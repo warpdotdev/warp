@@ -48,6 +48,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Pi
             | CLIAgent::OhMyPi
             | CLIAgent::Grok
+            | CLIAgent::Muse
             | CLIAgent::WarpTui
     )
 }
@@ -69,6 +70,7 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::OhMyPi
+        | CLIAgent::Muse
         | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex | CLIAgent::Grok => {
             Some(Box::new(Osc9FallbackSessionHandler { agent: *agent }))

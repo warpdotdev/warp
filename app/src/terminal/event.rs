@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
-pub use warp_terminal::event::{ExecutedExecutorCommandEvent, ParseGeneratorOutputError};
+pub use warp_terminal::event::{
+    ExecutedExecutorCommandEvent, ObservedExitStatus, ParseGeneratorOutputError,
+};
 use warp_util::lazy::Lazy;
 
 use super::history::HistoryEntry;
@@ -61,6 +63,11 @@ pub enum Event {
     CursorBlinkingChange(bool),
     TerminalClear,
     Bell,
+    /// The shell process exited but the terminal has not been finalized yet; the surface must
+    /// either recover the shell or call `TerminalModel::finalize_exit`.
+    ShellExitObserved {
+        status: ObservedExitStatus,
+    },
     Exit {
         reason: ExitReason,
     },
@@ -432,6 +439,7 @@ impl Debug for Event {
             Event::ClipboardLoad(_, _) => write!(f, "ClipboardLoad()"),
             Event::TerminalClear => write!(f, "TerminalClear"),
             Event::Bell => write!(f, "Bell"),
+            Event::ShellExitObserved { status } => write!(f, "ShellExitObserved({status:?})"),
             Event::Exit { reason } => write!(f, "Exit({reason:?})"),
             Event::CursorBlinkingChange(blinking) => write!(f, "CursorBlinking({blinking})"),
             Event::PreInteractiveSSHSession => write!(f, "Pre-Interactive SSH Session"),

@@ -38,9 +38,7 @@ use super::{
     ThirdPartyHarness, cli_agent_session_status, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{
-    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
-};
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
@@ -151,13 +149,21 @@ impl ThirdPartyHarness for ClaudeHarness {
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
+        skill_dirs: &[PathBuf],
+        has_deferred_repositories: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_claude_environment_config(workspace_root, harness_working_dir, resolved_env_vars)
-            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+        prepare_claude_environment_config(
+            workspace_root,
+            harness_working_dir,
+            resolved_env_vars,
+            skill_dirs,
+            has_deferred_repositories,
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
             error,
         })?;
@@ -510,10 +516,6 @@ impl HarnessRunner for ClaudeHarnessRunner {
             block_id: command_handle.block_id().clone(),
         };
 
-        setup_events
-            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
-            .await;
-
         Ok(command_handle)
     }
 
@@ -719,6 +721,8 @@ pub(crate) fn prepare_claude_environment_config(
     workspace_root: &Path,
     harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
+    skill_dirs: &[PathBuf],
+    has_deferred_repositories: bool,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
     let claude_dir = claude_config_dir()?;
@@ -730,7 +734,12 @@ pub(crate) fn prepare_claude_environment_config(
         api_key_suffix.as_deref(),
     )?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_skills_for_claude(workspace_root, harness_working_dir);
+    publish_skills_for_claude(
+        workspace_root,
+        harness_working_dir,
+        skill_dirs,
+        has_deferred_repositories,
+    )?;
     Ok(())
 }
 
@@ -747,14 +756,21 @@ pub(crate) fn prepare_claude_environment_config(
 /// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
 /// depending on whether this run is sandboxed (see
 /// `warp_isolation_platform::detect`).
-fn publish_skills_for_claude(workspace_root: &Path, harness_working_dir: &Path) {
+fn publish_skills_for_claude(
+    workspace_root: &Path,
+    harness_working_dir: &Path,
+    skill_dirs: &[PathBuf],
+    has_deferred_repositories: bool,
+) -> Result<()> {
     let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
     let published = super::skill_dirs_publish::publish_skills_for_harness(
         &skill_root,
         workspace_root,
         is_sandbox,
-    );
+        skill_dirs,
+        has_deferred_repositories,
+    )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,
         &published,
@@ -769,6 +785,7 @@ fn publish_skills_for_claude(workspace_root: &Path, harness_working_dir: &Path) 
             )
         );
     }
+    Ok(())
 }
 
 // This function is used specifically for determining where to land `.claude.json`.

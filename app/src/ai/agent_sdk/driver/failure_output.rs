@@ -1,6 +1,13 @@
+use lazy_static::lazy_static;
+use regex::Regex;
+
 use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
 
 const FAILURE_OUTPUT_MAX_BYTES: usize = 4 * 1024;
+lazy_static! {
+    static ref URL_CREDENTIALS_REGEX: Regex =
+        Regex::new(r"(?i)(https?://)[^/\s@]+@").expect("URL credentials regex should compile");
+}
 
 fn truncate_failure_output(output: &str, truncation_marker: &str) -> String {
     if output.len() <= FAILURE_OUTPUT_MAX_BYTES {
@@ -33,6 +40,7 @@ pub(super) fn prepare_failure_output(output: &str, truncation_marker: &str) -> S
     let mut output = output.trim().to_owned();
     // Redact before truncation so splitting a credential cannot hide it from detection.
     redact_secrets_in_string(&mut output);
+    let output = URL_CREDENTIALS_REGEX.replace_all(&output, "${1}***@");
     truncate_failure_output(&output, truncation_marker)
 }
 

@@ -1,17 +1,20 @@
 //! Makes Warp-provided skills available to third-party harnesses (Claude Code,
-//! Codex) by symlinking them into a skill root each harness already searches
+//! Codex, Gemini) by symlinking them into a skill root each harness already searches
 //! on its own.
 //!
 //! Oz reads `WARP_SKILL_DIRS` directly (see
 //! `crate::ai::agent_sdk::driver::AgentDriver::load_skills_dirs`). Third-party
 //! harnesses discover skills from their own skill roots instead, so this
-//! module reads the same `WARP_SKILL_DIRS` directories and symlinks each
+//! module receives the same skill directories and symlinks each
 //! skill folder into the harness's skill root, under the skill's own name.
 //! The published name must match the real skill name (rather than some
 //! namespaced alias) because an agent prompt, or another skill, may
 //! reference a skill by that name. Skill frontmatter is never rewritten.
 //! The feature-gated Factory MCP bootstrap is appended after these configured
 //! sources, so a configured `factory-mcp` skill retains precedence.
+//! A task's deferred-repository skill is reserved at its canonical name:
+//! configured sources cannot shadow it, and a non-sandbox conflict fails
+//! harness setup instead of silently publishing an unusable alias.
 //!
 //! A publish target already counts as ours only when it is a symlink whose
 //! canonical destination is this exact source directory — publishing is then
@@ -32,24 +35,28 @@
 //!   to the same ownership check), unless that alias also conflicts, in
 //!   which case the skill is not published at all.
 //!
-//! Every conflict is logged (see `logging-and-error-reporting`) with enough
-//! detail to debug later — there is no user-facing surface for this today,
-//! so the log is for us, not the user.
+//! Ordinary skill conflicts are logged (see `logging-and-error-reporting`).
+//! A required skill conflict outside a sandbox is returned to harness setup.
 //!
 //! A symlink — never a copy — keeps a skill's relative paths (for example a
 //! helper script the skill invokes) pointing at the real, versioned skill
 //! tree.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
+use ai::skills::resolve_skills_dirs;
 use anyhow::{Context, Result};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
+
+use crate::ai::skills::{
+    FACTORY_DEFERRED_REPOSITORIES_SKILL, factory_deferred_repositories_skill_path,
+};
 
 /// Suffix appended to a real (non-symlink) file or directory this module
 /// moves aside, in a sandbox, so a published skill can take over its name.
@@ -60,27 +67,76 @@ const SANDBOX_BACKUP_SUFFIX: &str = ".backup";
 /// when a real, non-symlink entry already occupies its real name.
 const NON_SANDBOX_ALTERNATE_NAME_PREFIX: &str = "warp-";
 
-/// Resolve the `WARP_SKILL_DIRS` source directories, most specific first —
-/// the same directories and precedence order Oz uses (see
-/// `ai::skills::read_skills_for_skills_dirs`).
-pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
-    resolve_skills_dirs(working_dir, parse_skills_dirs_env())
-}
-
 pub(super) fn publish_skills_for_harness(
     skill_root: &Path,
     working_dir: &Path,
     is_sandbox: bool,
-) -> Vec<PathBuf> {
-    let source_dirs = warp_skill_source_dirs(working_dir);
+    configured_source_dirs: &[PathBuf],
+    has_deferred_repositories: bool,
+) -> Result<Vec<PathBuf>> {
+    let source_dirs = resolve_skills_dirs(working_dir, configured_source_dirs.to_vec());
     let bundled_skill_dirs =
         bundled_factory_mcp_skill_dirs(warp_core::paths::bundled_resources_dir());
     let configured_skill_dirs = skill_dirs_from_source_dirs(&source_dirs);
-    publish_skill_dirs(
+    let deferred_skill_dir = if has_deferred_repositories {
+        Some(
+            factory_deferred_repositories_skill_path()
+                .context("bundled deferred repositories skill is unavailable")?,
+        )
+    } else {
+        None
+    };
+    publish_skill_sources(
         skill_root,
-        configured_skill_dirs.iter().chain(&bundled_skill_dirs),
+        &configured_skill_dirs,
+        &bundled_skill_dirs,
+        deferred_skill_dir.as_deref(),
         is_sandbox,
     )
+}
+
+fn publish_skill_sources(
+    skill_root: &Path,
+    configured_skill_dirs: &[PathBuf],
+    bundled_skill_dirs: &[PathBuf],
+    deferred_skill_dir: Option<&Path>,
+    is_sandbox: bool,
+) -> Result<Vec<PathBuf>> {
+    let mut published = Vec::new();
+    if let Some(source) = deferred_skill_dir {
+        let target = skill_root.join(FACTORY_DEFERRED_REPOSITORIES_SKILL);
+        if !is_sandbox && matches!(inspect_target(&target, source)?, TargetOutcome::Foreign) {
+            anyhow::bail!(
+                "required deferred repositories skill conflicts at {}",
+                target.display()
+            );
+        }
+        let path = publish_skill(
+            skill_root,
+            FACTORY_DEFERRED_REPOSITORIES_SKILL,
+            source,
+            is_sandbox,
+        )?
+        .context("required deferred repositories skill was not published")?;
+        if path != target {
+            anyhow::bail!(
+                "required deferred repositories skill was not published under its canonical name"
+            );
+        }
+        published.push(path);
+    }
+    published.extend(publish_skill_dirs(
+        skill_root,
+        configured_skill_dirs
+            .iter()
+            .chain(bundled_skill_dirs)
+            .filter(|source| {
+                deferred_skill_dir.is_none()
+                    || source.file_name() != Some(OsStr::new(FACTORY_DEFERRED_REPOSITORIES_SKILL))
+            }),
+        is_sandbox,
+    ));
+    Ok(published)
 }
 
 fn bundled_factory_mcp_skill_dirs(resources_dir: Option<PathBuf>) -> Vec<PathBuf> {

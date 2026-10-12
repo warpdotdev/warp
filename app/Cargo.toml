@@ -700,6 +700,7 @@ default = [
     "terminal_lifecycle_recovery",
     "cloud_runners",
     "cloud_agent_runners",
+    "cloud_agent_execution_config",
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
     "factory_mcp",
@@ -708,6 +709,7 @@ default = [
     "shell_widget_handoff",
     "native_shell_completions",
     "history_search_ranking_v2",
+    "cloud_agent_shell_respawn",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -944,6 +946,7 @@ artifact_command = []
 cloud_environments = []
 cloud_runners = []
 cloud_agent_runners = []
+cloud_agent_execution_config = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -1026,12 +1029,14 @@ cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
+factory_deferred_repositories = []
 prompt_cache_expiry_warning = []
 osc_hyperlinks = []
 ctrl_c_cancels_third_party_harness = []
 shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
+cloud_agent_shell_respawn = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

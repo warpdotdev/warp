@@ -37,3 +37,8 @@ path = "junit.xml"
 filter = 'test(update_manager)'
 platform = { host = 'cfg(target_os = "windows")' }
 retries = 2
+
+[[profile.ci.overrides]]
+filter = 'package(warp) and (test(=ai::agent_sdk::driver::mcp_startup::tests::configured_and_profile_mcp_servers_wait_for_environment_setup) or test(=terminal::view::tests::revoking_remote_session_ai_takes_effect_without_a_new_terminal_session))'
+platform = { host = 'cfg(target_os = "windows")' }
+slow-timeout = { period = "30s", terminate-after = 4 }

@@ -16,8 +16,8 @@ use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ExecutionProfileId,
-    WriteToPtyPermission,
+    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ComputerUsePermission,
+    ExecutionProfileId, WriteToPtyPermission,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -125,8 +125,8 @@ pub enum FileWritePermissionDeniedReason {
     AlwaysAskEnabled,
     Inconclusive,
     AgentDecided,
-    /// The path is a system-protected file (e.g. an MCP config) that must never
-    /// be auto-written regardless of user autonomy settings.
+    /// The path is a system-protected file (e.g. an MCP config) that requires explicit approval
+    /// in local sessions regardless of autonomy settings.
     ProtectedPath,
 }
 
@@ -631,6 +631,18 @@ impl BlocklistAIPermissions {
         scope: &impl TeamScope,
         ctx: &AppContext,
     ) -> crate::ai::execution_profiles::ComputerUsePermission {
+        if let Some(policy) = Self::team_autonomy_settings(scope, ctx).computer_use_setting {
+            return policy;
+        }
+        if let Some(selection) = terminal_view_id
+            .and_then(|id| AIExecutionProfilesModel::as_ref(ctx).session_computer_use(id))
+        {
+            return if selection.enabled {
+                ComputerUsePermission::AlwaysAllow
+            } else {
+                ComputerUsePermission::Never
+            };
+        }
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
         self.get_computer_use_setting_for_profile(active_profile.id(), scope, ctx)
@@ -764,8 +776,9 @@ impl BlocklistAIPermissions {
         scope: &impl TeamScope,
         ctx: &AppContext,
     ) -> FileWritePermission {
-        // Protected paths are always denied, regardless of autonomy settings.
-        if let Some(denied) = check_protected_write_paths(paths) {
+        if !AppExecutionMode::as_ref(ctx).is_sandboxed()
+            && let Some(denied) = check_protected_write_paths(paths)
+        {
             return denied;
         }
 
@@ -1227,12 +1240,10 @@ fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> S
         .unwrap_or_else(|| command.to_string())
 }
 
-/// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected
-/// and must never be auto-written regardless of user autonomy settings.
+/// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected.
 /// Returns `None` if no paths are protected.
 fn check_protected_write_paths(paths: &[PathBuf]) -> Option<FileWritePermission> {
-    // MCP config files are always protected from auto-write to prevent security risks
-    // from injecting arbitrary context into the agent.
+    // MCP configs can inject arbitrary context into the agent, so local edits require approval.
     if paths
         .iter()
         .any(|p| mcp_provider_from_file_path(p).is_some())

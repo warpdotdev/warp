@@ -3,6 +3,19 @@ use super::{FAILURE_OUTPUT_MAX_BYTES, prepare_failure_output};
 const TRUNCATION_MARKER: &str = "\n… output truncated …\n";
 
 #[test]
+fn url_credentials_are_redacted_before_truncation() {
+    let password = format!(
+        "password-start{}password-end",
+        "x".repeat(FAILURE_OUTPUT_MAX_BYTES)
+    );
+    let output = prepare_failure_output(
+        &format!("Git fetch failed for HTTPS://user:{password}@example.com/repo"),
+        TRUNCATION_MARKER,
+    );
+    assert_eq!(output, "Git fetch failed for HTTPS://***@example.com/repo");
+}
+
+#[test]
 fn failure_output_is_trimmed() {
     assert_eq!(
         prepare_failure_output(" \n Harness startup failed \n ", TRUNCATION_MARKER),

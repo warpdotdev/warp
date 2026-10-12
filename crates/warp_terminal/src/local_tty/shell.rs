@@ -68,6 +68,90 @@ pub enum ShellStarter {
 }
 
 impl ShellStarter {
+    /// Creates a starter for a fresh shell session in the same execution environment, or `None`
+    /// when the environment cannot host a second shell (a Docker sandbox container exits with
+    /// its shell).
+    pub fn replacement(&self) -> Option<Self> {
+        match self {
+            Self::Direct(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                starter.args = arguments_for_session_spawning_command(
+                    &starter.shell_path.to_string_lossy(),
+                    starter.shell_type,
+                    starter.session_id,
+                );
+                Some(Self::Direct(starter))
+            }
+            Self::Wsl(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                starter.args = wsl_arguments_for_session_spawning_command(
+                    &starter.distribution,
+                    &starter.shell_path,
+                    starter.shell_type,
+                    starter.session_id,
+                );
+                Some(Self::Wsl(starter))
+            }
+            Self::MSYS2(starter) => {
+                let mut starter = starter.clone();
+                starter.session_id = generate_session_id();
+                Some(Self::MSYS2(starter))
+            }
+            Self::DockerSandbox(_) => None,
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        match self {
+            Self::Direct(starter) | Self::MSYS2(starter) => starter.session_id(),
+            Self::Wsl(starter) => starter.session_id(),
+            Self::DockerSandbox(starter) => starter.session_id(),
+        }
+    }
+
+    pub fn launch_data(&self) -> ShellLaunchData {
+        match self {
+            Self::Direct(starter) => ShellLaunchData::Executable {
+                executable_path: starter.logical_shell_path().to_owned(),
+                shell_type: starter.shell_type(),
+            },
+            Self::DockerSandbox(starter) => ShellLaunchData::DockerSandbox {
+                sbx_path: starter.logical_shell_path().to_owned(),
+                base_image: starter.base_image().map(str::to_owned),
+            },
+            Self::Wsl(starter) => ShellLaunchData::WSL {
+                distro: starter.distribution().to_owned(),
+            },
+            Self::MSYS2(starter) => ShellLaunchData::MSYS2 {
+                executable_path: starter.logical_shell_path().to_owned(),
+                shell_type: starter.shell_type(),
+            },
+        }
+    }
+
+    /// Returns a shell-side recovery directory and whether the home fallback was needed.
+    pub fn recovery_working_directory(
+        &self,
+        requested: Option<&str>,
+        home_directory: Option<&str>,
+    ) -> anyhow::Result<(String, bool)> {
+        let launch_data = self.launch_data();
+        let is_directory = |path| {
+            launch_data
+                .maybe_convert_absolute_path(path)
+                .is_some_and(|path| path.is_absolute() && path.is_dir())
+        };
+        if let Some(requested) = requested.filter(|path| is_directory(path)) {
+            return Ok((requested.to_owned(), false));
+        }
+        let fallback = home_directory
+            .filter(|path| is_directory(path))
+            .context("no accessible home directory for shell recovery")?;
+        Ok((fallback.to_owned(), true))
+    }
+
     /// Constructs a `ShellStarter` represent the shell binary (and corresponding arguments) to be
     /// used to spawn a shell process for a new top-level Warp session. If a WSL Distribution is
     /// given, then it will always construct a `ShellStarter` starting the default shell for that

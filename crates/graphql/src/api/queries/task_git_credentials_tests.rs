@@ -25,6 +25,7 @@ fn current_query_selects_partial_refresh_fields() {
             task_id: cynic::Id::new("task"),
             workload_token: "token".to_string(),
             accepts_partial_refresh: Some(true),
+            use_factory_repositories: None,
         },
         request_context: request_context(),
     });
@@ -40,6 +41,7 @@ fn bootstrap_query_still_selects_failed_hosts() {
             task_id: cynic::Id::new("task"),
             workload_token: "token".to_string(),
             accepts_partial_refresh: Some(false),
+            use_factory_repositories: None,
         },
         request_context: request_context(),
     });

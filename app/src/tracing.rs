@@ -4,6 +4,8 @@ use std::time::Duration;
 use tracing::subscriber;
 
 #[cfg(not(target_family = "wasm"))]
+mod child_process;
+#[cfg(not(target_family = "wasm"))]
 mod cloud_agent_auth;
 #[cfg(not(target_family = "wasm"))]
 mod native;
@@ -20,6 +22,30 @@ pub fn init() -> anyhow::Result<Initialization> {
 
     #[cfg(not(target_family = "wasm"))]
     native::init()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn create_child_process_handoff(
+    scope_file: &std::path::Path,
+) -> Option<tempfile::TempPath> {
+    native::child_process_snapshot()?
+        .write(scope_file)
+        .map_err(|_| {
+            log::warn!("Child-process tracing unavailable: could not create credential handoff");
+        })
+        .ok()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn init_child_process(
+    scope_file: &std::path::Path,
+) -> anyhow::Result<(Initialization, opentelemetry::Context)> {
+    let config =
+        child_process::ChildProcessTracingConfig::consume(scope_file).unwrap_or_else(|_| {
+            log::warn!("Child-process tracing unavailable: invalid credential handoff");
+            None
+        });
+    native::init_child_process(config)
 }
 
 #[cfg(not(target_family = "wasm"))]

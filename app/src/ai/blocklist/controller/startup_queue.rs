@@ -6,6 +6,7 @@ use warp_errors::report_error;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::BlocklistAIController;
+use super::external_harness::ExternalHarnessPrompt;
 use super::shared_session::SharedSessionPromptTarget;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAttachment, BaseUserQuery};
@@ -66,6 +67,7 @@ impl BlocklistAIController {
         let Some(id) = self.native_prompt_conversation_id.take() else {
             return;
         };
+        self.external_harness_prompt_sink = None;
         let unsent_count = QueuedQueryModel::as_ref(ctx).queue(id).len();
         log::info!(
             "event=native_queue_stopped task_id={:?} terminal_id={:?} conversation_id={id} unsent_count={unsent_count}",
@@ -115,6 +117,25 @@ impl BlocklistAIController {
             );
             return false;
         };
+        if let Some(sink) = &self.external_harness_prompt_sink {
+            log::info!(
+                "event=injection_routed_to_external_harness task_id={:?} terminal_id={:?} conversation_id={bound_id} participant_id={participant_id} attachment_count={}",
+                self.ambient_agent_task_id,
+                self.terminal_surface_id,
+                attachments.len(),
+            );
+            let relayed = ExternalHarnessPrompt {
+                text: prompt.to_owned(),
+                attachments: attachments.to_vec(),
+            };
+            if sink.try_send(relayed).is_err() {
+                report_error!(
+                    "Dropped a shared-session prompt because the external harness is no longer accepting prompts",
+                    extra: { "conversation_id" => %bound_id, "terminal_id" => ?self.terminal_surface_id }
+                );
+            }
+            return true;
+        }
         let id = match self.resolve_shared_session_prompt_target(token, ctx) {
             SharedSessionPromptTarget::Existing(id) => id,
             SharedSessionPromptTarget::Rejected { target } => {

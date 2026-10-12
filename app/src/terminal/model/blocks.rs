@@ -15,6 +15,7 @@ pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_terminal::event::ObservedExitStatus;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::r#async::executor::Background;
 use warpui::color::ColorU;
@@ -3032,9 +3033,9 @@ impl BlockList {
         }
     }
 
-    pub fn reinit_shell(&mut self) {
+    pub fn reinit_shell(&mut self, interrupted_status: Option<ObservedExitStatus>) {
         let active_block = self.active_block_mut();
-        active_block.finish(0);
+        active_block.finish(interrupted_status.map_or(0, ObservedExitStatus::exit_code));
         self.update_active_block_height();
 
         self.create_warp_input_block();

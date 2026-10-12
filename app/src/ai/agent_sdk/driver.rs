@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
-    resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, WARP_SKILL_DIRS_ENV,
+    parse_bundled_skill, parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
@@ -25,13 +25,13 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, HarnessTransport, OutputFormat, RepositoryPreparationOverride};
+use warp_cli::agent::{Harness, HarnessTransport, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
-use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
+use warp_errors::{ErrorExt, ReportErrorLogMode, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -58,7 +58,9 @@ use crate::ai::agent_sdk::driver::harness::{
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
@@ -77,15 +79,13 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
     QueuedQueryEvent, QueuedQueryModel, finalize_recording_for_conversation,
 };
-use crate::ai::cloud_environments::{
-    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
-};
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, GithubRepo, SourceRepo};
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::skills::{
-    SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
-    resolve_skill_repos,
+    SkillManager, SkillWatcher, factory_deferred_repositories_skill_path, filter_skills_by_spec,
+    read_skills_from_directories, resolve_skill_repos,
 };
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
@@ -105,6 +105,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
@@ -115,6 +116,9 @@ pub(crate) mod cache_setup;
 mod checkpoint_coordinator;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
+#[cfg(feature = "local_fs")]
+pub(crate) mod environment_checkout;
+mod environment_checkout_protocol;
 mod error_classification;
 mod failure_output;
 pub(crate) mod git_credentials;
@@ -143,6 +147,7 @@ async fn with_credential_refreshes<F, T>(
     run_future: F,
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
+    use_factory_repositories: bool,
     bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> T
@@ -151,7 +156,9 @@ where
 {
     let git_refresh = async move {
         match git_task_id {
-            Some(task_id) => git_credentials::refresh_loop(task_id, ai_client).await,
+            Some(task_id) => {
+                git_credentials::refresh_loop(task_id, ai_client, use_factory_repositories).await
+            }
             None => future::pending::<()>().await,
         }
     }
@@ -176,7 +183,7 @@ where
     }
 }
 
-const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Delay after the initial exit request before retrying with the harness's
 /// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
 /// unconditionally, without waiting to see whether it's needed.
@@ -565,6 +572,47 @@ fn idle_window_for_cli_session_status(
     }
 }
 
+/// What a native conversation status change means for a harness exit signal driven by that
+/// conversation (see `AgentDriver::subscribe_to_native_conversation_status_events`).
+#[derive(Debug, PartialEq, Eq)]
+enum HarnessIdleAction {
+    /// A turn is under way; a pending exit must not fire underneath it.
+    CancelIdle,
+    /// The turn settled; exit after `window`, or immediately when `None`.
+    Exit {
+        window: Option<Duration>,
+        /// The window is a post-failure debug window, kept open by viewer input.
+        failed: bool,
+    },
+    /// Quiescent but not settled; leave the signal as it is.
+    Ignore,
+}
+
+/// [`idle_window_for_terminal_status`] for a harness whose progress is the status of the native
+/// conversation it drives.
+fn harness_idle_action_for_conversation_status(
+    status: &ConversationStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> HarnessIdleAction {
+    match status {
+        ConversationStatus::InProgress => HarnessIdleAction::CancelIdle,
+        ConversationStatus::Success
+        | ConversationStatus::Cancelled
+        | ConversationStatus::Blocked { .. } => HarnessIdleAction::Exit {
+            window: idle_on_complete,
+            failed: false,
+        },
+        ConversationStatus::Error => HarnessIdleAction::Exit {
+            window: idle_on_fail,
+            failed: true,
+        },
+        ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => {
+            HarnessIdleAction::Ignore
+        }
+    }
+}
+
 /// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
 fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
     match status {
@@ -604,6 +652,7 @@ pub struct AgentDriverOptions {
     pub secrets: HashMap<String, ManagedSecretValue>,
     /// ID of the task being executed.
     pub task_id: Option<AmbientAgentTaskId>,
+    pub use_factory_repositories: bool,
     /// Server-owned experiments retained without client interpretation.
     pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
@@ -622,15 +671,8 @@ pub struct AgentDriverOptions {
     pub resume: Option<ResumeOptions>,
     /// Cloud providers to configure within the agent's session.
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
-    /// Resolved environment configuration, if any.
-    pub environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server, such as a webhook's
-    /// originating repository. Empty for local runs.
-    pub additional_source_repos: Vec<SourceRepo>,
-    /// Server-owned repository preparation overrides for the agent's session.
-    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
-    /// Whether origin remotes should be removed from environment repositories.
-    pub remove_repository_origins: bool,
+    pub workspace: environment::WorkspaceConfiguration,
+    pub computer_use_config: Option<(bool, Option<LLMId>)>,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// How the selected harness is driven. Only used for non-Oz harnesses.
@@ -685,6 +727,7 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
+    use_factory_repositories: bool,
     #[allow(
         dead_code,
         reason = "the driver retains server-owned experiments without interpreting them"
@@ -726,12 +769,10 @@ pub struct AgentDriver {
     /// Cloud providers set up within this driver session.
     cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
 
-    /// Resolved environment configuration.
-    environment: Option<AmbientAgentEnvironment>,
-    /// Additional per-task repositories supplied by the server.
-    additional_source_repos: Vec<SourceRepo>,
-    repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
-    remove_repository_origins: bool,
+    workspace: Option<environment::WorkspaceConfiguration>,
+    skill_dirs: Vec<PathBuf>,
+    has_deferred_repositories: bool,
+    computer_use_configured: bool,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -831,6 +872,31 @@ pub enum AgentRunPrompt {
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
     },
+}
+
+/// Prepends runtime inventory instructions without replacing an attached skill.
+fn inject_deferred_repos_instruction(prompt: &mut AgentRunPrompt, instruction: String) {
+    match prompt {
+        AgentRunPrompt::Local(text) => *text = format!("{instruction}\n\n{text}"),
+        AgentRunPrompt::ServerSide { skill, .. } => {
+            *skill = Some(match skill.take() {
+                Some(mut existing) => {
+                    existing.content = format!("{instruction}\n\n{}", existing.content);
+                    existing
+                }
+                None => ParsedSkill {
+                    path: LocalOrRemotePath::Local(PathBuf::from("deferred-repositories")),
+                    name: "deferred-repositories".to_string(),
+                    description: "Instructions for dealing with repositories attached to this factory that are not cloned yet."
+                        .to_string(),
+                    content: instruction,
+                    line_range: None,
+                    provider: SkillProvider::Warp,
+                    scope: SkillScope::Bundled,
+                },
+            });
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1088,6 +1154,7 @@ impl AgentDriver {
         let AgentDriverOptions {
             working_dir,
             task_id,
+            use_factory_repositories,
             experimental,
             parent_run_id,
             should_share,
@@ -1096,10 +1163,8 @@ impl AgentDriver {
             secrets,
             resume,
             cloud_providers,
-            environment,
-            additional_source_repos,
-            repository_preparation_overrides,
-            remove_repository_origins,
+            workspace,
+            computer_use_config,
             selected_harness,
             harness_transport,
             third_party_harness_model_config,
@@ -1165,6 +1230,14 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
+        if let Some(dirs) = &workspace.factory_skill_dirs {
+            env_vars.insert(
+                OsString::from(WARP_SKILL_DIRS_ENV),
+                OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
+            );
+        }
+        let has_deferred_repositories =
+            use_factory_repositories && !workspace.deferred_repos.is_empty();
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
@@ -1180,6 +1253,10 @@ impl AgentDriver {
         }
 
         let resolved_env_vars = Arc::new(env_vars);
+        let skill_dirs = workspace
+            .factory_skill_dirs
+            .clone()
+            .unwrap_or_else(parse_skills_dirs_env);
 
         let terminal_driver = terminal::TerminalDriver::create(
             terminal::TerminalDriverOptions {
@@ -1192,6 +1269,16 @@ impl AgentDriver {
             },
             ctx,
         )?;
+        let computer_use_configured = computer_use_config.is_some();
+        if let Some((enabled, model_id)) = computer_use_config {
+            let terminal_view_id = terminal_driver.as_ref(ctx).terminal_view().id();
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.set_session_computer_use(terminal_view_id, enabled, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.set_computer_use_llm_override(terminal_view_id, model_id);
+            });
+        }
 
         // Sharing starts asynchronously from terminal creation, before run_internal's setup waits.
         let native_queue_enabled = renders_natively(selected_harness, harness_transport)
@@ -1276,6 +1363,7 @@ impl AgentDriver {
             resolved_env_vars,
             output_format: OutputFormat::default(),
             task_id,
+            use_factory_repositories,
             experimental,
             team_scope,
             bedrock_oidc_credentials,
@@ -1287,10 +1375,10 @@ impl AgentDriver {
             restored_conversation_id,
             resume_payload,
             cloud_providers,
-            environment,
-            additional_source_repos,
-            repository_preparation_overrides,
-            remove_repository_origins,
+            workspace: Some(workspace),
+            skill_dirs,
+            has_deferred_repositories,
+            computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -1331,6 +1419,7 @@ impl AgentDriver {
             resolved_env_vars: Arc::new(HashMap::new()),
             output_format: OutputFormat::default(),
             task_id: None,
+            use_factory_repositories: false,
             experimental: None,
             team_scope: None,
             bedrock_oidc_credentials: None,
@@ -1342,10 +1431,10 @@ impl AgentDriver {
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
-            environment: None,
-            additional_source_repos: Vec::new(),
-            repository_preparation_overrides: Vec::new(),
-            remove_repository_origins: false,
+            workspace: Some(environment::WorkspaceConfiguration::default()),
+            skill_dirs: parse_skills_dirs_env(),
+            has_deferred_repositories: false,
+            computer_use_configured: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -1363,6 +1452,15 @@ impl AgentDriver {
     /// Pair to the registration in `new` / `execute_run`. No-op when
     /// nothing was registered.
     fn unregister_streamer_consumer(&self, ctx: &mut ModelContext<Self>) {
+        if self.computer_use_configured {
+            let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                profiles.clear_session_computer_use(terminal_view_id, ctx);
+            });
+            LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+                preferences.clear_computer_use_llm_override(terminal_view_id);
+            });
+        }
         let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
         terminal.update(ctx, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
@@ -1439,7 +1537,8 @@ impl AgentDriver {
         Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })
     }
 
-    /// Runs `task` until it completes, the sandbox shutdown window begins, or an interrupt arrives.
+    /// Runs `task` until it completes, session sharing fails, the sandbox shutdown window begins,
+    /// or an interrupt arrives.
     ///
     /// The returned [`InterruptWatch`] must stay alive through teardown: non-signal outcomes disarm
     /// it, while signal handling retains its registrations so a second signal can terminate a
@@ -1498,14 +1597,22 @@ impl AgentDriver {
         };
 
         let (finished, cause) = {
+            let session_share_failure = foreground
+                .spawn(|me, ctx| {
+                    me.terminal_driver
+                        .update(ctx, |driver, _| driver.wait_for_session_share_failure())
+                })
+                .await?
+                .fuse();
             let signal_fut = interrupt_watch.wait();
             let run = Self::run_internal(task, foreground.clone()).fuse();
             let timer = Self::sandbox_shutdown_timer(foreground).fuse();
             let signal = signal_fut.fuse();
-            futures::pin_mut!(run, timer, signal);
+            futures::pin_mut!(run, timer, signal, session_share_failure);
 
             futures::select_biased! {
                 signal = signal => (None, RunEndCause::Signal(signal)),
+                error = session_share_failure => (Some(Err(error)), RunEndCause::Completed),
                 result = run => (Some(result), RunEndCause::Completed),
                 result = timer => (
                     Some(result),
@@ -2072,7 +2179,10 @@ impl AgentDriver {
     /// Invalid, missing, or unreadable entries are skipped with a warning; an unset or empty
     /// variable is a no-op.
     async fn load_skills_dirs(foreground: &ModelSpawner<Self>) {
-        let dirs = parse_skills_dirs_env();
+        let dirs = foreground
+            .spawn(|me, _| me.skill_dirs.clone())
+            .await
+            .unwrap_or_default();
         if dirs.is_empty() {
             return;
         }
@@ -2099,13 +2209,37 @@ impl AgentDriver {
         }
     }
 
+    async fn load_factory_deferred_repositories_skill(foreground: &ModelSpawner<Self>) {
+        let Some(path) = factory_deferred_repositories_skill_path() else {
+            log::warn!("Bundled deferred repositories skill is unavailable");
+            return;
+        };
+        let skill = match parse_bundled_skill(&path.join("SKILL.md")) {
+            Ok(skill) => skill,
+            Err(error) => {
+                log::warn!("Could not read bundled deferred repositories skill: {error}");
+                return;
+            }
+        };
+        if let Err(error) = foreground
+            .spawn(move |_, ctx| {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.add_skills_dirs_skills(vec![skill]);
+                });
+            })
+            .await
+        {
+            log::warn!("Could not register bundled deferred repositories skill: {error}");
+        }
+    }
+
     /// Runs the agent to completion.
     /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
     /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
     /// series of callbacks and state machine updates.
     #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
-        task: Task,
+        mut task: Task,
         foreground: ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
         safe_debug!(
@@ -2114,324 +2248,330 @@ impl AgentDriver {
         );
 
         let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
-        let (setup_events, task_id_for_refresh, ai_client_for_refresh, bedrock_config_for_refresh) =
-            async {
-                let (setup_events, environment_snapshot_reporter) = foreground
-                    .spawn(|me, ctx| {
-                        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
-                        let background = ctx.background_executor();
-                        match me.task_id {
-                            Some(task_id) => (
-                                SetupClientEventReporter::new(
-                                    task_id,
+        let (
+            setup_events,
+            task_id_for_refresh,
+            ai_client_for_refresh,
+            use_factory_repositories,
+            bedrock_config_for_refresh,
+        ) = async {
+            let (setup_events, environment_snapshot_reporter) = foreground
+                .spawn(|me, ctx| {
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                    let background = ctx.background_executor();
+                    match me.task_id {
+                        Some(task_id) => (
+                            SetupClientEventReporter::new(
+                                task_id,
+                                ai_client.clone(),
+                                background.clone(),
+                            ),
+                            EnvironmentSnapshotReporter::new(task_id, ai_client, background),
+                        ),
+                        None => {
+                            report_error!(
+                                "No task ID found for driver - cannot report client events"
+                            );
+                            (
+                                SetupClientEventReporter::noop(
                                     ai_client.clone(),
                                     background.clone(),
                                 ),
-                                EnvironmentSnapshotReporter::new(task_id, ai_client, background),
-                            ),
-                            None => {
-                                report_error!(
-                                    "No task ID found for driver - cannot report client events"
-                                );
-                                (
-                                    SetupClientEventReporter::noop(
-                                        ai_client.clone(),
-                                        background.clone(),
-                                    ),
-                                    EnvironmentSnapshotReporter::noop(ai_client, background),
-                                )
-                            }
-                        }
-                    })
-                    .await?;
-
-                foreground
-                    .spawn(|me, _| me.check_working_dir())
-                    .await?
-                    .await?;
-
-                // IMPORTANT: Wait for the terminal session to bootstrap before starting MCP servers.
-                // Some of the initializations are necessary for the MCP servers to start correctly.
-                //
-                // Why: MCP server startup can happen before we actually execute the agent prompt. For
-                // `TransportType::CLIServer` MCPs we currently depend on `AISettings.mcp_execution_path`,
-                // which is populated as part of terminal bootstrap. Waiting for the session bootstrap
-                // here avoids a subtle race where MCP spawn runs with an unset PATH and then the driver
-                // only fails via a timeout.
-                setup_events
-                    .record_result(SetupStep::TerminalBootstrap, async {
-                        foreground
-                            .spawn(|me, ctx| {
-                                me.terminal_driver
-                                    .update(ctx, |driver, _| driver.wait_for_session_bootstrapped())
-                            })
-                            .await?
-                            .await
-                            .map_err(|error| AgentDriverError::BootstrapFailed { error })
-                    })
-                    .await?;
-
-                // Once the terminal session is bootstrapped, perform cloud provider setup before spawning MCP servers.
-                // MCP servers *may* rely on cloud provider credentials.
-                setup_events
-                    .record_result(
-                        SetupStep::CloudProviderSetup,
-                        Self::setup_cloud_providers(&foreground),
-                    )
-                    .await?;
-
-                // For the Oz harness only: set up model overrides and profile information.
-                if matches!(&task.harness, HarnessKind::Oz) {
-                    let profile = task.profile.clone();
-                    setup_events
-                        .record_result(SetupStep::AgentProfileConfiguration, async {
-                            foreground
-                                .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
-                                .await??;
-                            Ok::<(), AgentDriverError>(())
-                        })
-                        .await?;
-
-                    if let Some(model_id) = task.model.clone() {
-                        foreground
-                            .spawn(move |me, ctx| me.set_base_model_override(model_id, ctx))
-                            .await??;
-                    }
-                }
-
-                // For all harnesses: wait for the shared session and prepare the environment.
-                setup_events
-                    .record_result(SetupStep::SharedSessionEstablishment, async {
-                        foreground
-                            .spawn(|me, ctx| {
-                                me.terminal_driver
-                                    .update(ctx, |driver, _| driver.wait_for_session_shared())
-                            })
-                            .await?
-                            .await
-                    })
-                    .await?;
-                let global_skill_resolution = setup_events
-                    .record_result(
-                        SetupStep::GlobalSkillResolution,
-                        Self::resolve_global_skills(&foreground),
-                    )
-                    .await?;
-                // Clone global skill repos before environment prep can change the
-                // terminal's cwd into a single environment repo.
-                // We do this for all harnesses, so that the skills *may* be discovered by third-party
-                // harnesses if appropriate.
-                setup_events
-                    .record_result(
-                        SetupStep::GlobalSkillRepoClone,
-                        Self::clone_global_skill_repos(&foreground, &global_skill_resolution.repos),
-                    )
-                    .await?;
-                let mut environment_skill_repos = Vec::new();
-
-                let (
-                    environment_opt,
-                    additional_source_repos,
-                    repository_preparation_overrides,
-                    remove_repository_origins,
-                    session_shell_type,
-                ) = foreground
-                    .spawn(|me, ctx| {
-                        (
-                            me.environment.clone(),
-                            me.additional_source_repos.clone(),
-                            me.repository_preparation_overrides.clone(),
-                            me.remove_repository_origins,
-                            me.terminal_driver
-                                .as_ref(ctx)
-                                .active_session_shell_type(ctx),
-                        )
-                    })
-                    .await?;
-                let mut setup_commands = environment_opt
-                    .as_ref()
-                    .map(|environment| environment.setup_commands.clone())
-                    .unwrap_or_default();
-                // The Factory definition checkout is run-scoped: the dispatch decides
-                // whether this run gets one by attaching the clone variables,
-                // independent of which environment the run executes in.
-                environment::prepend_factory_definition_clone(
-                    &mut setup_commands,
-                    session_shell_type,
-                );
-                let source_repos = environment::merge_repos_deduped(
-                    environment_opt
-                        .as_ref()
-                        .map(AmbientAgentEnvironment::effective_repos)
-                        .unwrap_or_default(),
-                    additional_source_repos,
-                )?;
-
-                if environment_opt.is_some()
-                    || !source_repos.is_empty()
-                    || !setup_commands.is_empty()
-                {
-                    log::info!("Loading environment...");
-                    environment_skill_repos = source_repos.clone();
-
-                    // Subscribe to file-based MCP discovery BEFORE prepare_environment triggers the
-                    // pipeline so no CloudEnvMcpScanComplete events are missed.
-                    //
-                    // File-based MCP discovery is Oz-only.
-                    // TODO(REMOTE-1345): handle MCP setup for third-party harnesses.
-                    let cloud_env_mcp_scan = match &task.harness {
-                        HarnessKind::Oz => {
-                            let source_repos = source_repos.clone();
-                            Some(
-                                foreground
-                                    .spawn(move |me, ctx| {
-                                        let expected_repo_paths: Vec<PathBuf> = source_repos
-                                            .iter()
-                                            .map(|repo| me.working_dir.join(&repo.repo))
-                                            .collect();
-                                        me.wait_for_cloud_env_file_based_mcp_scan(
-                                            expected_repo_paths,
-                                            MCP_SERVER_STARTUP_TIMEOUT,
-                                            ctx,
-                                        )
-                                    })
-                                    .await?,
+                                EnvironmentSnapshotReporter::noop(ai_client, background),
                             )
                         }
-                        HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => None,
-                    };
+                    }
+                })
+                .await?;
 
-                    let harness = task.harness.harness();
-                    let setup_events_for_environment = setup_events.clone();
-                    let source_repos_for_prepare = source_repos;
-                    let prepare_outcome = foreground
-                        .spawn(move |me, ctx| {
-                            let working_dir = me.working_dir.clone();
-                            me.terminal_driver.update(ctx, |_, ctx| {
-                                environment::prepare_environment(
-                                    working_dir,
-                                    false, /* is_sandbox */
-                                    harness,
-                                    environment::RepositoryPreparationOptions::new(
-                                        source_repos_for_prepare,
-                                        setup_commands,
-                                        repository_preparation_overrides,
-                                        remove_repository_origins,
-                                    ),
-                                    setup_events_for_environment,
-                                    environment_snapshot_reporter.clone(),
-                                    ctx,
-                                )
-                            })
+            foreground
+                .spawn(|me, _| me.check_working_dir())
+                .await?
+                .await?;
+
+            // IMPORTANT: Wait for the terminal session to bootstrap before starting MCP servers.
+            // Some of the initializations are necessary for the MCP servers to start correctly.
+            //
+            // Why: MCP server startup can happen before we actually execute the agent prompt. For
+            // `TransportType::CLIServer` MCPs we currently depend on `AISettings.mcp_execution_path`,
+            // which is populated as part of terminal bootstrap. Waiting for the session bootstrap
+            // here avoids a subtle race where MCP spawn runs with an unset PATH and then the driver
+            // only fails via a timeout.
+            setup_events
+                .record_result(SetupStep::TerminalBootstrap, async {
+                    foreground
+                        .spawn(|me, ctx| {
+                            me.terminal_driver
+                                .update(ctx, |driver, _| driver.wait_for_session_bootstrapped())
                         })
                         .await?
                         .await
-                        .map_err(AgentDriverError::from);
-                    let harness_working_dir = match prepare_outcome {
-                        Ok(harness_working_dir) => harness_working_dir,
-                        Err(error) => {
-                            // A broken environment is the case post-failure retention exists for, so this
-                            // failure must not take the session down with it on the way out.
-                            Self::linger_after_failure(&foreground, "environment_setup", &error)
-                                .await;
-                            return Err(error);
-                        }
-                    };
+                        .map_err(|error| AgentDriverError::BootstrapFailed { error })
+                })
+                .await?;
+
+            // Once the terminal session is bootstrapped, perform cloud provider setup before spawning MCP servers.
+            // MCP servers *may* rely on cloud provider credentials.
+            setup_events
+                .record_result(
+                    SetupStep::CloudProviderSetup,
+                    Self::setup_cloud_providers(&foreground),
+                )
+                .await?;
+
+            // For the Oz harness only: set up model overrides and profile information.
+            if matches!(&task.harness, HarnessKind::Oz) {
+                let profile = task.profile.clone();
+                setup_events
+                    .record_result(SetupStep::AgentProfileConfiguration, async {
+                        foreground
+                            .spawn(move |me, ctx| me.configure_terminal(profile, ctx))
+                            .await??;
+                        Ok::<(), AgentDriverError>(())
+                    })
+                    .await?;
+
+                if let Some(model_id) = task.model.clone() {
                     foreground
-                        .spawn(move |me, _| me.harness_working_dir = harness_working_dir)
-                        .await?;
-
-                    if let Some(scan) = cloud_env_mcp_scan {
-                        Self::await_file_based_mcp_startup(
-                            SetupStep::FileBasedMcpDiscovery,
-                            SetupStep::FileBasedMcpReadiness,
-                            scan,
-                            MCP_SERVER_STARTUP_TIMEOUT,
-                            &setup_events,
-                            &foreground,
-                        )
-                        .await?;
-                    }
-                } else {
-                    environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
+                        .spawn(move |me, ctx| me.set_base_model_override(model_id, ctx))
+                        .await??;
                 }
-                if matches!(&task.harness, HarnessKind::Oz) {
-                    let managed_mcp_client = foreground
-                        .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
-                        .await?;
-                    let mcp_startup_result = setup_events
-                        .record_result(
-                            SetupStep::McpServerStartup,
-                            Self::start_task_and_profile_mcp_servers(
-                                &task.mcp_specs,
-                                managed_mcp_client,
-                                &foreground,
-                            ),
-                        )
-                        .await;
-                    Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
-                }
+            }
 
-                // Skill loading is Oz-only; third-party harnesses have their own skill systems.
-                if matches!(&task.harness, HarnessKind::Oz) {
-                    // Load skills from repos synchronously so the initial message includes them.
-                    // File trees are ready after prepare_environment and global skill repo cloning above.
-                    let GlobalSkillResolution {
-                        specs: global_skill_specs,
-                        repos: global_skill_repos,
-                    } = global_skill_resolution;
-                    setup_events
-                        .record_value(
-                            SetupStep::EnvironmentSkillLoading,
-                            Self::load_environment_skills(&foreground, environment_skill_repos),
-                        )
-                        .await;
-                    setup_events
-                        .record_value(
-                            SetupStep::GlobalSkillLoading,
-                            Self::load_global_skills(
-                                &foreground,
-                                global_skill_specs,
-                                global_skill_repos,
-                            ),
-                        )
-                        .await;
-                    setup_events
-                        .record_value(
-                            SetupStep::SkillsDirsLoading,
-                            Self::load_skills_dirs(&foreground),
-                        )
-                        .await;
-                }
-
-                let (task_id_for_refresh, ai_client_for_refresh, bedrock_config_for_refresh) =
+            // For all harnesses: wait for the shared session and prepare the environment.
+            setup_events
+                .record_result(SetupStep::SharedSessionEstablishment, async {
                     foreground
                         .spawn(|me, ctx| {
-                            let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
-                                me.task_id.map(|id| id.to_string())
-                            } else {
-                                None
-                            };
-                            let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
-                            let bedrock_config =
-                                me.bedrock_oidc_credentials.clone().map(|config| {
-                                    let request_scope =
-                                        me.team_scope.as_ref().map(RequestTeamScope::from_scope);
-                                    (config, request_scope)
-                                });
-                            (task_id, ai_client, bedrock_config)
+                            me.terminal_driver
+                                .update(ctx, |driver, _| driver.wait_for_session_shared())
                         })
-                        .await?;
+                        .await?
+                        .await
+                })
+                .await?;
+            let global_skill_resolution = setup_events
+                .record_result(
+                    SetupStep::GlobalSkillResolution,
+                    Self::resolve_global_skills(&foreground),
+                )
+                .await?;
+            // Clone global skill repos before environment prep can change the
+            // terminal's cwd into a single environment repo.
+            // We do this for all harnesses, so that the skills *may* be discovered by third-party
+            // harnesses if appropriate.
+            setup_events
+                .record_result(
+                    SetupStep::GlobalSkillRepoClone,
+                    Self::clone_global_skill_repos(&foreground, &global_skill_resolution.repos),
+                )
+                .await?;
+            let mut environment_skill_repos = Vec::new();
 
-                Ok::<_, AgentDriverError>((
-                    setup_events,
-                    task_id_for_refresh,
-                    ai_client_for_refresh,
-                    bedrock_config_for_refresh,
-                ))
+            let (workspace, has_deferred_repositories, session_shell_type) = foreground
+                .spawn(|me, ctx| {
+                    (
+                        me.workspace.take(),
+                        me.has_deferred_repositories,
+                        me.terminal_driver
+                            .as_ref(ctx)
+                            .active_session_shell_type(ctx),
+                    )
+                })
+                .await?;
+            let mut workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
+            let source_repos = workspace.source_repos.clone();
+            if has_deferred_repositories {
+                let executable = std::env::current_exe()
+                    .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
+                if let Some(instruction) = environment::build_deferred_repos_instruction(
+                    &foreground.spawn(|me, _| me.working_dir.clone()).await?,
+                    &source_repos,
+                    &workspace.deferred_repos,
+                    &executable,
+                    session_shell_type.unwrap_or(ShellType::Bash),
+                )? {
+                    inject_deferred_repos_instruction(&mut task.prompt, instruction);
+                }
             }
-            .instrument(setup_span)
-            .await?;
+            // The Factory definition checkout is run-scoped: the dispatch decides
+            // whether this run gets one by attaching the clone variables,
+            // independent of which environment the run executes in.
+            environment::prepend_factory_definition_clone(
+                &mut workspace.setup_commands,
+                session_shell_type,
+            );
+
+            if workspace.has_environment
+                || !source_repos.is_empty()
+                || !workspace.setup_commands.is_empty()
+            {
+                log::info!("Loading environment...");
+                environment_skill_repos = source_repos.clone();
+
+                // Subscribe to file-based MCP discovery BEFORE prepare_environment triggers the
+                // pipeline so no CloudEnvMcpScanComplete events are missed.
+                //
+                // File-based MCP discovery is Oz-only.
+                // TODO(REMOTE-1345): handle MCP setup for third-party harnesses.
+                let cloud_env_mcp_scan = match &task.harness {
+                    HarnessKind::Oz => {
+                        let source_repos = source_repos.clone();
+                        Some(
+                            foreground
+                                .spawn(move |me, ctx| {
+                                    let expected_repo_paths: Vec<PathBuf> = source_repos
+                                        .iter()
+                                        .map(|repo| me.working_dir.join(&repo.repo))
+                                        .collect();
+                                    me.wait_for_cloud_env_file_based_mcp_scan(
+                                        expected_repo_paths,
+                                        MCP_SERVER_STARTUP_TIMEOUT,
+                                        ctx,
+                                    )
+                                })
+                                .await?,
+                        )
+                    }
+                    HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => None,
+                };
+
+                let harness = task.harness.harness();
+                let setup_events_for_environment = setup_events.clone();
+                let prepare_outcome = foreground
+                    .spawn(move |me, ctx| {
+                        let working_dir = me.working_dir.clone();
+                        me.terminal_driver.update(ctx, |_, ctx| {
+                            environment::prepare_environment(
+                                working_dir,
+                                false, /* is_sandbox */
+                                harness,
+                                workspace,
+                                setup_events_for_environment,
+                                environment_snapshot_reporter.clone(),
+                                ctx,
+                            )
+                        })
+                    })
+                    .await?
+                    .await
+                    .map_err(AgentDriverError::from);
+                let harness_working_dir = match prepare_outcome {
+                    Ok(harness_working_dir) => harness_working_dir,
+                    Err(error) => {
+                        // A broken environment is the case post-failure retention exists for, so this
+                        // failure must not take the session down with it on the way out.
+                        Self::linger_after_failure(&foreground, "environment_setup", &error).await;
+                        return Err(error);
+                    }
+                };
+                foreground
+                    .spawn(move |me, _| me.harness_working_dir = harness_working_dir)
+                    .await?;
+
+                if let Some(scan) = cloud_env_mcp_scan {
+                    Self::await_file_based_mcp_startup(
+                        SetupStep::FileBasedMcpDiscovery,
+                        SetupStep::FileBasedMcpReadiness,
+                        scan,
+                        MCP_SERVER_STARTUP_TIMEOUT,
+                        &setup_events,
+                        &foreground,
+                    )
+                    .await?;
+                }
+            } else {
+                environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
+            }
+            if matches!(&task.harness, HarnessKind::Oz) {
+                let managed_mcp_client = foreground
+                    .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+                    .await?;
+                let mcp_startup_result = setup_events
+                    .record_result(
+                        SetupStep::McpServerStartup,
+                        Self::start_task_and_profile_mcp_servers(
+                            &task.mcp_specs,
+                            managed_mcp_client,
+                            &foreground,
+                        ),
+                    )
+                    .await;
+                Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+            }
+
+            // Skill loading is Oz-only; third-party harnesses have their own skill systems.
+            if matches!(&task.harness, HarnessKind::Oz) {
+                // Load skills from repos synchronously so the initial message includes them.
+                // File trees are ready after prepare_environment and global skill repo cloning above.
+                let GlobalSkillResolution {
+                    specs: global_skill_specs,
+                    repos: global_skill_repos,
+                } = global_skill_resolution;
+                setup_events
+                    .record_value(
+                        SetupStep::EnvironmentSkillLoading,
+                        Self::load_environment_skills(&foreground, environment_skill_repos),
+                    )
+                    .await;
+                setup_events
+                    .record_value(
+                        SetupStep::GlobalSkillLoading,
+                        Self::load_global_skills(
+                            &foreground,
+                            global_skill_specs,
+                            global_skill_repos,
+                        ),
+                    )
+                    .await;
+                setup_events
+                    .record_value(
+                        SetupStep::SkillsDirsLoading,
+                        Self::load_skills_dirs(&foreground),
+                    )
+                    .await;
+                if has_deferred_repositories {
+                    Self::load_factory_deferred_repositories_skill(&foreground).await;
+                }
+            }
+
+            let (
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                use_factory_repositories,
+                bedrock_config_for_refresh,
+            ) = foreground
+                .spawn(|me, ctx| {
+                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
+                        me.task_id.map(|id| id.to_string())
+                    } else {
+                        None
+                    };
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                    let bedrock_config = me.bedrock_oidc_credentials.clone().map(|config| {
+                        let request_scope =
+                            me.team_scope.as_ref().map(RequestTeamScope::from_scope);
+                        (config, request_scope)
+                    });
+                    (
+                        task_id,
+                        ai_client,
+                        me.use_factory_repositories,
+                        bedrock_config,
+                    )
+                })
+                .await?;
+
+            Ok::<_, AgentDriverError>((
+                setup_events,
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                use_factory_repositories,
+                bedrock_config_for_refresh,
+            ))
+        }
+        .instrument(setup_span)
+        .await?;
 
         // Run the harness with a prompt, racing it against optional background refresh
         // loops for git credentials and Bedrock OIDC credentials via
@@ -2472,6 +2612,7 @@ impl AgentDriver {
                     },
                     task_id_for_refresh,
                     ai_client_for_refresh,
+                    use_factory_repositories,
                     bedrock_config_for_refresh,
                     &foreground,
                 )
@@ -2525,6 +2666,7 @@ impl AgentDriver {
                     ),
                     task_id_for_refresh,
                     ai_client_for_refresh,
+                    use_factory_repositories,
                     bedrock_config_for_refresh,
                     &foreground,
                 )
@@ -2912,6 +3054,18 @@ impl AgentDriver {
         let (exit_tx, exit_rx) = oneshot::channel();
         let harness_exit = IdleTimeoutSender::new(exit_tx);
 
+        // Harnesses that report progress through the native conversation instead of a CLI agent
+        // session have no hook plugin to install; the conversation's own status drives their
+        // idle window instead.
+        if !harness.drives_cli_agent_session() {
+            foreground
+                .spawn(move |me, ctx| {
+                    me.subscribe_to_native_conversation_status_events(harness_exit, ctx)
+                })
+                .await?;
+            return Ok(exit_rx);
+        }
+
         // Subscribe to CLI agent session events so we can update the task
         // state as the harness emits stop/blocked notifications.
         foreground
@@ -3098,6 +3252,8 @@ impl AgentDriver {
             server_api,
             managed_mcp_client,
             terminal_driver,
+            skill_dirs,
+            has_deferred_repositories,
         ) = foreground
             .spawn(|me, ctx| {
                 if me.harness.is_some() {
@@ -3114,6 +3270,8 @@ impl AgentDriver {
                     ServerApiProvider::as_ref(ctx).get(),
                     ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
                     me.terminal_driver.clone(),
+                    me.skill_dirs.clone(),
+                    me.has_deferred_repositories,
                 ))
             })
             .await
@@ -3203,6 +3361,8 @@ impl AgentDriver {
                 terminal_driver,
                 resume,
                 &resolved_env_vars,
+                &skill_dirs,
+                has_deferred_repositories,
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
@@ -3242,6 +3402,9 @@ impl AgentDriver {
 
         // Start the third-party harness.
         let command_handle = runner.start(foreground, setup_events).await?;
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
         let block_id = command_handle.block_id().clone();
         let mut command_handle = command_handle.fuse();
         let mut harness_exit_rx = harness_exit_rx.fuse();
@@ -4325,7 +4488,7 @@ impl AgentDriver {
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. }
                         | CLIAgentSessionStatus::Cancelled => {
-                            if me.harness.is_some() {
+                            if !matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
                                 me.request_harness_save(ctx);
                             }
                             let idle_window = idle_window_for_cli_session_status(
@@ -4387,13 +4550,95 @@ impl AgentDriver {
                         return;
                     }
 
-                    me.request_harness_save(ctx);
+                    let Some(runner) = me.harness.clone() else {
+                        return;
+                    };
+                    let foreground = ctx.spawner();
+                    ctx.spawn(
+                        async move {
+                            report_if_error!(
+                                runner
+                                    .handle_session_update(&foreground)
+                                    .await
+                                    .context("Failed to handle harness session update"),
+                                ReportErrorLogMode::OncePerRun
+                            );
+                        },
+                        |_, _, _| {},
+                    );
                 }
                 CLIAgentSessionsModelEvent::Started { .. }
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
     }
+    /// Drives the harness exit signal from the status of the driver's bound native conversation,
+    /// for harnesses that author that conversation's turns themselves (see
+    /// `ConversationDriver::ExternalHarness`). Mirrors [`Self::subscribe_to_cli_agent_session_events`]
+    /// so `--idle-on-complete`, `--idle-on-fail`, and the viewer-input debug window behave the
+    /// same whichever way a third-party harness reports progress.
+    fn subscribe_to_native_conversation_status_events(
+        &self,
+        harness_exit: IdleTimeoutSender<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *terminal_surface_id != terminal_view_id {
+                return;
+            }
+            let bound_conversation_id = me
+                .terminal_driver
+                .as_ref(ctx)
+                .terminal_view()
+                .as_ref(ctx)
+                .ai_controller()
+                .as_ref(ctx)
+                .native_prompt_conversation_id();
+            if bound_conversation_id != Some(*conversation_id) {
+                return;
+            }
+            match harness_idle_action_for_conversation_status(
+                new_status,
+                me.idle_on_complete,
+                me.idle_on_fail,
+            ) {
+                HarnessIdleAction::CancelIdle => {
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=idle_timeout_cancel_requested task_id={:?} conversation_id={conversation_id} trigger=turn_in_progress",
+                        me.task_id
+                    );
+                    harness_exit.cancel_idle_timeout();
+                }
+                HarnessIdleAction::Exit { window, failed } => {
+                    me.request_harness_save(ctx);
+                    log::info!(
+                        "Ambient agent harness lifecycle: event=turn_settled task_id={:?} conversation_id={conversation_id} failed={failed} idle_window={window:?}",
+                        me.task_id
+                    );
+                    match window {
+                        // A failure window is held open by whoever is debugging in the
+                        // session, so it refreshes on viewer input like the other paths.
+                        Some(window) if failed => {
+                            me.arm_debug_window(harness_exit.clone(), (), window, ctx)
+                        }
+                        _ => harness_exit.complete_with_optional_idle(window, ()),
+                    }
+                }
+                HarnessIdleAction::Ignore => {}
+            }
+        });
+    }
+
     fn request_harness_save(&self, ctx: &mut ModelContext<Self>) {
         let Some(runner) = self.harness.clone() else {
             return;

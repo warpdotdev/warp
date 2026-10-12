@@ -9,7 +9,54 @@ use warp_graphql::platform_error::{
 use warp_graphql::response_context::ResponseContext;
 
 use super::*;
-use crate::server::server_api::ai::TaskGitCredentialsResponse;
+use crate::server::server_api::ai::{MockAIClient, TaskGitCredentialsResponse};
+
+#[test]
+fn refresh_keeps_the_captured_repository_scope() {
+    let output = BlockingCommand::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ai::agent_sdk::driver::git_credentials::tests::retained_scope_refresh_subprocess",
+            "--nocapture",
+        ])
+        .env("WARP_TEST_RETAINED_SCOPE_REFRESH", "1")
+        .env("WARP_ISOLATION_PLATFORM", "docker")
+        .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn retained_scope_refresh_subprocess() {
+    if std::env::var_os("WARP_TEST_RETAINED_SCOPE_REFRESH").is_none() {
+        return;
+    }
+    for captured_scope in [false, true] {
+        let _flag = warp_core::features::FeatureFlag::FactoryDeferredRepositories
+            .override_enabled(!captured_scope);
+        let mut ai_client = MockAIClient::new();
+        ai_client
+            .expect_get_task_git_credentials()
+            .times(1)
+            .withf(move |task_id, _, partial, factory_scope| {
+                task_id == "task-one" && *partial && *factory_scope == captured_scope
+            })
+            .returning(|_, _, _, _| {
+                Ok(TaskGitCredentialsResponse {
+                    credentials: Vec::new(),
+                    failed_hosts: Vec::new(),
+                })
+            });
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+        futures::executor::block_on(try_refresh("task-one", &ai_client, captured_scope)).unwrap();
+    }
+}
 
 #[test]
 fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {

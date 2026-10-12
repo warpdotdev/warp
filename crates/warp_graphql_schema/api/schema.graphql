@@ -3869,6 +3869,10 @@ merged with other task queries into a single unified query.
 type Task {
   """List of attachments (images/files) associated with this task."""
   attachments: [TaskAttachment!]!
+  """
+  Configuration for the active cloud execution. Requires the execution's workload token.
+  """
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -3925,6 +3929,7 @@ input TaskGitCredentialsInput {
   partial list.
   """
   acceptsPartialRefresh: Boolean
+  useFactoryRepositories: Boolean
 
   """The ID of the task."""
   taskId: ID!
@@ -5139,4 +5144,112 @@ enum WriteToPtyAutonomyValue {
   ALWAYS_ASK
   ASK_ON_FIRST_WRITE
   RESPECT_USER_SETTING
+}
+
+
+type ExecutionSkillSpec {
+  spec: String!
+}
+
+enum ExecutionRepositoryRefType {
+  COMMIT_SHA
+  BRANCH
+}
+
+type ExecutionRepositoryRef {
+  type: ExecutionRepositoryRefType!
+  value: String!
+}
+
+
+type ExecutionRepository {
+  forge: CodeForge!
+  owner: String!
+  name: String!
+  ref: ExecutionRepositoryRef
+  cloneFrom: SourceRepo
+  preserveOrigin: Boolean!
+}
+
+
+enum SessionSharingSubjectType {
+  TEAM
+  USER_EMAIL
+  PUBLIC
+}
+
+enum SessionSharingAccessLevel {
+  VIEW
+  EDIT
+}
+
+type SessionSharingAclSpec {
+  subjectType: SessionSharingSubjectType!
+  email: String
+  access: SessionSharingAccessLevel!
+}
+
+type GCPCloudProviderClientConfig {
+  projectNumber: String!
+  poolId: String!
+  providerId: String!
+  serviceAccountEmail: String
+}
+
+type AWSCloudProviderClientConfig {
+  roleArn: String!
+}
+
+type CloudProviderClientConfigs {
+  gcp: GCPCloudProviderClientConfig
+  aws: AWSCloudProviderClientConfig
+}
+
+type AWSBedrockInferenceClientConfig {
+  roleArn: String!
+  region: String
+}
+
+type InferenceProviderClientConfigs {
+  awsBedrock: AWSBedrockInferenceClientConfig
+}
+
+type ExecutionConfiguration {
+  taskId: ID!
+  executionId: ID!
+  conversationId: ID
+  parentRunId: ID
+  """The owning team's UID, or null for a personal task."""
+  teamId: ID
+  harness: AgentHarness!
+  modelId: String
+  reasoningLevel: String
+  profileId: ID
+  mcpServersJson: String!
+  skills: [ExecutionSkillSpec!]!
+  factorySkillDirs: [String!]!
+  computerUseEnabled: Boolean!
+  computerUseModelId: String
+  inferenceProviders: InferenceProviderClientConfigs
+  repositories: [ExecutionRepository!]!
+  deferredRepositories: [SourceRepo!]!
+  setupCommands: [String!]!
+  providers: CloudProviderClientConfigs
+  sessionSharingAcls: [SessionSharingAclSpec!]!
+  skipInitialTurn: Boolean!
+  idleOnCompleteSeconds: Int
+  idleOnFailSeconds: Int
+  snapshotDisabled: Boolean!
+}
+
+enum CodeForge {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+}
+
+type SourceRepo {
+  codeForge: CodeForge!
+  owner: String!
+  repo: String!
 }

@@ -213,6 +213,18 @@ impl FileState {
     }
 }
 
+/// Keymap context set by a pane that can switch between the rendered and raw views of its file,
+/// so the toggle shortcut is only available where the Rendered/Raw control is shown.
+pub const MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT: &str = "MarkdownDisplayModeToggle";
+
+// The rendered and raw views are separate panes with their own actions, so each registers its own
+// direction of the toggle. Sharing the name and description gives them a single, jointly
+// rebindable entry in settings.
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME: &str = "markdown:toggle_display_mode";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION: &str =
+    "Toggle Markdown rendered/raw view";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING: &str = "cmdorctrl-e";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -230,6 +242,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION,
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!("FileNotebookView") & id!(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT))
+        .with_key_binding(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING),
     ])
 }
 
@@ -1012,6 +1031,14 @@ impl Entity for FileNotebookView {
 impl View for FileNotebookView {
     fn ui_name() -> &'static str {
         "FileNotebookView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.shows_markdown_toggle() {
+            context.set.insert(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT);
+        }
+        context
     }
 
     fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {

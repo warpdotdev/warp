@@ -814,8 +814,8 @@ fn only_successful_real_mounts_contribute_usage_paths() {
         serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
             .unwrap();
     assert_eq!(
-        document["userRequest"],
-        serde_json::json!({"repos/real/target": {"source": "warp", "cacheFramework": "rust", "mountTarget": ["/work/target"]}})
+        document["user_request"],
+        serde_json::json!({"repos/real/target": {"source": "warp", "cache_framework": "rust", "mount_target": ["/work/target"]}})
     );
 }
 
@@ -850,8 +850,8 @@ fn no_detected_modes_still_allows_additional_usage_metadata() {
         serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
             .unwrap();
     assert_eq!(
-        document["userRequest"],
-        serde_json::json!({"git-mirrors": {"source": "warp", "cacheFramework": "git", "mountTarget": []}})
+        document["user_request"],
+        serde_json::json!({"git-mirrors": {"source": "warp", "cache_framework": "git", "mount_target": []}})
     );
 }
 

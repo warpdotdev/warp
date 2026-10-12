@@ -47,6 +47,17 @@ pub(crate) async fn fetch_and_download_attachments(
         .get_task_attachments(task_id.clone())
         .await
         .context("Failed to fetch task attachments")?;
+    download_attachments(attachments, http_client, attachments_dir).await
+}
+
+pub(crate) async fn download_attachments(
+    attachments: Vec<TaskAttachment>,
+    http_client: Arc<ServerApi>,
+    attachments_dir: PathBuf,
+) -> anyhow::Result<Option<String>> {
+    if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
+        return Ok(None);
+    }
 
     log::info!("Fetched {} task attachments", attachments.len());
 

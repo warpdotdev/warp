@@ -30,6 +30,7 @@ use futures_util::stream::AbortHandle;
 use http::header::{AUTHORIZATION, HeaderValue};
 use instant::Instant;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
+use serde::{Deserialize, Serialize};
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -98,14 +99,32 @@ impl AuthContext {
             .ok()
             .filter(|run_id| !run_id.trim().is_empty());
 
-        let token_store = TokenStore::new(token, expires_at)?;
+        let mut context = Self::from_snapshot(CredentialSnapshot { token, expires_at })?;
+        context.expected_run_id = expected_run_id.map(Into::into);
+        Ok(context)
+    }
+
+    pub(super) fn from_snapshot(snapshot: CredentialSnapshot) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !snapshot.token.trim().is_empty(),
+            "Cloud-agent OTLP token is empty"
+        );
+        anyhow::ensure!(
+            snapshot.expires_at > Utc::now(),
+            "Cloud-agent OTLP token is already expired"
+        );
+        let token_store = TokenStore::new(snapshot.token, snapshot.expires_at)?;
         let (refresh_hint_sender, refresh_hint_receiver) = async_channel::bounded(1);
         Ok(Self {
             token_store,
-            expected_run_id: expected_run_id.map(Into::into),
+            expected_run_id: None,
             refresh_hint_sender,
             refresh_hint_receiver: Arc::new(Mutex::new(Some(refresh_hint_receiver))),
         })
+    }
+
+    pub(super) fn snapshot(&self) -> Option<CredentialSnapshot> {
+        self.token_store.valid_snapshot()
     }
 
     /// Creates a transport sharing the latest credential while leaving the exporter itself stable.
@@ -137,9 +156,9 @@ impl fmt::Debug for AuthContext {
 
 /// A snapshot of the latest credential, stored behind a short-lived reader/writer lock.
 ///
-/// Readers clone only the sensitive authorization header, and no caller holds this lock during
-/// network I/O. Replacement constructs and validates a complete snapshot before taking the write
-/// lock so failures preserve the last valid credential.
+/// Readers copy the credential or sensitive authorization header without holding the lock during
+/// network I/O. Replacement validates a complete snapshot before taking the write lock so failures
+/// preserve the last valid credential.
 #[derive(Clone)]
 struct TokenStore {
     inner: Arc<RwLock<TokenSnapshot>>,
@@ -157,6 +176,22 @@ impl TokenStore {
     fn valid_authorization_header(&self) -> Option<HeaderValue> {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
         (snapshot.expires_at > Utc::now()).then(|| snapshot.authorization_header.clone())
+    }
+
+    fn valid_snapshot(&self) -> Option<CredentialSnapshot> {
+        let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
+        if snapshot.expires_at <= Utc::now() {
+            return None;
+        }
+        Some(CredentialSnapshot {
+            token: snapshot
+                .authorization_header
+                .to_str()
+                .ok()?
+                .strip_prefix("Bearer ")?
+                .to_owned(),
+            expires_at: snapshot.expires_at,
+        })
     }
 
     /// Atomically replaces the current snapshot only with a usable unexpired credential.
@@ -219,6 +254,22 @@ impl fmt::Debug for TokenSnapshot {
             .field("authorization_header", &"<redacted>")
             .field("expires_at", &self.expires_at)
             .finish()
+    }
+}
+
+/// A one-time credential copy with its original expiry, never a renewed lifetime.
+#[derive(Serialize, Deserialize)]
+pub(super) struct CredentialSnapshot {
+    token: String,
+    expires_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for CredentialSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialSnapshot")
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
     }
 }
 

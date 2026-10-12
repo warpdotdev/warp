@@ -7,34 +7,73 @@ use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::future::{pending, ready};
 use futures::poll;
-use tempfile::TempDir;
 use warp_cli::agent::{
     RepositoryForge, RepositoryHeadRef, RepositoryIdentity, RepositoryPreparationOverride,
 };
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 
+use super::super::environment_checkout_protocol::{
+    CheckoutBatch, CheckoutRequest, ResolvedHeads, is_valid_git_object_id,
+};
 use super::{
-    CloneFailureCredentialIdentity, CloneFailureIdentityDiagnostics, PrepareEnvironmentError,
-    RepositoryCloneRequest, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    await_setup_phase, build_git_credential_query_command, build_parallel_clone_command,
-    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
-    clone_failure_identity_diagnostics, environment_snapshot, is_valid_git_object_id,
-    merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas, read_failed_repo_names,
-    repository_clone_requests, setup_command_failure, single_repo_name, unique_clone_hosts,
+    CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
+    ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
+    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command,
+    build_deferred_repos_instruction, environment_snapshot, merge_repos_deduped,
+    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
 
-fn command_output(stdout: &str, stderr: &str, status: CommandExitStatus) -> CommandOutput {
-    CommandOutput {
-        stdout: stdout.as_bytes().to_vec(),
-        stderr: stderr.as_bytes().to_vec(),
-        status,
-        exit_code: None,
-    }
+#[test]
+fn resolved_repositories_apply_origin_policy_per_checkout() {
+    let first = SourceRepo::new(CodeForge::GitHub, "owner".into(), "first".into());
+    let second = SourceRepo::new(CodeForge::GitLab, "owner".into(), "second".into());
+    let workspace = WorkspaceConfiguration::from_resolved(
+        vec![
+            ResolvedRepository {
+                source: first,
+                checkout: None,
+                clone_from: None,
+                preserve_origin: true,
+            },
+            ResolvedRepository {
+                source: second,
+                checkout: Some(RepositoryHeadRef::Branch("feature".into())),
+                clone_from: Some(SourceRepo::new(
+                    CodeForge::GitLab,
+                    "source".into(),
+                    "second".into(),
+                )),
+                preserve_origin: false,
+            },
+        ],
+        Vec::new(),
+        vec!["make setup".into()],
+    )
+    .unwrap();
+    assert_eq!(workspace.setup_commands, vec!["make setup"]);
+    let requests = workspace.clone_requests;
+    assert!(!requests[0].remove_origin);
+    assert!(requests[1].remove_origin);
+    assert!(requests[1].fetch_branch_only);
+    assert_eq!(requests[1].remote.owner, "source");
+}
+
+#[test]
+fn duplicate_resolved_repositories_fail_before_clone() {
+    let repositories = (0..2)
+        .map(|_| ResolvedRepository {
+            source: SourceRepo::new(CodeForge::GitHub, "owner".into(), "repo".into()),
+            checkout: None,
+            clone_from: None,
+            preserve_origin: true,
+        })
+        .collect::<Vec<_>>();
+    assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new(), Vec::new()).is_err());
 }
 
 #[test]
@@ -74,6 +113,166 @@ fn setup_timeout_covers_command_start_and_exit_without_resetting_deadline() {
             }
             assert!(exit_tx.is_canceled());
         });
+    }
+}
+#[test]
+fn reported_heads_are_keyed_by_checkout_name_and_omit_unresolved_heads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report.json");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"outcomes":[
+                {{"request_index":0,"failure":null,"diagnostics":"","duration_ms":12,"resolved_head":"{sha}"}},
+                {{"request_index":1,"failure":null,"diagnostics":"","duration_ms":34,"resolved_head":"not-a-sha"}}
+            ]}}"#
+        ),
+    )
+    .unwrap();
+    let report = read_checkout_report(&path, 2).unwrap();
+    assert!(!path.exists());
+    assert_eq!(report.outcomes[0].duration_ms, 12);
+    assert_eq!(
+        reported_resolved_heads(&report, &checkout_batch(["warp", "invalid"])),
+        ResolvedHeads::from([("warp".to_owned(), sha.to_owned())])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn head_probe_timeout_preserves_later_snapshot_repositories() {
+    use std::io::Write as _;
+
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+    use warp_cli::environment_checkout::EnvironmentCheckoutArgs;
+    use warp_core::features::FeatureFlag;
+
+    let _mirrors = FeatureFlag::GitMirrorCache.override_enabled(false);
+    let directory = tempfile::tempdir().unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    for name in ["before", "slow-1", "slow-2", "slow-3", "slow-4", "later"] {
+        let target = directory.path().join(name);
+        fs::create_dir(&target).unwrap();
+        git(&target, &["init", "--quiet", "-b", "main"]);
+        fs::write(
+            target.join(".git/config"),
+            "[core]\nrepositoryformatversion = 0\nbare = false\nhooksPath = /dev/null\n\
+             [user]\nname = Checkout Fixture\nemail = checkout@example.com\n\
+             [commit]\ngpgsign = false\n",
+        )
+        .unwrap();
+        git(&target, &["commit", "--quiet", "--allow-empty", "-m", name]);
+    }
+    let before = git(
+        &directory.path().join("before"),
+        &["rev-parse", "--verify", "HEAD"],
+    );
+    let later = git(
+        &directory.path().join("later"),
+        &["rev-parse", "--verify", "HEAD"],
+    );
+    let fifo = directory.path().join("blocked-config");
+    mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    for name in ["slow-1", "slow-2", "slow-3", "slow-4"] {
+        writeln!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(directory.path().join(name).join(".git/config"))
+                .unwrap(),
+            "[include]\npath = \"{}\"",
+            fifo.display()
+        )
+        .unwrap();
+    }
+    let mut batch = checkout_batch(["before", "slow-1", "slow-2", "slow-3", "slow-4", "later"]);
+    batch.working_dir = directory.path().to_owned();
+    let args = EnvironmentCheckoutArgs {
+        requests_file: directory.path().join("requests.json"),
+        report_file: directory.path().join("report.json"),
+        remove_origins_only: false,
+        fail_if_target_exists: false,
+    };
+    fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+
+    super::super::environment_checkout::run(&args).unwrap();
+
+    let report = read_checkout_report(&args.report_file, 6).unwrap();
+    assert!(report.failures().next().is_none());
+    assert_eq!(
+        report
+            .outcomes
+            .iter()
+            .map(|outcome| (outcome.request_index, outcome.resolved_head.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, Some(before.as_str())),
+            (1, None),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, Some(later.as_str()))
+        ]
+    );
+    let requests = repository_clone_requests(
+        &[
+            repo(CodeForge::GitHub, "warpdotdev", "before"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-1"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-2"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-3"),
+            repo(CodeForge::GitHub, "warpdotdev", "slow-4"),
+            repo(CodeForge::GitHub, "warpdotdev", "later"),
+        ],
+        &[],
+        false,
+    )
+    .unwrap();
+    let snapshot = environment_snapshot(
+        &requests,
+        directory.path(),
+        &reported_resolved_heads(&report, &batch),
+    );
+    assert_eq!(
+        snapshot
+            .repositories
+            .iter()
+            .map(|revision| (
+                revision.checkout_path.as_str(),
+                revision.resolved_head_sha.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("before", before.as_str()), ("later", later.as_str())]
+    );
+}
+fn checkout_batch<const COUNT: usize>(checkout_names: [&str; COUNT]) -> CheckoutBatch {
+    CheckoutBatch {
+        working_dir: PathBuf::from("/workspace"),
+        repositories: checkout_names
+            .into_iter()
+            .map(|checkout_name| CheckoutRequest {
+                source: RepositoryIdentity {
+                    code_forge: RepositoryForge::GitHub,
+                    repo_owner: "warpdotdev".to_owned(),
+                    repo_name: checkout_name.to_owned(),
+                },
+                checkout_name: checkout_name.to_owned(),
+                head: None,
+                fetch_branch_only: false,
+            })
+            .collect(),
     }
 }
 
@@ -273,279 +472,6 @@ fn substituted_branch_request_preserves_origin_without_affecting_other_repos() {
 }
 
 #[test]
-fn parallel_clone_threads_substituted_branch_without_default_name() {
-    let sha = "0123456789abcdef0123456789abcdef01234567";
-    let mut frozen = clone_request(
-        repo(CodeForge::GitHub, "source", "warp"),
-        Some(RepositoryHeadRef::Branch(format!("benchmark-base/{sha}"))),
-    );
-    frozen.fetch_branch_only = true;
-    let command = unwrap_sh_c_script(&build_parallel_clone_command(
-        &[
-            frozen,
-            clone_request(repo(CodeForge::GitHub, "source", "other"), None),
-        ],
-        ShellType::Bash,
-        Path::new("/tmp/failed"),
-    ));
-    assert!(command.contains("'benchmark-base/0123456789abcdef0123456789abcdef01234567' '0' '1'"));
-    assert!(command.contains("git -C \"$target\" config --replace-all remote.origin.fetch \"+refs/heads/$checkout_ref:refs/remotes/origin/$default_branch\""));
-}
-
-#[test]
-fn frozen_benchmark_fetch_uses_starting_sha_while_live_main_moves() {
-    let fixture = build_fixture();
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    let frozen = format!("benchmark-base/{}", fixture.pinned_sha);
-    let mut request = clone_request(
-        repo(CodeForge::GitHub, "source", &fixture.repo_name),
-        Some(RepositoryHeadRef::Branch(frozen.clone())),
-    );
-    request.remote = repo(CodeForge::GitHub, "target", &fixture.repo_name);
-    request.fetch_branch_only = true;
-
-    git(
-        &[
-            "push",
-            &fixture.origin_url,
-            &format!("{}:refs/heads/{frozen}", fixture.pinned_sha),
-        ],
-        &fixture.working_dir.join("../seed"),
-    );
-    let checkout = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash).unwrap();
-    let checkout = checkout.replace(&request.remote.https_clone_url(), &fixture.origin_url);
-    let seed = fixture.working_dir.join("../seed");
-    git(&["checkout", "-b", "live", &fixture.base_sha], &seed);
-    fs::write(seed.join("FIXED.md"), "live fix\n").unwrap();
-    git(&["add", "FIXED.md"], &seed);
-    git(&["commit", "-m", "live fix"], &seed);
-    git(&["push", "origin", "HEAD:refs/heads/main"], &seed);
-    let initial_live_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
-    assert!(run_command(&checkout).success());
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha
-    );
-    assert_eq!(
-        git_stdout(&["symbolic-ref", "refs/remotes/origin/HEAD"], &repo_dir),
-        "refs/remotes/origin/main"
-    );
-    assert_eq!(
-        git_stdout(&["config", "--get", "remote.origin.fetch"], &repo_dir),
-        format!("+refs/heads/{frozen}:refs/remotes/origin/main")
-    );
-    assert!(
-        !Command::new("git")
-            .args(["cat-file", "-e", &initial_live_sha])
-            .env("GIT_NO_LAZY_FETCH", "1")
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-
-    fs::write(seed.join("FIXED.md"), "new live fix\n").unwrap();
-    git(&["add", "FIXED.md"], &seed);
-    git(&["commit", "-m", "advance live main"], &seed);
-    git(&["push", "origin", "HEAD:refs/heads/main"], &seed);
-    let live_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
-    git(&["fetch", "origin"], &repo_dir);
-    assert_eq!(
-        git_stdout(&["rev-parse", "origin/main"], &repo_dir),
-        fixture.pinned_sha
-    );
-    assert!(
-        !Command::new("git")
-            .args(["cat-file", "-e", &live_sha])
-            .env("GIT_NO_LAZY_FETCH", "1")
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha
-    );
-    git(&["push", "origin", "HEAD:refs/heads/trial/test"], &repo_dir);
-    assert_eq!(
-        git_stdout(&["ls-remote", "origin", "refs/heads/trial/test"], &repo_dir)
-            .split('\t')
-            .next()
-            .unwrap(),
-        fixture.pinned_sha
-    );
-}
-
-#[test]
-fn substituted_branch_checkout_uses_renamed_remote_default() {
-    let fixture = build_fixture();
-    let seed = fixture.working_dir.join("../seed");
-    let origin = fixture.working_dir.join("../origin.git");
-    let branch = format!("frozen/{}", fixture.pinned_sha);
-    git(
-        &[
-            "push",
-            "origin",
-            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
-        ],
-        &seed,
-    );
-    git(&["push", "origin", "main:refs/heads/trunk"], &seed);
-    git(&["symbolic-ref", "HEAD", "refs/heads/trunk"], &origin);
-    let mut request = clone_request(
-        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
-        Some(RepositoryHeadRef::Branch(branch.clone())),
-    );
-    request.fetch_branch_only = true;
-    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
-        .unwrap()
-        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
-
-    assert!(run_command(&command).success());
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    assert_eq!(
-        git_stdout(&["rev-parse", "origin/trunk"], &repo_dir),
-        fixture.pinned_sha
-    );
-    assert_eq!(
-        git_stdout(&["symbolic-ref", "refs/remotes/origin/HEAD"], &repo_dir),
-        "refs/remotes/origin/trunk"
-    );
-    assert_eq!(
-        git_stdout(&["config", "--get", "remote.origin.fetch"], &repo_dir),
-        format!("+refs/heads/{branch}:refs/remotes/origin/trunk")
-    );
-    assert!(
-        !Command::new("git")
-            .args(["show-ref", "--verify", "refs/remotes/origin/main"])
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-}
-
-#[test]
-fn substituted_branch_checkout_rejects_missing_remote_head() {
-    let fixture = build_fixture();
-    let seed = fixture.working_dir.join("../seed");
-    let origin = fixture.working_dir.join("../origin.git");
-    let branch = format!("frozen/{}", fixture.pinned_sha);
-    git(
-        &[
-            "push",
-            "origin",
-            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
-        ],
-        &seed,
-    );
-    git(&["symbolic-ref", "HEAD", "refs/heads/missing"], &origin);
-    let mut request = clone_request(
-        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
-        Some(RepositoryHeadRef::Branch(branch)),
-    );
-    request.fetch_branch_only = true;
-    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
-        .unwrap()
-        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
-
-    assert!(!run_command(&command).success());
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    assert!(
-        !Command::new("git")
-            .args(["show-ref"])
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-}
-
-#[test]
-fn substituted_branch_checkout_rejects_invalid_ref() {
-    let fixture = build_fixture();
-    let mut request = clone_request(
-        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
-        Some(RepositoryHeadRef::Branch("../main".to_string())),
-    );
-    request.fetch_branch_only = true;
-    let command = checkout_command_for(&request, &fixture.working_dir, ShellType::Bash)
-        .unwrap()
-        .replace(&request.remote.https_clone_url(), &fixture.origin_url);
-
-    assert!(!run_command(&command).success());
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    assert!(
-        !Command::new("git")
-            .args(["rev-parse", "--verify", "HEAD"])
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
-}
-#[test]
-fn parallel_substituted_branch_checkout_fetches_only_named_ref() {
-    let fixture = build_fixture();
-    let seed = fixture.working_dir.join("../seed");
-    let branch = format!("frozen/{}", fixture.pinned_sha);
-    git(
-        &[
-            "push",
-            "origin",
-            &format!("{}:refs/heads/{branch}", fixture.pinned_sha),
-        ],
-        &seed,
-    );
-    let mut frozen = clone_request(
-        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
-        Some(RepositoryHeadRef::Branch(branch)),
-    );
-    frozen.fetch_branch_only = true;
-    let mut legacy = clone_request(
-        repo(CodeForge::GitHub, "copy", &fixture.repo_name),
-        Some(RepositoryHeadRef::CommitSha(fixture.base_sha.clone())),
-    );
-    legacy.checkout_name = "legacy".to_string();
-    let command = build_parallel_clone_command(
-        &[frozen, legacy],
-        ShellType::Bash,
-        &fixture.working_dir.join("failed"),
-    );
-    let command = unwrap_sh_c_script(&command)
-        .replace("https://github.com/copy/fixture.git", &fixture.origin_url);
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(&fixture.working_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "origin/main"], &repo_dir),
-        fixture.pinned_sha
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &fixture.working_dir.join("legacy")),
-        fixture.base_sha
-    );
-}
-#[test]
 fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
     assert!(is_valid_git_object_id(
         "0123456789abcdef0123456789abcdef01234567"
@@ -584,49 +510,7 @@ fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
 }
 
 #[test]
-fn parse_resolved_head_shas_keeps_one_line_per_repo_including_failures() {
-    let first = "0123456789abcdef0123456789abcdef01234567";
-    let second = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-    let stdout = format!("{first}\n\n{second}\n");
-
-    assert_eq!(
-        parse_resolved_head_shas(stdout.as_bytes(), 3),
-        vec![Some(first.to_string()), None, Some(second.to_string())]
-    );
-    assert_eq!(
-        parse_resolved_head_shas(first.as_bytes(), 2),
-        vec![Some(first.to_string()), None]
-    );
-    assert_eq!(parse_resolved_head_shas(b"\xff", 1), vec![None]);
-}
-
-#[test]
-fn resolved_head_command_prints_one_line_per_repo() {
-    let workspace = Path::new("/workspace");
-    let command = unwrap_sh_c_script(&build_resolved_head_command(
-        &[
-            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
-            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
-        ],
-        workspace,
-    ));
-    let warp_dir = workspace.join("warp");
-    let warp_server_dir = workspace.join("warp-server");
-
-    assert!(command.starts_with("set +e\n"));
-    assert!(command.contains(&format!(
-        "git -C '{}' rev-parse --verify HEAD",
-        warp_dir.to_string_lossy()
-    )));
-    assert!(command.contains(&format!(
-        "git -C '{}' rev-parse --verify HEAD",
-        warp_server_dir.to_string_lossy()
-    )));
-    assert_eq!(command.matches("printf '%s\\n'").count(), 2);
-}
-
-#[test]
-fn environment_snapshot_keeps_resolved_heads_in_request_order() {
+fn environment_snapshot_matches_resolved_heads_to_requests_by_checkout_name() {
     let requests = vec![
         clone_request(
             repo(CodeForge::GitHub, "warpdotdev", "warp"),
@@ -645,7 +529,10 @@ fn environment_snapshot_keeps_resolved_heads_in_request_order() {
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[Some(first_sha.to_string()), Some(second_sha.to_string())],
+        &ResolvedHeads::from([
+            ("api".to_owned(), second_sha.to_owned()),
+            ("warp".to_owned(), first_sha.to_owned()),
+        ]),
     );
 
     assert_eq!(snapshot.repositories.len(), 2);
@@ -670,29 +557,14 @@ fn environment_snapshot_omits_unresolved_heads() {
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[
-            None,
-            Some("0123456789abcdef0123456789abcdef01234567".to_string()),
-        ],
+        &ResolvedHeads::from([(
+            "second".to_owned(),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        )]),
     );
 
     assert_eq!(snapshot.repositories.len(), 1);
     assert_eq!(snapshot.repositories[0].repo_name, "second");
-}
-fn branch_head_override(
-    code_forge: RepositoryForge,
-    owner: &str,
-    repo: &str,
-    branch: &str,
-) -> RepositoryPreparationOverride {
-    RepositoryPreparationOverride {
-        code_forge,
-        repo_owner: owner.to_string(),
-        repo_name: repo.to_string(),
-        head: RepositoryHeadRef::Branch(branch.to_string()),
-        clone_from: None,
-        preserve_origin: false,
-    }
 }
 
 fn substitution_override(
@@ -725,11 +597,6 @@ fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> Repos
         remove_origin: false,
         fetch_branch_only: false,
     }
-}
-
-fn named_checkout_request(repo: SourceRepo) -> RepositoryCloneRequest {
-    let checkout = repo.checkout_ref.clone().map(RepositoryHeadRef::Branch);
-    clone_request(repo, checkout)
 }
 
 fn environment_with_repos(repos: Vec<SourceRepo>) -> AmbientAgentEnvironment {
@@ -817,6 +684,323 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
 }
 
 #[test]
+fn legacy_workspace_merges_environment_and_task_additions_without_deferred_inventory() {
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "WarpDotDev", "Warp")]);
+    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "warp-server")];
+
+    let workspace =
+        WorkspaceConfiguration::from_legacy(Some(&environment), additional, Vec::new(), false)
+            .unwrap();
+    assert_eq!(
+        workspace.source_repos,
+        vec![
+            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
+            repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
+        ]
+    );
+    assert!(workspace.deferred_repos.is_empty());
+}
+
+#[test]
+fn resolved_empty_eager_membership_skips_preparation_with_deferred_inventory() {
+    let deferred = vec![repo(CodeForge::GitLab, "platform/backend", "api")];
+    let workspace =
+        WorkspaceConfiguration::from_resolved(Vec::new(), deferred.clone(), Vec::new()).unwrap();
+    assert!(workspace.source_repos.is_empty());
+    assert!(workspace.clone_requests.is_empty());
+    assert_eq!(workspace.deferred_repos, deferred);
+    assert_eq!(single_repo_name(&workspace.source_repos), None);
+}
+
+#[test]
+fn resolved_workspace_keeps_deferred_inventory_out_of_preparation() {
+    let eager = repo(CodeForge::GitHub, "acme", "billing");
+    let deferred = vec![repo(CodeForge::GitLab, "other", "billing")];
+    let workspace = WorkspaceConfiguration::from_resolved(
+        vec![ResolvedRepository {
+            source: eager.clone(),
+            checkout: None,
+            clone_from: None,
+            preserve_origin: true,
+        }],
+        deferred.clone(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(workspace.source_repos, vec![eager.clone()]);
+    assert_eq!(workspace.deferred_repos, deferred);
+    assert_eq!(workspace.clone_requests.len(), 1);
+    assert_eq!(workspace.clone_requests[0].remote, eager);
+    assert_eq!(
+        single_repo_name(&workspace.source_repos),
+        Some("billing".to_owned())
+    );
+}
+
+#[test]
+fn resolved_repositories_reject_clone_directory_collisions() {
+    let result = WorkspaceConfiguration::from_resolved(
+        vec![
+            ResolvedRepository {
+                source: repo(CodeForge::GitHub, "a", "widget"),
+                checkout: None,
+                clone_from: None,
+                preserve_origin: true,
+            },
+            ResolvedRepository {
+                source: repo(CodeForge::GitLab, "b", "widget"),
+                checkout: None,
+                clone_from: None,
+                preserve_origin: true,
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(PrepareEnvironmentError::CloneDirectoryCollision { repo_name, .. }) if repo_name == "widget"
+    ));
+}
+
+fn test_working_dir() -> PathBuf {
+    PathBuf::from("/home/agent")
+}
+
+#[test]
+fn deferred_instruction_absent_when_nothing_deferred() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "monolith")];
+    assert!(
+        build_deferred_repos_instruction(
+            &test_working_dir(),
+            &eager,
+            &[],
+            Path::new("/opt/oz"),
+            ShellType::Bash
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn deferred_instruction_lists_github_and_nested_gitlab_repos_in_order() {
+    let deferred = vec![
+        repo(CodeForge::GitLab, "platform/backend", "api"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+    let instruction = build_deferred_repos_instruction(
+        &test_working_dir(),
+        &[],
+        &deferred,
+        Path::new("/opt/oz"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+
+    let github_pos = instruction.find("GitHub acme/billing").unwrap();
+    let gitlab_pos = instruction.find("GitLab platform/backend/api").unwrap();
+    assert!(
+        github_pos < gitlab_pos,
+        "repos must be sorted by forge, then owner, then name: {instruction}"
+    );
+    assert!(instruction.contains("https://github.com/acme/billing.git"));
+    assert!(instruction.contains("https://gitlab.com/platform/backend/api.git"));
+    assert!(instruction.contains("preferred target: /home/agent/billing"));
+    assert!(instruction.contains("preferred target: /home/agent/api"));
+    assert!(instruction.contains("read the built-in factory-deferred-repositories skill"));
+    assert!(!instruction.contains("git clone"));
+}
+
+#[test]
+fn deferred_instruction_targets_absolute_paths_under_the_single_eager_repo_auto_cd_state() {
+    let working_dir = test_working_dir();
+    let eager = vec![repo(CodeForge::GitHub, "acme", "eager-repo")];
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction = build_deferred_repos_instruction(
+        &working_dir,
+        &eager,
+        &deferred,
+        Path::new("/opt/oz"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(instruction.contains("preferred target: /home/agent/billing"));
+}
+
+#[test]
+fn deferred_instruction_is_deterministic_regardless_of_input_order() {
+    let a = vec![
+        repo(CodeForge::GitHub, "acme", "billing"),
+        repo(CodeForge::GitHub, "acme", "monolith"),
+    ];
+    let b = vec![
+        repo(CodeForge::GitHub, "acme", "monolith"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+
+    assert_eq!(
+        build_deferred_repos_instruction(
+            &test_working_dir(),
+            &[],
+            &a,
+            Path::new("/opt/oz"),
+            ShellType::Bash
+        )
+        .unwrap(),
+        build_deferred_repos_instruction(
+            &test_working_dir(),
+            &[],
+            &b,
+            Path::new("/opt/oz"),
+            ShellType::Bash
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_shared_target_name_and_never_emits_it() {
+    let deferred = vec![
+        repo(CodeForge::GitHub, "acme", "widget"),
+        repo(CodeForge::GitLab, "other", "widget"),
+    ];
+    let instruction = build_deferred_repos_instruction(
+        &test_working_dir(),
+        &[],
+        &deferred,
+        Path::new("/opt/oz"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!instruction.contains("preferred target: /home/agent/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitLab other/widget"));
+    assert!(
+        instruction.contains(
+            "set checkout_name to an unused single directory name under the workspace root"
+        )
+    );
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_an_eager_repo_target() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "widget")];
+    let deferred = vec![repo(CodeForge::GitLab, "other", "widget")];
+    let instruction = build_deferred_repos_instruction(
+        &test_working_dir(),
+        &eager,
+        &deferred,
+        Path::new("/opt/oz"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!instruction.contains("preferred target: /home/agent/widget"));
+    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
+}
+
+#[test]
+fn deferred_instruction_never_contains_secret_bearing_content() {
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction = build_deferred_repos_instruction(
+        &test_working_dir(),
+        &[],
+        &deferred,
+        Path::new("/opt/oz"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(!instruction.contains("WARP_FACTORY_REPO_CLONE_URL"));
+    assert!(
+        !instruction.contains("://") || !instruction.contains('@'),
+        "must not contain a user:pass@ URL: {instruction}"
+    );
+    for url in instruction.split_whitespace().filter(|s| s.contains("://")) {
+        assert!(
+            url.starts_with("https://github.com/") || url.starts_with("https://gitlab.com/"),
+            "unexpected URL shape (must be a plain forge HTTPS clone URL): {url}"
+        );
+    }
+}
+
+#[test]
+fn deferred_inventory_produces_valid_requests_and_a_quoted_runtime() {
+    let root = tempfile::TempDir::new().unwrap();
+    let instruction = build_deferred_repos_instruction(
+        root.path(),
+        &[],
+        &[
+            repo(CodeForge::GitHub, "Acme", "Billing"),
+            repo(CodeForge::GitLab, "Platform/Backend", "Api"),
+            repo(CodeForge::AzureDevOps, "Acme/Project", "Tools"),
+        ],
+        Path::new("/opt/oz build/oz'preview"),
+        ShellType::Bash,
+    )
+    .unwrap()
+    .unwrap();
+    let runtime: serde_json::Value = serde_json::from_str(
+        instruction
+            .lines()
+            .find_map(|line| line.strip_prefix("Checkout runtime: "))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["working_dir"],
+        root.path().to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        runtime["command_template"],
+        r#"'/opt/oz build/oz'"'"'preview' environment-checkout --requests-file '<requests-file>' --report-file '<report-file>' --fail-if-target-exists"#
+    );
+    let requests = instruction
+        .lines()
+        .filter_map(|line| {
+            line.split_once("; checkout request: ")
+                .map(|(_, request)| serde_json::from_str::<CheckoutRequest>(request).unwrap())
+        })
+        .collect::<Vec<_>>();
+    let batch = CheckoutBatch {
+        working_dir: root.path().to_owned(),
+        repositories: requests,
+    };
+    batch.validate().unwrap();
+    assert_eq!(batch.repositories.len(), 3);
+    let github = batch
+        .repositories
+        .iter()
+        .find(|request| request.source.code_forge == RepositoryForge::GitHub)
+        .unwrap();
+    assert_eq!(github.source.repo_owner, "Acme");
+    assert_eq!(github.source.repo_name, "Billing");
+    assert_eq!(github.checkout_name, "Billing");
+}
+
+#[test]
+fn deferred_inventory_rejects_unsupported_forges() {
+    assert!(matches!(
+        build_deferred_repos_instruction(
+            &test_working_dir(),
+            &[],
+            &[repo(CodeForge::Unknown, "acme", "billing")],
+            Path::new("/opt/oz"),
+            ShellType::Bash,
+        ),
+        Err(PrepareEnvironmentError::UnsupportedRepositoryForge { .. })
+    ));
+}
+#[test]
 fn single_repo_name_returns_none_for_zero_or_many_repos() {
     let no_repos = Vec::<SourceRepo>::new();
     assert_eq!(single_repo_name(&no_repos), None);
@@ -834,220 +1018,6 @@ fn single_repo_name_returns_none_for_zero_or_many_repos() {
         ),
     ];
     assert_eq!(single_repo_name(&two_repos), None);
-}
-
-#[test]
-fn parallel_clone_command_runs_repos_in_background_and_waits() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        ),
-        SourceRepo::new(
-            CodeForge::GitLab,
-            "platform/backend".to_string(),
-            "api".to_string(),
-        ),
-    ];
-
-    let command = build_parallel_clone_command(
-        &repos
-            .into_iter()
-            .map(|repo| clone_request(repo, None))
-            .collect::<Vec<_>>(),
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-
-    assert!(command.starts_with("sh -c '"));
-    assert!(command.contains("warpdotdev/warp"));
-    assert!(command.contains("https://github.com/warpdotdev/warp.git"));
-    assert!(command.contains("platform/backend/api"));
-    assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
-    assert_eq!(command.matches("clone_repo").count(), 3);
-    assert_eq!(command.matches("2>&1 &").count(), 2);
-    assert!(command.contains("mktemp -d"));
-    assert!(command.contains("warp-clone-logs"));
-    assert!(command.contains("trap cleanup_clone_logs EXIT"));
-    assert!(command.contains("repo-0.log"));
-    assert!(command.contains("repo-1.log"));
-    assert!(command.contains(">\"$log_file_0\" 2>&1 &"));
-    assert!(command.contains(">\"$log_file_1\" 2>&1 &"));
-    assert!(command.contains("pid_0=\"$!\""));
-    assert!(command.contains("pid_1=\"$!\""));
-    assert!(command.contains("wait \"$pid_0\""));
-    assert!(command.contains("wait \"$pid_1\""));
-    assert!(command.contains(".warp-clone-failed-test"));
-    assert!(command.contains("===== warpdotdev/warp ====="));
-    assert!(command.contains("cat \"$log_file_0\""));
-    assert!(command.contains("===== platform/backend/api ====="));
-    assert!(!command.contains("repository revision results"));
-    assert!(command.contains("exit \"$failed\""));
-}
-
-#[test]
-fn parallel_clone_command_records_only_the_failing_repo_name_on_partial_failure() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "good".to_string(),
-        ),
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "bad".to_string(),
-        ),
-    ];
-    let marker_dir = tempfile::tempdir().unwrap();
-    let marker = marker_dir.path().join("clone-failed-repos");
-    let script = unwrap_sh_c_script(&build_parallel_clone_command(
-        &repos
-            .into_iter()
-            .map(|repo| clone_request(repo, None))
-            .collect::<Vec<_>>(),
-        ShellType::Bash,
-        &marker,
-    ));
-
-    // Redefine clone_repo with a stub where only "bad" fails, inserted right
-    // before the first invocation, so we drive the real wait/bookkeeping
-    // logic end to end without touching the network. sh uses the latest
-    // definition of a function, so this cleanly shadows the real one.
-    let stub = "clone_repo() {\n  [ \"$1\" = 'warpdotdev/bad' ] && return 1\n  return 0\n}\n";
-    let script = script.replacen("log_file_0=", &format!("{stub}log_file_0="), 1);
-    let output = run_command_output(&script);
-
-    assert!(!output.status.success());
-    assert_eq!(
-        read_failed_repo_names(&marker),
-        Some(vec!["warpdotdev/bad".to_string()])
-    );
-    assert!(!marker.exists());
-}
-
-#[test]
-fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        )
-        .with_checkout_ref(Some("abc123".to_string())),
-        SourceRepo::new(
-            CodeForge::GitLab,
-            "platform/backend".to_string(),
-            "api".to_string(),
-        )
-        .with_checkout_ref(Some("feature".to_string())),
-    ];
-
-    let command = build_parallel_clone_command(
-        &repos
-            .into_iter()
-            .map(|repo| {
-                let checkout = repo.checkout_ref.clone().map(RepositoryHeadRef::Branch);
-                clone_request(repo, checkout)
-            })
-            .collect::<Vec<_>>(),
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-
-    assert!(command.contains("checkout_ref=\"$4\""));
-    assert!(command.contains("'abc123'"));
-    assert!(command.contains("'feature'"));
-    assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
-    assert!(command.contains(
-        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
-    ));
-    assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\""));
-    assert!(!command.contains("rev-parse --verify HEAD"));
-    assert!(!command.contains("user.name"));
-    assert!(!command.contains("credential fill"));
-}
-
-#[test]
-fn parallel_clone_command_fetches_commit_shas_without_cloning_later_history() {
-    let command = build_parallel_clone_command(
-        &[
-            clone_request(
-                SourceRepo::new(
-                    CodeForge::GitHub,
-                    "warpdotdev".to_string(),
-                    "warp".to_string(),
-                ),
-                Some(RepositoryHeadRef::CommitSha(
-                    "0123456789abcdef0123456789abcdef01234567".to_string(),
-                )),
-            ),
-            clone_request(
-                SourceRepo::new(
-                    CodeForge::GitHub,
-                    "warpdotdev".to_string(),
-                    "warp-server".to_string(),
-                ),
-                Some(RepositoryHeadRef::Branch("develop".to_string())),
-            ),
-        ],
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-
-    assert!(command.contains("is_commit_sha=\"$5\""));
-    assert!(command.contains("'1'"));
-    assert!(command.contains("'0'"));
-    assert!(command.contains("git init --quiet \"$target\""));
-    assert!(command.contains("git -C \"$target\" remote add origin \"$repo_url\""));
-    assert_eq!(command.matches("git clone --filter=blob:none").count(), 1);
-    assert!(!command.contains("--depth=1"));
-}
-
-#[test]
-fn checkout_command_checks_out_fetch_head_not_ref_name() {
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )
-    .with_checkout_ref(Some("feature".to_string()));
-
-    let workspace = Path::new("/workspace");
-    let command = checkout_command_for(
-        &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
-        workspace,
-        ShellType::Bash,
-    )
-    .unwrap();
-
-    let warp_dir = workspace.join("warp");
-    assert!(command.contains(&format!(
-        "git -C '{}' fetch --filter=blob:none origin 'feature'",
-        warp_dir.to_string_lossy()
-    )));
-    assert!(command.contains("checkout --detach FETCH_HEAD"));
-    assert!(!command.contains("checkout --detach 'feature'"));
-    assert!(!command.contains("user.name"));
-    assert!(!command.contains("credential fill"));
-}
-
-#[test]
-fn checkout_command_absent_when_no_ref() {
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    );
-    assert!(
-        checkout_command_for(
-            &clone_request(repo, None),
-            Path::new("/workspace"),
-            ShellType::Bash
-        )
-        .is_none()
-    );
 }
 
 #[test]
@@ -1098,46 +1068,15 @@ fn substituted_request_uses_target_identity_and_source_checkout_path() {
         "warp-for-benchmarks",
     )];
     let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
-    let command = build_parallel_clone_command(
-        &requests,
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
 
-    assert!(command.contains("https://github.com/warpdotdev/warp-for-benchmarks.git"));
-    assert!(command.contains("'warp'"));
+    assert_eq!(requests[0].checkout_name, "warp");
     let snapshot = environment_snapshot(
         &requests,
         Path::new("/workspace"),
-        &[Some(source_sha.to_string())],
+        &ResolvedHeads::from([("warp".to_owned(), source_sha.to_owned())]),
     );
     assert_eq!(snapshot.repositories[0].repo_name, "warp-for-benchmarks");
     assert_eq!(snapshot.repositories[0].checkout_path, "warp");
-}
-
-#[test]
-fn sparse_substitution_origin_removal_excludes_preserved_target() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
-    ];
-    let overrides = vec![substitution_override(
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-        "warpdotdev",
-        "warp-for-benchmarks",
-    )];
-    let requests = repository_clone_requests(&repos, &overrides, true).unwrap();
-    let workspace = Path::new("/workspace");
-    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
-    let preserved_target = workspace.join("warp").to_string_lossy().into_owned();
-    let removed_source = workspace
-        .join("common-skills")
-        .to_string_lossy()
-        .into_owned();
-    assert!(!command.contains(&preserved_target));
-    assert!(command.contains(&removed_source));
 }
 
 #[test]
@@ -1193,11 +1132,6 @@ fn clone_requests_use_each_repository_host() {
     ];
 
     let prepared = repository_clone_requests(&repos, &[], false).unwrap();
-    let command = build_parallel_clone_command(
-        &prepared,
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
 
     assert_eq!(
         prepared[0].remote.https_clone_url(),
@@ -1207,8 +1141,6 @@ fn clone_requests_use_each_repository_host() {
         prepared[1].remote.https_clone_url(),
         "https://gitlab.com/platform/backend/api.git"
     );
-    assert!(command.contains("https://github.com/warpdotdev/warp.git"));
-    assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
 }
 
 #[test]
@@ -1220,17 +1152,11 @@ fn clone_requests_accept_azure_devops_repositories() {
     )];
 
     let prepared = repository_clone_requests(&repos, &[], false).unwrap();
-    let command = build_parallel_clone_command(
-        &prepared,
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
 
     assert_eq!(
         prepared[0].remote.https_clone_url(),
         "https://dev.azure.com/warpdotdev/test-project/_git/test-project"
     );
-    assert!(command.contains("https://dev.azure.com/warpdotdev/test-project/_git/test-project"));
 }
 
 #[test]
@@ -1451,234 +1377,54 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
 }
 
 #[test]
-fn applied_preparation_overrides_are_threaded_through_the_existing_clone_command() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        )
-        .with_checkout_ref(Some("abc123".to_string())),
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp-server".to_string(),
-        )
-        .with_checkout_ref(Some("old-pin".to_string())),
-    ];
-    let overrides = vec![branch_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "develop",
-    )];
-    let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides, false).unwrap(),
+fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
+    for shell in [
         ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-
-    assert!(command.contains("'develop'"));
-    assert!(!command.contains("'abc123'"));
-    assert!(command.contains("'old-pin'"));
-    assert!(command.contains(
-        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
-    ));
-    assert!(!command.contains("checkout_commit"));
-    assert!(!command.contains("checkout_branch"));
-}
-
-#[test]
-fn applied_commit_override_uses_sha_only_fetch() {
-    let repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )];
-    let overrides = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-    )];
-    let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides, false).unwrap(),
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    );
-
-    assert!(command.contains("'0123456789abcdef0123456789abcdef01234567'"));
-    assert!(command.contains("'1'"));
-    assert!(command.contains("git init --quiet \"$target\""));
-    assert!(!command.contains("--depth=1"));
-}
-
-#[test]
-fn repository_origin_removal_targets_all_environment_repositories() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        ),
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp-server".to_string(),
-        ),
-    ];
-
-    let workspace = Path::new("/workspace");
-    let requests = repository_clone_requests(&repos, &[], true).unwrap();
-    let command = build_remove_repository_origins_command(&requests, workspace, ShellType::Bash);
-
-    let warp_dir = workspace.join("warp").to_string_lossy().into_owned();
-    let warp_server_dir = workspace.join("warp-server").to_string_lossy().into_owned();
-    assert!(command.contains(&warp_dir));
-    assert!(command.contains(&warp_server_dir));
-    assert!(command.contains("remote get-url origin"));
-    assert!(command.contains("config --remove-section remote.origin"));
-}
-
-#[test]
-fn clone_failure_identity_hosts_are_deduplicated_in_request_order() {
-    let requests = [
-        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
-        clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
-        clone_request(repo(CodeForge::GitLab, "platform", "api"), None),
-    ];
-
-    assert_eq!(
-        unique_clone_hosts(&requests),
-        vec!["github.com".to_string(), "gitlab.com".to_string()]
-    );
-}
-
-#[test]
-fn credential_query_is_noninteractive_and_contains_only_the_requested_host() {
-    let command = build_git_credential_query_command("github.com");
-
-    assert!(command.contains("GIT_TERMINAL_PROMPT=0"));
-    assert!(command.contains("GCM_INTERACTIVE=never"));
-    assert!(command.contains("git credential fill"));
-    assert!(command.contains("protocol=https"));
-    assert!(command.contains("host=github.com"));
-    assert!(!command.contains("https://"));
-    assert!(!command.contains("password"));
-}
-
-#[test]
-fn clone_failure_identity_diagnostics_keep_only_sanitized_expected_fields() {
-    let author = command_output("Ada Lovelace\n", "", CommandExitStatus::Success);
-    let github = command_output(
-        "protocol=https\nhost=github.com\nusername=octocat\npassword=github-secret-token\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let gitlab = command_output(
-        "username=gitlab-user\npassword=gitlab-secret-token\n",
-        "",
-        CommandExitStatus::Success,
-    );
-
-    let diagnostics = clone_failure_identity_diagnostics(
-        Some(&author),
-        [("github.com", Some(&github)), ("gitlab.com", Some(&gitlab))],
-    );
-
-    assert_eq!(diagnostics.author.as_deref(), Some("Ada Lovelace"));
-    assert_eq!(
-        diagnostics.credentials,
-        vec![
-            CloneFailureCredentialIdentity {
-                host: "github.com".to_string(),
-                username: Some("octocat".to_string()),
-            },
-            CloneFailureCredentialIdentity {
-                host: "gitlab.com".to_string(),
-                username: Some("gitlab-user".to_string()),
-            },
-        ]
-    );
-    let rendered = diagnostics.to_string();
-    assert_eq!(
-        rendered,
-        "\nGit identity diagnostics:\n  Author: Ada Lovelace\n  Credential username for github.com: octocat\n  Credential username for gitlab.com: gitlab-user"
-    );
-    assert!(!rendered.contains("password"));
-    assert!(!rendered.contains("secret-token"));
-    assert!(!rendered.contains("protocol="));
-    assert!(!rendered.contains("host="));
-}
-
-#[test]
-fn clone_failure_identity_diagnostics_fall_back_on_timeout_malformed_or_failed_queries() {
-    let malformed_author = command_output(
-        "Ada\npassword=author-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let malformed_username = command_output(
-        "username=https://token@github.com\npassword=credential-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-    let helper_failure = command_output(
-        "username=ignored",
-        "helper failed with password=stderr-secret",
-        CommandExitStatus::Failure,
-    );
-    let duplicate_username = command_output(
-        "username=first\nusername=second\npassword=duplicate-secret\n",
-        "",
-        CommandExitStatus::Success,
-    );
-
-    let diagnostics = clone_failure_identity_diagnostics(
-        Some(&malformed_author),
-        [
-            ("github.com", Some(&malformed_username)),
-            ("gitlab.com", Some(&helper_failure)),
-            ("bitbucket.org", Some(&duplicate_username)),
-            ("dev.azure.com", None),
-        ],
-    );
-
-    assert_eq!(diagnostics.author, None);
-    assert_eq!(
-        diagnostics.credentials,
-        vec![
-            CloneFailureCredentialIdentity {
-                host: "github.com".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "gitlab.com".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "bitbucket.org".to_string(),
-                username: None,
-            },
-            CloneFailureCredentialIdentity {
-                host: "dev.azure.com".to_string(),
-                username: None,
-            },
-        ]
-    );
-    let rendered = diagnostics.to_string();
-    assert_eq!(
-        rendered,
-        "\nGit identity diagnostics:\n  Author: unset\n  Credential username for github.com: unavailable\n  Credential username for gitlab.com: unavailable\n  Credential username for bitbucket.org: unavailable\n  Credential username for dev.azure.com: unavailable"
-    );
-    for secret in [
-        "author-secret",
-        "credential-secret",
-        "stderr-secret",
-        "duplicate-secret",
-        "https://token@github.com",
+        ShellType::Zsh,
+        ShellType::Fish,
+        ShellType::PowerShell,
     ] {
-        assert!(!rendered.contains(secret));
+        let command = build_checkout_helper_command(
+            Path::new("/Applications/Warp's App/Contents/MacOS/warp"),
+            Path::new("/private/a path/requests.json"),
+            Path::new("/private/a path/report.json"),
+            true,
+            shell,
+        );
+        assert!(command.contains("environment-checkout --requests-file"));
+        assert!(command.contains("' --report-file '"));
+        assert!(!command.contains("github.com") && !command.contains("sh -c"));
+        assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
+        assert!(command.ends_with(" --remove-origins-only"));
+    }
+}
+
+#[test]
+fn checkout_reports_are_validated_and_removed_on_every_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report.json");
+    std::fs::write(
+        &path,
+        r#"{"outcomes":[
+            {"request_index":0,"failure":null,"diagnostics":"","duration_ms":5,"resolved_head":null},
+            {"request_index":1,"failure":"Checkout","diagnostics":"unknown ref","duration_ms":9,"resolved_head":null}
+        ]}"#,
+    )
+    .unwrap();
+    let report = read_checkout_report(&path, 2).unwrap();
+    let failures = report.failures().collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].request_index, 1);
+    assert_eq!(failures[0].diagnostics, "unknown ref");
+    assert!(!path.exists());
+    for bytes in [
+        "{",
+        r#"{"outcomes":[{"request_index":2,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null}]}"#,
+        r#"{"outcomes":[{"request_index":0,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null},{"request_index":0,"failure":"Clone","diagnostics":"","duration_ms":0,"resolved_head":null}]}"#,
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(read_checkout_report(&path, 2).is_none());
+        assert!(!path.exists());
     }
 }
 
@@ -1709,13 +1455,6 @@ fn clone_failure_errors_preserve_the_original_failure_before_diagnostics() {
     );
 }
 
-// --- Real-git fixture tests -------------------------------------------------
-//
-// These exercise the actual fetch-then-checkout command produced by
-// `checkout_command_for` against a local git "forge", so we verify real git
-// behavior (fetch of a commit not brought down by the partial clone, then
-// checkout) rather than just the command string.
-
 fn git(args: &[&str], cwd: &Path) {
     let output = Command::new("git")
         .args(args)
@@ -1730,413 +1469,6 @@ fn git(args: &[&str], cwd: &Path) {
         output.status.success(),
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn git_stdout(args: &[&str], cwd: &Path) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("git should be runnable");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
-
-struct Fixture {
-    _tmp: TempDir,
-    origin_url: String,
-    working_dir: PathBuf,
-    /// Commit that is present on the origin but NOT reachable from the default
-    /// branch, so a plain clone will not bring it down.
-    pinned_sha: String,
-    /// Default-branch tip, used to confirm the no-ref path stays put.
-    base_sha: String,
-    repo_name: String,
-}
-
-/// Build a local bare "origin" repo whose default branch is at `base_sha` and
-/// which additionally holds `pinned_sha` under a hidden ref (`refs/pinned/base`)
-/// so `git clone` (which only fetches `refs/heads/*`) does not pull it in.
-fn build_fixture() -> Fixture {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-
-    let origin = root.join("origin.git");
-    fs::create_dir_all(&origin).unwrap();
-    git(&["init", "-b", "main", "--bare", "."], &origin);
-    // Allow partial clone + fetch-by-SHA over the smart protocol, matching what
-    // a real forge (e.g. GitHub) permits.
-    git(&["config", "uploadpack.allowFilter", "true"], &origin);
-    git(
-        &["config", "uploadpack.allowAnySHA1InWant", "true"],
-        &origin,
-    );
-
-    let seed = root.join("seed");
-    fs::create_dir_all(&seed).unwrap();
-    git(&["init", "-b", "main", "."], &seed);
-    fs::write(seed.join("README.md"), "base\n").unwrap();
-    git(&["add", "."], &seed);
-    git(&["commit", "-m", "base"], &seed);
-    let base_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
-    git(
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-        &seed,
-    );
-    git(&["push", "origin", "main"], &seed);
-
-    // A second commit that is intentionally left off `main`.
-    fs::write(seed.join("PINNED.md"), "pinned\n").unwrap();
-    git(&["add", "."], &seed);
-    git(&["commit", "-m", "pinned"], &seed);
-    let pinned_sha = git_stdout(&["rev-parse", "HEAD"], &seed);
-    git(&["push", "origin", "HEAD:refs/pinned/base"], &seed);
-
-    let working_dir = root.join("work");
-    fs::create_dir_all(&working_dir).unwrap();
-
-    // Force the smart protocol (not the local-hardlink optimization) so the
-    // partial-clone filter and hidden-ref exclusion behave like a real remote.
-    let origin_url = format!("file://{}", origin.display());
-
-    Fixture {
-        _tmp: tmp,
-        origin_url,
-        working_dir,
-        pinned_sha,
-        base_sha,
-        repo_name: "fixture".to_string(),
-    }
-}
-
-fn partial_clone(fixture: &Fixture) -> PathBuf {
-    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
-    git(
-        &[
-            "clone",
-            "--filter=blob:none",
-            &fixture.origin_url,
-            repo_dir.to_str().unwrap(),
-        ],
-        &fixture.working_dir,
-    );
-    repo_dir
-}
-
-fn run_command(command: &str) -> std::process::ExitStatus {
-    Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .status()
-        .expect("sh should be runnable")
-}
-fn run_command_output(command: &str) -> std::process::Output {
-    Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .expect("sh should be runnable")
-}
-
-/// Unwrap the outer `sh -c '...'` quoting produced by `build_parallel_clone_command`
-/// so tests can execute the embedded shell script directly.
-fn unwrap_sh_c_script(command: &str) -> String {
-    let prefix = "sh -c '";
-    let suffix = "'";
-    let inner = command
-        .strip_prefix(prefix)
-        .and_then(|s| s.strip_suffix(suffix))
-        .unwrap_or_else(|| panic!("expected sh -c '...' wrapper, got: {command}"));
-    // Reverse the single-quote escaping used by shell_escape_single_quotes:
-    // interior `'` becomes `'"'"'`.
-    inner.replace("'\"'\"'", "'")
-}
-
-/// Extract the `clone_repo` function body from the parallel clone script and
-/// invoke it once against a local fixture origin/target.
-fn run_parallel_clone_repo_helper(
-    fixture: &Fixture,
-    target: &Path,
-    checkout_ref: Option<&str>,
-) -> std::process::Output {
-    // Two dummy repos so we hit the parallel path (and its shell helper).
-    let repos = vec![
-        named_checkout_request(
-            SourceRepo::new(
-                CodeForge::GitHub,
-                "warpdotdev".to_string(),
-                fixture.repo_name.clone(),
-            )
-            .with_checkout_ref(checkout_ref.map(str::to_string)),
-        ),
-        clone_request(
-            SourceRepo::new(
-                CodeForge::GitHub,
-                "warpdotdev".to_string(),
-                "other".to_string(),
-            ),
-            None,
-        ),
-    ];
-    let script = unwrap_sh_c_script(&build_parallel_clone_command(
-        &repos,
-        ShellType::Bash,
-        Path::new("/tmp/.warp-clone-failed-test"),
-    ));
-
-    // Keep only the clone_repo function definition; drop background clones /
-    // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
-    let helper_start = script
-        .find("clone_repo() {")
-        .expect("clone_repo function definition");
-    let helper_end = script[helper_start..]
-        .find("\n}")
-        .expect("clone_repo function terminator")
-        + helper_start
-        + 2;
-    let helper = &script[helper_start..helper_end];
-    let invoke = format!(
-        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}' '0'\n",
-        repo = fixture.repo_name,
-        origin = fixture.origin_url,
-        target = target.display(),
-        checkout_ref = checkout_ref.unwrap_or(""),
-        is_commit_sha = if checkout_ref.is_some() { "1" } else { "0" },
-    );
-    run_command_output(&invoke)
-}
-
-#[test]
-fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
-    let fixture = build_fixture();
-    let repo_dir = partial_clone(&fixture);
-
-    // `git clone` only fetches `refs/heads/*` by default, and the pinned
-    // commit lives under a hidden non-heads ref (`refs/pinned/base`) instead
-    // of `main` — the fetch step baked into the command is what pulls it
-    // down before it can be checked out.
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    )
-    .with_checkout_ref(Some(fixture.pinned_sha.clone()));
-    let command = checkout_command_for(
-        &named_checkout_request(repo),
-        &fixture.working_dir,
-        ShellType::Bash,
-    )
-    .expect("a ref was set");
-
-    assert!(run_command(&command).success());
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha
-    );
-    // Detached HEAD is intentional for trial pins.
-    assert_eq!(
-        git_stdout(&["rev-parse", "--abbrev-ref", "HEAD"], &repo_dir),
-        "HEAD"
-    );
-}
-
-#[test]
-fn checkout_command_prefers_fetched_object_over_stale_local_branch() {
-    let fixture = build_fixture();
-    let repo_dir = partial_clone(&fixture);
-
-    // Create a local branch named like the remote branch we will fetch, but
-    // pointing at the default-branch tip (stale). Checking out the branch name
-    // would stay on base_sha; FETCH_HEAD must win.
-    git(&["branch", "feature", &fixture.base_sha], &repo_dir);
-
-    // Publish the pinned commit under refs/heads/feature on the origin.
-    git(
-        &[
-            "push",
-            &fixture.origin_url,
-            &format!("{}:refs/heads/feature", fixture.pinned_sha),
-        ],
-        &repo_dir,
-    );
-
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    )
-    .with_checkout_ref(Some("feature".to_string()));
-    let command = checkout_command_for(
-        &named_checkout_request(repo),
-        &fixture.working_dir,
-        ShellType::Bash,
-    )
-    .expect("a ref was set");
-
-    assert!(run_command(&command).success());
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha,
-        "must pin to the just-fetched remote tip, not the stale local branch"
-    );
-}
-
-#[test]
-fn parallel_clone_shell_pins_existing_target_dir_when_checkout_ref_set() {
-    let fixture = build_fixture();
-    // Simulate a reused multi-repo target directory already present on the
-    // default branch tip.
-    let repo_dir = partial_clone(&fixture);
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.base_sha
-    );
-
-    // Drive the real shell helper extracted from build_parallel_clone_command.
-    assert!(
-        run_parallel_clone_repo_helper(&fixture, &repo_dir, Some(&fixture.pinned_sha))
-            .status
-            .success()
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha,
-        "reused target directory must still pin when checkout_ref is set"
-    );
-}
-
-#[test]
-fn parallel_clone_shell_leaves_existing_target_dir_when_no_checkout_ref() {
-    let fixture = build_fixture();
-    let repo_dir = partial_clone(&fixture);
-
-    assert!(
-        run_parallel_clone_repo_helper(&fixture, &repo_dir, None)
-            .status
-            .success()
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.base_sha,
-        "no checkout_ref must leave an existing directory untouched"
-    );
-}
-
-/// Single-repo `clone_repo()` skips clone when the directory already exists, but
-/// must still run `checkout_command_for` when `checkout_ref` is set so a reused
-/// working tree is pinned rather than left on a stale default-branch tip.
-#[test]
-fn single_repo_checkout_pins_existing_dir_when_checkout_ref_set() {
-    let fixture = build_fixture();
-    // Existing single-repo target on the default branch (the reuse path).
-    let repo_dir = partial_clone(&fixture);
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.base_sha
-    );
-
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    )
-    .with_checkout_ref(Some(fixture.pinned_sha.clone()));
-
-    // This is the command single-repo clone_repo runs after the if/else when a
-    // checkout_ref is present — including when the clone itself was skipped.
-    let command = checkout_command_for(
-        &named_checkout_request(repo),
-        &fixture.working_dir,
-        ShellType::Bash,
-    )
-    .expect("a ref was set");
-    assert!(
-        run_command(&command).success(),
-        "single-repo reuse path must fetch and pin checkout_ref"
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.pinned_sha,
-        "reused single-repo directory must pin when checkout_ref is set"
-    );
-    assert_eq!(
-        git_stdout(&["rev-parse", "--abbrev-ref", "HEAD"], &repo_dir),
-        "HEAD",
-        "pin should detach HEAD via FETCH_HEAD"
-    );
-
-    // No checkout_ref still means no pin command (reused dirs stay untouched).
-    let unpinned = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    );
-    assert!(
-        checkout_command_for(
-            &clone_request(unpinned, None),
-            &fixture.working_dir,
-            ShellType::Bash
-        )
-        .is_none()
-    );
-}
-
-#[test]
-fn checkout_command_fails_for_unknown_ref() {
-    let fixture = build_fixture();
-    let repo_dir = partial_clone(&fixture);
-
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    )
-    .with_checkout_ref(Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()));
-    let command = checkout_command_for(
-        &named_checkout_request(repo),
-        &fixture.working_dir,
-        ShellType::Bash,
-    )
-    .expect("a ref was set");
-
-    let status = run_command(&command);
-    assert!(!status.success(), "unknown ref should fail");
-
-    // HEAD must remain on the default branch tip.
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.base_sha
-    );
-}
-
-#[test]
-fn no_checkout_ref_leaves_clone_on_default_branch() {
-    let fixture = build_fixture();
-    let repo_dir = partial_clone(&fixture);
-
-    let repo = SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        fixture.repo_name.clone(),
-    );
-    // No ref means no checkout command is produced ...
-    assert!(
-        checkout_command_for(
-            &clone_request(repo, None),
-            &fixture.working_dir,
-            ShellType::Bash
-        )
-        .is_none()
-    );
-    // ... and the clone stays exactly where a plain clone leaves it.
-    assert_eq!(
-        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
-        fixture.base_sha
     );
 }
 

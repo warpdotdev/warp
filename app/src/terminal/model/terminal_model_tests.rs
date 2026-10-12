@@ -24,7 +24,7 @@ use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 
 /// Helper function to create a SerializedBlock with default values,
 /// including the new is_local field.
@@ -1993,6 +1993,81 @@ fn terminal_exit_absorbs_later_lifecycle_inputs() {
     assert_eq!(terminal.active_block_id(), &active_block_id);
     assert_eq!(terminal.block_list().blocks().len(), block_count);
     assert_eq!(terminal.pending_session_id(), pending_session_id);
+}
+#[test]
+fn observed_shell_exit_is_finalized_once_after_recovery_decision() {
+    let _respawn_enabled = FeatureFlag::CloudAgentShellRespawn.override_enabled(true);
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.simulate_long_running_block("exit 42", "");
+    let reason = ExitReason::ShellProcessExited {
+        status: ObservedExitStatus::Code(42),
+    };
+
+    terminal.exit(reason);
+    assert!(terminal.is_read_only());
+
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.set_shared_session_source(SharedSessionSource::ambient_agent(None));
+    terminal.simulate_long_running_block("exit 42", "");
+    terminal.exit(reason);
+
+    assert!(!terminal.is_read_only());
+    assert!(!terminal.block_list().active_block().finished());
+    assert!(terminal.finalize_exit(reason));
+    assert!(terminal.is_read_only());
+    assert!(terminal.block_list().active_block().finished());
+    assert!(!terminal.finalize_exit(reason));
+}
+
+#[test]
+fn shell_recovery_finishes_interrupted_block_and_starts_fresh_input() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.simulate_long_running_block("exit 42", "");
+    let interrupted_block_id = terminal.active_block_id().clone();
+    let replacement_session_id = 456.into();
+
+    terminal.prepare_shell_recovery(ObservedExitStatus::Code(42));
+    terminal.register_session_id(replacement_session_id);
+    terminal.init_shell(InitShellValue {
+        session_id: replacement_session_id,
+        shell: "bash".to_owned(),
+        hostname: "cloud-agent".to_owned(),
+        ..Default::default()
+    });
+
+    let interrupted_block = terminal
+        .block_list()
+        .block_with_id(&interrupted_block_id)
+        .expect("interrupted block should remain in the block list");
+    assert!(interrupted_block.finished());
+    assert_eq!(interrupted_block.exit_code(), ExitCode::from(42));
+    assert_ne!(terminal.active_block_id(), &interrupted_block_id);
+    assert!(!terminal.is_read_only());
+}
+
+#[test]
+fn shell_recovery_without_exit_code_reports_failure() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.simulate_long_running_block("kill $$", "");
+    let interrupted_block_id = terminal.active_block_id().clone();
+    let replacement_session_id = 456.into();
+
+    terminal.prepare_shell_recovery(ObservedExitStatus::Signal(9));
+    terminal.register_session_id(replacement_session_id);
+    terminal.init_shell(InitShellValue {
+        session_id: replacement_session_id,
+        shell: "bash".to_owned(),
+        hostname: "cloud-agent".to_owned(),
+        ..Default::default()
+    });
+
+    let interrupted_block = terminal
+        .block_list()
+        .block_with_id(&interrupted_block_id)
+        .expect("interrupted block should remain addressable");
+    assert!(interrupted_block.finished());
+    assert_eq!(interrupted_block.exit_code(), ExitCode::from(137));
+    assert_ne!(terminal.active_block_id(), &interrupted_block_id);
 }
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {

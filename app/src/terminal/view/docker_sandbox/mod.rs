@@ -23,7 +23,7 @@ use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
     WARP_DRIVE_SYNC_TIMEOUT,
-    environment::{RepositoryPreparationOptions, prepare_environment},
+    environment::{WorkspaceConfiguration, prepare_environment},
     terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]
@@ -294,20 +294,26 @@ impl TerminalView {
                     .ok_or("environment not found")?;
 
                 // Prepare the environment (clone repos, run setup commands, index codebases).
-                let source_repos = environment.effective_repos();
-                let setup_commands = environment.setup_commands;
+                let workspace = WorkspaceConfiguration::from_legacy(
+                    Some(&environment),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                )
+                .map_err(|e| {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Docker sandbox environment preparation failed")
+                    );
+                    "invalid environment repositories"
+                })?;
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
-                            RepositoryPreparationOptions::new(
-                                source_repos,
-                                setup_commands,
-                                Vec::new(),
-                                false,
-                            ),
+                            workspace,
                             setup_events,
                             environment_snapshot_reporter,
                             ctx,

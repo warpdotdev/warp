@@ -30,6 +30,8 @@ pub struct TaskGitCredentialsInput {
     pub workload_token: String,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub accepts_partial_refresh: Option<bool>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub use_factory_repositories: Option<bool>,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

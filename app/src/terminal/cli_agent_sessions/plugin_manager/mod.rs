@@ -289,6 +289,7 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Codex
         | CLIAgent::Gemini
         | CLIAgent::Grok
+        | CLIAgent::Muse
         | CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Copilot

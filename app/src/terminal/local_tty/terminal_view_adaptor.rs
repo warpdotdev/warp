@@ -23,7 +23,9 @@ use session_sharing_protocol::sharer::{
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
+use warpui::{
+    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
+};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
@@ -1193,6 +1195,21 @@ impl TerminalManager<TerminalView> {
                     );
                 });
             }
+            NetworkEvent::ReconnectLimitReached { reason } => {
+                Self::shared_session_terminated(
+                    &terminal_view,
+                    shared_session_model_clone.clone(),
+                    model.clone(),
+                    ctx,
+                );
+
+                terminal_view.update(ctx, |view, ctx| {
+                    view.show_persistent_toast(reason.to_string(), ToastFlavor::Error, ctx);
+                    ctx.emit(TerminalViewEvent::SharedSessionFailed {
+                        reason: reason.to_string(),
+                    });
+                });
+            }
             NetworkEvent::ControlActionRequested {
                 participant_id,
                 request_id,
@@ -2205,6 +2222,21 @@ impl TerminalManager<TerminalView> {
 impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
+    }
+    fn recover_cloud_shell(
+        &mut self,
+        request: crate::terminal::shell_recovery::CloudShellRecoveryRequest,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) -> bool {
+        TerminalManager::recover_cloud_shell(self, request, ctx)
+    }
+
+    fn on_session_bootstrapped(
+        &mut self,
+        session_id: crate::terminal::model::session::SessionId,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) {
+        TerminalManager::on_session_bootstrapped(self, session_id, ctx);
     }
 
     fn on_view_detached(

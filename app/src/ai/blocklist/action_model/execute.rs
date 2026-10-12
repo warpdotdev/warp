@@ -61,7 +61,7 @@ pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawnin
 pub use run_agents::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
-pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
+pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent, ShellRecoveryResult};
 pub use start_agent::{
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
     StartAgentRequestId, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,

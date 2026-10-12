@@ -45,7 +45,11 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{MarkdownDisplayMode, renders_in_warp_notebook_viewer};
+use crate::notebooks::file::{
+    MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT, MarkdownDisplayMode,
+    TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION, TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+    TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING, renders_in_warp_notebook_viewer,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
     CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
@@ -122,6 +126,14 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
+        #[cfg(feature = "local_fs")]
+        EditableBinding::new(
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION,
+            CodeViewAction::RenderMarkdown,
+        )
+        .with_context_predicate(id!("CodeView") & id!(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT))
+        .with_key_binding(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING),
     ]);
 }
 
@@ -2240,6 +2252,14 @@ impl Entity for CodeView {
 impl View for CodeView {
     fn ui_name() -> &'static str {
         "CodeView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.markdown_mode_segmented_control.is_some() {
+            context.set.insert(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT);
+        }
+        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {

@@ -27,7 +27,8 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 ///
 /// It implements [`event::Source`] so that it can be registered with a
 /// [`mio::poll::Poll`]. It ignores the [`mio::Interest`], producing readable
-/// events even if read interest is not registered.
+/// events even if read interest is not registered. Deregistering and registering again with a
+/// different poll is supported, so one channel can outlive the event loop draining it.
 pub struct Receiver<T> {
     state: Arc<Mutex<State>>,
     rx: mpsc::Receiver<T>,
@@ -49,14 +50,12 @@ impl<T> event::Source for Receiver<T> {
     ) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
 
-        if state.waker.is_none() {
-            let waker = Waker::new(registry, token)?;
-            if state.needs_wake_on_register {
-                waker.wake()?;
-                state.needs_wake_on_register = false;
-            }
-            state.waker = Some(waker);
+        let waker = Waker::new(registry, token)?;
+        if state.needs_wake_on_register {
+            waker.wake()?;
+            state.needs_wake_on_register = false;
         }
+        state.waker = Some(waker);
 
         Ok(())
     }
@@ -72,7 +71,8 @@ impl<T> event::Source for Receiver<T> {
     }
 
     fn deregister(&mut self, _: &mio::Registry) -> io::Result<()> {
-        // Not actually supported, so we do nothing.
+        // Messages sent from here on are delivered by the wake performed on the next registration.
+        self.state.lock().unwrap().waker = None;
         Ok(())
     }
 }
@@ -115,11 +115,11 @@ impl<T> Clone for Sender<T> {
 }
 
 struct State {
-    /// The underlying waker for the channel.  This is None until the channel
-    /// is registered.
+    /// The underlying waker for the channel.  This is None while the channel
+    /// is not registered.
     waker: Option<Waker>,
     /// Whether or not we need to wake the waker immediately upon registration.
-    /// This can happen if a message was sent before the receiver was registered
+    /// This can happen if a message was sent while the receiver was not registered
     /// with a [`mio::Registry`].
     needs_wake_on_register: bool,
 }

@@ -1239,7 +1239,7 @@ pub fn test_selection_to_string_hidden_blocks() {
             block_list.linefeed();
 
             // Simulate creating an SSH session
-            block_list.reinit_shell();
+            block_list.reinit_shell(None);
             // Write some data to the bootstrap block, which should be hidden.
             input_string(&mut block_list, "this should be hidden and not copied");
             block_list.carriage_return();
