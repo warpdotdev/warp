@@ -83,7 +83,10 @@ fn local_to_cloud_initializes_remote_with_empty_environment() {
     };
     assert_eq!(environment_id, "");
     assert_eq!(worker_host, "warp");
-    assert!(!computer_use_enabled);
+    assert_eq!(
+        computer_use_enabled, None,
+        "toggling to Cloud leaves computer use unspecified so the cloud default applies"
+    );
 }
 
 #[test]
@@ -93,7 +96,7 @@ fn cloud_to_local_drops_environment() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
     ));
@@ -123,7 +126,7 @@ fn cloud_without_env_no_longer_disables_accept() {
         RunAgentsExecutionMode::Remote {
             environment_id: String::new(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
     ));
@@ -144,7 +147,7 @@ fn cloud_with_opencode_disables_accept() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
     ));
@@ -200,7 +203,7 @@ fn cloud_with_env_and_non_opencode_harness_allows_accept() {
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: false,
+                computer_use_enabled: None,
                 runner_id: String::new(),
             },
         ));
@@ -234,7 +237,7 @@ fn set_environment_id_updates_remote() {
         RunAgentsExecutionMode::Remote {
             environment_id: "old".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
     ));
@@ -256,7 +259,7 @@ fn set_runner_id_updates_remote_and_round_trips() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: String::new(),
         },
     ));
@@ -275,7 +278,7 @@ fn set_runner_id_updates_remote_and_round_trips() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             runner_id: "runner-9".to_string(),
         }
     );
@@ -301,7 +304,7 @@ fn to_request_round_trips_request_fields() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-2".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: true,
+            computer_use_enabled: Some(true),
             runner_id: String::new(),
         },
         vec![
@@ -535,7 +538,7 @@ mod override_from_approved_config_tests {
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: true,
+                computer_use_enabled: Some(true),
                 runner_id: String::new(),
             },
         ));
@@ -558,7 +561,7 @@ mod override_from_approved_config_tests {
             RunAgentsExecutionMode::Remote {
                 environment_id: "old-env".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: true,
+                computer_use_enabled: Some(true),
                 runner_id: String::new(),
             },
         ));
@@ -574,8 +577,9 @@ mod override_from_approved_config_tests {
             panic!("expected Remote");
         };
         assert_eq!(environment_id, "new-env", "env should come from config");
-        assert!(
+        assert_eq!(
             *computer_use_enabled,
+            Some(true),
             "computer_use_enabled should be preserved from original request"
         );
     }
@@ -594,9 +598,9 @@ mod override_from_approved_config_tests {
         else {
             panic!("expected Remote");
         };
-        assert!(
-            !*computer_use_enabled,
-            "computer_use_enabled should default to false when original was Local"
+        assert_eq!(
+            *computer_use_enabled, None,
+            "computer_use_enabled should stay unspecified when original was Local"
         );
     }
 
@@ -621,7 +625,7 @@ fn local_to_cloud_idempotent_when_already_remote() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: true,
+            computer_use_enabled: Some(true),
             runner_id: String::new(),
         },
     ));
@@ -640,8 +644,9 @@ fn local_to_cloud_idempotent_when_already_remote() {
         environment_id, "env-1",
         "toggle to Remote when already Remote should not clobber env"
     );
-    assert!(
+    assert_eq!(
         computer_use_enabled,
+        Some(true),
         "toggle to Remote when already Remote should not clobber computer_use"
     );
 }

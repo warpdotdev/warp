@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use ai::skills::parse_skill;
 use anyhow::anyhow;
 use tempfile::TempDir;
+use warp_cli::agent::Harness;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
     CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
     CloudAgentStartupIssue, CloudAgentStartupPresentation, RemoteChildLaunchConfig,
-    classify_cloud_agent_startup_error, prepare_remote_child_launch,
+    classify_cloud_agent_startup_error, effective_computer_use_enabled,
+    prepare_remote_child_launch, spawn_computer_use_enabled,
 };
 use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
@@ -27,13 +29,37 @@ fn config(harness_type: &str) -> RemoteChildLaunchConfig {
         skill_references: Vec::new(),
         working_dir: PathBuf::new(),
         model_id: String::new(),
-        computer_use_enabled: false,
+        computer_use_enabled: None,
         worker_host: String::new(),
         harness_type: harness_type.to_string(),
         title: String::new(),
         auth_secret_name: None,
         runner_id: String::new(),
         agent_identity_uid: None,
+    }
+}
+
+fn remote_child_request() -> StartAgentRequest {
+    StartAgentRequest {
+        id: Default::default(),
+        name: "researcher".to_string(),
+        prompt: "Inspect the code".to_string(),
+        execution_mode: StartAgentExecutionMode::Remote {
+            environment_id: String::new(),
+            skill_references: Vec::new(),
+            model_id: String::new(),
+            computer_use_enabled: None,
+            worker_host: String::new(),
+            harness_type: "oz".to_string(),
+            title: String::new(),
+            auth_secret_name: None,
+            runner_id: String::new(),
+            agent_identity_uid: None,
+        },
+        lifecycle_subscription: None,
+        parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+        parent_run_id: Some("parent-run".to_string()),
+        request_team_scope: request_team_scope(),
     }
 }
 
@@ -61,7 +87,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                 environment_id: "env-1".to_string(),
                 skill_references: Vec::new(),
                 model_id: "auto".to_string(),
-                computer_use_enabled: true,
+                computer_use_enabled: Some(true),
                 worker_host: "warp".to_string(),
                 harness_type: "oz".to_string(),
                 title: "Research".to_string(),
@@ -82,7 +108,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                     skill_references: Vec::new(),
                     working_dir: PathBuf::new(),
                     model_id: "auto".to_string(),
-                    computer_use_enabled: true,
+                    computer_use_enabled: Some(true),
                     worker_host: "warp".to_string(),
                     harness_type: "oz".to_string(),
                     title: "Research".to_string(),
@@ -117,6 +143,78 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
             assert_eq!(config.computer_use_enabled, Some(true));
         });
     });
+}
+
+#[test]
+fn unspecified_computer_use_is_omitted_from_the_child_spawn_request() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let request = remote_child_request();
+        app.read(|ctx| {
+            let mut config = config("oz");
+            config.computer_use_enabled = None;
+            let prepared =
+                prepare_remote_child_launch(&request, config, request_team_scope(), ctx).unwrap();
+            assert_eq!(
+                prepared.spawn_request.config.unwrap().computer_use_enabled,
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn explicitly_disabled_computer_use_still_reaches_the_child_spawn_request() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let request = remote_child_request();
+        app.read(|ctx| {
+            let mut config = config("oz");
+            config.computer_use_enabled = Some(false);
+            let prepared =
+                prepare_remote_child_launch(&request, config, request_team_scope(), ctx).unwrap();
+            assert_eq!(
+                prepared.spawn_request.config.unwrap().computer_use_enabled,
+                Some(false)
+            );
+        });
+    });
+}
+
+#[test]
+fn computer_use_is_dropped_for_third_party_harness_children() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let request = remote_child_request();
+        app.read(|ctx| {
+            let mut config = config("claude");
+            config.computer_use_enabled = Some(true);
+            let prepared =
+                prepare_remote_child_launch(&request, config, request_team_scope(), ctx).unwrap();
+            assert_eq!(
+                prepared.spawn_request.config.unwrap().computer_use_enabled,
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn computer_use_resolution_mirrors_the_cloud_default() {
+    assert_eq!(spawn_computer_use_enabled(None, Harness::Oz), None);
+    assert!(effective_computer_use_enabled(None, Harness::Oz));
+    assert_eq!(spawn_computer_use_enabled(None, Harness::Claude), None);
+    assert!(!effective_computer_use_enabled(None, Harness::Claude));
+    assert_eq!(
+        spawn_computer_use_enabled(Some(true), Harness::Oz),
+        Some(true)
+    );
+    assert!(effective_computer_use_enabled(Some(true), Harness::Oz));
+    assert_eq!(
+        spawn_computer_use_enabled(Some(false), Harness::Oz),
+        Some(false)
+    );
+    assert!(!effective_computer_use_enabled(Some(false), Harness::Oz));
 }
 
 #[test]
@@ -166,7 +264,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
                 environment_id: String::new(),
                 skill_references: skill_references.clone(),
                 model_id: String::new(),
-                computer_use_enabled: false,
+                computer_use_enabled: Some(false),
                 worker_host: String::new(),
                 harness_type: String::new(),
                 title: String::new(),
@@ -187,7 +285,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
                     skill_references,
                     working_dir: temp.path().to_path_buf(),
                     model_id: String::new(),
-                    computer_use_enabled: false,
+                    computer_use_enabled: Some(false),
                     worker_host: String::new(),
                     harness_type: String::new(),
                     title: String::new(),
@@ -218,7 +316,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
                 environment_id: String::new(),
                 skill_references: Vec::new(),
                 model_id: String::new(),
-                computer_use_enabled: false,
+                computer_use_enabled: Some(false),
                 worker_host: String::new(),
                 harness_type: String::new(),
                 title: String::new(),

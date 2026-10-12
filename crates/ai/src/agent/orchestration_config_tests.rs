@@ -28,7 +28,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: false,
+                computer_use_enabled: None,
                 runner_id: String::new(),
             }
         } else {
@@ -180,7 +180,7 @@ fn computer_use_not_in_match_check() {
         ..
     } = request.execution_mode
     {
-        *computer_use_enabled = true;
+        *computer_use_enabled = Some(true);
     }
     // computer_use_enabled differs but should still match
     assert!(matches_active_config(&request, &config));
