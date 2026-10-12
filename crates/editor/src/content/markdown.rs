@@ -707,6 +707,7 @@ impl Buffer {
             log::debug!("Editor action was no-op");
             return;
         };
+        self.invalidate_markdown_source_map();
         ctx.emit(BufferEvent::ContentChanged {
             delta,
             origin: EditOrigin::SystemEdit,

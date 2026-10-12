@@ -12,7 +12,7 @@ use super::{
 use crate::app_state::{LeafContents, NotebookPaneSnapshot};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
-use crate::notebooks::file::{FileNotebookEvent, FileNotebookView};
+use crate::notebooks::file::{FileNotebookEvent, FileNotebookView, SourceScrollTarget};
 use crate::terminal::model::session::Session;
 use crate::workflows::WorkflowSelectionSource;
 
@@ -39,17 +39,20 @@ impl FilePane {
     /// Create a new file notebook pane for the given path and optional target session. If `path`
     /// is `None`, the pane is created but left empty. For local paths without a target session,
     /// the pane waits for a local session to become active. Remote paths are loaded directly
-    /// via the remote server.
+    /// via the remote server. When `source_target` is set, the view scrolls to that location
+    /// in the source file (best effort) once the content loads.
     pub fn new<V: View>(
         path: Option<LocalOrRemotePath>,
         target_session: Option<Arc<Session>>,
         #[cfg(feature = "local_fs")] code_source: Option<CodeSource>,
+        source_target: Option<SourceScrollTarget>,
         ctx: &mut ViewContext<V>,
     ) -> Self {
         let view = ctx.add_typed_action_view(move |ctx| {
             let mut view = FileNotebookView::new(ctx);
             #[cfg(feature = "local_fs")]
             view.set_code_source(code_source);
+            view.set_pending_source_target(source_target);
 
             if let Some(path) = path {
                 view.open(path, target_session, ctx);

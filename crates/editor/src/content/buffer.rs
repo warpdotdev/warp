@@ -10,7 +10,8 @@ use line_ending::LineEnding;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTable, FormattedTaskList, FormattedText,
     FormattedTextFragment, FormattedTextHeader, FormattedTextLine, FormattedTextStyles,
-    OrderedFormattedIndentTextInline, parse_markdown, parse_markdown_with_gfm_tables,
+    MarkdownSourceMap, OrderedFormattedIndentTextInline, ParsedMarkdown,
+    parse_markdown_with_gfm_tables_and_source_map, parse_markdown_with_source_map,
 };
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
@@ -418,6 +419,13 @@ impl BufferEditAction<'_> {
             | BufferEditAction::VimEvent { .. } => ShouldAutoscroll::Yes,
         }
     }
+
+    /// Whether this action leaves the Markdown source unchanged, so a previously computed source
+    /// map stays valid. Syntax highlighting only writes colors, which are never serialized back to
+    /// Markdown, and it runs asynchronously after load.
+    fn preserves_markdown_source_map(&self) -> bool {
+        matches!(self, BufferEditAction::ColorCodeBlock { .. })
+    }
 }
 
 /// What initiated the change in the buffer.
@@ -572,6 +580,12 @@ pub struct Buffer {
     /// The session platform, used as a fallback when inferring line endings from content that
     /// has no line endings (e.g. single-line text).
     session_platform: Option<SessionPlatform>,
+    /// Buffer offset for each 0-based line of the Markdown source this buffer was parsed from, or
+    /// `None` for source lines that render to nothing. Cleared when an edit changes the text.
+    markdown_source_line_offsets: Option<Vec<Option<CharOffset>>>,
+    /// Offset at which each `FormattedTextLine` of the most recent lowering landed, recorded by
+    /// `CoreEditor::edit` and consumed by [`Buffer::from_markdown`].
+    pub(super) lowered_formatted_text_line_offsets: Option<Vec<CharOffset>>,
 }
 
 impl Default for Buffer {
@@ -595,6 +609,8 @@ impl Default for Buffer {
             version: BufferVersion::new(),
             line_ending_mode: LineEnding::LF,
             session_platform: None,
+            markdown_source_line_offsets: None,
+            lowered_formatted_text_line_offsets: None,
         }
     }
 }
@@ -774,6 +790,8 @@ impl Buffer {
             version: BufferVersion::new(),
             line_ending_mode: LineEnding::LF,
             session_platform: None,
+            markdown_source_line_offsets: None,
+            lowered_formatted_text_line_offsets: None,
         }
     }
 
@@ -848,11 +866,11 @@ impl Buffer {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let parse_fn = if warp_core::features::FeatureFlag::MarkdownTables.is_enabled() {
-            parse_markdown_with_gfm_tables
+            parse_markdown_with_gfm_tables_and_source_map
         } else {
-            parse_markdown
+            parse_markdown_with_source_map
         };
-        let parsed_formatted_text = match parse_fn(markdown) {
+        let parsed_markdown = match parse_fn(markdown) {
             Ok(parsed) => parsed,
             Err(e) => {
                 safe_error! {
@@ -861,16 +879,74 @@ impl Buffer {
                 }
 
                 // Return a default formatted text instead of panicking.
-                FormattedText::new(vec![])
+                ParsedMarkdown {
+                    text: FormattedText::new(vec![]),
+                    source_map: MarkdownSourceMap::default(),
+                }
             }
         };
-        Self::from_formatted_text(
-            parsed_formatted_text,
+        let rendered_line_count = parsed_markdown.text.lines.len();
+        let mut buffer = Self::from_formatted_text(
+            parsed_markdown.text,
             embedded_item_conversion,
             tab_indentation,
             selection_model,
             ctx,
-        )
+        );
+        buffer.set_markdown_source_map(parsed_markdown.source_map, rendered_line_count);
+        buffer
+    }
+
+    /// Resolves each Markdown source line to a buffer offset, using the offsets the lowering
+    /// recorded for every [`markdown_parser::FormattedTextLine`].
+    ///
+    /// `rendered_line_count` is the number of lines handed to the lowering, and guards against
+    /// consuming offsets recorded by an unrelated edit.
+    fn set_markdown_source_map(
+        &mut self,
+        source_map: MarkdownSourceMap,
+        rendered_line_count: usize,
+    ) {
+        let line_offsets = self.lowered_formatted_text_line_offsets.take();
+        let Some(line_offsets) =
+            line_offsets.filter(|offsets| offsets.len() == rendered_line_count)
+        else {
+            // An empty document never reaches the lowering, so there is nothing to anchor to.
+            self.markdown_source_line_offsets = None;
+            return;
+        };
+
+        let last_row = self.max_charoffset().to_buffer_point(self).row;
+        self.markdown_source_line_offsets = Some(
+            (0..source_map.source_line_count())
+                .map(|source_line| {
+                    let anchor = source_map.anchor_for_source_line(source_line)?;
+                    let line_offset = line_offsets.get(anchor.line_index).copied()?;
+                    // The recorded offset is the line's block marker, which sits at the end of the
+                    // preceding row, so the line's own first row is the next one.
+                    let row = line_offset
+                        .to_buffer_point(self)
+                        .row
+                        .saturating_add(1)
+                        .saturating_add(anchor.row_in_line as u32)
+                        .min(last_row);
+                    Some(Point::new(row, 0).to_buffer_char_offset(self))
+                })
+                .collect(),
+        );
+    }
+
+    pub fn markdown_offset_for_source_line(&self, source_line: usize) -> Option<CharOffset> {
+        let source_line = source_line.checked_sub(1)?;
+        self.markdown_source_line_offsets
+            .as_ref()?
+            .get(source_line)
+            .copied()
+            .flatten()
+    }
+
+    pub(super) fn invalidate_markdown_source_map(&mut self) {
+        self.markdown_source_line_offsets = None;
     }
 
     /// Construct a [`Buffer`] from the JSON contents of a `.ipynb` (Jupyter)
@@ -1844,6 +1920,8 @@ impl Buffer {
             UndoActionType::Atomic
         };
         let is_undo_redo = matches!(action, BufferEditAction::Redo | BufferEditAction::Undo);
+        // Computed before `action` is consumed by the match below.
+        let preserves_markdown_source_map = action.preserves_markdown_source_map();
         let mut is_replace = false;
         let edit_result = match action {
             // We need to override active text style with the style of the deleted fragment for deletions.
@@ -2029,6 +2107,12 @@ impl Buffer {
             log::debug!("Editor action was no-op");
             return;
         };
+
+        // A replacement rebuilds the buffer through `Buffer::from_markdown`, which installs a fresh
+        // source map, so clearing it here would throw away the new one.
+        if !is_replace && !preserves_markdown_source_map {
+            self.markdown_source_line_offsets = None;
+        }
 
         self.version = BufferVersion::new();
 
