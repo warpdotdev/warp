@@ -435,7 +435,10 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
                     use_computer::action::Type::MouseDown(mouse_down) => {
                         Ok(computer_use::Action::MouseDown {
                             button: to_computer_use_button(mouse_down.button()),
-                            at: coordinates_to_vec(mouse_down.at.as_ref())?,
+                            at: mouse_down
+                                .at
+                                .as_ref()
+                                .map(|at| computer_use::Vector2I::new(at.x, at.y)),
                         })
                     }
                     use_computer::action::Type::MouseUp(mouse_up) => {
@@ -624,7 +627,9 @@ fn log_window_target_coord(action: &computer_use::Action, target: computer_use::
     };
     let coord = match action {
         computer_use::Action::MouseMove { to } => Some(("mouse_move", to.x(), to.y())),
-        computer_use::Action::MouseDown { at, .. } => Some(("mouse_down", at.x(), at.y())),
+        computer_use::Action::MouseDown { at: Some(at), .. } => {
+            Some(("mouse_down", at.x(), at.y()))
+        }
         computer_use::Action::MouseWheel { at, .. } => Some(("mouse_wheel", at.x(), at.y())),
         _ => None,
     };

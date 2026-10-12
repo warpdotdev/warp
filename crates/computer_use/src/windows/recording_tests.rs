@@ -403,7 +403,7 @@ async fn records_real_virtual_desktop_when_requested() {
         TargetedAction::screen(Action::MouseMove { to: first }),
         TargetedAction::screen(Action::MouseDown {
             button: MouseButton::Left,
-            at: first,
+            at: Some(first),
         }),
         TargetedAction::screen(Action::Wait(Duration::from_millis(500))),
         TargetedAction::screen(Action::MouseMove { to: second }),
@@ -413,7 +413,7 @@ async fn records_real_virtual_desktop_when_requested() {
         }),
         TargetedAction::screen(Action::MouseDown {
             button: MouseButton::Left,
-            at: click,
+            at: Some(click),
         }),
         TargetedAction::screen(Action::Wait(Duration::from_millis(250))),
         TargetedAction::screen(Action::MouseUp {

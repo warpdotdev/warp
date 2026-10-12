@@ -3284,6 +3284,7 @@ dependencies = [
  "objc2-core-graphics",
  "pathfinder_geometry",
  "serde",
+ "serde_json",
  "serde_with",
  "tempfile",
  "thiserror 2.0.17",

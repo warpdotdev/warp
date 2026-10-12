@@ -570,8 +570,10 @@ pub enum Action {
     Wait(#[serde_as(as = "DurationSecondsWithFrac<f64>")] std::time::Duration),
     MouseDown {
         button: MouseButton,
-        #[serde(with = "Vector2IDef")]
-        at: Vector2I,
+        /// Where to press. `None` presses at the pointer's current position (e.g. after a
+        /// preceding `MouseMove`).
+        #[serde(default, with = "option_vector2i")]
+        at: Option<Vector2I>,
     },
     MouseUp {
         button: MouseButton,
@@ -926,5 +928,32 @@ impl From<Vector2IDef> for Vector2I {
     }
 }
 
+/// Serde helper for `Option<Vector2I>` fields, since `#[serde(with = "Vector2IDef")]` only
+/// applies to a bare `Vector2I`.
+mod option_vector2i {
+    use pathfinder_geometry::vector::Vector2I;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::Vector2IDef;
+
+    #[derive(Serialize, Deserialize)]
+    struct Wrapper(#[serde(with = "Vector2IDef")] Vector2I);
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<Vector2I>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.map(Wrapper).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vector2I>, D::Error> {
+        Ok(Option::<Wrapper>::deserialize(deserializer)?.map(|wrapper| wrapper.0))
+    }
+}
+
+#[cfg(test)]
+mod action_serde_tests;
 #[cfg(test)]
 mod pointer_session_tests;

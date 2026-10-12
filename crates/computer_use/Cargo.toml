@@ -89,6 +89,7 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 computer_use = { path = ".", features = ["test-util"] }
+serde_json.workspace = true
 
 [build-dependencies]
 cfg_aliases = "0.2.1"

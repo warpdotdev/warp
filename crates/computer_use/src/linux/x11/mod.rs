@@ -271,17 +271,23 @@ impl crate::Actor for Actor {
                         Timer::after(*duration).await;
                     }
                     Action::MouseDown { button, at } => {
-                        screen_mouse.move_to(*at)?;
+                        let at = match at {
+                            Some(at) => {
+                                screen_mouse.move_to(*at)?;
+                                *at
+                            }
+                            None => screen_mouse.current_position()?,
+                        };
                         screen_mouse.focus_window_under_pointer()?;
                         screen_mouse.button_down(button)?;
-                        last_mouse_position = Some(*at);
+                        last_mouse_position = Some(at);
                         record_positioned_event(
                             pointer_sink.as_ref(),
                             PointerEventKind::Down,
                             Some(*button),
                             target,
-                            *at,
-                            *at,
+                            at,
+                            at,
                         );
                     }
                     Action::MouseUp { button } => {
@@ -339,9 +345,27 @@ impl crate::Actor for Actor {
                             Timer::after(*duration).await;
                         }
                         Action::MouseDown { button, at } => {
-                            let local = *at;
-                            let at =
-                                windows::window_local_to_root(&self.conn, root, window_id, *at)?;
+                            // Without a coordinate the press lands wherever the agent pointer
+                            // currently is (root coordinates, since the seat's ClientPointer is
+                            // the agent pointer); derive the window-local point for the
+                            // recording from it.
+                            let (local, at) = match at {
+                                Some(local) => (
+                                    *local,
+                                    windows::window_local_to_root(
+                                        &self.conn, root, window_id, *local,
+                                    )?,
+                                ),
+                                None => {
+                                    let at = agent_mouse.current_position()?;
+                                    (
+                                        windows::root_to_window_local(
+                                            &self.conn, root, window_id, at,
+                                        )?,
+                                        at,
+                                    )
+                                }
+                            };
                             ensure_window_clickable_at(&self.conn, root, window_id, at).await?;
                             // Mirror a real click's focus effect on the agent seat only, so the
                             // window accepts subsequent input while the user's focus stays put.

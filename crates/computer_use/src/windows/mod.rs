@@ -180,13 +180,19 @@ impl super::Actor for Actor {
                     Timer::after(*duration).await;
                 }
                 Action::MouseDown { button, at } => {
-                    mouse.move_to(*at)?;
+                    let at = match at {
+                        Some(at) => {
+                            mouse.move_to(*at)?;
+                            *at
+                        }
+                        None => mouse.current_position()?,
+                    };
                     mouse.button_down(button)?;
                     record_positioned_event(
                         pointer_sink.as_ref(),
                         PointerEventKind::Down,
                         Some(*button),
-                        *at,
+                        at,
                     );
                 }
                 Action::MouseUp { button } => {
