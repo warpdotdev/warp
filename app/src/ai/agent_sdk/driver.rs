@@ -2395,13 +2395,14 @@ impl AgentDriver {
             if FeatureFlag::FactorySkillReferences.is_enabled()
                 && let Some(discovery) = Self::discover_skill_references(&foreground).await
             {
-                setup_events
+                let report = setup_events
                     .record_value_with_error_flag(
                         SetupStep::SkillReferenceResolution,
                         Self::resolve_skill_references(discovery, &foreground),
                         |report| report.warning_count() > 0,
                     )
                     .await;
+                Self::report_skill_sources(&report, &setup_events, &foreground).await;
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

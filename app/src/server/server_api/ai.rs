@@ -488,6 +488,8 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    /// An event-specific JSON payload for a timeline event.
+    Timeline(serde_json::Value),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -521,6 +523,17 @@ impl AgentRunClientEventRequest {
             event_name: event_name.into(),
             timestamp,
             payload: None,
+        }
+    }
+
+    pub fn timeline_event_with_payload(
+        event_name: impl Into<String>,
+        timestamp: DateTime<Utc>,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            payload: Some(AgentRunClientEventPayload::Timeline(payload)),
+            ..Self::timeline_event(event_name, timestamp)
         }
     }
 
