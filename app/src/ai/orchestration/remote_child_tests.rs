@@ -8,17 +8,55 @@ use warpui::{App, SingletonEntity as _};
 use super::{
     CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
     CloudAgentStartupIssue, CloudAgentStartupPresentation, RemoteChildLaunchConfig,
-    classify_cloud_agent_startup_error, prepare_remote_child_launch,
+    classify_cloud_agent_startup_error, cloud_run_url, has_factory_access,
+    prepare_remote_child_launch,
 };
 use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
+use crate::server::server_api::factory::MockFactoryClient;
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn request_team_scope() -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
+
+#[test]
+fn cloud_run_links_follow_factory_access() {
+    let run_id = "01a0f2e3-841c-7a6b-b78d-a12bccdb4028";
+    assert_eq!(
+        cloud_run_url(run_id, false),
+        format!("{}/runs/{run_id}", crate::ChannelState::oz_root_url())
+    );
+    assert_eq!(
+        cloud_run_url(run_id, true),
+        format!("https://platform.warp.dev/runs/{run_id}")
+    );
+}
+
+#[test]
+fn factory_access_probe_falls_back_on_error() {
+    futures::executor::block_on(async {
+        let mut allowed_client = MockFactoryClient::new();
+        allowed_client
+            .expect_has_factory_access()
+            .returning(|| Ok(true));
+        assert!(has_factory_access(&allowed_client).await);
+
+        let mut denied_client = MockFactoryClient::new();
+        denied_client
+            .expect_has_factory_access()
+            .returning(|| Ok(false));
+        assert!(!has_factory_access(&denied_client).await);
+
+        let mut client = MockFactoryClient::new();
+        client
+            .expect_has_factory_access()
+            .returning(|| Err(anyhow!("access probe failed")));
+        assert!(!has_factory_access(&client).await);
+    });
 }
 
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {

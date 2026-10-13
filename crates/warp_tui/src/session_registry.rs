@@ -13,7 +13,7 @@ use warp::tui_export::{
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
     LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken,
     TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, TerminalManagerTrait, TerminalSurfaceResult,
-    UserWorkspaces, oz_run_url,
+    UserWorkspaces, cloud_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -299,7 +299,7 @@ impl TuiSessions {
         ctx: &mut AppContext,
     ) -> TuiSessionId {
         let conversation_id = conversation.id();
-        let run_url = oz_run_url(&run_id);
+        let run_url = cloud_run_url(&run_id, false);
         let cloud_run_state = ctx.add_model(|_| {
             TuiCloudRunState::new_restored(conversation_id, task_id, run_id, run_url)
         });

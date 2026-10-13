@@ -1,5 +1,6 @@
 //! Unit tests for ambient agent CLI argument mapping and message helpers.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
@@ -17,7 +18,7 @@ use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ai::{
-    ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder,
+    ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder, SpawnAgentResponse,
 };
 use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -68,6 +69,56 @@ fn request_team_scope() -> RequestTeamScope {
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[tokio::test]
+async fn cloud_spawn_starts_while_factory_probe_is_pending() {
+    let spawned = Arc::new(AtomicBool::new(false));
+    let mut mock = MockAIClient::new();
+    mock.expect_spawn_agent().times(1).returning({
+        let spawned = spawned.clone();
+        move |_, _| {
+            spawned.store(true, Ordering::SeqCst);
+            Ok(SpawnAgentResponse {
+                task_id: TASK_ID.parse().expect("valid task ID"),
+                run_id: TASK_ID.to_owned(),
+                at_capacity: false,
+            })
+        }
+    });
+    let request = SpawnAgentRequest {
+        prompt: Some("hello".to_owned()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: Some(false),
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let future = run_spawned_ambient_agent(
+        request,
+        request_team_scope(),
+        Arc::new(mock),
+        futures::future::pending::<bool>(),
+        None,
+    );
+    tokio::pin!(future);
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut future)
+            .await
+            .is_err()
+    );
+    assert!(spawned.load(Ordering::SeqCst));
 }
 
 #[test]

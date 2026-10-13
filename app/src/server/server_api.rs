@@ -797,10 +797,28 @@ impl ServerApi {
         }
     }
 
+    async fn get_public_api<R>(&self, path: &str) -> Result<R>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        self.get_public_api_with_team(path, None).await
+    }
+
     async fn get_public_api_for_team<R>(
         &self,
         path: &str,
         team_scope: RequestTeamScope,
+    ) -> Result<R>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        self.get_public_api_with_team(path, Some(team_scope)).await
+    }
+
+    async fn get_public_api_with_team<R>(
+        &self,
+        path: &str,
+        team_scope: Option<RequestTeamScope>,
     ) -> Result<R>
     where
         R: serde::de::DeserializeOwned,
@@ -814,7 +832,7 @@ impl ServerApi {
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
-        if let Some(team_uid) = Self::team_uid_header_value(team_scope) {
+        if let Some(team_uid) = team_scope.and_then(Self::team_uid_header_value) {
             request = request.header(TEAM_UID_HEADER, team_uid);
         }
         for (name, value) in self.ambient_agent_headers().await? {

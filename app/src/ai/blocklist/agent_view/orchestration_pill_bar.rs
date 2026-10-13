@@ -10,7 +10,6 @@ use std::hash::{Hash, Hasher};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
-use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
@@ -58,9 +57,11 @@ use crate::ai::blocklist::telemetry::{
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::harness_display;
+use crate::ai::orchestration::{cloud_run_url, has_factory_access};
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
     BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
@@ -308,8 +309,8 @@ pub enum OrchestrationPillBarAction {
     OpenInNewPane(AIConversationId),
     /// Menu item: open this child in a new tab.
     OpenInNewTab(AIConversationId),
-    /// Menu item: open this child's run in the Oz web app.
-    ViewInOz(AIConversationId),
+    /// Menu item: open this child's run in the web app.
+    ViewRun(AIConversationId),
     /// Menu item: stop the in-progress task.
     Stop(AIConversationId),
     /// Menu item: cancel and remove from local history.
@@ -511,11 +512,11 @@ impl OrchestrationPillBar {
                 ),
             ]
         };
-        if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
+        if Self::run_id_for_conversation(conversation_id, ctx).is_some() {
             items.push(item(
-                "View in Oz",
-                Icon::Oz,
-                OrchestrationPillBarAction::ViewInOz(conversation_id),
+                "View run",
+                Icon::Link,
+                OrchestrationPillBarAction::ViewRun(conversation_id),
             ));
         }
         // Stop is shown only while the agent is in progress; Kill becomes
@@ -568,15 +569,14 @@ impl OrchestrationPillBar {
         ctx.notify();
     }
 
-    fn oz_run_url_for_conversation(
+    fn run_id_for_conversation(
         conversation_id: AIConversationId,
         app: &AppContext,
     ) -> Option<String> {
         let run_id = BlocklistAIHistoryModel::as_ref(app)
             .conversation(&conversation_id)?
             .run_id()?;
-        let oz_root_url = ChannelState::oz_root_url();
-        Some(format!("{oz_root_url}/runs/{run_id}"))
+        Some(run_id.to_string())
     }
 
     fn set_hovered_pill(
@@ -1026,7 +1026,7 @@ impl TypedActionView for OrchestrationPillBar {
                     ),
                 );
             }
-            OrchestrationPillBarAction::ViewInOz(id) => {
+            OrchestrationPillBarAction::ViewRun(id) => {
                 self.emit_pill_bar_interaction(
                     PillBarActionKind::ViewInOz,
                     PillBarPillKind::Child,
@@ -1034,8 +1034,14 @@ impl TypedActionView for OrchestrationPillBar {
                     ctx,
                 );
                 self.close_menu(ctx);
-                if let Some(url) = Self::oz_run_url_for_conversation(*id, ctx) {
-                    ctx.open_url(&url);
+                if let Some(run_id) = Self::run_id_for_conversation(*id, ctx) {
+                    let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+                    ctx.spawn(
+                        async move { has_factory_access(client.as_ref()).await },
+                        move |_, factory_access, ctx| {
+                            ctx.open_url(&cloud_run_url(&run_id, factory_access));
+                        },
+                    );
                 }
             }
             OrchestrationPillBarAction::Stop(id) => {
