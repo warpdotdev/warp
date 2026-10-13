@@ -1,0 +1,7 @@
+{
+  "reference": {
+    "source": {"code_forge": "GITHUB", "owner": "acme", "name": "shared-skills", "ref": {"kind": "sha", "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},
+    "include": [{"kind": "name", "value": "deploy"}],
+    "exclude": []
+  }
+}

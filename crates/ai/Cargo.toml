@@ -19,6 +19,7 @@ bytes.workspace = true
 cfg-if.workspace = true
 computer_use.workspace = true
 dunce.workspace = true
+globset.workspace = true
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -68,6 +69,7 @@ repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 url.workspace = true
+yaml-rust = "0.4.5"
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

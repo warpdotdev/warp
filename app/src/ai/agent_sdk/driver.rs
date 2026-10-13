@@ -120,6 +120,7 @@ pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod preview_retention;
 mod prewarmed;
+mod skill_references;
 mod snapshot;
 pub(crate) mod terminal;
 mod termination;
@@ -1036,6 +1037,10 @@ pub struct AgentDriver {
     /// The run's workspace, taken once when setup starts and `None` from then on.
     workspace: Option<WorkspaceState>,
     skill_dirs: Vec<PathBuf>,
+    /// Whether a skill name found in an earlier `skill_dirs` entry hides the same name in later
+    /// entries. Set once resolved skill references add generated folders, which rely on folder
+    /// order for precedence.
+    skill_dirs_first_name_wins: bool,
     factory_repository_contract: bool,
     computer_use_configured: bool,
 
@@ -1518,6 +1523,7 @@ impl AgentDriver {
                 environment::WorkspaceConfiguration::default(),
             )),
             skill_dirs: parse_skills_dirs_env(),
+            skill_dirs_first_name_wins: false,
             factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1595,6 +1601,7 @@ impl AgentDriver {
             _ => Some(WorkspaceState::Pending(workspace)),
         };
         self.skill_dirs = skill_dirs;
+        self.skill_dirs_first_name_wins = false;
         self.third_party_harness_model_config = third_party_harness_model_config;
         self.team_scope = team_scope;
         self.bedrock_oidc_credentials = bedrock_oidc_credentials;
@@ -2372,6 +2379,25 @@ impl AgentDriver {
                     )
                     .await;
                 Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+            }
+
+            if FeatureFlag::FactorySkillReferences.is_enabled() {
+                let environment_forges = prepared_workspace
+                    .repositories
+                    .iter()
+                    .filter_map(environment::repository_forge_for_repo)
+                    .collect();
+                if let Some(discovery) =
+                    Self::discover_skill_references(environment_forges, &foreground).await
+                {
+                    setup_events
+                        .record_value_with_error_flag(
+                            SetupStep::SkillReferenceResolution,
+                            Self::resolve_skill_references(discovery, &foreground),
+                            |report| report.warning_count() > 0,
+                        )
+                        .await;
+                }
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

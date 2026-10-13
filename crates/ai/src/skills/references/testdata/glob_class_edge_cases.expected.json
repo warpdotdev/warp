@@ -1,0 +1,14 @@
+{
+  "reference": {
+    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": null},
+    "include": [
+      {"kind": "name_glob", "value": "[]]-tool"},
+      {"kind": "name_glob", "value": "[!a-c]*"},
+      {"kind": "name_glob", "value": "[^x]*"},
+      {"kind": "name_glob", "value": "[a-]*"},
+      {"kind": "name_glob", "value": "[-a]*"},
+      {"kind": "name_glob", "value": "tool-a**"}
+    ],
+    "exclude": []
+  }
+}

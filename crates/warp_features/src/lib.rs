@@ -1003,6 +1003,10 @@ pub enum FeatureFlag {
     /// from the remote. Disabling it restores direct, network-only checkouts.
     GitMirrorCache,
     AgentPromptSteering,
+
+    /// Resolves skill reference files in a Factory definition's skill folders during cloud runs,
+    /// loading the selected skills from other repositories.
+    FactorySkillReferences,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1083,6 +1087,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::FactorySkillReferences,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

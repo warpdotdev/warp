@@ -1,0 +1,6 @@
+source:
+  codeForge: ""
+  owner: acme
+  name: shared-skills
+include:
+  - safe-secrets

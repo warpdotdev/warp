@@ -1,0 +1,7 @@
+{
+  "reference": {
+    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": null},
+    "include": [{"kind": "name_glob", "value": "*"}],
+    "exclude": []
+  }
+}

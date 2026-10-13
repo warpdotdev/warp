@@ -1,0 +1,7 @@
+source: acme/shared-skills
+include:
+  - skills/release-notes
+  - skills/release-notes/SKILL.md
+  - .agents/skills/deploy
+  - ./skills/shared
+  - tools/review/

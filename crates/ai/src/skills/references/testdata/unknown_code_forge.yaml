@@ -1,0 +1,6 @@
+source:
+  codeForge: BITBUCKET
+  owner: acme
+  name: shared-skills
+include:
+  - safe-secrets

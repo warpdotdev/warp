@@ -1,0 +1,6 @@
+source:
+  codeForge: AZURE_DEVOPS
+  owner: acme-org/platform
+  name: shared-skills
+include:
+  - deploy

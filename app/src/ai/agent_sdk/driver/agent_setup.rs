@@ -1,5 +1,6 @@
 //! Shared resource setup for normal runs and standby sandboxes before an agent prompt starts.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -551,7 +552,11 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
     let load_result = foreground
         .spawn(move |me, ctx| {
             let dirs = resolve_skills_dirs(&me.working_dir, dirs);
-            let skills = read_skills_for_skills_dirs(&dirs);
+            let mut skills = read_skills_for_skills_dirs(&dirs);
+            if me.skill_dirs_first_name_wins {
+                let mut names = HashSet::new();
+                skills.retain(|skill| names.insert(skill.name.clone()));
+            }
             if skills.is_empty() {
                 log::info!("WARP_SKILL_DIRS: no skills found");
             } else {

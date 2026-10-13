@@ -57,12 +57,14 @@ pub enum RepositoryForge {
 pub enum RepositoryHeadRef {
     CommitSha(String),
     Branch(String),
+    /// A branch or tag name. A branch wins when both exist.
+    NamedRef(String),
 }
 
 impl RepositoryHeadRef {
     pub fn value(&self) -> &str {
         match self {
-            Self::CommitSha(value) | Self::Branch(value) => value,
+            Self::CommitSha(value) | Self::Branch(value) | Self::NamedRef(value) => value,
         }
     }
 }
@@ -153,6 +155,9 @@ impl RepositoryPreparationOverride {
                         "branch must not be empty or contain surrounding whitespace".to_string()
                     );
                 }
+            }
+            RepositoryHeadRef::NamedRef(_) => {
+                return Err("repository preparation does not support named refs".to_string());
             }
         }
         if self.clone_from.is_some() && !self.preserve_origin {

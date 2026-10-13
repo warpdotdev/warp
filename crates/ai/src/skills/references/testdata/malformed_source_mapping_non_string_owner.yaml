@@ -1,0 +1,5 @@
+source:
+  owner: 42
+  name: shared-skills
+include:
+  - safe-secrets

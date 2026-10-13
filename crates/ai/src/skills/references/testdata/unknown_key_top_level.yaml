@@ -1,0 +1,4 @@
+source: acme/shared-skills
+ref: v1.4.0
+include:
+  - safe-secrets

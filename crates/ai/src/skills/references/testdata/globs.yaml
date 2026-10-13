@@ -1,0 +1,12 @@
+source: acme/shared-skills
+include:
+  - "*"
+  - "tool-?"
+  - "[a-c]*"
+  - "frontend/*"
+  - "**/review-*"
+  - "skills/**"
+  - "**"
+exclude:
+  - "legacy-*"
+  - "experimental/**"

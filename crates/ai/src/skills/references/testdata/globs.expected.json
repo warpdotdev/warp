@@ -1,0 +1,18 @@
+{
+  "reference": {
+    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": null},
+    "include": [
+      {"kind": "name_glob", "value": "*"},
+      {"kind": "name_glob", "value": "tool-?"},
+      {"kind": "name_glob", "value": "[a-c]*"},
+      {"kind": "path_glob", "value": "frontend/*"},
+      {"kind": "path_glob", "value": "**/review-*"},
+      {"kind": "path_glob", "value": "skills/**"},
+      {"kind": "name_glob", "value": "**"}
+    ],
+    "exclude": [
+      {"kind": "name_glob", "value": "legacy-*"},
+      {"kind": "path_glob", "value": "experimental/**"}
+    ]
+  }
+}
