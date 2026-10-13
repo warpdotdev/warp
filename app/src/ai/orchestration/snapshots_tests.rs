@@ -27,6 +27,25 @@ fn entry(harness: Harness, display_name: &str, enabled: bool) -> HarnessEntryInp
     }
 }
 
+#[test]
+fn pi_harness_snapshot_requires_enabled_cloud_entry() {
+    for (is_local, enabled, visible) in [
+        (false, true, true),
+        (true, true, false),
+        (false, false, false),
+    ] {
+        let snapshot = build_harness_snapshot(
+            vec![entry(Harness::Pi, "Pi", enabled)],
+            "pi",
+            None,
+            is_local,
+            &all_ready,
+        );
+        assert_eq!(snapshot.rows.iter().any(|row| row.id == "pi"), visible);
+        assert_eq!(snapshot.selected_id.as_deref(), visible.then_some("pi"));
+    }
+}
+
 fn all_ready(_harness: Harness) -> LocalHarnessSetupState {
     LocalHarnessSetupState::Ready
 }

@@ -19,6 +19,19 @@ fn write_skill(dir: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
+fn bundled_child_coordination_is_published_to_harness_skill_roots() {
+    let workspace = TempDir::new().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/bundled/harness_skills");
+    let bundled = skill_dirs_from_source_dirs([source]);
+    let skill_root = workspace.path().join("agent/skills");
+    let published = publish_skill_sources(&skill_root, &[], &bundled, None, false).unwrap();
+    let coordination = skill_root.join("oz-child-agent-orchestration");
+    assert!(published.contains(&coordination));
+    assert!(coordination.join("SKILL.md").is_file());
+    assert!(skill_root.join("oz-finish-task/SKILL.md").is_file());
+}
+
+#[test]
 fn required_deferred_skill_reserves_canonical_name_for_claude_codex_and_gemini() {
     let root = TempDir::new().unwrap();
     let configured_root = root.path().join("configured");

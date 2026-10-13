@@ -21,6 +21,46 @@ fn request_team_scope() -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
+#[test]
+fn pi_remote_child_forwards_auth_and_model_without_computer_use() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let launch = RemoteChildLaunchConfig {
+            model_id: "anthropic/claude-opus-4-6".to_string(),
+            auth_secret_name: Some("pi-key".to_string()),
+            computer_use_enabled: true,
+            ..config("pi")
+        };
+        let request = StartAgentRequest {
+            metadata: Default::default(),
+            id: Default::default(),
+            name: "child".to_string(),
+            prompt: "Inspect the code".to_string(),
+            execution_mode: StartAgentExecutionMode::Local {
+                harness_type: None,
+                model_id: None,
+            },
+            lifecycle_subscription: None,
+            parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+            parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
+        };
+        app.read(|ctx| {
+            let prepared =
+                prepare_remote_child_launch(&request, launch, request_team_scope(), ctx).unwrap();
+            let wire = serde_json::to_value(prepared.spawn_request).unwrap();
+            assert_eq!(wire["parent_run_id"], "parent-run");
+            assert_eq!(wire["config"]["harness"]["type"], "pi");
+            assert_eq!(wire["config"]["model_id"], "anthropic/claude-opus-4-6");
+            assert_eq!(
+                wire["config"]["harness_auth_secrets"]["pi_auth_secret_name"],
+                "pi-key"
+            );
+            assert!(wire["config"].get("computer_use_enabled").is_none());
+        });
+    });
+}
+
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {
     RemoteChildLaunchConfig {
         environment_id: String::new(),

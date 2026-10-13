@@ -202,12 +202,13 @@ fn build_harness_snapshot(
 
     // Sort selectable harnesses before disabled ones, preserving
     // relative order within each group.
-    // Gemini causes an infinite "Spawning agents" hang; Pi only supports Factory-created runs.
+    // Gemini causes an infinite "Spawning agents" hang.
     let mut sorted: Vec<_> = entries
         .iter()
         .filter(|entry| {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-            !matches!(harness, Harness::Gemini | Harness::Pi)
+            harness != Harness::Gemini
+                && (harness != Harness::Pi || (!is_local && entry.enabled))
                 && (!is_local || local_harness_is_product_enabled(harness))
         })
         .collect();

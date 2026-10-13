@@ -1,7 +1,9 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use warpui::{App, AppContext, Entity};
 
-use super::{accept_disabled_reason_with_auth, empty_env_recommendation_message};
+use super::{
+    accept_disabled_reason_with_auth, empty_env_recommendation_message, harness_is_selectable,
+};
 use crate::ai::orchestration::config_state::{AuthSecretSelection, OrchestrationConfigState};
 
 /// Minimal entity used to borrow an `AppContext` inside `App::test`.
@@ -12,18 +14,33 @@ impl Entity for CtxProbe {
 }
 
 #[test]
-fn pi_orchestration_is_rejected_in_local_and_cloud_modes() {
+fn pi_orchestration_requires_cloud_execution() {
     with_app_ctx(|ctx| {
-        for mode in [RunAgentsExecutionMode::Local, cloud()] {
-            let state = state("pi", mode, AuthSecretSelection::Unset);
+        let state = state(
+            "pi",
+            RunAgentsExecutionMode::Local,
+            AuthSecretSelection::Inherit,
+        );
+        assert_eq!(
+            accept_disabled_reason_with_auth(&state, ctx).as_deref(),
+            Some("Pi child agents require Cloud execution."),
+        );
+        assert!(!harness_is_selectable(warp_cli::agent::Harness::Pi, true));
+        assert!(harness_is_selectable(warp_cli::agent::Harness::Pi, false));
+    });
+}
+
+#[test]
+fn pi_cloud_accept_requires_server_availability() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        app.read(|ctx| {
+            let state = state("pi", cloud(), AuthSecretSelection::Inherit);
             assert_eq!(
                 accept_disabled_reason_with_auth(&state, ctx).as_deref(),
-                Some(
-                    "The pi harness is not available for orchestrated child agents yet; \
-                     it can only be used for Factory-created runs."
-                ),
+                Some("The pi harness is not available."),
             );
-        }
+        });
     });
 }
 
