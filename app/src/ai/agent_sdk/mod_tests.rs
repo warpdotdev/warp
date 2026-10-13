@@ -54,6 +54,8 @@ use crate::settings::PrivacySettings;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::update_manager::WorkspaceMetadataRetryPolicy;
 use crate::workspaces::user_workspaces::{
     HeadlessTeamScope, TeamScope, UserWorkspaces, WorkspacesMetadataResponse,
     WorkspacesMetadataWithPricing,
@@ -913,7 +915,10 @@ fn dropping_cloud_startup_metadata_refresh_stops_retries() {
         let manager =
             app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
         let refresh = manager.update(&mut app, |manager, ctx| {
-            manager.refresh_workspace_metadata_for_cloud_agent(ctx)
+            manager.refresh_workspace_metadata_with_retry(
+                WorkspaceMetadataRetryPolicy::TimeBudget(Duration::from_secs(30)),
+                ctx,
+            )
         });
 
         assert!(refresh.now_or_never().is_none());

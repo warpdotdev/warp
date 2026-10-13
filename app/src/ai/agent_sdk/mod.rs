@@ -88,7 +88,7 @@ use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
 #[cfg(not(target_family = "wasm"))]
-use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::update_manager::{TeamUpdateManager, WorkspaceMetadataRetryPolicy};
 use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
 mod admin;
@@ -1093,11 +1093,17 @@ impl AgentDriverRunner {
                 move |_, ctx| -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
                     #[cfg(not(target_family = "wasm"))]
                     if cloud_startup {
-                        return Box::pin(
-                            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                                manager.refresh_workspace_metadata_for_cloud_agent(ctx)
-                            }),
-                        );
+                        return Box::pin(TeamUpdateManager::handle(ctx).update(
+                            ctx,
+                            |manager, ctx| {
+                                manager.refresh_workspace_metadata_with_retry(
+                                    WorkspaceMetadataRetryPolicy::TimeBudget(Duration::from_secs(
+                                        30,
+                                    )),
+                                    ctx,
+                                )
+                            },
+                        ));
                     }
                     #[cfg(target_family = "wasm")]
                     let _ = cloud_startup;
