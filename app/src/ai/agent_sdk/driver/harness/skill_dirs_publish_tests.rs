@@ -31,6 +31,133 @@ fn bundled_child_coordination_is_published_to_harness_skill_roots() {
     assert!(skill_root.join("oz-finish-task/SKILL.md").is_file());
 }
 
+#[cfg(unix)]
+#[test]
+fn bundled_child_coordination_wait_returns_and_reaps_watcher() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use clap::Parser;
+    use command::blocking::Command;
+    use warp_cli::agent::OutputFormat;
+    use warp_cli::task::{MessageCommand, TaskCommand};
+    use warp_cli::{Args, CliCommand, Command as WarpCommand};
+
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/bundled/harness_skills/oz-child-agent-orchestration/SKILL.md"),
+    )
+    .unwrap();
+    let recipe = skill
+        .split("```bash\n")
+        .nth(1)
+        .unwrap()
+        .split("```")
+        .next()
+        .unwrap();
+    for (mode, wait_seconds, expected_sequence) in [("event", "5", "8"), ("timeout", "1", "7")] {
+        let temp = TempDir::new().unwrap();
+        let cli = temp.path().join("oz");
+        let watch_args = temp.path().join("watch-args");
+        let watch_pid = temp.path().join("watch-pid");
+        let watch_stopped = temp.path().join("watch-stopped");
+        let list_args = temp.path().join("list-args");
+        fs::write(
+            &cli,
+            r#"#!/usr/bin/env bash
+if [ "$3" = watch ]; then
+  printf '%s\n' "$@" > "$WATCH_ARGS"
+  printf '%s\n' "$$" > "$WATCH_PID"
+  sleep 60 &
+  sleeper=$!
+  trap 'kill "$sleeper"; wait "$sleeper" 2>/dev/null; printf stopped > "$WATCH_STOPPED"; exit 0' TERM
+  if [ "$WATCH_MODE" = event ]; then
+    printf '%s\n' '{"sequence":8,"message_id":"parent-reply"}'
+  fi
+  wait "$sleeper"
+elif [ "$3" = list ]; then
+  printf '%s\n' "$@" > "$LIST_ARGS"
+  printf '%s\n' '[{"message_id":"parent-reply"}]'
+else
+  exit 1
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "{recipe}\nprintf '%s\\n' \"$last_sequence\" \"$event\""
+            ))
+            .env("OZ_CLI", &cli)
+            .env("OZ_RUN_ID", "child-run")
+            .env("last_sequence", "7")
+            .env("wait_seconds", wait_seconds)
+            .env("WATCH_MODE", mode)
+            .env("WATCH_ARGS", &watch_args)
+            .env("WATCH_PID", &watch_pid)
+            .env("WATCH_STOPPED", &watch_stopped)
+            .env("LIST_ARGS", &list_args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{mode}: {output:?}");
+        assert!(
+            !String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("Message watch failed"),
+            "{mode}"
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines: Vec<_> = stdout.lines().collect();
+        assert_eq!(lines[0], r#"[{"message_id":"parent-reply"}]"#, "{mode}");
+        assert_eq!(lines[1], expected_sequence, "{mode}");
+        if mode == "event" {
+            let event: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+            assert_eq!(event["message_id"], "parent-reply");
+            assert_eq!(event["sequence"], 8);
+        } else {
+            assert!(lines.get(2).is_none_or(|event| event.is_empty()));
+        }
+        let args = fs::read_to_string(watch_args).unwrap();
+        let parsed = Args::try_parse_from(std::iter::once("oz").chain(args.lines())).unwrap();
+        assert_eq!(parsed.output_format(), OutputFormat::Ndjson);
+        let Some(WarpCommand::CommandLine(command)) = parsed.command() else {
+            panic!("Expected message watch command");
+        };
+        let CliCommand::Run(TaskCommand::Message(MessageCommand::Watch(watch))) = command.as_ref()
+        else {
+            panic!("Expected message watch command");
+        };
+        assert_eq!(watch.run_id, "child-run");
+        assert_eq!(watch.since_sequence, 7);
+        let args = fs::read_to_string(list_args).unwrap();
+        let parsed = Args::try_parse_from(std::iter::once("oz").chain(args.lines())).unwrap();
+        let Some(WarpCommand::CommandLine(command)) = parsed.command() else {
+            panic!("Expected unread message list command");
+        };
+        let CliCommand::Run(TaskCommand::Message(MessageCommand::List(list))) = command.as_ref()
+        else {
+            panic!("Expected unread message list command");
+        };
+        assert_eq!(list.run_id, "child-run");
+        assert!(list.unread);
+        assert_eq!(
+            fs::read_to_string(watch_stopped).unwrap(),
+            "stopped",
+            "{mode}"
+        );
+        let pid = fs::read_to_string(watch_pid).unwrap();
+        assert!(
+            !Command::new("bash")
+                .args(["-c", "kill -0 \"$1\" 2>/dev/null", "bash", pid.trim()])
+                .status()
+                .unwrap()
+                .success(),
+            "{mode}: watcher is still running"
+        );
+    }
+}
+
 #[test]
 fn required_deferred_skill_reserves_canonical_name_for_claude_codex_and_gemini() {
     let root = TempDir::new().unwrap();

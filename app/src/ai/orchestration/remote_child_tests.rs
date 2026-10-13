@@ -25,12 +25,6 @@ fn request_team_scope() -> RequestTeamScope {
 fn pi_remote_child_forwards_auth_and_model_without_computer_use() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
-        let launch = RemoteChildLaunchConfig {
-            model_id: "anthropic/claude-opus-4-6".to_string(),
-            auth_secret_name: Some("pi-key".to_string()),
-            computer_use_enabled: true,
-            ..config("pi")
-        };
         let request = StartAgentRequest {
             metadata: Default::default(),
             id: Default::default(),
@@ -46,17 +40,31 @@ fn pi_remote_child_forwards_auth_and_model_without_computer_use() {
             request_team_scope: request_team_scope(),
         };
         app.read(|ctx| {
-            let prepared =
-                prepare_remote_child_launch(&request, launch, request_team_scope(), ctx).unwrap();
-            let wire = serde_json::to_value(prepared.spawn_request).unwrap();
-            assert_eq!(wire["parent_run_id"], "parent-run");
-            assert_eq!(wire["config"]["harness"]["type"], "pi");
-            assert_eq!(wire["config"]["model_id"], "anthropic/claude-opus-4-6");
-            assert_eq!(
-                wire["config"]["harness_auth_secrets"]["pi_auth_secret_name"],
-                "pi-key"
-            );
-            assert!(wire["config"].get("computer_use_enabled").is_none());
+            for model_id in ["anthropic/claude-opus-4-6", ""] {
+                let launch = RemoteChildLaunchConfig {
+                    model_id: model_id.to_string(),
+                    auth_secret_name: Some("pi-key".to_string()),
+                    computer_use_enabled: true,
+                    ..config("pi")
+                };
+                let prepared =
+                    prepare_remote_child_launch(&request, launch, request_team_scope(), ctx)
+                        .unwrap();
+                let wire = serde_json::to_value(prepared.spawn_request).unwrap();
+                assert_eq!(wire["parent_run_id"], "parent-run");
+                assert_eq!(wire["config"]["harness"]["type"], "pi");
+                if model_id.is_empty() {
+                    assert!(wire["config"]["harness"].get("model_id").is_none());
+                } else {
+                    assert_eq!(wire["config"]["harness"]["model_id"], model_id);
+                }
+                assert!(wire["config"].get("model_id").is_none());
+                assert_eq!(
+                    wire["config"]["harness_auth_secrets"]["pi_auth_secret_name"],
+                    "pi-key"
+                );
+                assert!(wire["config"].get("computer_use_enabled").is_none());
+            }
         });
     });
 }

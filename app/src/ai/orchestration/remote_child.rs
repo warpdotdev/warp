@@ -252,11 +252,18 @@ pub fn prepare_remote_child_launch(
     let agent_name = normalize_orchestrator_agent_name(&request.name);
     let display_name = agent_name.clone().unwrap_or_default();
     let environment_id = Some(environment_id).filter(|id| !id.trim().is_empty());
+    let mut model_id = (!model_id.is_empty()).then_some(model_id);
     let harness_override = if harness_type.is_empty() {
         None
     } else {
         match <Harness as clap::ValueEnum>::from_str(&harness_type, true) {
-            Ok(harness) => Some(HarnessConfig::from_harness_type(harness)),
+            Ok(harness) => {
+                let mut harness_config = HarnessConfig::from_harness_type(harness);
+                if harness == Harness::Pi {
+                    harness_config.model_id = model_id.take();
+                }
+                Some(harness_config)
+            }
             Err(_) => {
                 log::warn!(
                     "Unknown child-agent harness type: {harness_type:?}; omitting harness override so the server picks its default"
@@ -295,7 +302,7 @@ pub fn prepare_remote_child_launch(
             name: agent_name,
             environment_id,
             runner_id: (!runner_id.is_empty()).then_some(runner_id),
-            model_id: (!model_id.is_empty()).then_some(model_id),
+            model_id,
             worker_host: (!worker_host.is_empty()).then_some(worker_host),
             computer_use_enabled,
             harness: harness_override,
