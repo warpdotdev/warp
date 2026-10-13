@@ -36,7 +36,7 @@ use super::transcript_persistence::{
 use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, cli_agent_session_status, write_temp_file,
+    ThirdPartyHarness, cli_agent_session_status, install_docs_url, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -85,7 +85,7 @@ impl ThirdPartyHarness for ClaudeHarness {
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
-        Some("https://code.claude.com/docs/en/quickstart")
+        install_docs_url(self.harness())
     }
 
     fn auth_check_command(&self) -> Option<String> {

@@ -248,10 +248,7 @@ fn initial_prompt_links_files_after_server_composed_text() {
     let dir = std::env::temp_dir().join("acp-initial-attachments");
     let screenshot = dir.join("image #雪%.png");
     let notes = dir.join("notes.txt");
-    let harness = AcpHarness::new(
-        Harness::Claude,
-        AcpLaunchSpec::for_harness(Harness::Claude).unwrap(),
-    );
+    let harness = AcpHarness::new(Harness::Claude).unwrap();
     let text = harness.initial_prompt_text(
         "inspect these",
         Some("system"),
@@ -304,10 +301,7 @@ fn initial_prompt_links_files_after_server_composed_text() {
 
 #[test]
 fn initial_prompt_without_files_keeps_the_existing_text() {
-    let harness = AcpHarness::new(
-        Harness::Codex,
-        AcpLaunchSpec::for_harness(Harness::Codex).unwrap(),
-    );
+    let harness = AcpHarness::new(Harness::Codex).unwrap();
 
     let text = harness.initial_prompt_text("hello", Some("staged in config"), Some(" "), None);
 

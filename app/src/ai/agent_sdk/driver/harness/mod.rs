@@ -56,7 +56,7 @@ mod skill_dirs_publish;
 mod telemetry;
 mod transcript_persistence;
 mod usage_reporting;
-pub(crate) use acp::{AcpHarness, AcpLaunchSpec};
+use acp::AcpHarness;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
@@ -177,6 +177,13 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// machinery used by the find feature.
     fn runtime_error_patterns(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    fn runtime_error_patterns_for_run(&self) -> Vec<String> {
+        self.runtime_error_patterns()
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect()
     }
 
     /// Whether this harness must verify its Oz platform plugin before launch.
@@ -346,17 +353,28 @@ pub(crate) fn harness_kind(
     }
 }
 
-/// Resolves the ACP launch for `harness`, failing when the launch table has no entry for it.
 fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
-    let Some(launch) = AcpLaunchSpec::for_harness(harness) else {
-        return Err(AgentDriverError::HarnessSetupFailed {
-            harness: harness.to_string(),
-            reason: format!("The {harness} harness cannot be driven over ACP."),
-        });
-    };
-    Ok(HarnessKind::ThirdParty(Box::new(AcpHarness::new(
-        harness, launch,
-    ))))
+    match harness {
+        Harness::Claude | Harness::Codex | Harness::Gemini | Harness::Pi => {
+            Ok(HarnessKind::ThirdParty(Box::new(AcpHarness::new(harness)?)))
+        }
+        Harness::Oz | Harness::OpenCode | Harness::Unknown => {
+            Err(AgentDriverError::HarnessSetupFailed {
+                harness: harness.to_string(),
+                reason: format!("The {harness} harness cannot be driven over ACP."),
+            })
+        }
+    }
+}
+
+/// URL to install instructions for the harness's CLI.
+fn install_docs_url(harness: Harness) -> Option<&'static str> {
+    match harness {
+        Harness::Claude => Some("https://code.claude.com/docs/en/quickstart"),
+        Harness::Codex => Some("https://developers.openai.com/codex/cli"),
+        Harness::Gemini => Some("https://geminicli.com/"),
+        Harness::Pi | Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
+    }
 }
 
 /// Returns the harness's auth-check preflight command, if any.

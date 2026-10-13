@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
@@ -17,37 +15,20 @@ use super::skill_dirs_publish::{HarnessSupportSkills, publish_skills_for_harness
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
 
-const PI_PACKAGE_DIR_ENV: &str = "PI_PACKAGE_DIR";
-const SIDECAR_PI_PACKAGE_DIR: &str = "/mnt/pi-cli-sidecar/usr/local/lib/pi-packages";
-/// Pinned to the version baked into the sidecar image so native installs resolve the same
-/// adapter the seeded extension tree carries.
+/// Pinned to the version baked into the sidecar image so a Pi found on `PATH` resolves the
+/// same adapter the sidecar ships.
 const PI_MCP_ADAPTER_PACKAGE: &str = "npm:pi-mcp-adapter@5.2.0";
 pub(super) const PI_CODING_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 
-/// Pi's installation assets root, when a run supplies one: a process-level `PI_PACKAGE_DIR`,
-/// otherwise the sidecar mount if present. A native Pi install needs neither and locates its own
-/// assets.
-fn pi_package_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os(PI_PACKAGE_DIR_ENV).filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(dir));
-    }
-    let sidecar = PathBuf::from(SIDECAR_PI_PACKAGE_DIR);
-    sidecar.is_dir().then_some(sidecar)
-}
-
-/// The pre-installed extension tree under a package dir, when the adapter was baked in ahead of
-/// time so a run never needs to download it.
-fn seeded_extension_dir(package_dir: &Path) -> Option<PathBuf> {
-    let npm = package_dir.join("npm");
-    npm.is_dir().then_some(npm)
-}
-
+/// Allocates Pi's private per-run agent directory. Whether the adapter package is already
+/// present under it is up to whatever launches Pi: a sidecar seeds it from its own image,
+/// while a Pi found on `PATH` installs it on first launch.
 pub(super) fn pi_env_vars() -> Result<HashMap<OsString, OsString>> {
     let agent_dir = Builder::new().prefix("oz-pi-").tempdir()?;
     let session_dir = agent_dir.path().join("sessions");
     fs::create_dir_all(&session_dir)?;
     let agent_dir = agent_dir.keep();
-    let mut env_vars = HashMap::from([
+    Ok(HashMap::from([
         (
             OsString::from(PI_CODING_AGENT_DIR_ENV),
             agent_dir.into_os_string(),
@@ -57,19 +38,7 @@ pub(super) fn pi_env_vars() -> Result<HashMap<OsString, OsString>> {
             session_dir.into_os_string(),
         ),
         (OsString::from("PI_SKIP_VERSION_CHECK"), OsString::from("1")),
-    ]);
-    if let Some(package_dir) = pi_package_dir() {
-        // Offline mode also stops Pi from installing missing packages, so it is only safe once
-        // the adapter is known to be seeded from the package dir.
-        if seeded_extension_dir(&package_dir).is_some() {
-            env_vars.insert(OsString::from("PI_OFFLINE"), OsString::from("1"));
-        }
-        env_vars.insert(
-            OsString::from(PI_PACKAGE_DIR_ENV),
-            package_dir.into_os_string(),
-        );
-    }
-    Ok(env_vars)
+    ]))
 }
 
 /// The startup notice pi-acp attaches to `session/new`, when it has one. pi-acp also streams
@@ -112,18 +81,6 @@ pub(super) fn prepare_pi_environment_config(
         .get(OsStr::new(PI_CODING_AGENT_DIR_ENV))
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("{PI_CODING_AGENT_DIR_ENV} was not initialized"))?;
-    // Pi installs extensions under its agent directory even when its installation assets are
-    // read-only. Seeding the writable npm tree from a pre-installed one lets the pinned adapter
-    // load without a download; otherwise Pi installs it from the registry on first launch.
-    match resolved_env_vars
-        .get(OsStr::new(PI_PACKAGE_DIR_ENV))
-        .map(PathBuf::from)
-        .and_then(|package_dir| seeded_extension_dir(&package_dir))
-    {
-        Some(seeded) => copy_writable_tree(&seeded, &agent_dir.join("npm"))
-            .context("Failed to seed Pi adapter packages")?,
-        None => log::info!("Pi will install {PI_MCP_ADAPTER_PACKAGE} on launch"),
-    }
     prepare_pi_settings(&agent_dir.join("settings.json"))?;
     if let Some(prompt) = system_prompt {
         prepare_pi_system_prompt(&agent_dir, harness_working_dir, prompt)?;
@@ -251,33 +208,6 @@ fn pi_mcp_config(servers: &HashMap<String, JSONMCPServer>) -> Value {
         })
         .collect();
     json!({"mcpServers": servers})
-}
-
-fn copy_writable_tree(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let target = destination.join(entry.file_name());
-        #[cfg(unix)]
-        if entry.file_type()?.is_symlink() {
-            symlink(fs::read_link(entry.path())?, &target)?;
-            continue;
-        }
-        if entry.path().is_dir() {
-            copy_writable_tree(&entry.path(), &target)?;
-        } else {
-            fs::copy(entry.path(), &target)?;
-            #[cfg(unix)]
-            {
-                let permissions = fs::metadata(&target)?.permissions();
-                fs::set_permissions(
-                    &target,
-                    fs::Permissions::from_mode(permissions.mode() | 0o200),
-                )?;
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -37,7 +37,8 @@ use super::transcript_persistence::{
 };
 use super::usage_reporting::CaptureIdentity;
 use super::{
-    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, install_docs_url,
+    write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -72,7 +73,7 @@ impl ThirdPartyHarness for CodexHarness {
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
-        Some("https://developers.openai.com/codex/cli")
+        install_docs_url(self.harness())
     }
 
     fn auth_check_command(&self) -> Option<String> {

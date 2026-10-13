@@ -20,6 +20,7 @@ mod bridge;
 mod cli_transcript;
 mod connection;
 mod launch;
+mod manifest;
 mod mapping;
 mod model_config;
 mod policy;
@@ -36,7 +37,6 @@ use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 pub(crate) use bridge::run_bridge;
 use futures::{FutureExt, future, pin_mut, select};
-pub(crate) use launch::AcpLaunchSpec;
 use parking_lot::Mutex;
 use prost::Message as _;
 use serde_json::Value;
@@ -58,6 +58,8 @@ use self::attachments::AttachmentResolver;
 use self::bridge::{BridgeListener, bridge_command};
 use self::cli_transcript::CliTranscriptKind;
 use self::connection::{AcpConnection, RpcError};
+use self::launch::AcpLaunchSpec;
+use self::manifest::HarnessManifest;
 use self::mapping::AcpTurnMapper;
 use self::model_config::configure_model_and_thinking_through_acp;
 use self::policy::{PolicyDecision, PolicyRequest};
@@ -72,9 +74,9 @@ use self::turn_driver::{
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::claude_code::{ClaudeHarness, prepare_claude_environment_config};
-use super::codex::{CodexHarness, prepare_codex_environment_config, publish_skills_for_codex};
-use super::gemini::{GeminiHarness, prepare_gemini_environment_config, publish_skills_for_gemini};
+use super::claude_code::prepare_claude_environment_config;
+use super::codex::{prepare_codex_environment_config, publish_skills_for_codex};
+use super::gemini::{prepare_gemini_environment_config, publish_skills_for_gemini};
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_conversation_data,
 };
@@ -85,7 +87,7 @@ use super::transcript_persistence::{
 };
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, validate_cli_installed,
+    ThirdPartyHarness, install_docs_url, validate_cli_installed,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -110,21 +112,20 @@ const MAA_FORMAT: &str = "maa";
 /// `session/new` handshakes.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A third-party harness driven over ACP. `harness` is the harness identity (which decides
-/// bootstrap, auth checks, and server-side bookkeeping); `launch` is the ACP adapter process.
-pub(crate) struct AcpHarness {
+/// A third-party harness driven over ACP with manifest-defined launch and setup metadata.
+pub(super) struct AcpHarness {
     harness: Harness,
-    launch: AcpLaunchSpec,
+    manifest: HarnessManifest,
     initial_attachments: Vec<DownloadedAttachment>,
 }
 
 impl AcpHarness {
-    pub(crate) fn new(harness: Harness, launch: AcpLaunchSpec) -> Self {
-        Self {
+    pub(super) fn new(harness: Harness) -> Result<Self, AgentDriverError> {
+        Ok(Self {
             harness,
-            launch,
+            manifest: manifest::resolve(harness)?,
             initial_attachments: Vec::new(),
-        }
+        })
     }
 
     /// The text of the initial prompt. ACP has no system-prompt channel of its own, so every
@@ -152,17 +153,6 @@ impl AcpHarness {
         .filter(|part| !part.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
-    }
-
-    /// The terminal-based harness with the same identity, whose per-harness knowledge (install
-    /// docs, auth checks) applies regardless of transport. Pi has no terminal-based harness.
-    fn pty_harness(&self) -> Option<Box<dyn ThirdPartyHarness>> {
-        match self.harness {
-            Harness::Claude => Some(Box::new(ClaudeHarness)),
-            Harness::Codex => Some(Box::new(CodexHarness)),
-            Harness::Gemini => Some(Box::new(GeminiHarness)),
-            Harness::Pi | Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
-        }
     }
 
     /// Writes the harness's own config files (trust, auth, system prompt) the way the terminal
@@ -256,24 +246,23 @@ impl ThirdPartyHarness for AcpHarness {
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
-        self.pty_harness()
-            .and_then(|harness| harness.install_docs_url())
+        install_docs_url(self.harness)
     }
 
     fn validate(&self) -> Result<(), AgentDriverError> {
-        validate_cli_installed(&self.launch.program, self.install_docs_url())
+        if self.manifest.is_sidecar {
+            Ok(())
+        } else {
+            validate_cli_installed(&self.manifest.launch.program, self.install_docs_url())
+        }
     }
 
     fn auth_check_command(&self) -> Option<String> {
-        self.pty_harness()
-            .and_then(|harness| harness.auth_check_command())
+        self.manifest.auth_check_command.clone()
     }
 
-    /// The agent's stderr lands in its terminal block, so the CLI's failure signatures apply.
-    fn runtime_error_patterns(&self) -> &'static [&'static str] {
-        self.pty_harness()
-            .map(|harness| harness.runtime_error_patterns())
-            .unwrap_or(&[])
+    fn runtime_error_patterns_for_run(&self) -> Vec<String> {
+        self.manifest.runtime_error_patterns.clone()
     }
 
     fn drives_cli_agent_session(&self) -> bool {
@@ -349,7 +338,7 @@ impl ThirdPartyHarness for AcpHarness {
         });
         Ok(Box::new(AcpHarnessRunner {
             harness: self.harness,
-            launch: self.launch.clone(),
+            launch: self.manifest.launch.clone(),
             user_prompt: prompt.to_owned(),
             prompt_text,
             initial_attachments: self.initial_attachments.clone(),

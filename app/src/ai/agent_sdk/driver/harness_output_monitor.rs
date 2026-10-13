@@ -37,8 +37,8 @@ pub(crate) struct DetectedHarnessError {
     pub excerpt: String,
 }
 
-/// Build a combined case-insensitive DFA from the harness's static patterns.
-pub(crate) fn build_dfas(patterns: &[&'static str]) -> Option<RegexDFAs> {
+/// Build a combined case-insensitive DFA from the harness's runtime error patterns.
+pub(crate) fn build_dfas(patterns: &[&str]) -> Option<RegexDFAs> {
     if patterns.is_empty() {
         return None;
     }
@@ -59,10 +59,7 @@ pub(crate) fn build_dfas(patterns: &[&'static str]) -> Option<RegexDFAs> {
 /// Map a `matched_text` produced by the combined DFA back to the originating
 /// needle. The DFA matched `(p1|p2|…)`, so the matched substring is exactly
 /// one of `patterns` up to case — we lowercase-compare to identify it.
-pub(crate) fn pattern_for_match(
-    matched_text: &str,
-    patterns: &[&'static str],
-) -> Option<&'static str> {
+pub(crate) fn pattern_for_match<'a>(matched_text: &str, patterns: &[&'a str]) -> Option<&'a str> {
     let matched_lower = matched_text.to_lowercase();
     patterns
         .iter()
@@ -145,7 +142,7 @@ async fn confirm_stall(
 /// Cancellation-safe: dropping the future stops both loops.
 pub(crate) async fn watch_block_for_errors(
     block_id: BlockId,
-    patterns: &'static [&'static str],
+    patterns: &[&str],
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Option<DetectedHarnessError> {
     if patterns.is_empty() {

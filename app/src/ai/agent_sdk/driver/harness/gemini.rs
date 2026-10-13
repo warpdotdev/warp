@@ -21,7 +21,7 @@ use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, write_temp_file,
+    ThirdPartyHarness, install_docs_url, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -51,7 +51,7 @@ impl ThirdPartyHarness for GeminiHarness {
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
-        Some("https://geminicli.com/")
+        install_docs_url(self.harness())
     }
 
     fn build_runner(

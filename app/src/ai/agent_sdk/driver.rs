@@ -2245,12 +2245,14 @@ impl AgentDriver {
                         Ok::<_, AgentDriverError>((harness_exit_rx, runner))
                     })
                     .await?;
-                let runtime_error_patterns = harness.runtime_error_patterns();
+                let runtime_error_patterns = harness.runtime_error_patterns_for_run();
+                let runtime_error_patterns: Vec<&str> =
+                    runtime_error_patterns.iter().map(String::as_str).collect();
 
                 with_credential_refreshes(
                     Self::run_harness(
                         runner,
-                        runtime_error_patterns,
+                        &runtime_error_patterns,
                         &foreground,
                         harness_exit_rx,
                         &setup_events,
@@ -2984,7 +2986,7 @@ impl AgentDriver {
     /// same `AuthenticationRequired` error code used by the auth preflight.
     async fn run_harness(
         runner: Arc<dyn harness::HarnessRunner>,
-        runtime_error_patterns: &'static [&'static str],
+        runtime_error_patterns: &[&str],
         foreground: &ModelSpawner<Self>,
         harness_exit_rx: oneshot::Receiver<()>,
         setup_events: &SetupClientEventReporter,
