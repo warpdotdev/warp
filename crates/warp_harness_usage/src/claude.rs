@@ -1,12 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::api::{
-    Attribution, CacheCreation, ClaudeUsage, Coverage, HarnessUsageSnapshot, UsagePayload,
-    UsageSnapshot,
-};
-use crate::counters::{Accounting, Counters};
+use crate::api::{Attribution, CacheCreation, ClaudeUsage, HarnessUsageSnapshot, ThresholdPolicy};
+use crate::counters::{Accounting, Counters, Provider};
 use crate::tools::Tools;
 use crate::{
     CaptureDiagnostics, ExtractedUsage, ExtractionOutcome, Findings, MAX_IDENTITIES,
@@ -22,8 +19,8 @@ const PATHS: [&str; 6] = [
     "/cache_creation/ephemeral_1h_input_tokens",
 ];
 
-impl From<Counters<6>> for ClaudeUsage {
-    fn from(counts: Counters<6>) -> Self {
+impl From<Counters> for ClaudeUsage {
+    fn from(counts: Counters) -> Self {
         let [
             input_tokens,
             output_tokens,
@@ -49,7 +46,7 @@ impl From<Counters<6>> for ClaudeUsage {
 
 #[derive(Default)]
 struct Response {
-    usage: Option<Counters<6>>,
+    usage: Option<Counters>,
     attribution: Attribution,
     conflicted: bool,
 }
@@ -68,6 +65,7 @@ pub fn extract_claude<'a>(
     root: &[Value],
     subagents: impl IntoIterator<Item = (&'a str, &'a [Value])>,
     diagnostics: &CaptureDiagnostics,
+    policy: Option<&ThresholdPolicy>,
 ) -> ExtractionOutcome {
     let mut findings = Findings::default();
     findings.capture(diagnostics);
@@ -93,7 +91,7 @@ pub fn extract_claude<'a>(
         }
     }
     let mut sessions = BTreeSet::from([session_id.to_owned()]);
-    let mut responses = HashMap::new();
+    let mut responses = BTreeMap::new();
     let mut tools = Tools::default();
     for entries in std::iter::once(root).chain(sources.into_values()) {
         for entry in entries {
@@ -219,22 +217,13 @@ pub fn extract_claude<'a>(
             break;
         }
     }
-    let mut accounting = Accounting::default();
-    let mut observed_fields = None;
-    let mut missing_category = false;
+    let mut accounting = Accounting::new(Provider::Claude, policy);
     for response in responses.into_values() {
         if let Some(usage) = response.usage {
-            let fields = usage.values.map(|value| value.is_some());
-            missing_category |= observed_fields.is_some_and(|previous| previous != fields);
-            observed_fields = Some(fields);
-            accounting.total.add(&usage, &mut findings);
-            accounting.attribute(&usage, &response.attribution, &mut findings);
+            accounting.request(&usage, &response.attribution, &mut findings);
         } else if !response.conflicted {
             findings.token(ReasonCode::IncompleteInput);
         }
-    }
-    if missing_category {
-        findings.token(ReasonCode::IncompleteInput);
     }
     let readable = diagnostics.root.is_complete()
         || diagnostics
@@ -242,40 +231,20 @@ pub fn extract_claude<'a>(
             .values()
             .any(|file| file.is_complete());
     let tool_calls = tools.finish(readable, &mut findings);
-    let usage = accounting
-        .total
-        .any()
-        .then(|| accounting.total.clone().into());
-    let attribution = accounting.groups();
-    if findings.limit_exceeded || (usage.is_none() && tool_calls.is_none()) {
-        return ExtractionOutcome::Unavailable(findings.diagnostics());
-    }
-    let token_status = Findings::status(usage.is_some(), findings.tokens_partial);
-    let tool_status = Findings::status(tool_calls.is_some(), findings.tools_partial);
+    let snapshot = accounting.finish(tool_calls, &findings);
     let diagnostics = findings.diagnostics();
     ExtractionOutcome::Usable(Box::new(ExtractedUsage {
-        snapshot: HarnessUsageSnapshot::ClaudeCode(UsageSnapshot {
-            coverage: Coverage {
-                token_status,
-                tool_status,
-            },
-            payload: UsagePayload {
-                usage,
-                attribution,
-                tool_calls,
-            },
-        }),
+        snapshot: HarnessUsageSnapshot::ClaudeCode(snapshot),
         diagnostics,
     }))
 }
 
-fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
+fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters> {
     if value
         .get("cache_creation")
         .is_some_and(|partitions| !partitions.is_object())
     {
         findings.token(ReasonCode::InvalidData);
-        return None;
     }
     let usage = Counters::parse(value, PATHS, findings)?;
     let [_, _, _, aggregate, short, long] = usage.values;
@@ -283,7 +252,6 @@ fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
         && short.checked_add(long) != Some(aggregate)
     {
         findings.token(ReasonCode::InvalidData);
-        return None;
     }
     Some(usage)
 }

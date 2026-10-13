@@ -14,8 +14,95 @@ use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::agent_sdk::driver::harness::claude_transcript::{
     encode_cwd, read_envelope_with_diagnostics, write_session_index_entry,
 };
+use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
+use crate::server::server_api::harness_support::{
+    HarnessUsageCapability, MockHarnessSupportClient, TranscriptUploadMetadata, UploadTarget,
+};
+
+#[tokio::test]
+#[serial_test::serial]
+async fn transcript_capture_reads_and_timestamps_after_metadata_response() {
+    let config = TempDir::new().unwrap();
+    let old_config = std::env::var_os("CLAUDE_CONFIG_DIR");
+    // SAFETY: environment access is serialized with the other Claude configuration tests.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", config.path()) };
+    let session = Uuid::new_v4();
+    let cwd = Path::new("/synthetic/project");
+    let directory = config.path().join("projects").join(encode_cwd(cwd));
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("{session}.jsonl"));
+    let entry = serde_json::json!({"type":"assistant","message":{"id":"a","model":"claude-a","content":[],
+        "usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":5}}});
+    let mut server = mockito::Server::new_async().await;
+    let upload = server
+        .mock("PUT", "/upload")
+        .match_body(mockito::Matcher::PartialJson(
+            serde_json::json!({"entries":[entry.clone()]}),
+        ))
+        .with_status(200)
+        .create_async()
+        .await;
+    let metadata_returned_at = Arc::new(Mutex::new(None));
+    let returned_at = metadata_returned_at.clone();
+    let url = format!("{}/upload", server.url());
+    let mut client = MockHarnessSupportClient::new();
+    client
+        .expect_get_transcript_upload_metadata()
+        .returning(move |_| {
+            fs::write(&path, format!("{entry}\n")).unwrap();
+            *returned_at.lock() = Some(Utc::now());
+            Ok(TranscriptUploadMetadata {
+                target: UploadTarget {
+                    url: url.clone(),
+                    method: "PUT".into(),
+                    headers: HashMap::new(),
+                    fields: Vec::new(),
+                },
+                threshold_policy: warp_harness_usage::api::ThresholdPolicy::parse(
+                    serde_json::json!({
+                        "schema_version":1,"models":{"claude-a":{"kind":"none"}}
+                    }),
+                ),
+            })
+        });
+    let http = build_test_http_client();
+    client.expect_http_client().return_const(http);
+    let persistence = HarnessPersistence::default();
+    persistence.initialize(
+        tokio::task::spawn_blocking(|| ServerApiProvider::new_for_test().get())
+            .await
+            .unwrap(),
+        Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
+        Some(HarnessUsageCapability { execution_id: 41 }),
+    );
+    let result = capture_and_upload_transcript(
+        &client,
+        &ServerConversationToken::new("conversation".into()),
+        session,
+        cwd,
+        None,
+        true,
+        &persistence,
+    )
+    .await;
+    match old_config {
+        // SAFETY: the capture and its blocking file read have finished before restoring the environment.
+        Some(value) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", value) },
+        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+    }
+    let request = result.unwrap().into_request().unwrap();
+    assert!(request.captured_at >= metadata_returned_at.lock().unwrap());
+    assert_eq!(request.capture_sequence, 1);
+    let warp_harness_usage::api::HarnessUsageSnapshot::ClaudeCode(snapshot) = request.snapshot
+    else {
+        panic!("wrong provider")
+    };
+    assert_eq!(snapshot.payload.output_tokens, Some(5));
+    assert!(snapshot.payload.cost_metadata.is_some());
+    upload.assert_async().await;
+}
 
 fn sample_parent_bridge_message(
     sequence: i64,

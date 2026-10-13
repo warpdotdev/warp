@@ -12,8 +12,9 @@ use warp_harness_usage::{
 use warpui::r#async::Timer;
 use warpui::duration_with_jitter;
 
-use crate::ai::agent::api::ServerConversationToken;
-use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::server::server_api::harness_support::{
+    HarnessSupportClient, UploadTarget, upload_to_target,
+};
 
 const MAX_CAPTURE_ATTEMPTS: usize = 3;
 const JSONL_LIMITS: JsonlLimits = JsonlLimits {
@@ -99,13 +100,12 @@ where
 /// Performs the legacy single raw-transcript upload attempt.
 pub(super) async fn upload_captured_transcript(
     client: &dyn HarnessSupportClient,
-    conversation_id: &ServerConversationToken,
+    target: &UploadTarget,
     capture: CapturedTranscript,
 ) -> Result<UploadedTranscriptUsage> {
-    let target = client.get_transcript_upload_target(conversation_id).await?;
     upload_to_target(
         client.http_client(),
-        &target,
+        target,
         capture.transcript_body.clone(),
     )
     .await

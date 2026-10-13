@@ -45,6 +45,7 @@ fn request(sequence: i64) -> HarnessUsageRequest {
                 },
                 ..Default::default()
             },
+            None,
         ),
     )
     .unwrap()

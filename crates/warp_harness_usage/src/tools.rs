@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::api::ToolCalls;
-use crate::{Findings, MAX_IDENTITIES, MAX_TOOL_NAMES, ReasonCode, identifier};
+use crate::{Findings, MAX_IDENTITIES, MAX_SCOPE_LENGTH, MAX_TOOL_NAMES, ReasonCode};
 
 #[derive(Default)]
 pub(crate) struct Tools {
@@ -25,7 +25,8 @@ impl Tools {
             findings.tool(ReasonCode::InvalidData);
             return;
         };
-        if !identifier(id, findings) || !identifier(name, findings) {
+        if id.len() > MAX_SCOPE_LENGTH || name.len() > MAX_SCOPE_LENGTH {
+            findings.tool(ReasonCode::ResourceLimit);
             return;
         }
         let key = (session.to_owned(), id.to_owned());
@@ -36,7 +37,7 @@ impl Tools {
                 findings.tool(ReasonCode::AmbiguousAccounting);
             }
         } else if self.calls.len() >= MAX_IDENTITIES {
-            findings.limit(ReasonCode::ResourceLimit);
+            findings.tool(ReasonCode::ResourceLimit);
         } else {
             self.calls.insert(key, Some(name.to_owned()));
         }
@@ -47,7 +48,7 @@ impl Tools {
         let mut total = 0_i64;
         for name in self.calls.into_values().flatten() {
             if !by_name.contains_key(&name) && by_name.len() >= MAX_TOOL_NAMES {
-                findings.limit(ReasonCode::ResourceLimit);
+                findings.tool(ReasonCode::ResourceLimit);
                 return None;
             }
             let count = by_name.entry(name).or_insert(0_i64);

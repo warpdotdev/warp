@@ -7,23 +7,18 @@ use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http_client::StatusCode;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use warp_harness_usage::api::HarnessUsageRequest;
+use warp_harness_usage::api::{HarnessUsageRequest, MAX_BODY_BYTES};
 
 use super::super::ServerApi;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 mod wire;
 
-const MAX_BODY_BYTES: usize = 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) fn encode_request(request: &HarnessUsageRequest) -> Result<Vec<u8>> {
     ensure!(
         request.execution_id > 0 && request.capture_sequence > 0,
         "Invalid harness capture identity"
-    );
-    ensure!(
-        request.has_usable_category(),
-        "No usable harness usage category"
     );
     let body = serde_json::to_vec(request)?;
     ensure!(

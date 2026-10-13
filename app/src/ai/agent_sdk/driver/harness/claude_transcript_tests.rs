@@ -19,7 +19,7 @@ fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
     write_file(
         &directory,
         &filename,
-        "{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"usage\":{\"input_tokens\":10}}}\n{\"type\":",
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"usage\":{\"output_tokens\":10}}}\n{\"type\":",
     );
     let (envelope, diagnostics) =
         read_envelope_with_diagnostics(session, cwd, tmp.path(), true).unwrap();
@@ -29,19 +29,24 @@ fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
         &filename,
         "{\"type\":\"assistant\",\"message\":{\"id\":\"b\",\"usage\":{\"input_tokens\":999}}}\n",
     );
-    let ExtractionOutcome::Usable(extracted) =
-        extract_claude(&session.to_string(), &envelope.entries, [], &diagnostics)
-    else {
+    let ExtractionOutcome::Usable(extracted) = extract_claude(
+        &session.to_string(),
+        &envelope.entries,
+        [],
+        &diagnostics,
+        None,
+    ) else {
         panic!("expected observed tokens");
     };
     let HarnessUsageSnapshot::ClaudeCode(snapshot) = extracted.snapshot else {
         unreachable!()
     };
-    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(
-        serde_json::to_value(snapshot.payload).unwrap()["usage"]["input_tokens"],
-        10
+        snapshot.coverage.output_token_status,
+        CoverageStatus::Partial
     );
+    assert_eq!(snapshot.payload.output_tokens, Some(10));
+    assert!(snapshot.payload.cost_metadata.is_none());
     let uploaded: ClaudeTranscriptEnvelope = serde_json::from_slice(&raw).unwrap();
     assert_eq!(uploaded.entries, envelope.entries);
     assert!(diagnostics.root.incomplete_trailing_record);

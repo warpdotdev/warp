@@ -19,7 +19,7 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
     CommitSnapshotRequest, CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest,
-    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget,
+    ResolvedHarnessPrompt, SnapshotUploadRequest, TranscriptUploadMetadata, UploadTarget,
 };
 
 fn fresh_task_id() -> AmbientAgentTaskId {
@@ -94,10 +94,10 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }
-    async fn get_transcript_upload_target(
+    async fn get_transcript_upload_metadata(
         &self,
         _conversation_id: &ServerConversationToken,
-    ) -> Result<UploadTarget> {
+    ) -> Result<TranscriptUploadMetadata> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_block_snapshot_upload_target(
@@ -195,10 +195,10 @@ impl HarnessSupportClient for RecordingClient {
     async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
         unimplemented!("not used by the coordinator")
     }
-    async fn get_transcript_upload_target(
+    async fn get_transcript_upload_metadata(
         &self,
         _conversation_id: &ServerConversationToken,
-    ) -> Result<UploadTarget> {
+    ) -> Result<TranscriptUploadMetadata> {
         unimplemented!("not used by the coordinator")
     }
     async fn get_block_snapshot_upload_target(
