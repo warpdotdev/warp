@@ -41,6 +41,30 @@ fn per_member_rows_sort_by_fractional_usage_without_rounding() {
     assert_eq!(rows[1].total_cost_cents, 0.1);
 }
 
+#[test]
+fn member_rows_preserve_fractional_cost_without_credits() {
+    let mut cost_only = entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        0,
+        0,
+    );
+    cost_only.cost_type = AiCreditsUsageAndCostType::Payg;
+    cost_only.cost_cents = 0.6;
+
+    let rows = MemberUsageRow::for_each_member(
+        &[cost_only.clone(), cost_only],
+        &[member(VIEWER_UID)],
+        SourceFilter::All,
+    );
+
+    assert_eq!(rows[0].total_credits, 0.0);
+    assert_eq!(rows[0].total_cost_cents, 1.2);
+    assert_eq!(rows[0].segments.len(), 1);
+    assert_eq!(rows[0].segments[0].cost_cents, 1.2);
+}
+
 fn entry(
     subject_type: AiCreditsUsageAndCostSubjectType,
     subject_uid: Option<&str>,

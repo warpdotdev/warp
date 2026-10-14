@@ -126,6 +126,10 @@ fn render_card_pill_bar(
     let theme = appearance.theme();
     let track_bg = theme.surface_overlay_1();
     let corner = Radius::Pixels(CARD_BAR_RADIUS);
+    let segments = segments
+        .iter()
+        .filter(|s| s.credits > 0.0)
+        .collect::<Vec<_>>();
 
     if total_credits == 0.0 || segments.is_empty() {
         return ConstrainedBox::new(

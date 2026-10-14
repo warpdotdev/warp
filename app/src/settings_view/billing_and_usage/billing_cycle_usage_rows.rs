@@ -87,7 +87,7 @@ pub struct MemberUsageRow {
     pub display_name: String,
     pub total_credits: f64,
     pub total_cost_cents: f64,
-    /// Sorted by cost-type then bucket order; zero-credit entries dropped.
+    /// Sorted by cost-type then bucket order; entries with no credit or monetary usage dropped.
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: f64,
@@ -378,6 +378,7 @@ fn render_stacked_bar(
     let theme = appearance.theme();
     let track_bg = theme.surface_overlay_1();
     let corner = Radius::Pixels(BAR_CORNER_RADIUS);
+    let segments = segments.iter().filter(|s| s.credits > 0.0).collect_vec();
 
     if team_max_credits == 0.0 || total_credits == 0.0 || segments.is_empty() {
         // Empty track, top-rounded on both ends.

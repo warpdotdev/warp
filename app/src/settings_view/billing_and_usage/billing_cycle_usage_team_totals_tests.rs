@@ -22,6 +22,27 @@ fn entry(
     }
 }
 
+#[test]
+fn cost_only_team_totals_preserve_fractional_source_costs() {
+    let mut local = entry(AiCreditsUsageSource::Local, 0, 0);
+    local.cost_type = AiCreditsUsageAndCostType::Payg;
+    local.cost_cents = 0.6;
+    let mut cloud = local.clone();
+    cloud.usage_source = AiCreditsUsageSource::Cloud;
+
+    let summaries = build_team_total_card_summaries(
+        &[local, cloud],
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
+    );
+
+    assert_eq!(summaries[0].total_credits, 0.0);
+    assert_eq!(summaries[0].total_cost_cents, 1.2);
+    assert_eq!(summaries[0].segments.len(), 1);
+    assert_eq!(summaries[0].segments[0].cost_cents, 1.2);
+    assert_eq!(summaries[1].total_cost_cents, 0.6);
+    assert_eq!(summaries[2].total_cost_cents, 0.6);
+}
+
 fn visibility(granularity: UsageVisibilityGranularity) -> UsageVisibility {
     UsageVisibility {
         granularity,

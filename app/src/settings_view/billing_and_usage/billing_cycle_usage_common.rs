@@ -42,8 +42,7 @@ const BUCKET_ORDER: &[AiCreditsUsageBucket] = &[
     AiCreditsUsageBucket::Platform,
 ];
 
-/// One colored slice of the stacked bar. `cost_type` drives color; `usage_bucket`
-/// drives the tooltip breakdown.
+/// One cost-type/bucket line in a usage breakdown.
 #[derive(Clone, Debug)]
 pub struct BarSegment {
     pub cost_type: AiCreditsUsageAndCostType,
@@ -161,7 +160,7 @@ pub fn aggregate_segments<'a>(
         }
     }
 
-    segments.retain(|s| s.credits > 0.0);
+    segments.retain(|s| s.credits > 0.0 || s.cost_cents > 0.0);
     segments.sort_by_key(segment_sort_key);
 
     let total_credits = segments.iter().map(|s| s.credits).sum();
@@ -222,14 +221,7 @@ pub fn members_for_team(members: &[WorkspaceMember], team: Option<&Team>) -> Vec
         .collect()
 }
 
-/// Cost-type buckets to surface in the usage legend, in display order.
-///
-/// Mirrors the buckets the stacked bars actually render: legacy buckets are
-/// dropped (see [`filter_legacy_buckets`]) and a cost type only counts when it
-/// has real usage (`credits_used > 0`), exactly like [`aggregate_segments`],
-/// which retains only segments with `credits > 0`. Without the usage check a
-/// zero-credit entry (e.g. an untouched base-limit row) would list "Base" in
-/// the legend even though it contributed nothing to the chart.
+/// Cost types with credit or monetary usage, excluding legacy buckets, in display order.
 pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsageAndCostType> {
     let filtered = filter_legacy_buckets(entries);
     [
@@ -243,7 +235,7 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
     .filter(|cost_type| {
         filtered
             .iter()
-            .any(|e| e.cost_type == *cost_type && e.credits_used > 0.0)
+            .any(|e| e.cost_type == *cost_type && (e.credits_used > 0.0 || e.cost_cents > 0.0))
     })
     .collect()
 }
@@ -251,7 +243,7 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
 /// "Is there any data in `entries` that's not my own?"
 pub fn has_non_viewer_data(entries: &[BillingCycleUsageEntry], viewer_uid: Option<&str>) -> bool {
     entries.iter().any(|e| match &e.subject_type {
-        AiCreditsUsageAndCostSubjectType::Team => e.credits_used > 0.0,
+        AiCreditsUsageAndCostSubjectType::Team => e.credits_used > 0.0 || e.cost_cents > 0.0,
         _ => match (e.subject_uid.as_deref(), viewer_uid) {
             (Some(uid), Some(viewer)) => uid != viewer,
             // Unknown subject — conservatively treat as non-viewer.

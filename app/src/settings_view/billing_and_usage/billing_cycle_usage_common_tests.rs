@@ -35,6 +35,29 @@ fn entry(
     }
 }
 
+#[test]
+fn cost_only_team_usage_is_visible() {
+    let mut cost_only = entry(
+        AiCreditsUsageAndCostSubjectType::Team,
+        None,
+        AiCreditsUsageAndCostType::Aggregate,
+        AiCreditsUsageBucket::Aggregate,
+        AiCreditsUsageSource::Aggregate,
+        0,
+        0,
+    );
+    cost_only.cost_cents = 0.6;
+
+    assert!(has_non_viewer_data(
+        &[viewer_user_entry(), cost_only.clone()],
+        Some(VIEWER_UID)
+    ));
+    assert_eq!(
+        legend_cost_types(&[cost_only]),
+        vec![AiCreditsUsageAndCostType::Aggregate]
+    );
+}
+
 /// Boilerplate viewer-owned User row for predicate tests.
 fn viewer_user_entry() -> BillingCycleUsageEntry {
     entry(
@@ -240,8 +263,6 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
             20,
             0,
         ),
-        // Zero-credit entry: must be dropped before totals are computed (so
-        // the stray cost_cents don't leak into the row total).
         entry(
             AiCreditsUsageAndCostSubjectType::User,
             Some(VIEWER_UID),
@@ -250,6 +271,15 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
             AiCreditsUsageSource::Local,
             0,
             42,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::AmbientBonusGrant,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Cloud,
+            0,
+            0,
         ),
     ];
 
@@ -268,22 +298,21 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
                 AiCreditsUsageAndCostType::BonusGrant,
                 AiCreditsUsageBucket::Compute
             ),
+            (AiCreditsUsageAndCostType::Payg, AiCreditsUsageBucket::Ai),
         ],
-        "expected BaseLimit/Ai before BonusGrant/Compute, Payg zero-credit dropped"
+        "expected cost-type order, excluding only unused entries"
     );
 
     let bonus = &segments[1];
     assert_eq!(bonus.credits, 17.0, "10 + 7 merged credits");
     assert_eq!(bonus.cost_cents, 8.0, "5 + 3 merged cost cents");
 
-    // Totals are summed *after* the zero-credit segment is dropped, so the
-    // stray 42 cents on the Payg/Ai entry must not appear here.
     assert_eq!(total_credits, 20.0 + 17.0);
-    assert_eq!(total_cost_cents, 8.0);
+    assert_eq!(total_cost_cents, 50.0);
 }
 
 #[test]
-fn legend_cost_types_excludes_zero_credit_bucket() {
+fn legend_cost_types_excludes_unused_bucket() {
     // Regression: a base-limit row with no usage must not surface "Base" in
     // the legend while only Pay-as-you-go credits were actually spent.
     let entries = vec![
@@ -310,7 +339,7 @@ fn legend_cost_types_excludes_zero_credit_bucket() {
     assert_eq!(
         legend_cost_types(&entries),
         vec![AiCreditsUsageAndCostType::Payg],
-        "zero-credit BaseLimit row must be dropped from the legend"
+        "unused BaseLimit row must be dropped from the legend"
     );
 }
 
