@@ -400,8 +400,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                      secret configured for this harness is correct."
                 }
             };
-            let message =
-                format!("Harness '{harness}' authentication check failed: {detail}. {guidance}");
+            let detail_separator = match detail.chars().last() {
+                Some('.' | '!' | '?') => " ",
+                _ => ". ",
+            };
+            let message = format!(
+                "Harness '{harness}' authentication check failed: {detail}{detail_separator}{guidance}"
+            );
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(

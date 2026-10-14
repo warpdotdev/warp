@@ -529,10 +529,12 @@ fn harness_auth_check_failed_is_failed_with_auth_required() {
         update.error_code,
         Some(PlatformErrorCode::AuthenticationRequired)
     );
-    assert!(update.message.contains("authentication check failed"));
-    assert!(update.message.contains("claude"));
-    assert!(update.message.contains("exit code 1"));
-    assert!(update.message.contains("invalid or expired"));
+    assert_eq!(
+        update.message,
+        "Harness 'claude' authentication check failed: exit code 1. Login credentials are \
+         invalid or expired. Verify that the authentication secret configured for this harness \
+         is correct."
+    );
 }
 
 #[test]
@@ -547,10 +549,13 @@ fn pi_auth_check_failed_points_at_provider_api_key_secret() {
         update.error_code,
         Some(PlatformErrorCode::AuthenticationRequired)
     );
-    assert!(update.message.contains(detail));
-    assert!(update.message.contains("Anthropic or OpenAI API key"));
-    assert!(update.message.contains("harness auth secret"));
-    assert!(!update.message.contains("invalid or expired"));
+    assert_eq!(
+        update.message,
+        "Harness 'pi' authentication check failed: Authentication required: Configure an API \
+         key or log in with an OAuth provider. Pi needs an Anthropic or OpenAI API key: \
+         configure an API-key managed secret matching the chosen model's provider and attach \
+         it as this run's harness auth secret."
+    );
 }
 
 // --- Harness setup failures ---
