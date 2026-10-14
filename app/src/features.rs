@@ -457,6 +457,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::VerticalTabsSummaryMode,
         #[cfg(feature = "tab_configs")]
         FeatureFlag::TabConfigs,
+        #[cfg(feature = "windows_jump_list")]
+        FeatureFlag::WindowsJumpList,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
         #[cfg(feature = "pinned_tabs")]

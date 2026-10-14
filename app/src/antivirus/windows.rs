@@ -1,8 +1,7 @@
 use warp_core::send_telemetry_from_ctx;
+use warp_util::windows::com_initialized;
 use warpui::ModelContext;
-use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
-};
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
 use windows::Win32::System::SecurityCenter::*;
 
 use crate::antivirus::telemetry::AntivirusInfoTelemetryEvent;
@@ -66,37 +65,4 @@ impl AntivirusInfo {
 
         ctx.emit(AntivirusInfoEvent::ScannedComplete);
     }
-}
-
-/// Helper struct to properly enforce reference counting of the Windows COM library.
-///
-/// Per the Windows docs (https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex)
-/// each call to [`CoInitializeEx`] must be paired with a call to [`CoUninitialize`] in order for
-/// the COM library to be gracefully uninitialized.
-// TODO(alokedesai): Move this to a shared place in `core` so we can use it in other places in the
-// app.
-struct ComInitialized;
-
-impl Drop for ComInitialized {
-    fn drop(&mut self) {
-        unsafe { CoUninitialize() };
-    }
-}
-
-thread_local! {
-    static COM_INITIALIZED: Result<ComInitialized, windows::core::Error> = {
-        unsafe {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-            Ok(ComInitialized)
-        }
-    };
-}
-
-fn com_initialized() -> Result<(), windows::core::Error> {
-    COM_INITIALIZED.with(|initialized| {
-        initialized
-            .as_ref()
-            .map(|_| ())
-            .map_err(|error| error.clone())
-    })
 }
