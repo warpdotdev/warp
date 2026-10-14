@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use ai::skills::{
     SKILL_PROVIDER_DEFINITIONS, SkillReferenceEntry, SkillReferenceFile, SkillReferenceParseError,
@@ -24,15 +25,18 @@ use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 use warp_core::{safe_info, safe_warn};
-use warpui::ModelSpawner;
 use warpui::r#async::executor::Background;
+use warpui::{ModelSpawner, SingletonEntity as _};
 
 use super::AgentDriver;
 use super::environment;
 use super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest,
 };
+use crate::ai::agent_sdk::setup_observability::{OzRunTimelineEvent, SetupClientEventReporter};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 
 /// Environment variable naming the Factory's primary code forge, used for sources that don't
 /// name one.
@@ -47,6 +51,14 @@ const SKILL_FILE: &str = "SKILL.md";
 const GIT_DIRECTORY: &str = ".git";
 /// Bounds how much of a source repository a path glob walks.
 const MAX_WALKED_ENTRIES: usize = 200_000;
+
+/// Bounds on the run record, kept within what the server stores for one timeline event.
+const MAX_RECORDED_REFERENCE_FILES: usize = 200;
+const MAX_RECORDED_ENTRIES: usize = 256;
+const MAX_RECORDED_STRING_BYTES: usize = 512;
+const MAX_RECORDED_PAYLOAD_BYTES: usize = 60 * 1024;
+/// How many unresolved entries the run status message names before summarizing the rest.
+const MAX_STATUS_MESSAGE_ENTRIES: usize = 5;
 
 /// Whether a reference file applies to the whole Factory or to one agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -83,6 +95,133 @@ impl SkillSourcesReport {
             .map(|reference| reference.unresolved.len())
             .sum()
     }
+
+    /// The `skill_sources_resolved` timeline payload. Long strings are truncated and, when the
+    /// record would be too large, loaded skills are dropped before warnings, and later reference
+    /// files before earlier ones.
+    pub fn timeline_payload(&self) -> serde_json::Value {
+        let mut remaining =
+            MAX_RECORDED_PAYLOAD_BYTES.saturating_sub(json_size(&SkillSourcesReport::default()));
+        let mut references = Vec::new();
+        for reference in self.references.iter().take(MAX_RECORDED_REFERENCE_FILES) {
+            let mut recorded = ReferenceFileReport {
+                reference_file: truncated(&reference.reference_file),
+                level: reference.level,
+                agent: reference.agent.as_deref().map(truncated),
+                source: reference.source.as_ref().map(|source| ReferencedSource {
+                    code_forge: source.code_forge,
+                    owner: truncated(&source.owner),
+                    name: truncated(&source.name),
+                    requested_ref: source.requested_ref.as_deref().map(truncated),
+                    resolved_sha: source.resolved_sha.clone(),
+                }),
+                loaded: Vec::new(),
+                unresolved: Vec::new(),
+            };
+            // Each `+ 1` is the separator before the reference or entry.
+            let mut size = json_size(&recorded) + 1;
+            if size > remaining {
+                break;
+            }
+            for entry in reference.unresolved.iter().take(MAX_RECORDED_ENTRIES) {
+                let entry = UnresolvedEntry {
+                    entry: truncated(&entry.entry),
+                    reason: entry.reason,
+                };
+                let entry_size = json_size(&entry) + 1;
+                if size + entry_size > remaining {
+                    break;
+                }
+                size += entry_size;
+                recorded.unresolved.push(entry);
+            }
+            remaining -= size;
+            references.push(recorded);
+        }
+        for (recorded, reference) in references.iter_mut().zip(&self.references) {
+            for skill in reference.loaded.iter().take(MAX_RECORDED_ENTRIES) {
+                let skill = LoadedSkill {
+                    name: truncated(&skill.name),
+                    path: truncated(&skill.path),
+                };
+                let skill_size = json_size(&skill) + 1;
+                if skill_size > remaining {
+                    break;
+                }
+                remaining -= skill_size;
+                recorded.loaded.push(skill);
+            }
+        }
+        serde_json::to_value(SkillSourcesReport { references }).unwrap_or_default()
+    }
+
+    /// The run status message for a report with warnings, naming the first few.
+    pub fn status_message(&self) -> Option<String> {
+        let warnings = self
+            .references
+            .iter()
+            .flat_map(|reference| {
+                reference.unresolved.iter().map(move |entry| {
+                    if entry.entry.is_empty() {
+                        format!("{} ({})", reference.reference_file, entry.reason.code())
+                    } else {
+                        format!(
+                            "{} '{}' ({})",
+                            reference.reference_file,
+                            entry.entry,
+                            entry.reason.code()
+                        )
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if warnings.is_empty() {
+            return None;
+        }
+        let mut details = warnings
+            .iter()
+            .take(MAX_STATUS_MESSAGE_ENTRIES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        if warnings.len() > MAX_STATUS_MESSAGE_ENTRIES {
+            details.push_str(&format!(
+                "; and {} more",
+                warnings.len() - MAX_STATUS_MESSAGE_ENTRIES
+            ));
+        }
+        Some(format!(
+            "Warning: some referenced skills did not load ({details}); continuing without them."
+        ))
+    }
+}
+
+impl UnresolvedReason {
+    fn code(self) -> &'static str {
+        match self {
+            Self::CloneFailed => "clone_failed",
+            Self::RefNotFound => "ref_not_found",
+            Self::NoMatch => "no_match",
+            Self::InvalidSkill => "invalid_skill",
+            Self::InvalidReferenceFile => "invalid_reference_file",
+            Self::Collision => "collision",
+        }
+    }
+}
+
+fn json_size(value: &impl Serialize) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX / 2, |bytes| bytes.len())
+}
+
+fn truncated(value: &str) -> String {
+    if value.len() <= MAX_RECORDED_STRING_BYTES {
+        return value.to_owned();
+    }
+    let mut end = MAX_RECORDED_STRING_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 /// The outcome for one reference file.
@@ -235,6 +374,63 @@ impl AgentDriver {
         }
         report
     }
+
+    /// Records `report` on this run. See [`post_skill_sources`].
+    pub(super) async fn report_skill_sources(
+        report: &SkillSourcesReport,
+        setup_events: &SetupClientEventReporter,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let Ok((Some(task_id), ai_client)) = foreground
+            .spawn(|me, ctx| {
+                (
+                    me.task_id,
+                    ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
+                )
+            })
+            .await
+        else {
+            return;
+        };
+        post_skill_sources(report, task_id, setup_events, ai_client).await;
+    }
+}
+
+/// Records `report` on the run as a `skill_sources_resolved` timeline event and, when anything
+/// didn't resolve, a run status message. Both are best-effort: failures are logged and the run
+/// continues.
+pub(super) async fn post_skill_sources(
+    report: &SkillSourcesReport,
+    task_id: AmbientAgentTaskId,
+    setup_events: &SetupClientEventReporter,
+    ai_client: Arc<dyn AIClient>,
+) {
+    let timeline_event = setup_events.post_timeline_event_with_payload(
+        OzRunTimelineEvent::SkillSourcesResolved,
+        report.timeline_payload(),
+    );
+    let status_message = async {
+        let Some(message) = report.status_message() else {
+            return;
+        };
+        // The server persists status messages only on terminal state transitions today, so this
+        // is best-effort until message-only updates are supported.
+        if let Err(error) = ai_client
+            .update_agent_task(
+                task_id,
+                None,
+                None,
+                None,
+                Some(TaskStatusUpdate::message(message)),
+                None,
+                None,
+            )
+            .await
+        {
+            log::warn!("Failed to report skill reference warnings for task {task_id}: {error:#}");
+        }
+    };
+    futures::join!(timeline_event, status_message);
 }
 
 /// Directory holding a run's skill source checkouts and generated skill folders.

@@ -1,13 +1,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
+use warpui::App;
 
 use super::super::environment_checkout_protocol::{
     CheckoutFailureKind, CheckoutOutcome, CheckoutReport, CheckoutRequest,
 };
 use super::*;
+use crate::server::server_api::ai::MockAIClient;
 
 const INVALID_SKILL_MD: &str = "---\nname: [unterminated\n---\nBody\n";
 
@@ -646,6 +650,188 @@ fn sources_without_a_forge_use_the_primary_then_the_environment_forge() {
         RepositoryForge::GitHub
     );
     assert_eq!(default_source_forge(None, []), RepositoryForge::GitHub);
+}
+
+fn sample_report() -> SkillSourcesReport {
+    SkillSourcesReport {
+        references: vec![
+            ReferenceFileReport {
+                reference_file: "agents/triage/skills/broken.yaml".to_owned(),
+                level: ReferenceLevel::Agent,
+                agent: Some("triage".to_owned()),
+                source: None,
+                loaded: Vec::new(),
+                unresolved: vec![UnresolvedEntry {
+                    entry: String::new(),
+                    reason: UnresolvedReason::InvalidReferenceFile,
+                }],
+            },
+            ReferenceFileReport {
+                reference_file: "skills/shared.yaml".to_owned(),
+                level: ReferenceLevel::Factory,
+                agent: None,
+                source: Some(ReferencedSource {
+                    code_forge: RepositoryForge::GitHub,
+                    owner: "acme".to_owned(),
+                    name: "shared-skills".to_owned(),
+                    requested_ref: Some("v1.4.0".to_owned()),
+                    resolved_sha: Some(fake_sha('c')),
+                }),
+                loaded: vec![LoadedSkill {
+                    name: "safe-secrets".to_owned(),
+                    path: ".agents/skills/safe-secrets".to_owned(),
+                }],
+                unresolved: vec![UnresolvedEntry {
+                    entry: "legacy-*".to_owned(),
+                    reason: UnresolvedReason::NoMatch,
+                }],
+            },
+        ],
+    }
+}
+
+#[test]
+fn timeline_payload_has_the_agreed_shape() {
+    assert_eq!(
+        sample_report().timeline_payload(),
+        json!({"references": [
+            {
+                "reference_file": "agents/triage/skills/broken.yaml",
+                "level": "agent",
+                "agent": "triage",
+                "loaded": [],
+                "unresolved": [{"entry": "", "reason": "invalid_reference_file"}],
+            },
+            {
+                "reference_file": "skills/shared.yaml",
+                "level": "factory",
+                "source": {
+                    "code_forge": "GITHUB",
+                    "owner": "acme",
+                    "name": "shared-skills",
+                    "requested_ref": "v1.4.0",
+                    "resolved_sha": fake_sha('c'),
+                },
+                "loaded": [{"name": "safe-secrets", "path": ".agents/skills/safe-secrets"}],
+                "unresolved": [{"entry": "legacy-*", "reason": "no_match"}],
+            },
+        ]})
+    );
+}
+
+#[test]
+fn timeline_payload_stays_bounded_and_keeps_warnings_first() {
+    let long = "x".repeat(4 * MAX_RECORDED_STRING_BYTES);
+    let mut report = SkillSourcesReport::default();
+    for index in 0..400 {
+        let mut reference = sample_report().references.remove(1);
+        reference.reference_file = format!("skills/{index}-{long}.yaml");
+        reference.loaded = (0..600)
+            .map(|skill| LoadedSkill {
+                name: format!("skill-{skill}"),
+                path: format!("skills/skill-{skill}"),
+            })
+            .collect();
+        reference.unresolved = (0..10)
+            .map(|entry| UnresolvedEntry {
+                entry: format!("missing-{entry}"),
+                reason: UnresolvedReason::NoMatch,
+            })
+            .collect();
+        report.references.push(reference);
+    }
+
+    let payload = report.timeline_payload();
+    assert!(serde_json::to_vec(&payload).unwrap().len() <= MAX_RECORDED_PAYLOAD_BYTES);
+    let references = payload["references"].as_array().unwrap();
+    assert!(references.len() > 10, "{}", references.len());
+    assert!(references.iter().all(|reference| {
+        reference["reference_file"].as_str().unwrap().len() == MAX_RECORDED_STRING_BYTES
+            && reference["unresolved"].as_array().unwrap().len() == 10
+            && reference["loaded"].as_array().unwrap().len() <= MAX_RECORDED_ENTRIES
+    }));
+    let loaded = references
+        .iter()
+        .map(|reference| reference["loaded"].as_array().unwrap().len())
+        .sum::<usize>();
+    assert!(loaded < 600, "{loaded}");
+}
+
+#[test]
+fn status_message_names_the_first_warnings_only_when_there_are_any() {
+    let mut report = sample_report();
+    assert_eq!(
+        report.status_message().unwrap(),
+        "Warning: some referenced skills did not load (agents/triage/skills/broken.yaml \
+         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match)); continuing \
+         without them."
+    );
+
+    report.references[1].unresolved = (0..6)
+        .map(|entry| UnresolvedEntry {
+            entry: format!("missing-{entry}"),
+            reason: UnresolvedReason::NoMatch,
+        })
+        .collect();
+    assert!(report.status_message().unwrap().contains("; and 2 more)"));
+
+    for reference in &mut report.references {
+        reference.unresolved.clear();
+    }
+    assert_eq!(report.status_message(), None);
+}
+
+#[test]
+fn posting_tolerates_a_rejected_event_and_warns_only_with_warnings() {
+    App::test((), |app| async move {
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+        for with_warnings in [true, false] {
+            let mut report = sample_report();
+            if !with_warnings {
+                for reference in &mut report.references {
+                    reference.unresolved.clear();
+                }
+            }
+            let expected_payload = report.timeline_payload();
+            let mut ai_client = MockAIClient::new();
+            ai_client
+                .expect_post_agent_run_client_event()
+                .times(1)
+                .withf(move |run_id, request| {
+                    let request = serde_json::to_value(request).unwrap();
+                    *run_id == task_id
+                        && request["event_name"] == "skill_sources_resolved"
+                        && request["payload"] == expected_payload
+                })
+                .returning(|_, _| Err(anyhow::anyhow!("400 Bad Request: unknown event")));
+            ai_client
+                .expect_update_agent_task()
+                .times(usize::from(with_warnings))
+                .withf(
+                    move |run_id, state, session, conversation, status, debug_until, debug| {
+                        *run_id == task_id
+                            && state.is_none()
+                            && session.is_none()
+                            && conversation.is_none()
+                            && status.as_ref().is_some_and(|status| {
+                                status
+                                    .message
+                                    .starts_with("Warning: some referenced skills")
+                            })
+                            && debug_until.is_none()
+                            && debug.is_none()
+                    },
+                )
+                .returning(|_, _, _, _, _, _, _| Ok(()));
+            let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+            let setup_events = SetupClientEventReporter::new(
+                task_id,
+                ai_client.clone(),
+                app.background_executor(),
+            );
+            post_skill_sources(&report, task_id, &setup_events, ai_client).await;
+        }
+    });
 }
 
 #[test]

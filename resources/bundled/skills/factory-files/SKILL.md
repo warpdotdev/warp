@@ -19,7 +19,9 @@ Use this skill for repository files. It is not the skill for operating a live
 factory: use `factory-mcp` to send work to a factory, inspect task status, or
 pull a task down locally. Playbooks under a factory's own `skills/` directories
 tell that factory's agents how to do their job; editing one is a prompt change,
-not a schema change, so this skill's rules do not apply to their contents.
+not a schema change, so this skill's rules do not apply to their contents. The
+exception is a skill reference file, a `.yaml` or `.yml` file directly inside a
+`skills/` directory; see "Reference skills from another repository".
 
 ## Locate the Factory root
 Every Factory tree is rooted at the directory containing `factory.yaml`. All
@@ -44,6 +46,8 @@ benchmarks/<name>/suite.yaml         optional; benchmark suite manifest
 benchmarks/<name>/tasks/<name>.yaml  optional; benchmark suite task
 webhooks/<name>.yaml                optional; custom webhook sources
 skills/**                           skills every agent in the factory can use
+skills/<file>.yaml                  optional; skill references for every agent
+agents/<name>/skills/<file>.yaml    optional; skill references for that agent
 ```
 
 Resource names come from the path, never from a field inside the file. Renaming
@@ -74,11 +78,12 @@ The registry lists the versions the server supports. The version endpoint
 returns every document describing one version, keyed by file name:
 `factory.schema.json` for `factory.yaml`, `agent.schema.json`,
 `automation.schema.json`, `runner.schema.json`, `scorer.schema.json` and
-`benchmark_suite.schema.json`, `benchmark_suite_task.schema.json`, and
-`webhook.schema.json` for the corresponding resources, and
-`common.schema.json` for the definitions they share. Both endpoints are
-unauthenticated. They are exact for the version they describe: an unknown
-field is an error, and each enumerated value is one the server accepts today.
+`benchmark_suite.schema.json`, `benchmark_suite_task.schema.json`,
+`webhook.schema.json` and `skill_reference.schema.json` for the corresponding
+resources, and `common.schema.json` for the definitions they share. Both
+endpoints are unauthenticated. They are exact for the version they describe:
+an unknown field is an error, and each enumerated value is one the server
+accepts today.
 
 If the server does not publish the declared version, stop. Do not measure the
 tree against a version it does not claim to be, and never lower
@@ -172,6 +177,58 @@ read them.
   different name.
 - A webhook subscription's `filter.webhook_ids` takes source UIDs the server
   assigned, not the file names declared here.
+
+## Reference skills from another repository
+A skill reference file loads selected skills from another Git repository
+without copying them into the Factory. It is a `.yaml` or `.yml` file directly
+inside `skills/` (every agent) or `agents/<name>/skills/` (that agent only,
+and `<name>` must be a declared agent). YAML deeper inside a skill folder is
+part of that skill, not a reference file. The file name is only a label.
+
+```yaml
+# skills/shared.yaml
+source: acme/shared-skills@v1.4.0
+include:
+  - safe-secrets               # a skill name, from SKILL.md frontmatter
+  - skills/release-notes       # a path to a skill folder, or to its SKILL.md
+  - "frontend/*"               # a glob; `*` stays in one path segment, `**` crosses them
+exclude:
+  - "legacy-*"
+```
+
+The exact rules are in `skill_reference.schema.json` from the schema endpoint;
+these are the ones that are easy to get wrong:
+
+- Only `source`, `include` (required, non-empty) and `exclude` are allowed.
+- `source` is `owner/name` or `owner/name@ref`, or a mapping with `owner`,
+  `name`, and optional `codeForge` and `ref`. The shorthand always uses the
+  Factory's primary code forge, and its ref can't contain `@`; use the mapping
+  form for either.
+- A 40- or 64-character lowercase hex `ref` pins a commit. Any other value is a
+  branch or tag name, and a branch wins when both exist. With no `ref`, every
+  run uses the latest commit on the default branch, so pin when runs need to be
+  reproducible.
+- Quote any entry that starts with `*`: unquoted, it is a YAML alias. Anchors
+  and aliases are rejected.
+- Paths and path globs are relative to the source repository root and can't
+  start with `/` or contain `..`.
+- A name or name glob only searches the standard skill folders
+  (`.agents/skills`, `.warp/skills`, `.claude/skills` and the like), in that
+  order. Use a path for a skill anywhere else.
+- Including the same literal skill name twice at one level is an error.
+- Only the skill's own folder is available; files elsewhere in the source
+  repository are not.
+
+For one agent, the first skill with a given name wins, in this order: the
+agent's own skill folders, the agent's reference files, the Factory's skill
+folders, then the Factory's reference files. Within one level, reference files
+apply in file-name order.
+
+Planning and the validator check reference files for structure only. Whether
+the repository, ref and skills exist is found out when a run starts: a
+reference that doesn't resolve never fails the run; its skills are skipped and
+the run detail shows a warning. Private repositories must be readable with the
+credentials the Factory's runs already have.
 
 ## Do not add a local copy of the format
 It is tempting to bundle the schema, or to reimplement a few checks here so

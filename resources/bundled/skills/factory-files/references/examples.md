@@ -241,3 +241,29 @@ agents/reviewer/skills/review-style/SKILL.md   the reviewer agent only
 These are agent playbooks, not Factory schema. Moving one between the two
 locations changes who can use it, so do not relocate a skill unless that is
 what was asked for.
+
+## Skill references
+`skills/shared.yaml` loads skills from another repository for every agent,
+pinned to a tag:
+
+```yaml
+source: acme/shared-skills@v1.4.0
+include:
+  - safe-secrets
+  - "review-*"
+exclude:
+  - review-legacy
+```
+
+`agents/reviewer/skills/platform.yaml` uses the mapping form to name another
+code forge, for the reviewer agent only:
+
+```yaml
+source:
+  codeForge: GITLAB
+  owner: acme/platform
+  name: review-skills
+  ref: main
+include:
+  - tools/review-style
+```

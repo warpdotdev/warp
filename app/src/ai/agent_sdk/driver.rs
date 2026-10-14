@@ -2520,13 +2520,14 @@ impl AgentDriver {
                 if let Some(discovery) =
                     Self::discover_skill_references(environment_forges, &foreground).await
                 {
-                    setup_events
+                    let report = setup_events
                         .record_value_with_error_flag(
                             SetupStep::SkillReferenceResolution,
                             Self::resolve_skill_references(discovery, &foreground),
                             |report| report.warning_count() > 0,
                         )
                         .await;
+                    Self::report_skill_sources(&report, &setup_events, &foreground).await;
                 }
             }
 

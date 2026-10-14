@@ -143,6 +143,25 @@ impl SetupClientEventReporter {
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
     }
 
+    /// Like [`Self::post_timeline_event`], with an event-specific JSON payload. A server that
+    /// doesn't accept the event rejects it, which is logged and otherwise ignored.
+    pub(crate) async fn post_timeline_event_with_payload(
+        &self,
+        event: OzRunTimelineEvent,
+        payload: serde_json::Value,
+    ) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+        let event_name = event.as_event_name();
+        let request = AgentRunClientEventRequest::timeline_event_with_payload(
+            event_name,
+            Utc::now(),
+            payload,
+        );
+        Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
+    }
+
     fn post_setup_metric_event_best_effort(
         &self,
         event_name: &'static str,
@@ -189,6 +208,7 @@ impl SetupClientEventReporter {
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
     WorkerContainerReady,
+    SkillSourcesResolved,
 }
 
 impl OzRunTimelineEvent {
@@ -196,6 +216,7 @@ impl OzRunTimelineEvent {
         match self {
             Self::AgentStarted => "agent_started",
             Self::WorkerContainerReady => "worker_container_ready",
+            Self::SkillSourcesResolved => "skill_sources_resolved",
         }
     }
 }

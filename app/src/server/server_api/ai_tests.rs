@@ -10,12 +10,13 @@ use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
 use super::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
-    ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
-    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskGitCredentialsError, TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
+    AIClient, AgentMessageHeader, AgentRunClientEventRequest, AgentRunEvent, AgentSource,
+    AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
+    ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
+    ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskGitCredentialsError,
+    TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
     agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
     build_run_followup_url, is_unknown_git_credential_schema_error,
 };
@@ -663,6 +664,29 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         Some("agent_123")
     );
     assert!(value.get("agent_uid").is_none());
+}
+
+#[test]
+fn timeline_events_serialize_their_payload_only_when_present() {
+    let timestamp = Utc.with_ymd_and_hms(2026, 10, 13, 12, 0, 0).unwrap();
+    let payload = json!({"references": [{"reference_file": "skills/shared.yaml"}]});
+    let with_payload =
+        serde_json::to_value(AgentRunClientEventRequest::timeline_event_with_payload(
+            "skill_sources_resolved",
+            timestamp,
+            payload.clone(),
+        ))
+        .unwrap();
+    assert_eq!(with_payload["event_name"], "skill_sources_resolved");
+    assert_eq!(with_payload["timestamp"], "2026-10-13T12:00:00Z");
+    assert_eq!(with_payload["payload"], payload);
+
+    let without_payload = serde_json::to_value(AgentRunClientEventRequest::timeline_event(
+        "agent_started",
+        timestamp,
+    ))
+    .unwrap();
+    assert!(without_payload.get("payload").is_none());
 }
 
 #[test]
