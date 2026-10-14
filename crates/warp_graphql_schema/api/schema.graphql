@@ -3,6 +3,13 @@ schema {
   mutation: RootMutation
   subscription: RootSubscription
 }
+type FactoryBranchExecutionConfig {
+  factoryId: ID!
+  branchId: ID!
+  branch: String!
+  sourceSha: String!
+  repositoryUrl: String!
+}
 
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
@@ -5233,6 +5240,7 @@ type ExecutionConfiguration {
   mcpServersJson: String!
   skills: [ExecutionSkillSpec!]!
   factorySkillDirs: [String!]!
+  factoryBranch: FactoryBranchExecutionConfig
   computerUseEnabled: Boolean!
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs

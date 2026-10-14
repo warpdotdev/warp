@@ -37,6 +37,12 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             "mcpServersJson",
             "teamId",
             "factorySkillDirs",
+            "factoryBranch",
+            "factoryId",
+            "branchId",
+            "branch",
+            "sourceSha",
+            "repositoryUrl",
             "preserveOrigin",
             "cloneFrom",
             "sessionSharingAcls",
@@ -58,5 +64,6 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         assert_eq!(variables["secretsInput"]["workloadToken"], "token");
         assert_eq!(variables["taskInput"]["taskId"], "task");
         assert!(!query.contains("executionConfig(input:"));
+        assert!(query.contains("$executionId: ID!"));
     }
 }

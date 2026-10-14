@@ -48,6 +48,7 @@ fn execution_bootstrap_response() -> Value {
                         "mcpServersJson": "{}",
                         "skills": [],
                         "factorySkillDirs": [],
+                        "factoryBranch": null,
                         "computerUseEnabled": false,
                         "computerUseModelId": null,
                         "inferenceProviders": null,

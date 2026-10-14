@@ -244,6 +244,7 @@ pub(crate) struct WorkspaceConfiguration {
     pub deferred_repos: Vec<SourceRepo>,
     pub setup_commands: Vec<String>,
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
+    pub factory_definition_source_sha: Option<String>,
     pub has_environment: bool,
     clone_requests: Vec<RepositoryCloneRequest>,
 }
@@ -278,6 +279,7 @@ impl WorkspaceConfiguration {
             deferred_repos: Vec::new(),
             setup_commands,
             factory_skill_dirs: None,
+            factory_definition_source_sha: None,
             has_environment: environment.is_some(),
             clone_requests,
         })
@@ -297,6 +299,7 @@ impl WorkspaceConfiguration {
             deferred_repos,
             setup_commands,
             factory_skill_dirs: None,
+            factory_definition_source_sha: None,
             has_environment: false,
             clone_requests,
         })
@@ -383,6 +386,7 @@ pub(crate) fn prepare_environment(
             deferred_repos: _,
             setup_commands,
             factory_skill_dirs: _,
+            factory_definition_source_sha: _,
             clone_requests,
             has_environment: _,
         } = workspace;
@@ -588,7 +592,8 @@ const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 pub(super) fn prepend_factory_definition_clone(
     setup_commands: &mut Vec<String>,
     shell_type: Option<ShellType>,
-) {
+    source_sha: Option<&str>,
+) -> Result<(), PrepareEnvironmentError> {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
     let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
     prepend_factory_definition_clone_for_values(
@@ -596,7 +601,8 @@ pub(super) fn prepend_factory_definition_clone(
         &clone_dir,
         shell_type.unwrap_or(ShellType::Bash),
         setup_commands,
-    );
+        source_sha,
+    )
 }
 
 fn prepend_factory_definition_clone_for_values(
@@ -604,25 +610,71 @@ fn prepend_factory_definition_clone_for_values(
     clone_dir: &str,
     shell_type: ShellType,
     setup_commands: &mut Vec<String>,
-) {
+    source_sha: Option<&str>,
+) -> Result<(), PrepareEnvironmentError> {
     if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
-        return;
-    }
-    // Environments provisioned before run-scoped cloning still persist their
-    // own copy of the clone command; leave that copy in charge rather than
-    // attempting the checkout twice.
-    if setup_commands
-        .iter()
-        .any(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
-    {
-        return;
+        return Ok(());
     }
     // The command expands the variables in the session shell instead of
     // inlining their values so the credential-bearing URL never appears in
     // command text. There is deliberately no existence guard: a bare clone
     // into an already-present target directory fails, which is treated as a
     // fatal setup-command error upstream.
-    setup_commands.insert(0, factory_definition_clone_command(shell_type));
+    let pin = source_sha
+        .map(|sha| {
+            if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(
+                    PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
+                        reason: "Pinned factory definitions require a full source SHA".to_owned(),
+                    },
+                );
+            }
+            let directory = match shell_type {
+                ShellType::PowerShell => format!("$env:{FACTORY_REPO_DIR_ENV_VAR}"),
+                ShellType::Zsh | ShellType::Bash | ShellType::Fish => {
+                    format!("${FACTORY_REPO_DIR_ENV_VAR}")
+                }
+            };
+            Ok([
+                format!("git -C \"{directory}\" fetch --no-tags origin {sha}"),
+                format!("git -C \"{directory}\" checkout --detach {sha}"),
+            ])
+        })
+        .transpose()?;
+    // Persisted environment clone commands must not clone the repository twice.
+    let persisted = setup_commands
+        .iter_mut()
+        .find(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR));
+    let mut command = persisted
+        .as_deref()
+        .cloned()
+        .unwrap_or_else(|| factory_definition_clone_command(shell_type));
+    if let Some(pin) = pin {
+        match shell_type {
+            ShellType::PowerShell => {
+                let failure_guard =
+                    "; if ($LASTEXITCODE -ne 0) { throw 'Factory definition preparation failed' }";
+                command.push_str(failure_guard);
+                for step in pin {
+                    command.push_str("; ");
+                    command.push_str(&step);
+                    command.push_str(failure_guard);
+                }
+            }
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish => {
+                for step in pin {
+                    command.push_str(" && ");
+                    command.push_str(&step);
+                }
+            }
+        }
+    }
+    if let Some(persisted) = persisted {
+        *persisted = command;
+    } else {
+        setup_commands.insert(0, command);
+    }
+    Ok(())
 }
 
 fn factory_definition_clone_command(shell_type: ShellType) -> String {

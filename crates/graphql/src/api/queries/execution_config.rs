@@ -13,6 +13,14 @@ pub struct ExecutionBootstrapVariables {
     pub task_input: TaskInput,
     pub request_context: RequestContext,
 }
+#[derive(cynic::QueryFragment, Debug)]
+pub struct FactoryBranchExecutionConfig {
+    pub factory_id: cynic::Id,
+    pub branch_id: cynic::Id,
+    pub branch: String,
+    pub source_sha: String,
+    pub repository_url: String,
+}
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "RootQuery", variables = "ExecutionBootstrapVariables")]
@@ -64,6 +72,7 @@ pub struct ExecutionConfiguration {
     pub mcp_servers_json: String,
     pub skills: Vec<ExecutionSkillSpec>,
     pub factory_skill_dirs: Vec<String>,
+    pub factory_branch: Option<FactoryBranchExecutionConfig>,
     pub computer_use_enabled: bool,
     pub computer_use_model_id: Option<String>,
     pub inference_providers: Option<InferenceProviderClientConfigs>,

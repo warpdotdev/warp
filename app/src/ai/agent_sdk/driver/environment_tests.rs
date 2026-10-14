@@ -1546,7 +1546,9 @@ fn factory_clone_is_prepended_when_clone_values_are_present() {
         "acme_factory_repo",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     assert_eq!(
         setup_commands,
         vec![
@@ -1573,7 +1575,9 @@ fn factory_clone_references_env_vars_with_the_session_shells_syntax() {
             "acme_factory_repo",
             shell_type,
             &mut setup_commands,
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(setup_commands, vec![expected.to_string()], "{shell_type:?}");
     }
 }
@@ -1586,19 +1590,25 @@ fn factory_clone_is_skipped_without_clone_values() {
         "",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     super::prepend_factory_definition_clone_for_values(
         "url",
         "  ",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     super::prepend_factory_definition_clone_for_values(
         "  ",
         "dir",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     assert_eq!(setup_commands, vec!["make setup".to_string()]);
 }
 
@@ -1616,8 +1626,191 @@ fn factory_clone_defers_to_a_persisted_environment_copy() {
         "acme_factory_repo",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
+}
+
+#[test]
+fn factory_definition_setup_pins_before_customer_commands_and_loads_the_prepared_skills() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let git = |root: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&source, &["init", "--quiet"]);
+    let skill_path = "factory/skills/shared/SKILL.md";
+    fs::create_dir_all(source.join("factory/skills/shared")).unwrap();
+    fs::write(
+        source.join(skill_path),
+        "---\nname: shared\ndescription: example\n---\nSelected instructions",
+    )
+    .unwrap();
+    git(&source, &["add", "."]);
+    git(
+        &source,
+        &["commit", "--quiet", "-m", "Selected definitions"],
+    );
+    let selected = git(&source, &["rev-parse", "HEAD"]);
+    fs::write(
+        source.join(skill_path),
+        "---\nname: shared\ndescription: example\n---\nDefault instructions",
+    )
+    .unwrap();
+    git(
+        &source,
+        &["commit", "--quiet", "-am", "Default definitions"],
+    );
+
+    let persisted = super::factory_definition_clone_command(ShellType::Bash);
+    let mut commands = vec![
+        persisted,
+        "git -C \"$WARP_FACTORY_REPO_DIR\" rev-parse HEAD > setup-sha".to_owned(),
+        format!(
+            "printf '%s' '---\nname: shared\ndescription: example\n---\nSetup instructions' > \"$WARP_FACTORY_REPO_DIR/{skill_path}\""
+        ),
+    ];
+    super::prepend_factory_definition_clone_for_values(
+        source.to_str().unwrap(),
+        "definitions",
+        ShellType::Bash,
+        &mut commands,
+        Some(&selected),
+    )
+    .unwrap();
+    assert_eq!(commands.len(), 3);
+    let output = Command::new("bash")
+        .current_dir(directory.path())
+        .args(["-c", &commands.join(" && ")])
+        .env(super::FACTORY_REPO_CLONE_URL_ENV_VAR, &source)
+        .env(super::FACTORY_REPO_DIR_ENV_VAR, "definitions")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("setup-sha"))
+            .unwrap()
+            .trim(),
+        selected
+    );
+    let checkout = directory.path().join("definitions");
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), selected);
+    assert!(
+        !Command::new("git")
+            .current_dir(&checkout)
+            .args(["symbolic-ref", "-q", "HEAD"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let dirs = ai::skills::resolve_skills_dirs(
+        directory.path(),
+        vec![PathBuf::from("definitions/factory/skills")],
+    );
+    let loaded = ai::skills::read_skills_for_skills_dirs(&dirs);
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded[0].content.contains("Setup instructions"));
+
+    for (target, sha, exists) in [
+        (
+            "unavailable",
+            "0000000000000000000000000000000000000000",
+            false,
+        ),
+        ("existing", selected.as_str(), true),
+    ] {
+        if exists {
+            fs::create_dir(directory.path().join(target)).unwrap();
+            fs::write(
+                directory.path().join(target).join("keep"),
+                "existing checkout",
+            )
+            .unwrap();
+        }
+        let mut commands = Vec::new();
+        super::prepend_factory_definition_clone_for_values(
+            source.to_str().unwrap(),
+            target,
+            ShellType::Bash,
+            &mut commands,
+            Some(sha),
+        )
+        .unwrap();
+        let output = Command::new("bash")
+            .current_dir(directory.path())
+            .args([
+                "-c",
+                &format!("{} && touch customer-setup-ran", commands[0]),
+            ])
+            .env(super::FACTORY_REPO_CLONE_URL_ENV_VAR, &source)
+            .env(super::FACTORY_REPO_DIR_ENV_VAR, target)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{target}");
+        assert!(
+            !directory.path().join("customer-setup-ran").exists(),
+            "{target}"
+        );
+        if exists {
+            assert_eq!(
+                fs::read_to_string(directory.path().join(target).join("keep")).unwrap(),
+                "existing checkout"
+            );
+        }
+    }
+}
+
+#[test]
+fn factory_definition_pin_rejects_non_sha_input_before_changing_setup() {
+    let mut commands = vec!["make setup".to_owned()];
+    assert!(
+        super::prepend_factory_definition_clone_for_values(
+            "https://example.com/definitions.git",
+            "definitions",
+            ShellType::Bash,
+            &mut commands,
+            Some("a; touch injected"),
+        )
+        .is_err()
+    );
+    assert_eq!(commands, ["make setup"]);
+}
+
+#[test]
+fn factory_definition_powershell_pin_guards_each_git_failure() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let mut commands = Vec::new();
+    super::prepend_factory_definition_clone_for_values(
+        "https://example.com/definitions.git",
+        "definitions",
+        ShellType::PowerShell,
+        &mut commands,
+        Some(sha),
+    )
+    .unwrap();
+    assert_eq!(
+        commands,
+        [format!(
+            "git clone \"$env:WARP_FACTORY_REPO_CLONE_URL\" \"$env:WARP_FACTORY_REPO_DIR\"; if ($LASTEXITCODE -ne 0) {{ throw 'Factory definition preparation failed' }}; git -C \"$env:WARP_FACTORY_REPO_DIR\" fetch --no-tags origin {sha}; if ($LASTEXITCODE -ne 0) {{ throw 'Factory definition preparation failed' }}; git -C \"$env:WARP_FACTORY_REPO_DIR\" checkout --detach {sha}; if ($LASTEXITCODE -ne 0) {{ throw 'Factory definition preparation failed' }}"
+        )]
+    );
 }
 
 #[test]
@@ -1631,6 +1824,8 @@ fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
         "acme_factory_repo",
         ShellType::Bash,
         &mut setup_commands,
-    );
+        None,
+    )
+    .unwrap();
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
 }

@@ -613,7 +613,7 @@ fn build_execution_task_and_options(
     use_factory_repositories: bool,
     working_dir: PathBuf,
     first_skill: Option<ResolvedSkill>,
-    skill_discovery_dirs: Vec<PathBuf>,
+    factory_skill_dirs: Vec<PathBuf>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(
     AgentDriverOptions,
@@ -657,12 +657,6 @@ fn build_execution_task_and_options(
         anyhow::bail!("An execution that skips its initial turn requires an idle window");
     }
     let providers = execution_config::providers(config.providers);
-    let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
-    for dir in skill_discovery_dirs {
-        if !factory_skill_dirs.contains(&dir) {
-            factory_skill_dirs.push(dir);
-        }
-    }
     let task = Task {
         prompt: AgentRunPrompt::ServerSide {
             skill: first_skill.map(|skill| skill.parsed_skill),
@@ -692,6 +686,8 @@ fn build_execution_task_and_options(
                 config.setup_commands,
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
+            workspace.factory_definition_source_sha =
+                config.factory_branch.map(|branch| branch.source_sha);
             workspace
         },
         computer_use_config: (selected_harness == Harness::Oz).then(|| {
@@ -720,6 +716,7 @@ fn build_execution_task_and_options(
         providers,
     ))
 }
+
 fn selected_execution_skills(
     skills: Vec<ResolvedSkill>,
 ) -> Result<(Option<ResolvedSkill>, Vec<PathBuf>), AgentDriverError> {
@@ -1458,6 +1455,9 @@ impl AgentDriverRunner {
             attachments,
         }) = execution_data
         {
+            let mut factory_skill_dirs =
+                execution_config::factory_skill_dirs(config.factory_skill_dirs.clone())
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
             let (first_skill, skill_discovery_dirs) = Self::resolve_execution_skills(
                 foreground,
                 &args,
@@ -1466,6 +1466,11 @@ impl AgentDriverRunner {
                 setup_events,
             )
             .await?;
+            for dir in skill_discovery_dirs {
+                if !factory_skill_dirs.contains(&dir) {
+                    factory_skill_dirs.push(dir);
+                }
+            }
             let (mut options, mut task, conversation_id, providers) = foreground
                 .spawn(move |_, ctx| {
                     build_execution_task_and_options(
@@ -1474,7 +1479,7 @@ impl AgentDriverRunner {
                         use_factory_repositories,
                         working_dir,
                         first_skill,
-                        skill_discovery_dirs,
+                        factory_skill_dirs,
                         ctx,
                     )
                 })

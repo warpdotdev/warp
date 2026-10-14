@@ -2408,7 +2408,8 @@ impl AgentDriver {
             environment::prepend_factory_definition_clone(
                 &mut workspace.setup_commands,
                 session_shell_type,
-            );
+                workspace.factory_definition_source_sha.as_deref(),
+            )?;
 
             if workspace.has_environment
                 || !source_repos.is_empty()

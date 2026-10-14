@@ -1,5 +1,6 @@
 use std::fs;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -63,7 +64,6 @@ use crate::workspaces::user_workspaces::{
 use crate::workspaces::workspace::{ChargeUnit, UserTier, Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
-
 #[test]
 fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
     App::test((), |mut app| async move {
@@ -87,7 +87,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
                 "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [], "factoryBranch": null,
                 "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
                     "codeForge": deferred_forge, "owner": "platform/backend", "repo": "api",
@@ -139,7 +139,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
 
 #[test]
 fn paired_execution_retains_deferred_capability_through_task_setup() {
-    for scenario in ["eager", "deferred", "empty"] {
+    for scenario in ["eager", "deferred", "empty", "branch"] {
         let output = ProcessCommand::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -166,7 +166,13 @@ fn deferred_capability_bootstrap_subprocess() {
         return;
     };
     let use_factory_repositories = scenario != "eager";
-    let eager = if use_factory_repositories {
+    let source_sha = "0123456789abcdef0123456789abcdef01234567";
+    let eager = if scenario == "branch" {
+        json!([{
+            "forge": "GITHUB", "owner": "acme", "name": "definitions",
+            "ref": {"type": "COMMIT_SHA", "value": source_sha}, "cloneFrom": null, "preserveOrigin": true,
+        }])
+    } else if use_factory_repositories {
         json!([])
     } else {
         json!([{
@@ -179,18 +185,29 @@ fn deferred_capability_bootstrap_subprocess() {
     } else {
         json!([])
     };
-    let config = json!({
+    let mut config = json!({
         "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
         "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
         "inferenceProviders": null, "providers": null,
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [], "factoryBranch": null,
         "computerUseEnabled": false, "repositories": eager,
         "deferredRepositories": deferred,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false,
     });
+    if scenario == "branch" {
+        config["factoryBranch"] = json!({
+            "factoryId": "factory", "branchId": "preview", "branch": "preview",
+            "sourceSha": source_sha, "repositoryUrl": "https://example.com/definitions.git",
+        });
+        config["factorySkillDirs"] = json!([
+            "definitions/factory/agents/worker/skills",
+            "definitions/factory/skills"
+        ]);
+        config["setupCommands"] = json!(["make setup"]);
+    }
     let mut server = warp_core::channel::ChannelState::mock_server();
     let bootstrap = server
         .mock("POST", "/graphql/v2")
@@ -245,6 +262,7 @@ fn deferred_capability_bootstrap_subprocess() {
     App::test((), |mut app| async move {
         let _refresh = FeatureFlag::GitCredentialRefresh.override_enabled(true);
         let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
+        let _skills = FeatureFlag::OzPlatformSkills.override_enabled(true);
         let capability =
             FeatureFlag::FactoryDeferredRepositories.override_enabled(use_factory_repositories);
         let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
@@ -266,8 +284,10 @@ fn deferred_capability_bootstrap_subprocess() {
         let events = runner.update(&mut app, |_, ctx| {
             super::SetupClientEventReporter::noop(ai_client.clone(), ctx.background_executor())
         });
-        let args =
+        let directory = tempfile::TempDir::new().unwrap();
+        let mut args =
             parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        args.cwd = Some(directory.path().to_path_buf());
         let (options, _, _) = AgentDriverRunner::build_driver_options_and_task(
             &foreground,
             args,
@@ -281,12 +301,27 @@ fn deferred_capability_bootstrap_subprocess() {
         assert_eq!(options.use_factory_repositories, use_factory_repositories);
         assert_eq!(
             options.workspace.source_repos.len(),
-            usize::from(scenario == "eager")
+            usize::from(scenario == "eager" || scenario == "branch")
         );
         assert_eq!(
             options.workspace.deferred_repos.len(),
             usize::from(scenario == "deferred")
         );
+        if scenario == "branch" {
+            assert_eq!(
+                options.workspace.factory_definition_source_sha.as_deref(),
+                Some(source_sha)
+            );
+            assert_eq!(options.workspace.setup_commands, ["make setup"]);
+            assert_eq!(
+                options.workspace.factory_skill_dirs,
+                Some(vec![
+                    PathBuf::from("definitions/factory/agents/worker/skills"),
+                    PathBuf::from("definitions/factory/skills"),
+                ])
+            );
+            assert!(!directory.path().join("definitions").exists());
+        }
     });
     bootstrap.assert();
     credentials.assert();
