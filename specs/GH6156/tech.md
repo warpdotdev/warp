@@ -41,6 +41,8 @@ Everything a task needs to launch already exists:
    - `Win32_System_Variant`
    - `Win32_Storage_EnhancedStorage`
 
+8. **Focus on tab config deeplinks.** `UriHost::TabConfig` uses `WindowBehaviorHint::Nothing` because `handle_tab_config_uri` picks the window itself. That means a forwarded click that adds a tab to an existing window leaves it behind other apps. `handle_tab_config_uri` calls `show_window_and_focus_app` on the target window when `allows_programmatic_window_activation()` is true, the same check `WindowBehaviorHint::resolve` makes. Wayland is therefore unchanged.
+
 ## Testing and validation
 
 - **`app/src/app_services/windows/jump_list_tests.rs`:**

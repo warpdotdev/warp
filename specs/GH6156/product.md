@@ -17,7 +17,7 @@ Right-clicking Warp's taskbar button on Windows shows a "New Window" task follow
 
 3. Tab Config tasks appear in the same order, and with the same labels, as Tab Configs in the `+` menu. When several Tab Configs share a `name`, the first is labeled `Name`, the next `Name (1)`, then `Name (2)`, and so on.
 
-4. Selecting a Tab Config task behaves exactly like opening its `<scheme>://tab_config/<file-stem>` deeplink: the config opens as a new tab in the active window, or in a new window if none is open. If it declares params, the params modal appears first.
+4. Selecting a Tab Config task behaves exactly like opening its `<scheme>://tab_config/<file-stem>` deeplink: the config opens as a new tab in the active window, which is brought to the front, or in a new window if none is open. If it declares params, the params modal appears first.
 
 5. When Warp is not running, selecting a task starts Warp the way any `warp://` link does: the previous session is restored (if session restore is on), then the task's deeplink is applied. When Warp is running, the click is handed to the running instance and no second Warp process stays open.
 
@@ -52,4 +52,4 @@ Right-clicking Warp's taskbar button on Windows shows a "New Window" task follow
 - A separate "Tab Configs" category, which would be subject to the recent-items privacy setting, slot limits and per-item removal.
 - Launch configs, workflows, recent directories, or Warp Drive objects.
 - Per-entry icons, a settings toggle, or removing the list on uninstall.
-- Changing what `warp://tab_config/...` or `warp://action/new_window` do.
+- Changing what `warp://tab_config/...` or `warp://action/new_window` open. The one change is that a `tab_config` link opened into an existing window now brings that window to the front, where the windowing system allows apps to raise their own windows (not on Wayland).
