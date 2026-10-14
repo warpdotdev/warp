@@ -278,8 +278,8 @@ impl ThirdPartyHarness for AcpHarness {
         false
     }
 
-    fn initial_attachments_mut(&mut self) -> Option<&mut Vec<DownloadedAttachment>> {
-        Some(&mut self.initial_attachments)
+    fn set_initial_attachments(&mut self, downloaded: Vec<DownloadedAttachment>) {
+        self.initial_attachments = downloaded;
     }
 
     fn build_runner(

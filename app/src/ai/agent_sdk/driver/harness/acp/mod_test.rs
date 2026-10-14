@@ -226,7 +226,7 @@ fn initial_prompt_links_files_after_server_composed_text() {
         Harness::Claude,
         AcpLaunchSpec::for_harness(Harness::Claude).unwrap(),
     );
-    *harness.initial_attachments_mut().unwrap() = vec![
+    harness.set_initial_attachments(vec![
         DownloadedAttachment {
             file_id: "image-id".to_owned(),
             file_name: "image #雪%.png".to_owned(),
@@ -237,7 +237,7 @@ fn initial_prompt_links_files_after_server_composed_text() {
             file_name: "notes.txt".to_owned(),
             file_path: notes.to_string_lossy().into_owned(),
         },
-    ];
+    ]);
 
     let blocks = harness.initial_prompt(
         "inspect these",
