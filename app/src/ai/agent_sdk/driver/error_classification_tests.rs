@@ -531,14 +531,13 @@ fn harness_auth_check_failed_is_failed_with_auth_required() {
     );
     assert_eq!(
         update.message,
-        "Harness 'claude' authentication check failed: exit code 1. Login credentials are \
-         invalid or expired. Verify that the authentication secret configured for this harness \
-         is correct."
+        "Harness 'claude' authentication check failed: exit code 1. Verify that the \
+         authentication secret configured for this harness is correct."
     );
 }
 
 #[test]
-fn pi_auth_check_failed_points_at_provider_api_key_secret() {
+fn harness_auth_check_failed_does_not_double_punctuate_detail() {
     let detail = "Authentication required: Configure an API key or log in with an OAuth provider.";
     let (state, update) = classify_driver_error(&AgentDriverError::HarnessAuthCheckFailed {
         harness: "pi".into(),
@@ -552,9 +551,8 @@ fn pi_auth_check_failed_points_at_provider_api_key_secret() {
     assert_eq!(
         update.message,
         "Harness 'pi' authentication check failed: Authentication required: Configure an API \
-         key or log in with an OAuth provider. Pi needs an Anthropic or OpenAI API key: \
-         configure an API-key managed secret matching the chosen model's provider and attach \
-         it as this run's harness auth secret."
+         key or log in with an OAuth provider. Verify that the authentication secret \
+         configured for this harness is correct."
     );
 }
 

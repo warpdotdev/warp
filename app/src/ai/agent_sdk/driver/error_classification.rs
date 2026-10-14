@@ -1,4 +1,3 @@
-use warp_cli::agent::Harness;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
@@ -379,33 +378,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             ),
         ),
         AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
-            let guidance = match Harness::from_config_name(harness) {
-                // Pi reads provider credentials from the run's auth secret rather than from a
-                // login of its own, so a missing or mismatched secret is the usual cause.
-                Some(Harness::Pi) => {
-                    "Pi needs an Anthropic or OpenAI API key: configure an API-key managed \
-                     secret matching the chosen model's provider and attach it as this run's \
-                     harness auth secret."
-                }
-                Some(
-                    Harness::Oz
-                    | Harness::Claude
-                    | Harness::OpenCode
-                    | Harness::Gemini
-                    | Harness::Codex
-                    | Harness::Unknown,
-                )
-                | None => {
-                    "Login credentials are invalid or expired. Verify that the authentication \
-                     secret configured for this harness is correct."
-                }
-            };
             let detail_separator = match detail.chars().last() {
                 Some('.' | '!' | '?') => " ",
                 _ => ". ",
             };
             let message = format!(
-                "Harness '{harness}' authentication check failed: {detail}{detail_separator}{guidance}"
+                "Harness '{harness}' authentication check failed: {detail}{detail_separator}\
+                 Verify that the authentication secret configured for this harness is correct."
             );
             (
                 AgentTaskState::Failed,
