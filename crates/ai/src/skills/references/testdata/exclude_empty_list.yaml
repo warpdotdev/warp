@@ -1,0 +1,4 @@
+source: acme/shared-skills
+include:
+  - "*"
+exclude: []

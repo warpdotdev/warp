@@ -897,7 +897,7 @@ fn record_codebase_indexing(
 // doesn't recognize. Unlike `None`, a future server can assign the latter to
 // a real repository before this client updates, so callers must treat it as
 // an ordinary "can't clone this" outcome rather than an invariant violation.
-fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
+pub(super) fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge {
         Some(CodeForge::GitHub) => Some(RepositoryForge::GitHub),
         Some(CodeForge::GitLab) => Some(RepositoryForge::GitLab),
@@ -1296,6 +1296,25 @@ async fn execute_checkout_helper(
         command_result,
         report,
     })
+}
+
+/// Runs `batch` through the checkout helper in the terminal session, returning the helper's
+/// report, or `None` when the helper couldn't produce one. Individual checkout failures are left
+/// for the caller to read from the report.
+pub(super) fn checkout_skill_sources(
+    batch: CheckoutBatch,
+    ctx: &mut ModelContext<TerminalDriver>,
+) -> impl Future<Output = Option<CheckoutReport>> + use<> {
+    let spawner = ctx.spawner();
+    async move {
+        match execute_checkout_helper(&batch, false, &spawner).await {
+            Ok(result) => result.report,
+            Err(error) => {
+                log::warn!("Skill source checkout did not run: {error}");
+                None
+            }
+        }
+    }
 }
 
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]

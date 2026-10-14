@@ -1,0 +1,3 @@
+source: 42
+include:
+  - safe-secrets

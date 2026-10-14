@@ -1,0 +1,7 @@
+source:
+  codeForge: GITHUB
+  owner: acme
+  name: shared-skills
+  ref: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+include:
+  - deploy

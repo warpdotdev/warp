@@ -1,0 +1,7 @@
+source: acme/shared-skills
+include:
+  - safe-secrets
+---
+source: acme/other-skills
+include:
+  - review

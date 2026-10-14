@@ -1,0 +1,13 @@
+{
+  "reference": {
+    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": null},
+    "include": [
+      {"kind": "path", "value": "skills/release-notes"},
+      {"kind": "path", "value": "skills/release-notes/SKILL.md"},
+      {"kind": "path", "value": ".agents/skills/deploy"},
+      {"kind": "path", "value": "./skills/shared"},
+      {"kind": "path", "value": "tools/review/"}
+    ],
+    "exclude": []
+  }
+}

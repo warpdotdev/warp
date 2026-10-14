@@ -85,6 +85,29 @@ impl SetupClientEventReporter {
         );
         value
     }
+
+    /// Like [`Self::record_value`], with the metric's error flag derived from the value.
+    pub(crate) async fn record_value_with_error_flag<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T>,
+        is_error: impl FnOnce(&T) -> bool,
+    ) -> T {
+        let (step_name, span) = step.to_event_name_and_span();
+
+        let start_timestamp = Utc::now();
+        let value = future.instrument(span).await;
+        let finish_timestamp = Utc::now();
+
+        self.post_setup_metric_event_best_effort(
+            step_name,
+            start_timestamp,
+            finish_timestamp,
+            is_error(&value),
+        );
+        value
+    }
+
     pub(crate) fn record_value_detached<T>(
         &self,
         step: SetupStep,
@@ -202,6 +225,7 @@ pub(crate) enum SetupStep {
     EnvironmentSkillLoading,
     GlobalSkillLoading,
     SkillsDirsLoading,
+    SkillReferenceResolution,
     ConversationResumeLoading,
     ThirdPartyHarnessPreparation,
     ThirdPartyHarnessExternalConversation,
@@ -290,6 +314,9 @@ impl SetupStep {
             }
             Self::SkillsDirsLoading => {
                 span_and_name!("setup_skills_dirs_loading")
+            }
+            Self::SkillReferenceResolution => {
+                span_and_name!("setup_skill_reference_resolution")
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")

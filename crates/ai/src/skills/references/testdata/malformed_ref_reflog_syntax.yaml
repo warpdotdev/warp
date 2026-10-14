@@ -1,0 +1,6 @@
+source:
+  owner: acme
+  name: shared-skills
+  ref: "main@{1}"
+include:
+  - safe-secrets

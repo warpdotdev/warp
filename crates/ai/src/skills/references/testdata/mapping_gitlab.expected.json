@@ -1,0 +1,7 @@
+{
+  "reference": {
+    "source": {"code_forge": "GITLAB", "owner": "acme/platform", "name": "shared-skills", "ref": {"kind": "named", "value": "v2.0.0"}},
+    "include": [{"kind": "name", "value": "review-checklist"}],
+    "exclude": []
+  }
+}

@@ -126,6 +126,7 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 mod mcp_startup;
 pub(super) mod output;
+mod skill_references;
 mod snapshot;
 pub(crate) mod terminal;
 mod termination;
@@ -772,6 +773,10 @@ pub struct AgentDriver {
 
     workspace: Option<environment::WorkspaceConfiguration>,
     skill_dirs: Vec<PathBuf>,
+    /// Whether a skill name found in an earlier `skill_dirs` entry hides the same name in later
+    /// entries. Set once resolved skill references add generated folders, which rely on folder
+    /// order for precedence.
+    skill_dirs_first_name_wins: bool,
     has_deferred_repositories: bool,
     computer_use_configured: bool,
 
@@ -1378,6 +1383,7 @@ impl AgentDriver {
             cloud_providers,
             workspace: Some(workspace),
             skill_dirs,
+            skill_dirs_first_name_wins: false,
             has_deferred_repositories,
             computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
@@ -1434,6 +1440,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             workspace: Some(environment::WorkspaceConfiguration::default()),
             skill_dirs: parse_skills_dirs_env(),
+            skill_dirs_first_name_wins: false,
             has_deferred_repositories: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -2194,7 +2201,11 @@ impl AgentDriver {
         let load_result = foreground
             .spawn(move |me, ctx| {
                 let dirs = resolve_skills_dirs(&me.working_dir, dirs);
-                let skills = read_skills_for_skills_dirs(&dirs);
+                let mut skills = read_skills_for_skills_dirs(&dirs);
+                if me.skill_dirs_first_name_wins {
+                    let mut names = HashSet::new();
+                    skills.retain(|skill| names.insert(skill.name.clone()));
+                }
                 if skills.is_empty() {
                     log::info!("WARP_SKILL_DIRS: no skills found");
                 } else {
@@ -2499,6 +2510,24 @@ impl AgentDriver {
                     )
                     .await;
                 Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+            }
+
+            if FeatureFlag::FactorySkillReferences.is_enabled() {
+                let environment_forges = source_repos
+                    .iter()
+                    .filter_map(environment::repository_forge_for_repo)
+                    .collect();
+                if let Some(discovery) =
+                    Self::discover_skill_references(environment_forges, &foreground).await
+                {
+                    setup_events
+                        .record_value_with_error_flag(
+                            SetupStep::SkillReferenceResolution,
+                            Self::resolve_skill_references(discovery, &foreground),
+                            |report| report.warning_count() > 0,
+                        )
+                        .await;
+                }
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

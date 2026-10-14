@@ -1002,6 +1002,10 @@ pub enum FeatureFlag {
     /// mirrors kept in the persistent build cache instead of cloning each one
     /// from the remote. Disabling it restores direct, network-only checkouts.
     GitMirrorCache,
+
+    /// Resolves skill reference files in a Factory definition's skill folders during cloud runs,
+    /// loading the selected skills from other repositories.
+    FactorySkillReferences,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1084,6 +1088,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::FactoryDeferredRepositories,
+    FeatureFlag::FactorySkillReferences,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

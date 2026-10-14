@@ -1014,6 +1014,70 @@ fn parallel_substituted_branches_preserve_alias_and_attribute_failure() {
 }
 
 #[test]
+fn named_refs_prefer_branches_and_fall_back_to_tags() {
+    fixture_test(
+        "named_refs_prefer_branches_and_fall_back_to_tags",
+        |fixture| {
+            let (base, pinned) = (fixture.base(), fixture.pinned());
+            let origin = fixture.origin();
+            git(&origin, &["update-ref", "refs/tags/v1", &pinned]);
+            git(
+                &origin,
+                &[
+                    "-c",
+                    "user.name=Checkout Fixture",
+                    "-c",
+                    "user.email=checkout@example.com",
+                    "tag",
+                    "-a",
+                    "annotated",
+                    "-m",
+                    "release",
+                    &pinned,
+                ],
+            );
+            git(&origin, &["update-ref", "refs/heads/same", &base]);
+            git(&origin, &["update-ref", "refs/tags/same", &pinned]);
+            let modes = if cfg!(any(target_os = "linux", target_os = "macos")) {
+                vec![false, true]
+            } else {
+                vec![false]
+            };
+            for cached in modes {
+                let prefix = if cached { "cached" } else { "direct" };
+                let named = |name: &str| {
+                    fixture.request(
+                        &format!("{prefix}-{name}"),
+                        Some(RepositoryHeadRef::NamedRef(name.to_owned())),
+                    )
+                };
+                let root = cached.then(optional_mirror_root).flatten();
+                let results = checkout_batch(
+                    &fixture.batch(vec![
+                        named("v1"),
+                        named("annotated"),
+                        named("same"),
+                        named("missing"),
+                    ]),
+                    root.as_deref(),
+                )
+                .unwrap();
+                assert_succeeded(&results[..3]);
+                assert_eq!(results[3].failure, Some(CheckoutFailureKind::Checkout));
+                for (name, expected) in [("v1", &pinned), ("annotated", &pinned), ("same", &base)] {
+                    let target = fixture.work().join(format!("{prefix}-{name}"));
+                    assert_eq!(
+                        &git(&target, &["rev-parse", "HEAD"]),
+                        expected,
+                        "{prefix} {name}"
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn uncached_sha_fetch_avoids_later_default_history_and_preserves_failures() {
     fixture_test(
         "uncached_sha_fetch_avoids_later_default_history_and_preserves_failures",

@@ -1,0 +1,3 @@
+source: "@v1"
+include:
+  - safe-secrets

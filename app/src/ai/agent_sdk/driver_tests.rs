@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -1630,6 +1630,64 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
             skill_names.contains(&"env-skill-rel".to_string()),
             "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
         );
+    });
+}
+
+/// Once skill references add generated folders, a skill name in an earlier folder hides the same
+/// name in later folders, so Oz loads the same skill a third-party harness would publish.
+#[test]
+#[serial_test::serial]
+fn skill_dirs_first_name_wins_hides_later_duplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        for (folder, description) in [("agent-skills", "Agent copy."), ("generated", "Ref copy.")] {
+            let skill_dir = working_dir.join(folder).join("shared");
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: shared\ndescription: {description}\n---\nBody\n"),
+            )
+            .unwrap();
+        }
+        write_flat_skill(&working_dir.join("generated"), "ref-only");
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.skill_dirs = vec![PathBuf::from("agent-skills"), working_dir.join("generated")];
+            driver.skill_dirs_first_name_wins = true;
+            driver
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let skills = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|skill| skill.name == "shared" || skill.name == "ref-only")
+                .map(|skill| (skill.name, skill.description))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(skills.len(), 2, "{skills:?}");
+        assert!(skills.contains(&("shared".to_owned(), "Agent copy.".to_owned())));
+        assert!(skills.iter().any(|(name, _)| name == "ref-only"));
     });
 }
 

@@ -1,0 +1,7 @@
+{
+  "reference": {
+    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": {"kind": "sha", "value": "0123456789abcdef0123456789abcdef01234567"}},
+    "include": [{"kind": "name", "value": "safe-secrets"}],
+    "exclude": []
+  }
+}

@@ -1,0 +1,8 @@
+# skills/shared.yaml: every agent
+source: acme/shared-skills@v1.4.0
+include:
+  - safe-secrets
+  - skills/release-notes
+  - "frontend/*"
+exclude:
+  - "legacy-*"

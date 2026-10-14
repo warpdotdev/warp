@@ -102,6 +102,7 @@ fn head_kind(head: Option<&RepositoryHeadRef>) -> &'static str {
     match head {
         Some(RepositoryHeadRef::Branch(_)) => "branch",
         Some(RepositoryHeadRef::CommitSha(_)) => "commit",
+        Some(RepositoryHeadRef::NamedRef(_)) => "named",
         None => "default",
     }
 }
@@ -998,7 +999,7 @@ async fn checkout_cached(
         (Some(RepositoryHeadRef::Branch(branch)), true) => {
             fetch_branch_from_mirror(branch, url, target, mirror, default, git).await
         }
-        (Some(RepositoryHeadRef::CommitSha(_)) | None, true) => {
+        (Some(RepositoryHeadRef::CommitSha(_) | RepositoryHeadRef::NamedRef(_)) | None, true) => {
             git.record("branch-only checkout requires a branch");
             Err(CheckoutFailureKind::Checkout)
         }
@@ -1085,6 +1086,28 @@ async fn clone_from_mirror(
                 "requested head checkout",
                 target,
                 &["checkout", "--detach", sha],
+            )
+            .await
+        }
+        Some(RepositoryHeadRef::NamedRef(name)) => {
+            let branch = format!("refs/remotes/origin/{name}");
+            let branches = git
+                .run(
+                    "requested branch lookup",
+                    target,
+                    &["for-each-ref", "--format=%(refname)", &branch],
+                )
+                .await
+                .map_err(|_| checkout_error)?;
+            let head = if branches.lines().any(|line| line == branch) {
+                branch
+            } else {
+                format!("refs/tags/{name}")
+            };
+            git.run(
+                "requested head checkout",
+                target,
+                &["checkout", "--detach", &head],
             )
             .await
         }
@@ -1244,9 +1267,9 @@ async fn clone_repository(
 ///
 /// A branch-only request fetches just the requested branch and stores it under the default
 /// branch's tracking ref, so the repository holds a single remote-tracking branch that
-/// `origin/HEAD` resolves to. Any other head is fetched by name, which also reaches commits that
-/// no branch points to. Fetches are blobless so file contents are downloaded only for what gets
-/// checked out.
+/// `origin/HEAD` resolves to. A named ref is fetched as a branch, falling back to a tag of the
+/// same name. Any other head is fetched by name, which also reaches commits that no branch points
+/// to. Fetches are blobless so file contents are downloaded only for what gets checked out.
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
     head_kind = head_kind(request.head.as_ref()),
@@ -1301,6 +1324,34 @@ async fn checkout_requested_head(
                 "refs/remotes/origin/HEAD",
                 &format!("refs/remotes/origin/{default}"),
             ],
+        )
+        .await
+        .map_err(|_| checkout_error)?;
+    } else if let RepositoryHeadRef::NamedRef(name) = head {
+        // Fetching a bare name would prefer a tag over a branch of the same name.
+        let branch = format!("refs/heads/{name}");
+        if git
+            .run(
+                "requested branch fetch",
+                target,
+                &["fetch", "--filter=blob:none", "origin", &branch],
+            )
+            .await
+            .is_err()
+        {
+            let tag = format!("refs/tags/{name}");
+            git.run(
+                "requested tag fetch",
+                target,
+                &["fetch", "--filter=blob:none", "origin", &tag],
+            )
+            .await
+            .map_err(|_| checkout_error)?;
+        }
+        git.run(
+            "requested head checkout",
+            target,
+            &["checkout", "--detach", "FETCH_HEAD"],
         )
         .await
         .map_err(|_| checkout_error)?;

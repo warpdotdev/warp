@@ -145,11 +145,13 @@ where
     enum Head {
         CommitSha(String),
         Branch(String),
+        NamedRef(String),
     }
     Option::<Head>::deserialize(deserializer).map(|head| {
         head.map(|head| match head {
             Head::CommitSha(value) => RepositoryHeadRef::CommitSha(value),
             Head::Branch(value) => RepositoryHeadRef::Branch(value),
+            Head::NamedRef(value) => RepositoryHeadRef::NamedRef(value),
         })
     })
 }
@@ -234,7 +236,7 @@ impl CheckoutRequest {
                     return Err("invalid checkout commit");
                 }
             }
-            Some(RepositoryHeadRef::Branch(value)) => {
+            Some(RepositoryHeadRef::Branch(value) | RepositoryHeadRef::NamedRef(value)) => {
                 if value.is_empty()
                     || value.starts_with('-')
                     || value.starts_with('/')

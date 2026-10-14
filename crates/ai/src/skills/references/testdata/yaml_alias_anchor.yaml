@@ -1,0 +1,5 @@
+source: &repo acme/shared-skills
+include:
+  - safe-secrets
+exclude:
+  - *repo

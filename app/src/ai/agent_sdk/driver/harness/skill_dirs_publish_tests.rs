@@ -125,6 +125,45 @@ fn resolved_skill_dirs_are_published_relative_to_workspace_root() {
     assert_eq!(fs::read_link(&link).unwrap(), skill);
 }
 
+#[cfg(unix)]
+#[test]
+fn generated_skill_reference_folders_publish_for_claude_code_and_codex() {
+    let root = TempDir::new().unwrap();
+    let referenced = write_skill(
+        &root
+            .path()
+            .join("sources/acme-shared-skills/.agents/skills"),
+        "safe-secrets",
+    );
+    let generated = root.path().join("generated/1");
+    fs::create_dir_all(&generated).unwrap();
+    std::os::unix::fs::symlink(&referenced, generated.join("safe-secrets")).unwrap();
+    let factory_skill = write_skill(&root.path().join("definition/skills"), "deploy");
+    let source_dirs = vec![PathBuf::from("definition/skills"), generated.clone()];
+
+    for relative_root in [".claude/skills", ".agents/skills"] {
+        let skill_root = root.path().join("harness").join(relative_root);
+        let published =
+            publish_skills_for_harness(&skill_root, root.path(), false, &source_dirs, false)
+                .unwrap();
+        let link = skill_root.join("safe-secrets");
+        assert!(published.contains(&link));
+        assert!(published.contains(&skill_root.join("deploy")));
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            generated.join("safe-secrets")
+        );
+        assert_eq!(
+            link.canonicalize().unwrap(),
+            referenced.canonicalize().unwrap()
+        );
+        assert_eq!(
+            fs::read_link(skill_root.join("deploy")).unwrap(),
+            factory_skill
+        );
+    }
+}
+
 fn publish_source_dirs(
     skill_root: &Path,
     source_dirs: &[PathBuf],

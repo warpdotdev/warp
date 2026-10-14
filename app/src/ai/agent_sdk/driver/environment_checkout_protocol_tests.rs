@@ -77,3 +77,35 @@ fn nested_gitlab_and_azure_identities_and_tag_pins_are_accepted() {
         CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).unwrap();
     }
 }
+
+#[test]
+fn named_refs_round_trip_and_share_branch_validation() {
+    let mut named = batch();
+    named["repositories"][0]["head"] = json!({"type": "NAMED_REF", "value": "v1.4.0"});
+    let parsed = CheckoutBatch::parse(&serde_json::to_vec(&named).unwrap()).unwrap();
+    assert_eq!(
+        parsed.repositories[0].head,
+        Some(RepositoryHeadRef::NamedRef("v1.4.0".to_owned()))
+    );
+    assert_eq!(
+        serde_json::to_value(&parsed).unwrap()["repositories"][0]["head"],
+        json!({"type": "NAMED_REF", "value": "v1.4.0"})
+    );
+
+    for (head, fetch_branch_only) in [
+        (
+            json!({"type": "NAMED_REF", "value": "--upload-pack=bad"}),
+            false,
+        ),
+        (json!({"type": "NAMED_REF", "value": "bad..ref"}), false),
+        (json!({"type": "NAMED_REF", "value": "main"}), true),
+    ] {
+        let mut batch = batch();
+        batch["repositories"][0]["head"] = head.clone();
+        batch["repositories"][0]["fetch_branch_only"] = json!(fetch_branch_only);
+        assert!(
+            CheckoutBatch::parse(&serde_json::to_vec(&batch).unwrap()).is_err(),
+            "{head}"
+        );
+    }
+}

@@ -3,6 +3,7 @@ mod listed_skill;
 mod parse_skill;
 mod parser;
 mod read_skills;
+mod references;
 mod skill_provider;
 mod skill_reference;
 pub use conversion::{
@@ -16,6 +17,11 @@ pub use parse_skill::{
 pub use read_skills::{
     WARP_SKILL_DIRS_ENV, parse_skills_dirs_env, parse_skills_dirs_value, read_skills,
     read_skills_for_skills_dirs, resolve_skills_dirs,
+};
+pub use references::{
+    SKILL_REFERENCE_FILE_EXTENSIONS, SkillReferenceEntry, SkillReferenceFile,
+    SkillReferenceParseError, SkillSource, SkillSourceForge, SkillSourceRef,
+    is_skill_reference_file_name, parse_skill_reference_file,
 };
 pub use skill_provider::{
     SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillProviderDefinition, SkillScope,
