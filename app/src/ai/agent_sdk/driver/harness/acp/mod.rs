@@ -39,6 +39,7 @@ pub(crate) use launch::AcpLaunchSpec;
 use parking_lot::Mutex;
 use prost::Message as _;
 use serde_json::Value;
+use session_sharing_protocol::common::ParticipantId;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::channel::ChannelState;
@@ -770,7 +771,7 @@ impl HarnessRunner for AcpHarnessRunner {
         let _ = self.conversation.set(conversation);
 
         let run_id = self.task_id.map(|id| id.to_string());
-        let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone()).await?;
+        let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone(), None).await?;
         let (follow_up_tx, follow_up_rx) = async_channel::unbounded::<ExternalHarnessPrompt>();
         with_ai_controller(foreground, &self.terminal_driver, move |controller, _| {
             controller.set_external_harness_prompt_sink(follow_up_tx);
@@ -780,7 +781,7 @@ impl HarnessRunner for AcpHarnessRunner {
         let (mut mapper, opening_actions) = match restored_root_task_id {
             Some(root_task_id) => {
                 let mapper = AcpTurnMapper::new(root_task_id, turn.request_id.clone());
-                let actions = vec![mapper.user_query_action(&self.user_prompt)];
+                let actions = vec![mapper.user_query_action(&self.user_prompt, None)];
                 (mapper, actions)
             }
             None => {
@@ -977,12 +978,17 @@ impl TurnDriver {
         mapper: &mut AcpTurnMapper,
         prompt: ExternalHarnessPrompt,
     ) -> Result<StopReason> {
-        let next = begin_turn(&self.foreground, &self.terminal_driver, self.run_id.clone())
-            .await
-            .map_err(|error| anyhow!("{error}"))?;
+        let next = begin_turn(
+            &self.foreground,
+            &self.terminal_driver,
+            self.run_id.clone(),
+            Some(prompt.participant_id.clone()),
+        )
+        .await
+        .map_err(|error| anyhow!("{error}"))?;
         mapper.start_segment(next.request_id.clone());
         *self.turn.lock() = next;
-        let echo = vec![mapper.user_query_action(&prompt.text)];
+        let echo = vec![mapper.user_query_action(&prompt.text, prompt.base.as_ref())];
         self.apply_events(mapper, vec![TurnEvent::Actions(echo)])
             .await?;
         let content = self
@@ -1128,10 +1134,14 @@ impl TurnDriver {
                     .await
                     .map_err(|error| anyhow!("{error}"))?;
                     self.request_save().await;
-                    let next =
-                        begin_turn(&self.foreground, &self.terminal_driver, self.run_id.clone())
-                            .await
-                            .map_err(|error| anyhow!("{error}"))?;
+                    let next = begin_turn(
+                        &self.foreground,
+                        &self.terminal_driver,
+                        self.run_id.clone(),
+                        None,
+                    )
+                    .await
+                    .map_err(|error| anyhow!("{error}"))?;
                     mapper.start_segment(next.request_id.clone());
                     *self.turn.lock() = next;
                 }
@@ -1195,16 +1205,22 @@ async fn upload_conversation_snapshot(
         })
 }
 
-/// Opens a request stream on the driver's bound native conversation.
+/// Opens a request stream on the driver's bound native conversation. `initiator` names the
+/// shared-session participant whose prompt opens the stream; `None` keeps the previous one, as
+/// the streams a tool round trip chains together all answer the same prompt.
 async fn begin_turn(
     foreground: &ModelSpawner<AgentDriver>,
     terminal_driver: &ModelHandle<TerminalDriver>,
     run_id: Option<String>,
+    initiator: Option<ParticipantId>,
 ) -> Result<ExternalHarnessTurn, AgentDriverError> {
     with_ai_controller(foreground, terminal_driver, move |controller, ctx| {
         let conversation_id = controller
             .native_prompt_conversation_id()
             .unwrap_or_else(|| controller.bind_native_prompt_conversation(None, ctx));
+        if let Some(initiator) = initiator {
+            controller.set_current_response_initiator(initiator);
+        }
         controller.begin_external_harness_turn(conversation_id, run_id, ctx)
     })
     .await?

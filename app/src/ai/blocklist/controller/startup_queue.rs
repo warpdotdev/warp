@@ -127,6 +127,8 @@ impl BlocklistAIController {
             let relayed = ExternalHarnessPrompt {
                 text: prompt.to_owned(),
                 attachments: attachments.to_vec(),
+                participant_id: participant_id.clone(),
+                base: base.cloned(),
             };
             if sink.try_send(relayed).is_err() {
                 report_error!(

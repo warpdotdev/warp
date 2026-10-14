@@ -2,7 +2,7 @@
 // conversation: the harness translates its own protocol into MAA response events, which flow
 // through the same controller path as events from the MAA server. The conversation stays owned
 // by this client (so task status syncing keeps working); only the turn itself is the harness's.
-use session_sharing_protocol::common::AgentAttachment;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warp_multi_agent_api::response_event::StreamInit;
 use warp_multi_agent_api::{ResponseEvent, response_event};
@@ -10,6 +10,7 @@ use warpui::{ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
@@ -28,6 +29,12 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     /// Context the prompt's author attached, kept in its shared-session wire shape so the
     /// harness can decide how to present each kind to its agent.
     pub attachments: Vec<AgentAttachment>,
+    /// The shared-session participant who injected the prompt, so the turn it opens is
+    /// attributed to them for viewers.
+    pub participant_id: ParticipantId,
+    /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
+    /// Its attribution is copied onto the user query echoed into the conversation.
+    pub base: Option<BaseUserQuery>,
 }
 
 impl BlocklistAIController {
