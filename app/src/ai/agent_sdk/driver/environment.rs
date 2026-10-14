@@ -237,12 +237,14 @@ fn environment_snapshot(
     }
 }
 
-/// Workspace inputs used to prepare a run's repositories, commands, and skills.
+/// Holds the workspace inputs that setup turns into checkouts, commands, and skills.
 #[derive(Default)]
 pub(crate) struct WorkspaceConfiguration {
     pub source_repos: Vec<SourceRepo>,
     pub setup_commands: Vec<String>,
+    /// Overrides `WARP_SKILL_DIRS` when present, including an empty list.
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
+    /// Retains an explicitly selected environment even when it has no repositories or commands.
     pub has_environment: bool,
     clone_requests: Vec<RepositoryCloneRequest>,
 }
@@ -255,6 +257,11 @@ pub(crate) struct ResolvedRepository {
     pub preserve_origin: bool,
 }
 impl WorkspaceConfiguration {
+    /// Reports whether the workspace requires setup before harness startup.
+    pub fn needs_preparation(&self) -> bool {
+        self.has_environment || !self.source_repos.is_empty() || !self.setup_commands.is_empty()
+    }
+    /// Builds a workspace from a locally resolved environment and CLI repository overrides.
     pub fn from_legacy(
         environment: Option<&AmbientAgentEnvironment>,
         additional_source_repos: Vec<SourceRepo>,
@@ -281,6 +288,7 @@ impl WorkspaceConfiguration {
         })
     }
 
+    /// Builds a workspace from server-selected checkouts without resolving an environment locally.
     pub fn from_resolved(
         repositories: Vec<ResolvedRepository>,
         setup_commands: Vec<String>,

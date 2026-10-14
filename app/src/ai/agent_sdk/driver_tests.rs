@@ -112,7 +112,7 @@ fn driver_keeps_uninterpreted_factory_experiments() {
             .unwrap();
         let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
         options.experimental = Some(experimental.clone());
-        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
         driver.read(&app, |driver, _| {
             assert_eq!(driver.experimental, Some(experimental));
         });
@@ -1309,8 +1309,9 @@ fn split_loading_env_loads_all_global_loads_subset() {
             let spawner = ctx.spawner();
             ctx.spawn(
                 async move {
-                    AgentDriver::load_environment_skills(&spawner, env_repos).await;
-                    AgentDriver::load_global_skills(&spawner, global_specs, global_repos).await;
+                    super::agent_setup::load_environment_skills(&spawner, env_repos).await;
+                    super::agent_setup::load_global_skills(&spawner, global_specs, global_repos)
+                        .await;
                     let _ = done_tx.send(());
                 },
                 |_, _, _| {},
@@ -1430,8 +1431,9 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
             let spawner = ctx.spawner();
             ctx.spawn(
                 async move {
-                    AgentDriver::load_environment_skills(&spawner, env_repos).await;
-                    AgentDriver::load_global_skills(&spawner, global_specs, global_repos).await;
+                    super::agent_setup::load_environment_skills(&spawner, env_repos).await;
+                    super::agent_setup::load_global_skills(&spawner, global_specs, global_repos)
+                        .await;
                     let _ = done_tx.send(());
                 },
                 |_, _, _| {},
@@ -1526,7 +1528,7 @@ fn warp_skill_dirs_env_loads_skills_as_home_tier() {
             let spawner = ctx.spawner();
             ctx.spawn(
                 async move {
-                    AgentDriver::load_skills_dirs(&spawner).await;
+                    super::agent_setup::load_skills_dirs(&spawner).await;
                     let _ = done_tx.send(());
                 },
                 |_, _, _| {},
@@ -1608,7 +1610,7 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
             let spawner = ctx.spawner();
             ctx.spawn(
                 async move {
-                    AgentDriver::load_skills_dirs(&spawner).await;
+                    super::agent_setup::load_skills_dirs(&spawner).await;
                     let _ = done_tx.send(());
                 },
                 |_, _, _| {},
@@ -2538,7 +2540,7 @@ fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
         options.working_dir = root.path().to_path_buf();
         options.selected_harness = Harness::Codex;
         options.harness_transport = HarnessTransport::Acp;
-        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
         let HarnessKind::ThirdParty(harness) =
             harness_kind(Harness::Codex, HarnessTransport::Acp).unwrap()
@@ -2658,7 +2660,7 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                             ManagedSecretValue::raw_value("1"),
                         );
                     }
-                    let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+                    let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
                     let foreground = driver.update(&mut app, |driver, ctx| {
                         assert!(driver.workspace.take().unwrap().source_repos.is_empty());
                         assert_eq!(driver.factory_repository_contract, should_activate);
@@ -2727,7 +2729,7 @@ fn deferred_repository_runtime_exports_absolute_root_before_terminal_creation() 
             "WARP_WORKSPACE_ROOT".into(),
             ManagedSecretValue::raw_value("/other/root"),
         );
-        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
         driver.update(&mut app, |driver, ctx| {
             for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
                 assert_eq!(
@@ -2762,7 +2764,7 @@ fn deferred_repository_runtime_exports_root_when_unset() {
         let root = TempDir::new().unwrap();
         let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
         options.working_dir = root.path().to_path_buf();
-        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
         driver.read(&app, |driver, _| {
             for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
                 assert_eq!(
@@ -2780,14 +2782,13 @@ fn deferred_repository_runtime_rejects_relative_root() {
         initialize_workspace_test_app(&mut app);
         let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
         options.working_dir = "relative-workspace".into();
-        app.add_model(|ctx| {
-            let error = AgentDriver::new(options, ctx).err().expect("invalid root");
+        app.update(|ctx| {
+            let error = AgentDriver::create(options, ctx).expect_err("invalid root");
             assert!(matches!(
                 error,
                 AgentDriverError::ConfigBuildFailed(source)
                     if source.to_string().contains("workspace root must be absolute")
             ));
-            AgentDriver::new(crate::ai::agent_sdk::tests::agent_driver_options(), ctx).unwrap()
         });
     });
 }
