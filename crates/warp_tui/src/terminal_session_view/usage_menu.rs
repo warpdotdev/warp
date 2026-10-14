@@ -97,8 +97,8 @@ impl TuiElement for TuiUsageBar {
 }
 
 struct TuiUsagePayAsYouGoRows {
-    credits_used: u64,
-    cost_cents: i64,
+    credits_used: f64,
+    cost_cents: f64,
     summary_note: &'static str,
     credits_per_circle: u64,
     visible_circles: usize,
@@ -119,7 +119,7 @@ impl TuiUsagePayAsYouGoRows {
         muted_style: TuiStyle,
     ) -> Self {
         Self {
-            credits_used: payg.credits_used.max(0) as u64,
+            credits_used: payg.credits_used.max(0.0),
             cost_cents: payg.cost_cents,
             summary_note: if payg.has_kicked_in {
                 "Kicks in after credits are exhausted."
@@ -147,14 +147,13 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
     ) -> TuiSize {
         let width = usize::from(constraint.max.width.max(1));
         let capacity = width.saturating_mul(MAX_PAY_AS_YOU_GO_ROWS);
-        let minimum_credits_per_circle = self.credits_used.div_ceil(capacity as u64);
+        let minimum_credits_per_circle = (self.credits_used / capacity as f64).ceil() as u64;
         self.credits_per_circle = MIN_CREDITS_PER_CIRCLE;
         while self.credits_per_circle < minimum_credits_per_circle {
             self.credits_per_circle = self.credits_per_circle.saturating_mul(10);
         }
-        self.visible_circles = usize::try_from(self.credits_used.div_ceil(self.credits_per_circle))
-            .unwrap_or(capacity)
-            .min(capacity);
+        self.visible_circles =
+            ((self.credits_used / self.credits_per_circle as f64).ceil() as usize).min(capacity);
         let circle_rows = if self.visible_circles == 0 {
             1
         } else {
@@ -184,7 +183,7 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
                     (
                         format!(
                             "{} credits / {}",
-                            format_usage_credits(self.credits_used as i64),
+                            format_usage_credits(self.credits_used),
                             format_usage_cost_cents(self.cost_cents)
                         ),
                         self.primary_style,
@@ -194,7 +193,7 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
                     (
                         format!(
                             " = {} credits",
-                            format_usage_credits(self.credits_per_circle as i64)
+                            format_usage_credits(self.credits_per_circle as f64)
                         ),
                         self.muted_style,
                     ),
