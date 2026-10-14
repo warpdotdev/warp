@@ -737,16 +737,23 @@ impl HarnessRunner for AcpHarnessRunner {
             Err(error) => {
                 connection.close().await;
                 self.interrupt_terminal(foreground).await;
-                if error
+                // Code -32000 is the agent refusing the session for lack of credentials, which
+                // is the run's configuration rather than a defect worth paging on.
+                if let Some(rpc_error) = error
                     .downcast_ref::<RpcError>()
-                    .is_some_and(|error| error.code == -32000)
+                    .filter(|error| error.code == -32000)
                 {
                     return Err(AgentDriverError::HarnessAuthCheckFailed {
                         harness: self.harness.to_string(),
-                        detail: "ACP authentication required".to_owned(),
+                        detail: rpc_error.message.clone(),
                     });
                 }
-                return Err(self.setup_failed(format!("{error:#}")));
+                let reason = format!("{error:#}");
+                report_error!(
+                    error.context("ACP handshake failed"),
+                    extra: { "harness" => %self.harness }
+                );
+                return Err(self.setup_failed(reason));
             }
         };
         log::info!("ACP session {session_id} created");
@@ -771,7 +778,15 @@ impl HarnessRunner for AcpHarnessRunner {
         let _ = self.conversation.set(conversation);
 
         let run_id = self.task_id.map(|id| id.to_string());
-        let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone(), None).await?;
+        let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone(), None).await;
+        let turn = match turn {
+            Ok(turn) => turn,
+            Err(error) => {
+                connection.close().await;
+                self.interrupt_terminal(foreground).await;
+                return Err(error);
+            }
+        };
         let (follow_up_tx, follow_up_rx) = async_channel::unbounded::<ExternalHarnessPrompt>();
         with_ai_controller(foreground, &self.terminal_driver, move |controller, ctx| {
             controller.set_external_harness_prompt_sink(follow_up_tx, ctx);

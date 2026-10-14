@@ -531,6 +531,45 @@ fn harness_auth_check_failed_is_failed_with_auth_required() {
     );
     assert!(update.message.contains("authentication check failed"));
     assert!(update.message.contains("claude"));
+    assert!(update.message.contains("exit code 1"));
+    assert!(update.message.contains("invalid or expired"));
+}
+
+#[test]
+fn pi_auth_check_failed_points_at_provider_api_key_secret() {
+    let detail = "Authentication required: Configure an API key or log in with an OAuth provider.";
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessAuthCheckFailed {
+        harness: "pi".into(),
+        detail: detail.into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AuthenticationRequired)
+    );
+    assert!(update.message.contains(detail));
+    assert!(update.message.contains("Anthropic or OpenAI API key"));
+    assert!(update.message.contains("harness auth secret"));
+    assert!(!update.message.contains("invalid or expired"));
+}
+
+// --- Harness setup failures ---
+
+#[test]
+fn harness_setup_failed_is_failed_with_reason() {
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessSetupFailed {
+        harness: "pi".into(),
+        reason: "the agent did not complete its handshake within 60s".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    assert_eq!(
+        update.message,
+        "Harness 'pi' setup failed: the agent did not complete its handshake within 60s"
+    );
 }
 
 // --- Runtime failure detection ---

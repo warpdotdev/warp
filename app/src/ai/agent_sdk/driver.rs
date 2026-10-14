@@ -3409,7 +3409,12 @@ impl AgentDriver {
         let harness_name = runner.harness_name().to_owned();
 
         // Start the third-party harness.
-        let command_handle = runner.start(foreground, setup_events).await?;
+        let command_handle = setup_events
+            .record_result(
+                SetupStep::ThirdPartyHarnessStart,
+                runner.start(foreground, setup_events),
+            )
+            .await?;
         setup_events
             .post_timeline_event(OzRunTimelineEvent::AgentStarted)
             .await;
