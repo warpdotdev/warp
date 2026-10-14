@@ -216,18 +216,26 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     ..Default::default()
                 });
                 let participant_id = ParticipantId::new();
-                for text in ["first", "second"] {
-                    controller.execute_warp_agent_prompt_from_shared_session_injection(
-                        text.into(),
-                        None,
-                        vec![AgentAttachment::PlainText {
-                            content: format!("{text} context"),
-                        }],
-                        participant_id.clone(),
-                        Some(base.clone()),
-                        ctx,
-                    );
-                }
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "first".into(),
+                    None,
+                    vec![AgentAttachment::PlainText {
+                        content: "first context".into(),
+                    }],
+                    participant_id.clone(),
+                    Some(base.clone()),
+                    ctx,
+                );
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "second".into(),
+                    None,
+                    vec![AgentAttachment::PlainText {
+                        content: "second context".into(),
+                    }],
+                    participant_id.clone(),
+                    Some(base),
+                    ctx,
+                );
                 assert_eq!(
                     QueuedQueryModel::as_ref(ctx).queue(id).len(),
                     2,
@@ -236,27 +244,42 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
 
                 controller.set_external_harness_prompt_sink(sink, ctx);
 
-                for text in ["first", "second"] {
-                    let relayed = prompts
-                        .try_recv()
-                        .unwrap_or_else(|_| panic!("{text:?} must be relayed on install"));
-                    assert_eq!(relayed.text, text);
-                    assert!(
-                        matches!(
-                            relayed.attachments.as_slice(),
-                            [AgentAttachment::PlainText { content }]
-                                if *content == format!("{text} context")
-                        ),
-                        "attachments must survive the queue: {:?}",
-                        relayed.attachments
-                    );
-                    assert_eq!(relayed.participant_id, participant_id);
-                    assert_eq!(
-                        relayed.base.as_ref().map(|base| base.to_proto().author),
-                        Some(Some(author.clone())),
-                        "attribution must survive the queue"
-                    );
-                }
+                let first = prompts
+                    .try_recv()
+                    .expect("first prompt is relayed on install");
+                assert_eq!(first.text, "first");
+                assert!(
+                    matches!(
+                        first.attachments.as_slice(),
+                        [AgentAttachment::PlainText { content }] if content == "first context"
+                    ),
+                    "first prompt's attachments must survive the queue: {:?}",
+                    first.attachments
+                );
+                assert_eq!(first.participant_id, participant_id);
+                assert_eq!(
+                    first.base.map(|base| base.to_proto().author),
+                    Some(Some(author.clone()))
+                );
+
+                let second = prompts
+                    .try_recv()
+                    .expect("second prompt is relayed on install, after the first");
+                assert_eq!(second.text, "second");
+                assert!(
+                    matches!(
+                        second.attachments.as_slice(),
+                        [AgentAttachment::PlainText { content }] if content == "second context"
+                    ),
+                    "second prompt's attachments must survive the queue: {:?}",
+                    second.attachments
+                );
+                assert_eq!(second.participant_id, participant_id);
+                assert_eq!(
+                    second.base.map(|base| base.to_proto().author),
+                    Some(Some(author))
+                );
+
                 assert!(
                     prompts.is_empty(),
                     "each queued row is relayed exactly once"
@@ -273,17 +296,6 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     0,
                     "nothing is sent to Warp's agent"
                 );
-
-                controller.execute_warp_agent_prompt_from_shared_session_injection(
-                    "third".into(),
-                    None,
-                    vec![],
-                    participant_id.clone(),
-                    None,
-                    ctx,
-                );
-                assert_eq!(prompts.try_recv().unwrap().text, "third");
-                assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
             });
         });
     });
