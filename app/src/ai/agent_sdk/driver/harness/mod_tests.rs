@@ -1,22 +1,38 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ai::skills::parse_skill;
 use anyhow::Result;
 use async_trait::async_trait;
+use command::blocking::Command as ProcessCommand;
 use futures::channel::oneshot;
+use mockito::Matcher;
+use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::{Harness, HarnessTransport};
+use warp_core::channel::ChannelState;
+use warp_managed_secrets::ManagedSecretValue;
 use warpui::r#async::FutureExt as _;
-use warpui::{App, ModelSpawner, SingletonEntity as _};
+use warpui::{App, ModelHandle, ModelSpawner, SingletonEntity as _};
 
 use super::{
     HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, HarnessKind, HarnessPersistence, HarnessRunner,
-    PersistenceOutcome, SavePoint, auth_check_command_for, harness_kind,
-    prepare_harness_failure_output, validate_cli_installed,
+    PersistenceOutcome, ResumePayload, SavePoint, ThirdPartyHarness, auth_check_command_for,
+    harness_kind, prepare_harness_failure_output, validate_cli_installed,
 };
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
-use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
+use crate::ai::agent_sdk::driver::{
+    AgentDriver, AgentDriverError, AgentRunPrompt, IdleTimeoutSender,
+};
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
+use crate::ai::mcp::JSONMCPServer;
+use crate::server::server_api::ServerApi;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
@@ -24,6 +40,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionsModel,
 };
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
     match err {
@@ -178,6 +195,279 @@ impl HarnessRunner for RecordingRunner {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct PreparedPrompt {
+    prompt: String,
+    system_prompt: Option<String>,
+    resumption_prompt: Option<String>,
+    context: Option<String>,
+}
+
+struct RecordingHarness {
+    transport: HarnessTransport,
+    prepared: Arc<Mutex<Option<PreparedPrompt>>>,
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+impl ThirdPartyHarness for RecordingHarness {
+    fn harness(&self) -> Harness {
+        Harness::Claude
+    }
+
+    fn cli_agent(&self) -> CLIAgent {
+        CLIAgent::Claude
+    }
+
+    fn drives_cli_agent_session(&self) -> bool {
+        self.transport == HarnessTransport::Pty
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_runner(
+        &self,
+        prompt: &str,
+        system_prompt: Option<&str>,
+        resumption_prompt: Option<&str>,
+        context: Option<&str>,
+        _: &Path,
+        _: &Path,
+        _: Option<AmbientAgentTaskId>,
+        _: Arc<ServerApi>,
+        _: ModelHandle<TerminalDriver>,
+        resume: Option<ResumePayload>,
+        _: &HashMap<OsString, OsString>,
+        _: &[PathBuf],
+        _: bool,
+        _: &HashMap<String, ManagedSecretValue>,
+        _: &HashMap<String, JSONMCPServer>,
+        _: Option<&HarnessModelConfig>,
+    ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
+        assert!(resume.is_none());
+        *self.prepared.lock().unwrap() = Some(PreparedPrompt {
+            prompt: prompt.to_owned(),
+            system_prompt: system_prompt.map(str::to_owned),
+            resumption_prompt: resumption_prompt.map(str::to_owned),
+            context: context.map(str::to_owned),
+        });
+        let (requests, _) = async_channel::unbounded();
+        Ok(Box::new(RecordingRunner {
+            requests,
+            persistence: HarnessPersistence::default(),
+        }))
+    }
+}
+
+const DEFERRED_INSTRUCTION: &str = "clone acme/billing first";
+const TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+#[test]
+fn external_harness_preparation_keeps_server_skill_and_non_query_sections_unchanged() {
+    if std::env::var_os("WARP_TEST_HARNESS_RESOLUTION").is_none() {
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::harness::tests::external_harness_preparation_keeps_server_skill_and_non_query_sections_unchanged",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_HARNESS_RESOLUTION", "1")
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "synthetic-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+        let root = TempDir::new().unwrap();
+        let skill_path = root.path().join("authored/SKILL.md");
+        std::fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        let skill_content = "---\nname: authored\n---\n\nDo the authored task.\n";
+        std::fs::write(&skill_path, skill_content).unwrap();
+        let skill = parse_skill(&skill_path).unwrap();
+        let expected_body = format!(
+            r#"{{"skill":{{"name":"authored","content":{},"path":{}}},"attachments_dir":"/workspace/attachments"}}"#,
+            serde_json::to_string(skill_content).unwrap(),
+            serde_json::to_string(&skill_path.to_string_lossy()).unwrap(),
+        );
+        let mut server = ChannelState::mock_server();
+        let resolution = server
+            .mock("POST", "/api/v1/harness-support/resolve-prompt")
+            .match_header(
+                warp_server_client::base_client::CLOUD_AGENT_ID_HEADER,
+                TASK_ID,
+            )
+            .match_header(
+                warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER,
+                "synthetic-workload-token",
+            )
+            .match_body(Matcher::Exact(expected_body))
+            .with_status(200)
+            .with_body(
+                json!({
+                    "prompt": "do the task",
+                    "system_prompt": "system identity",
+                    "resumption_prompt": "resume state",
+                    "context": "retrieved memory",
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        App::test((), |mut app| async move {
+            initialize_workspace_test_app(&mut app);
+            let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+            options.working_dir = root.path().to_path_buf();
+            options.task_id = Some(TASK_ID.parse().unwrap());
+            let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let prepared = Arc::new(Mutex::new(None));
+            let harness = RecordingHarness {
+                transport,
+                prepared: prepared.clone(),
+            };
+            AgentDriver::prepare_harness(
+                &AgentRunPrompt::ServerSide {
+                    skill: Some(skill),
+                    attachments_dir: Some("/workspace/attachments".into()),
+                },
+                Some(DEFERRED_INSTRUCTION),
+                &[],
+                &harness,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                prepared.lock().unwrap().take().unwrap(),
+                PreparedPrompt {
+                    prompt: format!("{DEFERRED_INSTRUCTION}\n\ndo the task"),
+                    system_prompt: Some("system identity".into()),
+                    resumption_prompt: Some("resume state".into()),
+                    context: Some("retrieved memory".into()),
+                },
+                "{transport:?}"
+            );
+        });
+        resolution.assert();
+    }
+}
+
+#[test]
+fn external_harness_preparation_routes_local_and_promptless_first_turns() {
+    for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+        App::test((), |mut app| async move {
+            initialize_workspace_test_app(&mut app);
+            let root = TempDir::new().unwrap();
+            let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+            options.working_dir = root.path().to_path_buf();
+            options.task_id = Some(TASK_ID.parse().unwrap());
+            let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let prepared = Arc::new(Mutex::new(None));
+            let harness = RecordingHarness {
+                transport,
+                prepared: prepared.clone(),
+            };
+            AgentDriver::prepare_harness(
+                &AgentRunPrompt::Local("do the task".into()),
+                Some(DEFERRED_INSTRUCTION),
+                &[],
+                &harness,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                prepared.lock().unwrap().take().unwrap(),
+                PreparedPrompt {
+                    prompt: format!("{DEFERRED_INSTRUCTION}\n\ndo the task"),
+                    system_prompt: None,
+                    resumption_prompt: None,
+                    context: None,
+                },
+                "{transport:?}"
+            );
+        });
+
+        App::test((), |mut app| async move {
+            initialize_workspace_test_app(&mut app);
+            app.add_singleton_model(PendingCliHarnessPromptQueue::new);
+            let root = TempDir::new().unwrap();
+            let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+            options.working_dir = root.path().to_path_buf();
+            options.task_id = Some(TASK_ID.parse().unwrap());
+            let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+            let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+            let prepared = Arc::new(Mutex::new(None));
+            let harness = RecordingHarness {
+                transport,
+                prepared: prepared.clone(),
+            };
+            AgentDriver::prepare_harness(
+                &AgentRunPrompt::Local(String::new()),
+                Some(DEFERRED_INSTRUCTION),
+                &[],
+                &harness,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert_eq!(prepared.lock().unwrap().take().unwrap().prompt, "");
+            match transport {
+                HarnessTransport::Pty => {
+                    let queue = PendingCliHarnessPromptQueue::handle(&app);
+                    queue.update(&mut app, |queue, _| {
+                        let task_id = TASK_ID.parse().unwrap();
+                        assert_eq!(queue.prompt_for_delivery(task_id, String::new()), "");
+                        assert_eq!(
+                            queue.prompt_for_delivery(task_id, "inspect".into()),
+                            format!("{DEFERRED_INSTRUCTION}\n\ninspect")
+                        );
+                        assert_eq!(
+                            queue.prompt_for_delivery(task_id, "follow-up".into()),
+                            "follow-up"
+                        );
+                    });
+                }
+                HarnessTransport::Acp => {
+                    let terminal_driver =
+                        driver.read(&app, |driver, _| driver.terminal_driver.clone());
+                    let terminal =
+                        terminal_driver.read(&app, |driver, _| driver.terminal_view().clone());
+                    let (sink, prompts) = async_channel::unbounded();
+                    terminal.update(&mut app, |terminal, ctx| {
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.bind_native_prompt_conversation(None, ctx);
+                            controller.set_external_harness_prompt_sink(sink);
+                            for prompt in ["", "inspect", "follow-up"] {
+                                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                                    prompt.into(),
+                                    None,
+                                    vec![],
+                                    session_sharing_protocol::common::ParticipantId::new(),
+                                    None,
+                                    ctx,
+                                );
+                            }
+                        });
+                    });
+                    assert_eq!(prompts.try_recv().unwrap().text, "");
+                    assert_eq!(
+                        prompts.try_recv().unwrap().text,
+                        format!("{DEFERRED_INSTRUCTION}\n\ninspect")
+                    );
+                    assert_eq!(prompts.try_recv().unwrap().text, "follow-up");
+                }
+            }
+        });
+    }
+}
 #[test]
 fn cli_activity_refreshes_metadata_without_saving_until_turn_completion() {
     App::test((), |mut app| async move {

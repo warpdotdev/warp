@@ -39,7 +39,7 @@ use super::{
     SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
     debug_turn_task_state, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    prepend_deferred_repos_instruction, setup_failure_status_update, terminal_status_log_outcome,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -2603,18 +2603,6 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
             }
         }
     }
-}
-
-#[test]
-fn deferred_repos_external_query_inline_prefixes_prompt_once() {
-    assert_eq!(
-        prepend_deferred_repos_instruction("do the task", Some("clone acme/billing first")),
-        "clone acme/billing first\n\ndo the task"
-    );
-    assert_eq!(
-        prepend_deferred_repos_instruction("", Some("clone acme/billing first")),
-        ""
-    );
 }
 
 #[test]
