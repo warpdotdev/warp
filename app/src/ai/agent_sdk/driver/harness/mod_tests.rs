@@ -17,6 +17,7 @@ use super::{
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
 use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
@@ -100,6 +101,32 @@ fn acp_transport_does_not_affect_the_oz_harness() {
         harness_kind(Harness::Oz, HarnessTransport::Acp),
         Ok(HarnessKind::Oz)
     ));
+}
+
+#[test]
+fn initial_file_content_is_only_enabled_for_acp() {
+    let mut acp = harness_kind(Harness::Claude, HarnessTransport::Acp).unwrap();
+    acp.set_initial_attachments(vec![DownloadedAttachment {
+        file_id: "attachment-id".to_owned(),
+        file_name: "image.png".to_owned(),
+        file_path: std::env::temp_dir()
+            .join("image.png")
+            .to_string_lossy()
+            .into_owned(),
+    }]);
+    let HarnessKind::ThirdParty(acp) = &mut acp else {
+        panic!("expected an ACP harness");
+    };
+    assert_eq!(
+        acp.initial_attachments_mut().unwrap()[0].file_id,
+        "attachment-id"
+    );
+
+    let mut pty = harness_kind(Harness::Claude, HarnessTransport::Pty).unwrap();
+    let HarnessKind::ThirdParty(pty) = &mut pty else {
+        panic!("expected a terminal harness");
+    };
+    assert!(pty.initial_attachments_mut().is_none());
 }
 
 #[test]

@@ -1744,7 +1744,10 @@ impl AgentDriverRunner {
         };
         let (regular_result, handoff_result) = futures::join!(regular, handoff);
         let mut attachments_dir = match regular_result {
-            Ok(dir) => dir,
+            Ok(downloads) => {
+                task.harness.set_initial_attachments(downloads.files);
+                downloads.directory
+            }
             Err(error) => {
                 log::warn!("Failed to fetch and download attachments: {error:#}");
                 None
@@ -1854,14 +1857,14 @@ impl AgentDriverRunner {
             handoff_snapshot,
         );
 
-        // Extract attachments_dir from successful result, log errors
-        let mut attachments_dir = match attachments_result {
-            Ok(dir) => dir,
+        let downloads = match attachments_result {
+            Ok(downloads) => downloads,
             Err(e) => {
                 log::warn!("Failed to fetch and download attachments: {e:#}");
-                None
+                driver::attachments::TaskAttachmentDownloads::default()
             }
         };
+        let mut attachments_dir = downloads.directory;
 
         match handoff_snapshot_result {
             Ok(Some(dir)) => {
@@ -1958,6 +1961,7 @@ impl AgentDriverRunner {
                 driver_options.harness_transport,
             )?;
         }
+        task.harness.set_initial_attachments(downloads.files);
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;

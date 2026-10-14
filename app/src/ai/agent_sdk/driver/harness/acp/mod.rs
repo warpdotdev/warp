@@ -89,7 +89,7 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
-use crate::ai::attachment_utils::attachments_download_dir;
+use crate::ai::attachment_utils::{DownloadedAttachment, attachments_download_dir};
 use crate::ai::blocklist::{
     BlocklistAIController, BlocklistAIHistoryModel, ExternalHarnessPrompt, ExternalHarnessTurn,
     ResponseStreamId,
@@ -112,11 +112,44 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) struct AcpHarness {
     harness: Harness,
     launch: AcpLaunchSpec,
+    initial_attachments: Vec<DownloadedAttachment>,
 }
 
 impl AcpHarness {
     pub(crate) fn new(harness: Harness, launch: AcpLaunchSpec) -> Self {
-        Self { harness, launch }
+        Self {
+            harness,
+            launch,
+            initial_attachments: Vec::new(),
+        }
+    }
+
+    fn initial_prompt(
+        &self,
+        prompt: &str,
+        system_prompt: Option<&str>,
+        resumption_prompt: Option<&str>,
+        context: Option<&str>,
+    ) -> Vec<ContentBlock> {
+        // ACP has no system-prompt channel of its own, so every server-composed block that the
+        // harness bootstrap did not already place is folded into the user turn ahead of the
+        // prompt itself.
+        let system_prompt_in_turn = match self.harness {
+            Harness::Claude | Harness::Oz | Harness::OpenCode | Harness::Unknown => system_prompt,
+            Harness::Codex | Harness::Gemini | Harness::Pi => None,
+        };
+        let text = [
+            resumption_prompt,
+            context,
+            system_prompt_in_turn,
+            Some(prompt),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        attachments::prompt_content(text, Vec::new(), &self.initial_attachments)
     }
 
     /// The terminal-based harness with the same identity, whose per-harness knowledge (install
@@ -245,6 +278,10 @@ impl ThirdPartyHarness for AcpHarness {
         false
     }
 
+    fn initial_attachments_mut(&mut self) -> Option<&mut Vec<DownloadedAttachment>> {
+        Some(&mut self.initial_attachments)
+    }
+
     fn build_runner(
         &self,
         prompt: &str,
@@ -280,24 +317,7 @@ impl ThirdPartyHarness for AcpHarness {
             error,
         })?;
 
-        // ACP has no system-prompt channel of its own, so every server-composed block that the
-        // harness bootstrap did not already place is folded into the user turn ahead of the
-        // prompt itself.
-        let system_prompt_in_turn = match self.harness {
-            Harness::Claude | Harness::Oz | Harness::OpenCode | Harness::Unknown => system_prompt,
-            Harness::Codex | Harness::Gemini | Harness::Pi => None,
-        };
-        let prompt_text = [
-            resumption_prompt,
-            context,
-            system_prompt_in_turn,
-            Some(prompt),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        let initial_prompt = self.initial_prompt(prompt, system_prompt, resumption_prompt, context);
         let attachments = AttachmentResolver::new(
             server_api.clone(),
             server_api.owned_http_client(),
@@ -328,7 +348,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness: self.harness,
             launch: self.launch.clone(),
             user_prompt: prompt.to_owned(),
-            prompt_text,
+            initial_prompt,
             harness_working_dir: harness_working_dir.to_path_buf(),
             model_config: third_party_harness_model_config.cloned(),
             task_id,
@@ -385,8 +405,7 @@ pub(crate) struct AcpHarnessRunner {
     launch: AcpLaunchSpec,
     /// The prompt as the user wrote it, echoed into the conversation.
     user_prompt: String,
-    /// The full text sent to the agent, including server-composed context.
-    prompt_text: String,
+    initial_prompt: Vec<ContentBlock>,
     harness_working_dir: PathBuf,
     model_config: Option<HarnessModelConfig>,
     task_id: Option<AmbientAgentTaskId>,
@@ -809,7 +828,7 @@ impl HarnessRunner for AcpHarnessRunner {
             turn: Mutex::new(turn),
             session_id,
             suppressed_startup_message: Mutex::new(suppressed_startup_message),
-            prompt_text: self.prompt_text.clone(),
+            initial_prompt: self.initial_prompt.clone(),
             attachments: self.attachments.clone(),
             conversation_id: local_conversation_id,
             boundary_snapshot: self.boundary_snapshot.clone(),
@@ -925,7 +944,7 @@ struct TurnDriver {
     /// message chunk. That chunk is not part of any response, so it is dropped on arrival and
     /// this is cleared.
     suppressed_startup_message: Mutex<Option<String>>,
-    prompt_text: String,
+    initial_prompt: Vec<ContentBlock>,
     attachments: Arc<AttachmentResolver>,
     conversation_id: AIConversationId,
     boundary_snapshot: Arc<Mutex<Option<Vec<u8>>>>,
@@ -937,10 +956,7 @@ impl TurnDriver {
     /// an internal error), which is what the task status follows; the block's exit code remains
     /// the agent's own.
     async fn run(self, mapper: &mut AcpTurnMapper) {
-        let initial = vec![ContentBlock::Text {
-            text: self.prompt_text.clone(),
-        }];
-        let mut turn_result = self.run_turn(mapper, initial).await;
+        let mut turn_result = self.run_turn(mapper, self.initial_prompt.clone()).await;
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -1488,3 +1504,7 @@ fn mcp_server_for_acp(name: &str, server: &JSONMCPServer) -> McpServer {
         },
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
