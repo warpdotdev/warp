@@ -697,8 +697,8 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
                         cost_type: entry.cost_type,
                         usage_bucket: entry.usage_bucket,
                         usage_source: entry.usage_source,
-                        credits_used: entry.credits_used,
-                        cost_cents: entry.cost_cents,
+                        credits_used: entry.credits_used_exact,
+                        cost_cents: entry.cost_cents_exact,
                         attributed_team_uid: entry.attributed_team_uid,
                     })
                     .collect(),

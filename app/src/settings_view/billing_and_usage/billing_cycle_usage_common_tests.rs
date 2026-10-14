@@ -1,6 +1,6 @@
 use super::{
     BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
-    has_non_viewer_data, legend_cost_types, members_for_team,
+    format_cost_cents, format_credits, has_non_viewer_data, legend_cost_types, members_for_team,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -29,8 +29,8 @@ fn entry(
         cost_type,
         usage_bucket,
         usage_source,
-        credits_used,
-        cost_cents,
+        credits_used: f64::from(credits_used),
+        cost_cents: f64::from(cost_cents),
         attributed_team_uid: None,
     }
 }
@@ -273,13 +273,13 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
     );
 
     let bonus = &segments[1];
-    assert_eq!(bonus.credits, 17, "10 + 7 merged credits");
-    assert_eq!(bonus.cost_cents, 8, "5 + 3 merged cost cents");
+    assert_eq!(bonus.credits, 17.0, "10 + 7 merged credits");
+    assert_eq!(bonus.cost_cents, 8.0, "5 + 3 merged cost cents");
 
     // Totals are summed *after* the zero-credit segment is dropped, so the
     // stray 42 cents on the Payg/Ai entry must not appear here.
-    assert_eq!(total_credits, 20 + 17);
-    assert_eq!(total_cost_cents, 8);
+    assert_eq!(total_credits, 20.0 + 17.0);
+    assert_eq!(total_cost_cents, 8.0);
 }
 
 #[test]
@@ -472,4 +472,43 @@ fn members_for_team_keeps_every_member_when_team_is_unknown() {
     let members = vec![workspace_member("a"), workspace_member("b")];
 
     assert_eq!(members_for_team(&members, None), members);
+}
+
+#[test]
+fn aggregate_segments_preserves_fractional_segments_and_totals() {
+    let mut local = viewer_user_entry();
+    local.credits_used = 0.6;
+    local.cost_cents = 0.6;
+    let mut cloud = local.clone();
+    cloud.usage_source = AiCreditsUsageSource::Cloud;
+    let mut other_bucket = local.clone();
+    other_bucket.usage_bucket = AiCreditsUsageBucket::Compute;
+    other_bucket.credits_used = 0.25;
+    other_bucket.cost_cents = 0.25;
+
+    let (segments, credits, cents) = aggregate_segments([&local, &cloud, &other_bucket]);
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].credits, 1.2);
+    assert_eq!(segments[0].cost_cents, 1.2);
+    assert_eq!(segments[1].credits, 0.25);
+    assert_eq!(credits, 1.45);
+    assert_eq!(cents, 1.45);
+    assert_eq!(format_credits(credits), "1");
+    assert_eq!(format_cost_cents(cents), "$0.01");
+}
+
+#[test]
+fn format_credits_rounds_only_for_display() {
+    assert_eq!(format_credits(0.499999), "0");
+    assert_eq!(format_credits(0.5), "1");
+    assert_eq!(format_credits(999.5), "1,000");
+}
+
+#[test]
+fn format_cost_cents_rounds_before_splitting_dollars_and_cents() {
+    assert_eq!(format_cost_cents(0.499999), "$0.00");
+    assert_eq!(format_cost_cents(0.5), "$0.01");
+    assert_eq!(format_cost_cents(99.5), "$1.00");
+    assert_eq!(format_cost_cents(123456.5), "$1,234.57");
 }

@@ -4725,9 +4725,11 @@ input UsageBasedPricingSettingsInput {
 
 type UsageEntry {
   attributedTeamUid: String
-  costCents: Int!
+  costCents: Int! @deprecated(reason: "Use costCentsExact to preserve fractional usage")
+  costCentsExact: Float!
   costType: AICreditsUsageAndCostType!
-  creditsUsed: Int!
+  creditsUsed: Int! @deprecated(reason: "Use creditsUsedExact to preserve fractional usage")
+  creditsUsedExact: Float!
   subjectDisplayName: String
   subjectType: AICreditsUsageAndCostSubjectType!
   subjectUid: String
