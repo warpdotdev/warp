@@ -19,6 +19,13 @@ impl PendingResponseStreams {
             streams: HashMap::new(),
         }
     }
+    #[cfg(test)]
+    pub(super) fn stream_for_test(
+        &self,
+        stream_id: &ResponseStreamId,
+    ) -> &ModelHandle<ResponseStream> {
+        self.streams.get(stream_id).expect("stream should exist")
+    }
 
     pub fn has_active_stream_for_conversation(
         &self,

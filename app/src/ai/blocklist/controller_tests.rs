@@ -10,7 +10,9 @@ use chrono::Local;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warp_multi_agent_api::{AgentType, response_event};
+use warp_multi_agent_api::{
+    AgentType, ClientAction, Message, client_action, message, response_event,
+};
 use warpui::{App, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
@@ -18,7 +20,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, BaseUserQuery, CancellationReason,
-    ImageContext, PassiveSuggestionTrigger, UserQueryMode,
+    ImageContext, InvokeSkillUserQuery, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::local_agent_task_sync_model::map_conversation_status_for_test;
@@ -135,6 +137,260 @@ fn stream_client_actions_event() -> warp_multi_agent_api::ResponseEvent {
             response_event::ClientActions { actions: vec![] },
         )),
     }
+}
+
+fn sent_inputs(
+    controller: &super::BlocklistAIController,
+    conversation_id: AIConversationId,
+    app: &warpui::AppContext,
+) -> (ResponseStreamId, Vec<AIAgentInput>) {
+    let stream_id = controller
+        .in_flight_response_streams
+        .stream_ids_for_conversation(conversation_id, app)
+        .pop()
+        .expect("an outgoing request should have a stream");
+    let inputs = controller
+        .in_flight_response_streams
+        .stream_for_test(&stream_id)
+        .as_ref(app)
+        .params_for_test()
+        .input
+        .clone();
+    (stream_id, inputs)
+}
+
+#[test]
+fn deferred_repos_first_query_waits_for_an_ordinary_user_query_in_a_batch() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let (conversation_id, wake_stream) = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.stage_deferred_repos_instruction("clone acme/billing first".into());
+            let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+                &controller.team_context(ctx),
+            );
+            let request = RequestInput::for_task(
+                vec![AIAgentInput::AgentWake],
+                root_task_id,
+                &controller.active_session,
+                None,
+                id,
+                controller.terminal_surface_id,
+                &scope,
+                ctx,
+            );
+            controller
+                .send_request_input(request, None, RecoveryBudget::fresh(), false, ctx)
+                .unwrap();
+            let (stream_id, inputs) = sent_inputs(controller, id, ctx);
+            assert_eq!(inputs, vec![AIAgentInput::AgentWake]);
+            assert!(controller.pending_deferred_repos_instruction.is_some());
+            (id, stream_id)
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.cancel_request(&wake_stream, CancellationReason::ManuallyCancelled, ctx);
+            let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+                &controller.team_context(ctx),
+            );
+            let skill_input = AIAgentInput::InvokeSkill {
+                context: Arc::from([]),
+                skill: ai::skills::ParsedSkill {
+                    path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+                        "/skills/reviewer/SKILL.md".into(),
+                    ),
+                    name: "reviewer".into(),
+                    description: "Reviews changes".into(),
+                    content: "Review the diff".into(),
+                    line_range: None,
+                    provider: ai::skills::SkillProvider::Agents,
+                    scope: ai::skills::SkillScope::Project,
+                },
+                user_query: Some(InvokeSkillUserQuery {
+                    query: "review the diff".into(),
+                    referenced_attachments: HashMap::new(),
+                    base: None,
+                }),
+            };
+            let skill_request = RequestInput::for_task(
+                vec![skill_input.clone()],
+                root_task_id.clone(),
+                &controller.active_session,
+                None,
+                conversation_id,
+                controller.terminal_surface_id,
+                &scope,
+                ctx,
+            );
+            controller
+                .send_request_input(skill_request, None, RecoveryBudget::fresh(), false, ctx)
+                .unwrap();
+            let (skill_stream, skill_inputs) = sent_inputs(controller, conversation_id, ctx);
+            assert_eq!(skill_inputs, vec![skill_input]);
+            assert!(controller.pending_deferred_repos_instruction.is_some());
+            controller.cancel_request(&skill_stream, CancellationReason::ManuallyCancelled, ctx);
+            let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
+                query: "review the changes".into(),
+                intended_agent: AgentType::Cli.into(),
+                origin: Some(crate::ai::agent::base_user_query::warp_client_origin()),
+                ..Default::default()
+            });
+            let first = AIAgentInput::UserQuery {
+                query: "review the changes".into(),
+                context: Arc::from([]),
+                static_query_type: None,
+                referenced_attachments: HashMap::from([(
+                    "notes".into(),
+                    AIAgentAttachment::PlainText("review notes".into()),
+                )]),
+                user_query_mode: UserQueryMode::Plan,
+                running_command: None,
+                intended_agent: Some(AgentType::Cli),
+                base: Some(base.clone()),
+            };
+            let second = AIAgentInput::UserQuery {
+                query: "and summarize".into(),
+                context: Arc::from([]),
+                static_query_type: None,
+                referenced_attachments: HashMap::new(),
+                user_query_mode: UserQueryMode::Normal,
+                running_command: None,
+                intended_agent: None,
+                base: None,
+            };
+            let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+                &controller.team_context(ctx),
+            );
+            let request = RequestInput::for_task(
+                vec![AIAgentInput::AgentWake, first.clone(), second.clone()],
+                root_task_id,
+                &controller.active_session,
+                None,
+                conversation_id,
+                controller.terminal_surface_id,
+                &scope,
+                ctx,
+            );
+            controller
+                .send_request_input(request, None, RecoveryBudget::fresh(), false, ctx)
+                .unwrap();
+            let (_, inputs) = sent_inputs(controller, conversation_id, ctx);
+            assert_eq!(inputs[0], AIAgentInput::AgentWake);
+            assert!(matches!(&inputs[1], AIAgentInput::UserQuery {
+                query, user_query_mode: UserQueryMode::Plan,
+                intended_agent: Some(AgentType::Cli), base: Some(input_base),
+                referenced_attachments, ..
+            } if query == "clone acme/billing first\n\nreview the changes"
+                && input_base == &base
+                && referenced_attachments == &HashMap::from([(
+                    "notes".into(), AIAgentAttachment::PlainText("review notes".into())
+                )])));
+            assert_eq!(inputs[2], second);
+            let history_inputs = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .unwrap()
+                .root_task_exchanges()
+                .last()
+                .unwrap()
+                .input
+                .clone();
+            assert_eq!(history_inputs, vec![AIAgentInput::AgentWake, first, second]);
+        });
+    });
+}
+
+#[test]
+fn deferred_repos_guidance_survives_cancellation_and_is_consumed_by_server_echo() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.stage_deferred_repos_instruction("clone acme/billing first".into());
+            controller.send_user_query_in_conversation("first".into(), id, None, ctx);
+            let (first_stream, first_inputs) = sent_inputs(controller, id, ctx);
+            assert!(
+                matches!(&first_inputs[0], AIAgentInput::UserQuery { query, .. }
+                if query == "clone acme/billing first\n\nfirst")
+            );
+            controller.apply_response_event(
+                &first_stream,
+                id,
+                stream_client_actions_event(),
+                None,
+                ctx,
+            );
+            assert!(controller.pending_deferred_repos_instruction.is_some());
+
+            controller.cancel_request(&first_stream, CancellationReason::ManuallyCancelled, ctx);
+            controller.send_user_query_in_conversation("second".into(), id, None, ctx);
+            let (second_stream, second_inputs) = sent_inputs(controller, id, ctx);
+            assert!(
+                matches!(&second_inputs[0], AIAgentInput::UserQuery { query, .. }
+                if query == "clone acme/billing first\n\nsecond")
+            );
+            let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .get_root_task_id()
+                .to_string();
+            let query = Message {
+                id: Uuid::new_v4().to_string(),
+                task_id: task_id.clone(),
+                request_id: Uuid::new_v4().to_string(),
+                timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
+                message: Some(message::Message::UserQuery(message::UserQuery {
+                    query: "clone acme/billing first\n\nsecond".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            controller.apply_response_event(
+                &second_stream,
+                id,
+                warp_multi_agent_api::ResponseEvent {
+                    r#type: Some(response_event::Type::ClientActions(
+                        response_event::ClientActions {
+                            actions: vec![ClientAction {
+                                action: Some(client_action::Action::CreateTask(
+                                    client_action::CreateTask {
+                                        task: Some(warp_multi_agent_api::Task {
+                                            id: task_id,
+                                            messages: vec![query],
+                                            ..Default::default()
+                                        }),
+                                    },
+                                )),
+                            }],
+                        },
+                    )),
+                },
+                None,
+                ctx,
+            );
+            assert!(controller.pending_deferred_repos_instruction.is_none());
+            controller.cancel_request(&second_stream, CancellationReason::ManuallyCancelled, ctx);
+            controller.send_user_query_in_conversation("third".into(), id, None, ctx);
+            let (_, third_inputs) = sent_inputs(controller, id, ctx);
+            assert!(
+                matches!(&third_inputs[0], AIAgentInput::UserQuery { query, .. }
+                if query == "third")
+            );
+        });
+    });
 }
 
 fn assert_terminal_stream_task_update(

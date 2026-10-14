@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, WARP_SKILL_DIRS_ENV,
-    parse_bundled_skill, parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, WARP_SKILL_DIRS_ENV, parse_bundled_skill,
+    parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
@@ -875,28 +875,10 @@ pub enum AgentRunPrompt {
     },
 }
 
-/// Prepends runtime inventory instructions without replacing an attached skill.
-fn inject_deferred_repos_instruction(prompt: &mut AgentRunPrompt, instruction: String) {
-    match prompt {
-        AgentRunPrompt::Local(text) => *text = format!("{instruction}\n\n{text}"),
-        AgentRunPrompt::ServerSide { skill, .. } => {
-            *skill = Some(match skill.take() {
-                Some(mut existing) => {
-                    existing.content = format!("{instruction}\n\n{}", existing.content);
-                    existing
-                }
-                None => ParsedSkill {
-                    path: LocalOrRemotePath::Local(PathBuf::from("deferred-repositories")),
-                    name: "deferred-repositories".to_string(),
-                    description: "Instructions for dealing with repositories attached to this factory that are not cloned yet."
-                        .to_string(),
-                    content: instruction,
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
-            });
-        }
+fn prepend_deferred_repos_instruction(prompt: &str, instruction: Option<&str>) -> String {
+    match instruction.filter(|_| !prompt.trim().is_empty()) {
+        Some(instruction) => format!("{instruction}\n\n{prompt}"),
+        None => prompt.to_owned(),
     }
 }
 
@@ -2240,7 +2222,7 @@ impl AgentDriver {
     /// series of callbacks and state machine updates.
     #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
-        mut task: Task,
+        task: Task,
         foreground: ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
         safe_debug!(
@@ -2255,6 +2237,7 @@ impl AgentDriver {
             ai_client_for_refresh,
             use_factory_repositories,
             bedrock_config_for_refresh,
+            deferred_repos_instruction,
         ) = async {
             let (setup_events, environment_snapshot_reporter) = foreground
                 .spawn(|me, ctx| {
@@ -2382,19 +2365,19 @@ impl AgentDriver {
                 .await?;
             let mut workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
             let source_repos = workspace.source_repos.clone();
-            if has_deferred_repositories {
+            let deferred_repos_instruction = if has_deferred_repositories {
                 let executable = std::env::current_exe()
                     .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
-                if let Some(instruction) = environment::build_deferred_repos_instruction(
+                environment::build_deferred_repos_instruction(
                     &foreground.spawn(|me, _| me.working_dir.clone()).await?,
                     &source_repos,
                     &workspace.deferred_repos,
                     &executable,
                     session_shell_type.unwrap_or(ShellType::Bash),
-                )? {
-                    inject_deferred_repos_instruction(&mut task.prompt, instruction);
-                }
-            }
+                )?
+            } else {
+                None
+            };
             // The Factory definition checkout is run-scoped: the dispatch decides
             // whether this run gets one by attaching the clone variables,
             // independent of which environment the run executes in.
@@ -2569,6 +2552,7 @@ impl AgentDriver {
                 ai_client_for_refresh,
                 use_factory_repositories,
                 bedrock_config_for_refresh,
+                deferred_repos_instruction,
             ))
         }
         .instrument(setup_span)
@@ -2580,6 +2564,20 @@ impl AgentDriver {
         // they are dropped automatically when the harness result resolves.
         match task.harness {
             HarnessKind::Oz => {
+                if let Some(instruction) = deferred_repos_instruction.as_ref() {
+                    let instruction = instruction.clone();
+                    foreground
+                        .spawn(move |me, ctx| {
+                            me.terminal_driver.update(ctx, |driver, ctx| {
+                                driver.with_terminal_view(ctx, |terminal, ctx| {
+                                    terminal.ai_controller().update(ctx, |controller, _| {
+                                        controller.stage_deferred_repos_instruction(instruction);
+                                    });
+                                });
+                            });
+                        })
+                        .await?;
+                }
                 // Join global file-based MCP startup immediately before the first Oz turn so it
                 // can overlap preceding setup without omitting tools from the first request.
                 let initial_global_scan = foreground
@@ -2601,7 +2599,9 @@ impl AgentDriver {
                 .await?;
 
                 let status_rx = foreground
-                    .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
+                    .spawn(move |me, ctx| {
+                        me.execute_run(task.prompt, deferred_repos_instruction, ctx)
+                    })
                     .await?;
 
                 let conversation_status = with_credential_refreshes(
@@ -2645,6 +2645,7 @@ impl AgentDriver {
                         .await?;
                         let runner = Self::prepare_harness(
                             &task.prompt,
+                            deferred_repos_instruction.as_deref(),
                             &task.mcp_specs,
                             harness.as_ref(),
                             &foreground,
@@ -3242,6 +3243,7 @@ impl AgentDriver {
     /// return a handle to the harness runner.
     async fn prepare_harness(
         prompt: &AgentRunPrompt,
+        deferred_repos_instruction: Option<&str>,
         mcp_specs: &[MCPSpec],
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
@@ -3349,9 +3351,40 @@ impl AgentDriver {
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
 
+        let prompt_text =
+            prepend_deferred_repos_instruction(prompt_text.as_ref(), deferred_repos_instruction);
+        if prompt_text.trim().is_empty()
+            && let Some(instruction) = deferred_repos_instruction
+        {
+            let instruction = instruction.to_owned();
+            if harness.drives_cli_agent_session() {
+                if let Some(task_id) = task_id {
+                    foreground
+                        .spawn(move |_, ctx| {
+                            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _| {
+                                queue.stage_deferred_repos_instruction(task_id, instruction);
+                            });
+                        })
+                        .await?;
+                }
+            } else {
+                let terminal_driver = terminal_driver.clone();
+                foreground
+                    .spawn(move |_, ctx| {
+                        terminal_driver.update(ctx, |driver, ctx| {
+                            driver.with_terminal_view(ctx, |terminal, ctx| {
+                                terminal.ai_controller().update(ctx, |controller, _| {
+                                    controller.stage_deferred_repos_instruction(instruction);
+                                });
+                            });
+                        });
+                    })
+                    .await?;
+            }
+        }
         let runner: Arc<dyn HarnessRunner> = harness
             .build_runner(
-                prompt_text.as_ref(),
+                &prompt_text,
                 system_prompt.as_deref(),
                 resumption_prompt.as_deref(),
                 server_context.as_deref(),
@@ -3832,6 +3865,7 @@ impl AgentDriver {
     fn execute_run(
         &self,
         task_prompt: AgentRunPrompt,
+        deferred_repos_instruction: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
         // Create a oneshot channel to signal task completion. This is `run_exit`'s
@@ -4328,6 +4362,7 @@ impl AgentDriver {
                                 |context| AIAgentInput::StartFromAmbientRunPrompt {
                                     ambient_run_id: ambient_run_id.clone(),
                                     context,
+                                    runtime_base_prompt: deferred_repos_instruction.clone(),
                                     runtime_skill: skill.clone(),
                                     attachments_dir: attachments_dir.clone(),
                                 },
@@ -4704,8 +4739,11 @@ impl AgentDriver {
                  participant_id={:?})",
                 prompt.participant_id
             );
+            let text = PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _| {
+                queue.prompt_for_delivery(task_id, prompt.prompt)
+            });
             self.terminal_driver.update(ctx, |terminal_driver, ctx| {
-                terminal_driver.send_text_to_cli(prompt.prompt, ctx);
+                terminal_driver.send_text_to_cli(text, ctx);
             });
         }
         delivered_count

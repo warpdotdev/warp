@@ -408,6 +408,10 @@ impl ResponseStream {
     pub fn id(&self) -> &ResponseStreamId {
         &self.id
     }
+    #[cfg(test)]
+    pub(super) fn params_for_test(&self) -> &api::RequestParams {
+        &self.params
+    }
 
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {

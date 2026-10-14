@@ -29,7 +29,7 @@ use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
-use warp_multi_agent_api::{AgentType, Task, ToolType, message};
+use warp_multi_agent_api::{AgentType, Task, ToolType, client_action, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
@@ -101,6 +101,12 @@ pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
+}
+
+struct PendingDeferredReposInstruction {
+    text: String,
+    conversation_id: Option<AIConversationId>,
+    stream_id: Option<ResponseStreamId>,
 }
 
 impl SessionContext {
@@ -356,6 +362,7 @@ pub struct BlocklistAIController {
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any
     /// sessions within it. In the future, one task may span several sessions with background processes.
     ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    pending_deferred_repos_instruction: Option<PendingDeferredReposInstruction>,
 
     /// Per-session directory for downloading file attachments.
     /// Set by the agent driver based on the workspace directory (e.g. `{working_dir}/.warp/attachments`).
@@ -722,12 +729,23 @@ impl BlocklistAIController {
             native_prompt_conversation_id: None,
             external_harness_prompt_sink: None,
             ambient_agent_task_id: None,
+            pending_deferred_repos_instruction: None,
             attachments_download_dir: None,
             pending_auto_resume_handles: HashMap::new(),
             pending_local_claude_wakes: HashMap::new(),
             pending_passive_follow_ups: HashSet::new(),
             commands_interrupted_for_injection: HashMap::new(),
             pending_passive_suggestion_results: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn stage_deferred_repos_instruction(&mut self, instruction: String) {
+        if !instruction.is_empty() {
+            self.pending_deferred_repos_instruction = Some(PendingDeferredReposInstruction {
+                text: instruction,
+                conversation_id: self.native_prompt_conversation_id,
+                stream_id: None,
+            });
         }
     }
 
@@ -3088,6 +3106,42 @@ impl BlocklistAIController {
         );
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
+        let mut staged_deferred_repos = false;
+        if let Some(pending) = self.pending_deferred_repos_instruction.as_ref()
+            && pending
+                .conversation_id
+                .is_none_or(|id| id == conversation_id)
+        {
+            for input in &mut request_params.input {
+                match input {
+                    AIAgentInput::StartFromAmbientRunPrompt {
+                        runtime_base_prompt,
+                        ..
+                    } => {
+                        match runtime_base_prompt {
+                            Some(prompt) if prompt != &pending.text => {
+                                *prompt = format!("{}\n\n{prompt}", pending.text);
+                            }
+                            Some(_) => {}
+                            None => *runtime_base_prompt = Some(pending.text.clone()),
+                        }
+                        staged_deferred_repos = true;
+                        break;
+                    }
+                    AIAgentInput::UserQuery {
+                        query,
+                        static_query_type: None,
+                        running_command: None,
+                        ..
+                    } => {
+                        *query = format!("{}\n\n{query}", pending.text);
+                        staged_deferred_repos = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
@@ -3110,6 +3164,12 @@ impl BlocklistAIController {
             )
         });
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
+        if staged_deferred_repos
+            && let Some(pending) = self.pending_deferred_repos_instruction.as_mut()
+        {
+            pending.conversation_id = Some(conversation_id);
+            pending.stream_id = Some(response_stream_id.clone());
+        }
         let response_stream_clone = response_stream.clone();
         let input_contains_user_query = request_input
             .all_inputs()
@@ -3559,6 +3619,33 @@ impl BlocklistAIController {
             }
             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                 let client_actions = actions.actions;
+                let confirms_deferred_repos = self
+                    .pending_deferred_repos_instruction
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.conversation_id == Some(conversation_id)
+                            && pending.stream_id.as_ref() == Some(stream_id)
+                            && client_actions.iter().any(|action| {
+                                let messages = match action.action.as_ref() {
+                                    Some(client_action::Action::AddMessagesToTask(add)) => {
+                                        Some(add.messages.as_slice())
+                                    }
+                                    Some(client_action::Action::CreateTask(create)) => {
+                                        create.task.as_ref().map(|task| task.messages.as_slice())
+                                    }
+                                    _ => None,
+                                };
+                                messages.is_some_and(|messages| {
+                                    messages.iter().any(|message| {
+                                        matches!(
+                                            message.message.as_ref(),
+                                            Some(message::Message::UserQuery(query))
+                                                if query.query.contains(&pending.text)
+                                        )
+                                    })
+                                })
+                            })
+                    });
                 let skill_path_origin =
                     SessionContext::from_session(self.active_session.as_ref(ctx), ctx)
                         .skill_path_origin();
@@ -3577,6 +3664,8 @@ impl BlocklistAIController {
                         anyhow::Error::new(e)
                             .context("Failed to apply client actions to conversation")
                     );
+                } else if confirms_deferred_repos {
+                    self.pending_deferred_repos_instruction = None;
                 }
                 self.record_streamed_tool_call_results_as_finished(stream_id, conversation_id, ctx);
             }

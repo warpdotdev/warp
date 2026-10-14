@@ -39,7 +39,7 @@ use super::{
     SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
     debug_turn_task_state, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    inject_deferred_repos_instruction, setup_failure_status_update, terminal_status_log_outcome,
+    prepend_deferred_repos_instruction, setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -1765,7 +1765,7 @@ fn driver_wired_for_terminal(
     // Installs the real history-model subscription under test (including
     // `drop_pending_events_for_exiting_conversation`), without submitting a query.
     let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
-        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        driver.execute_run(AgentRunPrompt::Local(String::new()), None, ctx)
     });
     driver_handle
 }
@@ -1839,7 +1839,7 @@ fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
             driver
         });
         let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
-            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+            driver.execute_run(AgentRunPrompt::Local(String::new()), None, ctx)
         });
         let query_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
             queue.append(
@@ -2414,7 +2414,7 @@ fn driver_wired_for_resumed_conversation(
         driver
     });
     let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
-        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        driver.execute_run(AgentRunPrompt::Local(String::new()), None, ctx)
     });
     driver_handle
 }
@@ -2583,6 +2583,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                     };
                     let result = AgentDriver::prepare_harness(
                         &AgentRunPrompt::Local("do the task".into()),
+                        None,
                         &[],
                         harness.as_ref(),
                         &foreground,
@@ -2605,58 +2606,14 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
 }
 
 #[test]
-fn inject_deferred_repos_instruction_prepends_to_local_prompt() {
-    let mut prompt = AgentRunPrompt::Local("do the task".to_string());
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::Local(text) = prompt else {
-        panic!("expected a Local prompt");
-    };
-    assert_eq!(text, "clone acme/billing first\n\ndo the task");
-}
-
-#[test]
-fn inject_deferred_repos_instruction_synthesizes_hidden_skill_when_none_requested() {
-    let mut prompt = AgentRunPrompt::ServerSide {
-        skill: None,
-        attachments_dir: None,
-    };
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
-        panic!("expected a ServerSide prompt");
-    };
-    let skill = skill.expect("a synthetic skill should carry the hidden instruction");
-    assert_eq!(skill.content, "clone acme/billing first");
-}
-
-#[test]
-fn inject_deferred_repos_instruction_prepends_to_requested_skill_content() {
-    let requested_skill = ai::skills::ParsedSkill {
-        path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(std::path::PathBuf::from(
-            "/skills/reviewer/SKILL.md",
-        )),
-        name: "reviewer".to_string(),
-        description: "Reviews billing changes.".to_string(),
-        content: "Review the diff carefully.".to_string(),
-        line_range: None,
-        provider: ai::skills::SkillProvider::Agents,
-        scope: ai::skills::SkillScope::Project,
-    };
-    let mut prompt = AgentRunPrompt::ServerSide {
-        skill: Some(requested_skill),
-        attachments_dir: None,
-    };
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
-        panic!("expected a ServerSide prompt");
-    };
-    let skill = skill.expect("the requested skill must be preserved");
-    assert_eq!(skill.name, "reviewer");
+fn deferred_repos_external_query_inline_prefixes_prompt_once() {
     assert_eq!(
-        skill.content,
-        "clone acme/billing first\n\nReview the diff carefully."
+        prepend_deferred_repos_instruction("do the task", Some("clone acme/billing first")),
+        "clone acme/billing first\n\ndo the task"
+    );
+    assert_eq!(
+        prepend_deferred_repos_instruction("", Some("clone acme/billing first")),
+        ""
     );
 }
 

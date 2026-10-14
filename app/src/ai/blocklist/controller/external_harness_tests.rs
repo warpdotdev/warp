@@ -32,6 +32,39 @@ fn done() -> ResponseEvent {
     }
 }
 
+#[test]
+fn deferred_repos_guidance_waits_for_the_first_external_harness_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (sink, prompts) = async_channel::unbounded();
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.bind_native_prompt_conversation(None, ctx);
+                controller.stage_deferred_repos_instruction("clone acme/billing first".into());
+                controller.set_external_harness_prompt_sink(sink);
+                for prompt in ["", "inspect", "follow-up"] {
+                    controller.execute_warp_agent_prompt_from_shared_session_injection(
+                        prompt.into(),
+                        None,
+                        vec![],
+                        ParticipantId::new(),
+                        None,
+                        ctx,
+                    );
+                }
+                assert_eq!(prompts.try_recv().unwrap().text, "");
+                assert_eq!(
+                    prompts.try_recv().unwrap().text,
+                    "clone acme/billing first\n\ninspect"
+                );
+                assert_eq!(prompts.try_recv().unwrap().text, "follow-up");
+                assert!(controller.pending_deferred_repos_instruction.is_none());
+            });
+        });
+    });
+}
+
 fn client_actions(actions: Vec<ClientAction>) -> ResponseEvent {
     ResponseEvent {
         r#type: Some(response_event::Type::ClientActions(

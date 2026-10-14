@@ -3068,6 +3068,8 @@ pub enum AIAgentInput {
     StartFromAmbientRunPrompt {
         ambient_run_id: String,
         context: Arc<[AIAgentContext]>,
+        /// Query context prepended to the stored run prompt.
+        runtime_base_prompt: Option<String>,
         /// Optional skill to use as base context (content hidden from user in UI).
         runtime_skill: Option<ai::skills::ParsedSkill>,
         /// Optional directory path where the client downloaded task attachments.

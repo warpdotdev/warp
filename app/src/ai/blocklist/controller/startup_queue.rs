@@ -64,6 +64,7 @@ impl BlocklistAIController {
     /// any future local queueing against it, since nothing else would ever release that barrier.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
+        self.pending_deferred_repos_instruction = None;
         let Some(id) = self.native_prompt_conversation_id.take() else {
             return;
         };
@@ -124,8 +125,18 @@ impl BlocklistAIController {
                 self.terminal_surface_id,
                 attachments.len(),
             );
+            let text = self
+                .pending_deferred_repos_instruction
+                .as_ref()
+                .filter(|pending| {
+                    pending.conversation_id == Some(bound_id) && !prompt.trim().is_empty()
+                })
+                .map_or_else(
+                    || prompt.to_owned(),
+                    |pending| format!("{}\n\n{prompt}", pending.text),
+                );
             let relayed = ExternalHarnessPrompt {
-                text: prompt.to_owned(),
+                text,
                 attachments: attachments.to_vec(),
             };
             if sink.try_send(relayed).is_err() {
@@ -133,6 +144,13 @@ impl BlocklistAIController {
                     "Dropped a shared-session prompt because the external harness is no longer accepting prompts",
                     extra: { "conversation_id" => %bound_id, "terminal_id" => ?self.terminal_surface_id }
                 );
+            } else if !prompt.trim().is_empty()
+                && self
+                    .pending_deferred_repos_instruction
+                    .as_ref()
+                    .is_some_and(|pending| pending.conversation_id == Some(bound_id))
+            {
+                self.pending_deferred_repos_instruction = None;
             }
             return true;
         }

@@ -29,11 +29,20 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                 redact_secrets(query);
                 redact_context(Arc::make_mut(context));
             }
+            AIAgentInput::StartFromAmbientRunPrompt {
+                context,
+                runtime_base_prompt,
+                ..
+            } => {
+                if let Some(prompt) = runtime_base_prompt {
+                    redact_secrets(prompt);
+                }
+                redact_context(Arc::make_mut(context));
+            }
             AIAgentInput::CreateNewProject { context, .. }
             | AIAgentInput::CloneRepository { context, .. }
             | AIAgentInput::ResumeConversation { context }
-            | AIAgentInput::InitProjectRules { context, .. }
-            | AIAgentInput::StartFromAmbientRunPrompt { context, .. } => {
+            | AIAgentInput::InitProjectRules { context, .. } => {
                 redact_context(Arc::make_mut(context));
             }
             AIAgentInput::SummarizeConversation { prompt, context } => {

@@ -1,10 +1,56 @@
+use std::sync::Arc;
+
 use warp_core::channel::{Channel, ChannelState};
+use warp_multi_agent_api::request::input::Type;
 
 use super::{RequestParams, ServerConversationToken};
-use crate::ai::agent::ServerOutputId;
+use crate::ai::agent::{AIAgentInput, ServerOutputId};
 use crate::server::ids::ServerId;
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
+#[test]
+fn deferred_repos_query_inline_serializes_separate_runtime_prompt_and_authored_skill() {
+    let skill = ai::skills::ParsedSkill {
+        path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+            "/skills/reviewer/SKILL.md".into(),
+        ),
+        name: "deferred-repositories".to_string(),
+        description: "Reviews billing changes.".to_string(),
+        content: "Review the diff carefully.".to_string(),
+        line_range: None,
+        provider: ai::skills::SkillProvider::Agents,
+        scope: ai::skills::SkillScope::Project,
+    };
+    let input = AIAgentInput::StartFromAmbientRunPrompt {
+        ambient_run_id: "run-123".into(),
+        context: Arc::from([]),
+        runtime_base_prompt: Some("clone acme/billing first".into()),
+        runtime_skill: Some(skill),
+        attachments_dir: Some("/workspace/.warp/attachments".into()),
+    };
+
+    let converted = super::convert_to::convert_input(vec![input]).unwrap();
+    let Some(Type::StartFromAmbientRunPrompt(start)) = converted.r#type else {
+        panic!("expected ambient-run startup input");
+    };
+    assert_eq!(start.runtime_base_prompt, "clone acme/billing first");
+    assert_eq!(start.ambient_run_id, "run-123");
+    assert_eq!(start.attachments_dir, "/workspace/.warp/attachments");
+    let authored = start.runtime_skill.expect("authored skill must survive");
+    let descriptor = authored
+        .descriptor
+        .expect("authored skill descriptor must survive");
+    assert_eq!(descriptor.name, "deferred-repositories");
+    assert_eq!(descriptor.description, "Reviews billing changes.");
+    assert_eq!(
+        authored
+            .content
+            .expect("authored skill content must survive")
+            .content,
+        "Review the diff carefully."
+    );
+}
 
 #[test]
 fn debugging_payload_is_link_on_dogfood_channels() {
