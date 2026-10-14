@@ -19,6 +19,8 @@ pub(super) enum CliTelemetryEvent {
     },
     /// Executing `warp agent run-ambient`
     AgentRunAmbient,
+    /// Executing `warp agent run-cloud-standby`
+    AgentRunCloudStandby,
     /// Executing `warp agent profile list`
     AgentProfileList,
     /// Executing `warp agent list`
@@ -195,6 +197,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 "harness": harness,
             })),
             CliTelemetryEvent::AgentRunAmbient => None,
+            CliTelemetryEvent::AgentRunCloudStandby => None,
             CliTelemetryEvent::AgentProfileList => None,
             CliTelemetryEvent::AgentList => None,
             CliTelemetryEvent::AgentGet => None,
@@ -296,6 +299,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
         match self {
             CliTelemetryEventDiscriminants::AgentRun => "CLI.Execute.Agent.Run",
             CliTelemetryEventDiscriminants::AgentRunAmbient => "CLI.Execute.Agent.RunAmbient",
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "CLI.Execute.Agent.RunCloudStandby"
+            }
             CliTelemetryEventDiscriminants::AgentProfileList => "CLI.Execute.Agent.Profile.List",
             CliTelemetryEventDiscriminants::AgentList => "CLI.Execute.Agent.List",
             CliTelemetryEventDiscriminants::AgentGet => "CLI.Execute.Agent.Get",
@@ -408,6 +414,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::AgentRun => "Ran an agent from the Warp CLI",
             CliTelemetryEventDiscriminants::AgentRunAmbient => {
                 "Ran an ambient agent from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "Prepared a pre-warmed cloud sandbox from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::AgentProfileList => {
                 "Listed agent profiles from the Warp CLI"

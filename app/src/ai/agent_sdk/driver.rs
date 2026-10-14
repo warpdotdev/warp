@@ -248,8 +248,7 @@ impl IdleWait for RealIdleWait {
     }
 }
 
-/// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
-/// an idle timeout. Used for both Oz runs and third-party harnesses.
+/// Sends one exit signal for run idle timeouts or standby expiry.
 ///
 /// We use a generation-based approach to cancel timers instead of storing timer handles:
 ///
@@ -261,7 +260,7 @@ impl IdleWait for RealIdleWait {
 ///
 /// This approach avoids the complexity of storing and cancelling timer handles,
 /// while allowing multiple events to safely race without double-completion.
-struct IdleTimeoutSender<T: Send + 'static> {
+pub(crate) struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
     generation: Arc<AtomicUsize>,
     /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
@@ -292,7 +291,8 @@ impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
 }
 
 impl<T: Send + 'static> IdleTimeoutSender<T> {
-    fn new(tx: oneshot::Sender<T>) -> Self {
+    /// Creates a shared, single-use exit signal without starting a timer.
+    pub(crate) fn new(tx: oneshot::Sender<T>) -> Self {
         Self {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
@@ -310,7 +310,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     }
 
     /// End the run by sending `value` immediately.
-    fn end_run_now(&self, value: T) {
+    pub(crate) fn end_run_now(&self, value: T) {
         if let Ok(mut guard) = self.tx_cell.lock()
             && let Some(sender) = guard.take()
         {
@@ -320,7 +320,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     }
 
     /// End the run after `timeout` by sending `value`, unless cancelled before then.
-    fn end_run_after(&self, timeout: Duration, value: T) {
+    pub(crate) fn end_run_after(&self, timeout: Duration, value: T) {
         // Increment the generation counter to invalidate any existing timers,
         // then capture the new generation for our timer to check against.
         let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -355,7 +355,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     ///
     /// Also drops the recorded [`Self::arm_refreshable`] outcome, so a refresher that outlives the
     /// cancellation cannot reschedule the exit it was cancelling.
-    fn cancel_idle_timeout(&self) {
+    pub(crate) fn cancel_idle_timeout(&self) {
         if let Ok(mut pending) = self.pending.lock() {
             *pending = None;
         }
@@ -639,12 +639,15 @@ pub enum ResumeOptions {
     ThirdParty(Box<ResumePayload>),
 }
 
-/// Configures the terminal and resources for a normal run before its prompt starts.
+/// Configures the terminal and resources for a normal run or task-free standby preparation.
+#[derive(Default)]
 pub struct AgentDriverOptions {
     /// Initial working directory for the agent's terminal session.
     pub working_dir: PathBuf,
     /// Secrets to inject into the agent's terminal session.
     pub secrets: HashMap<String, ManagedSecretValue>,
+    /// Supplies terminal variables that override secrets but precede provider and run variables.
+    pub environment_variables: HashMap<String, String>,
     /// ID of the task being executed.
     pub task_id: Option<AmbientAgentTaskId>,
     pub use_factory_repositories: bool,
@@ -697,7 +700,7 @@ pub struct AgentDriverOptions {
     pub mcp_startup_timeout: Option<Duration>,
 }
 
-/// Owns a headless terminal for agent runs.
+/// Owns a headless terminal for agent runs or standby resource preparation.
 pub struct AgentDriver {
     terminal_driver: ModelHandle<terminal::TerminalDriver>,
     /// Root directory for workspace-wide environment and snapshot operations.
@@ -1126,6 +1129,7 @@ impl AgentDriver {
             idle_on_complete,
             idle_on_fail,
             secrets,
+            environment_variables,
             resume,
             cloud_providers,
             workspace,
@@ -1185,6 +1189,11 @@ impl AgentDriver {
                 });
 
         let mut env_vars = build_secret_env_vars(&secrets)?;
+        env_vars.extend(
+            environment_variables
+                .into_iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        );
 
         // Inject cloud provider env vars.
         cloud_provider::collect_env_vars(&cloud_providers, &mut env_vars)?;
@@ -2104,6 +2113,7 @@ impl AgentDriver {
                         mcp_startup::start_task_and_profile_mcp_servers(
                             &task.mcp_specs,
                             managed_mcp_client,
+                            mcp_startup::McpStartupMode::Run,
                             task_id,
                             &foreground,
                         ),
@@ -4810,3 +4820,7 @@ fn write_session_joined(join_url: &str, output_format: OutputFormat) {
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "local_fs", not(feature = "skip_login")))]
+#[path = "driver/standby_bootstrap_tests.rs"]
+mod standby_bootstrap_tests;

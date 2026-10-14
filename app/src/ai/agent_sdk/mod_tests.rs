@@ -625,6 +625,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         idle_on_complete: None,
         idle_on_fail: None,
         secrets: Default::default(),
+        environment_variables: Default::default(),
         resume: None,
         cloud_providers: vec![],
         workspace: WorkspaceConfiguration::default(),

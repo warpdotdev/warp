@@ -1632,9 +1632,7 @@ impl ServerApiProvider {
     }
 
     /// Returns the standby API client with the app's shared authentication state.
-    // The standby entrypoint that calls this is a follow-up change. `allow` rather than
-    // `expect` because whether this is reachable depends on the build's feature unification.
-    #[allow(dead_code)]
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_prewarmed_sandbox_client(
         &self,
     ) -> Arc<dyn prewarmed_sandbox::PrewarmedSandboxClient> {

@@ -14,6 +14,7 @@ use instant::Instant;
 use uuid::Uuid;
 use warp_cli::mcp::MCPSpec;
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
@@ -24,7 +25,10 @@ use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
+use super::{
+    AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
+    attach_builtin_mcp_servers,
+};
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
@@ -854,6 +858,71 @@ fn builtin_factory_mcp_for_oz_uses_stable_installation() {
         installation.templatable_mcp_server().name,
         FACTORY_MCP_SERVER_NAME
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_mcp_servers_are_deferred_only_for_standby() {
+    let _factory_flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    let _preview_flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        // The driver only hosts built-ins outside an interactive client, where
+        // `TemplatableMCPServerManager::sync_builtin_servers` owns them instead.
+        let sdk_mode = app.add_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, true, ctx));
+        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
+            *mode = sdk_mode.as_ref(ctx).clone();
+        });
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+            // Use a fixed token so the host's workload credentials cannot change the test result.
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string(), None);
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440014".parse().unwrap();
+        for (task_id, expected_names) in [
+            (None, vec![FACTORY_MCP_SERVER_NAME]),
+            (
+                Some(task_id),
+                vec![FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME],
+            ),
+        ] {
+            let mut installations = Vec::new();
+            attach_builtin_mcp_servers(
+                McpStartupMode::Standby,
+                task_id,
+                &[],
+                &mut installations,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert!(installations.is_empty());
+            attach_builtin_mcp_servers(
+                McpStartupMode::Run,
+                task_id,
+                &[],
+                &mut installations,
+                &foreground,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                installations
+                    .iter()
+                    .map(|installation| installation.templatable_mcp_server().name.as_str())
+                    .collect::<Vec<_>>(),
+                expected_names
+            );
+        }
+    });
 }
 
 #[test]

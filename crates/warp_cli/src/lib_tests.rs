@@ -3448,6 +3448,60 @@ fn agent_run_cloud_claude_auth_secret_without_harness_parses() {
 }
 
 #[test]
+fn agent_run_cloud_standby_parses_standby_id() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run-cloud-standby",
+        "--standby-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run-cloud-standby` command");
+    };
+    let CliCommand::Agent(AgentCommand::RunCloudStandby(standby_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run-cloud-standby` command");
+    };
+
+    assert_eq!(
+        standby_args.standby_id,
+        "550e8400-e29b-41d4-a716-446655440000"
+    );
+}
+
+#[test]
+fn agent_run_cloud_standby_requires_standby_id() {
+    assert!(Args::try_parse_from(["warp", "agent", "run-cloud-standby"]).is_err());
+}
+
+/// The Namespace worker launches the standby with `--server-root-url`, which the subcommand
+/// does not declare because it is a global flag.
+#[test]
+fn agent_run_cloud_standby_accepts_global_server_root_url() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run-cloud-standby",
+        "--standby-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--server-root-url",
+        "https://app.warp.dev",
+    ])
+    .unwrap();
+
+    assert_eq!(args.server_root_url(), Some("https://app.warp.dev"));
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run-cloud-standby` command");
+    };
+    assert!(matches!(
+        boxed_cmd.as_ref(),
+        CliCommand::Agent(AgentCommand::RunCloudStandby(_))
+    ));
+}
+
+#[test]
 fn run_message_send_parses() {
     let args = Args::try_parse_from([
         "warp",

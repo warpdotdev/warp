@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use enum_iterator::Sequence;
 use futures::FutureExt as _;
 use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
@@ -9,9 +10,12 @@ use warpui::r#async::executor::Background;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
 
+/// Records setup spans and optional run events, with an agent-only scope for standby.
 #[derive(Clone)]
 pub(crate) struct SetupClientEventReporter {
     run_id: Option<AmbientAgentTaskId>,
+    /// Keeps execution scope separate from the run ID that controls event reporting.
+    scope: SetupScope,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
 }
@@ -25,26 +29,46 @@ impl SetupClientEventReporter {
     ) -> Self {
         Self {
             run_id: Some(run_id),
+            scope: SetupScope::Run,
             ai_client,
             background,
         }
     }
 
-    /// Constructs a reporter for setup paths that are intentionally not backed by an Oz run.
+    /// Disables run events without disabling setup tracing spans.
     pub(crate) fn noop(ai_client: Arc<dyn AIClient>, background: Arc<Background>) -> Self {
         Self {
             run_id: None,
+            scope: SetupScope::Run,
             ai_client,
             background,
         }
     }
 
+    /// Restricts setup to agent-scoped steps and disables run event reporting.
+    #[cfg_attr(all(target_family = "wasm", not(test)), expect(dead_code))]
+    pub(crate) fn standby(ai_client: Arc<dyn AIClient>, background: Arc<Background>) -> Self {
+        Self {
+            scope: SetupScope::Agent,
+            ..Self::noop(ai_client, background)
+        }
+    }
+
+    fn start_step(&self, step: SetupStep) -> (&'static str, tracing::Span) {
+        assert!(
+            self.scope == SetupScope::Run || step.scope() == SetupScope::Agent,
+            "Run-scoped setup step {step:?} cannot run during standby preparation",
+        );
+        step.to_event_name_and_span()
+    }
+
+    /// Records a setup step's duration and error state without changing its result.
     pub(crate) async fn record_result<T, E: std::error::Error>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
     ) -> Result<T, E> {
-        let (step_name, span) = step.to_event_name_and_span();
+        let (step_name, span) = self.start_step(step);
 
         let start_timestamp = Utc::now();
         let result = future
@@ -66,12 +90,13 @@ impl SetupClientEventReporter {
         result
     }
 
+    /// Records a setup step's duration without interpreting its return value as an error.
     pub(crate) async fn record_value<T>(
         &self,
         step: SetupStep,
         future: impl Future<Output = T>,
     ) -> T {
-        let (step_name, span) = step.to_event_name_and_span();
+        let (step_name, span) = self.start_step(step);
 
         let start_timestamp = Utc::now();
         let value = future.instrument(span).await;
@@ -85,6 +110,7 @@ impl SetupClientEventReporter {
         );
         value
     }
+    /// Records setup work in the background without making startup wait for it.
     pub(crate) fn record_value_detached<T>(
         &self,
         step: SetupStep,
@@ -92,7 +118,7 @@ impl SetupClientEventReporter {
     ) where
         T: Send + 'static,
     {
-        let (step_name, span) = step.to_event_name_and_span();
+        let (step_name, span) = self.start_step(step);
 
         let reporter = self.clone();
         self.background
@@ -110,6 +136,7 @@ impl SetupClientEventReporter {
             .detach();
     }
 
+    /// Reports a run milestone without making delivery failures fatal.
     pub(crate) async fn post_timeline_event(&self, event: OzRunTimelineEvent) {
         let Some(run_id) = self.run_id else {
             return;
@@ -162,6 +189,7 @@ impl SetupClientEventReporter {
     }
 }
 
+/// Names run milestones that have a timestamp rather than a setup duration.
 #[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
@@ -177,11 +205,24 @@ impl OzRunTimelineEvent {
     }
 }
 
-#[derive(Clone, Copy)]
+/// Identifies which setup steps standby may execute before a run exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SetupScope {
+    /// Inputs are limited to team, agent service account, agent config snapshot,
+    /// environment, and runner.
+    Agent,
+    /// Inputs include task ID, execution ID, conversation ID, requester identity, or prompt.
+    Run,
+}
+
+/// Names setup operations so normal runs and standby preparation use the same tracing labels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Sequence)]
 pub(crate) enum SetupStep {
     TeamMetadataRefresh,
     WarpDriveSync,
     TaskDataFetch,
+    /// Applies standby credentials without the task-keyed APIs of `TaskDataFetch`.
+    AgentCredentialsFetch,
     EnvironmentResolution,
     SkillRepoClone,
     TerminalBootstrap,
@@ -223,7 +264,53 @@ macro_rules! span_and_name {
 }
 
 impl SetupStep {
+    /// Declares each step's setup scope with no default for new steps.
+    pub(crate) fn scope(self) -> SetupScope {
+        match self {
+            Self::TeamMetadataRefresh
+            | Self::WarpDriveSync
+            | Self::AgentCredentialsFetch
+            | Self::EnvironmentResolution
+            | Self::SkillRepoClone
+            | Self::TerminalBootstrap
+            | Self::McpServerStartup
+            | Self::AgentProfileConfiguration
+            | Self::GlobalSkillResolution
+            | Self::GlobalSkillRepoClone
+            | Self::EnvironmentRepoClone
+            | Self::CacheSetup
+            | Self::EnvironmentSetupCommands
+            | Self::EnvironmentCodebaseIndexing
+            | Self::FileBasedMcpDiscovery
+            | Self::FileBasedMcpReadiness
+            | Self::InitialGlobalMcpScan
+            | Self::InitialGlobalMcpReadiness
+            | Self::EnvironmentSkillLoading
+            | Self::GlobalSkillLoading
+            | Self::SkillsDirsLoading => SetupScope::Agent,
+            // Task metadata and attachments are run-scoped, and this step reaches secrets and
+            // git credentials through task-keyed APIs even though the server resolves both
+            // from agent-scoped inputs. `AgentCredentialsFetch` is the pre-warmed equivalent.
+            Self::TaskDataFetch
+            // Provider credentials are time-boxed well below a standby's lifetime, so they
+            // must be minted fresh for the run rather than pre-warmed.
+            | Self::CloudProviderSetup
+            // Session ACLs name the requester, who is unknown before a claim.
+            | Self::SharedSessionEstablishment
+            | Self::ConversationResumeLoading
+            // Pre-warming is Oz-only, so these are unreachable from a standby.
+            | Self::ThirdPartyHarnessPreparation
+            | Self::ThirdPartyHarnessStart
+            | Self::ThirdPartyHarnessExternalConversation
+            | Self::ThirdPartyHarnessPreparationNotificationPluginInstall
+            | Self::ThirdPartyHarnessPreparationNotificationPluginUpdate
+            | Self::ThirdPartyHarnessPreparationPlatformPluginInstall
+            | Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => SetupScope::Run,
+        }
+    }
+
     fn to_event_name_and_span(self) -> (&'static str, tracing::Span) {
+        log::debug!("Starting {:?} setup step: {self:?}", self.scope());
         match self {
             Self::TeamMetadataRefresh => {
                 span_and_name!("setup_team_metadata_refresh")
@@ -233,6 +320,9 @@ impl SetupStep {
             }
             Self::TaskDataFetch => {
                 span_and_name!("setup_task_metadata_secrets_attachments_git_credentials_fetch")
+            }
+            Self::AgentCredentialsFetch => {
+                span_and_name!("setup_agent_secrets_git_credentials_fetch")
             }
             Self::EnvironmentResolution => {
                 span_and_name!("setup_environment_resolution")
@@ -321,3 +411,7 @@ impl SetupStep {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "setup_observability_tests.rs"]
+mod tests;

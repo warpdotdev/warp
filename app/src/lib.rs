@@ -446,11 +446,13 @@ enum AuthInitialization {
 }
 
 impl LaunchMode {
+    /// Sets command-line launch flags so standby uses sandbox initialization without a run prompt.
     fn command_line(command: CliCommand, global_options: GlobalOptions, debug: bool) -> Self {
         let (is_sandboxed, computer_use_override) = match &command {
             CliCommand::Agent(AgentCommand::Run(args)) => {
                 (args.sandboxed, args.computer_use.computer_use_override())
             }
+            CliCommand::Agent(AgentCommand::RunCloudStandby(_)) => (true, None),
             _ => (false, None),
         };
         Self::CommandLine {
@@ -625,7 +627,14 @@ impl LaunchMode {
     fn supports_indexing(&self) -> bool {
         match self {
             LaunchMode::CommandLine { command, .. } => {
-                matches!(command, CliCommand::Agent(AgentCommand::Run { .. }))
+                // A pre-warmed sandbox indexes its repositories during preparation, so the
+                // claimed run inherits a warm index instead of rebuilding one.
+                matches!(
+                    command,
+                    CliCommand::Agent(
+                        AgentCommand::Run { .. } | AgentCommand::RunCloudStandby { .. }
+                    )
+                )
             }
             LaunchMode::RemoteServerDaemon { .. } => {
                 FeatureFlag::RemoteCodebaseIndexing.is_enabled()

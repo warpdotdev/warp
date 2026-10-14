@@ -3,9 +3,8 @@
 //!
 //! Every endpoint requires two credentials: the agent-scoped API key (normal auth) and a
 //! Namespace workload token naming this instance.
-// Nothing outside the tests calls this client yet; the standby entrypoint that drives it is a
-// follow-up change. `allow` rather than `expect` because the test build does use these items.
-#![allow(dead_code)]
+// Pre-warmed sandboxes only run in a Namespace container, never in a WASM build.
+#![cfg_attr(target_family = "wasm", expect(dead_code))]
 
 use std::collections::HashMap;
 use std::fmt;

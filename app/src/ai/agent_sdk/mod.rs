@@ -122,6 +122,8 @@ mod runner;
 mod schedule;
 mod secret;
 pub(crate) mod setup_observability;
+#[cfg(not(target_family = "wasm"))]
+mod standby;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
@@ -353,6 +355,12 @@ fn run_agent(
                 return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
             }
             ambient::run_ambient_agent(ctx, args)
+        }
+        #[cfg(not(target_family = "wasm"))]
+        AgentCommand::RunCloudStandby(args) => standby::run(ctx, args),
+        #[cfg(target_family = "wasm")]
+        AgentCommand::RunCloudStandby(_) => {
+            Err(anyhow::anyhow!("invalid value 'run-cloud-standby'"))
         }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),
         AgentCommand::List(args) => {
@@ -677,6 +685,7 @@ fn build_execution_task_and_options(
         idle_on_complete,
         idle_on_fail,
         secrets: Default::default(),
+        environment_variables: HashMap::new(),
         resume: None,
         cloud_providers: Vec::new(),
         workspace: {
@@ -793,7 +802,7 @@ fn run_task(
     }
 }
 
-/// Provides model context for the async setup that runs before the agent driver is created.
+/// Provides model context for async setup before a normal run or standby creates its agent driver.
 struct AgentDriverRunner;
 struct ExecutionTaskData {
     server_api: Arc<ServerApi>,
@@ -1496,6 +1505,7 @@ impl AgentDriverRunner {
                     idle_on_complete: args.idle_on_complete.map(|d| d.into()),
                     idle_on_fail: args.effective_idle_on_fail().map(|d| d.into()),
                     secrets: Default::default(),
+                    environment_variables: HashMap::new(),
                     resume: None,
                     cloud_providers: Vec::new(),
                     workspace: driver::environment::WorkspaceConfiguration::default(),
@@ -2112,6 +2122,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Agent(agent_cmd) => match agent_cmd {
             AgentCommand::Run { .. } => true,
             AgentCommand::RunCloud { .. } => true,
+            AgentCommand::RunCloudStandby { .. } => true,
             AgentCommand::Profile(sub) => match sub {
                 AgentProfileCommand::List => true,
             },
@@ -2342,6 +2353,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             harness: args.harness.to_string(),
         },
         CliCommand::Agent(AgentCommand::RunCloud(_)) => CliTelemetryEvent::AgentRunAmbient,
+        CliCommand::Agent(AgentCommand::RunCloudStandby(_)) => {
+            CliTelemetryEvent::AgentRunCloudStandby
+        }
         CliCommand::Agent(AgentCommand::Profile(sub)) => match sub {
             AgentProfileCommand::List => CliTelemetryEvent::AgentProfileList,
         },

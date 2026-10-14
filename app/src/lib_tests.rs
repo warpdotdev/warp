@@ -60,6 +60,15 @@ fn agent_run_preserves_disabled_computer_use() {
 }
 
 #[test]
+fn run_cloud_standby_is_sandboxed_and_leaves_computer_use_to_defaults() {
+    let launch_mode =
+        command_line_launch_mode(&["agent", "run-cloud-standby", "--standby-id", "sandbox"]);
+
+    assert!(launch_mode.is_sandboxed());
+    assert_eq!(computer_use_override(&launch_mode), None);
+}
+
+#[test]
 fn non_agent_command_is_unsandboxed_and_leaves_computer_use_to_defaults() {
     let launch_mode = command_line_launch_mode(&["whoami"]);
 

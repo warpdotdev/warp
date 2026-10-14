@@ -238,7 +238,7 @@ fn environment_snapshot(
     }
 }
 
-/// Holds the workspace inputs that setup turns into checkouts, commands, and skills.
+/// Holds shared workspace inputs for normal run setup and standby preparation.
 #[derive(Default)]
 pub(crate) struct WorkspaceConfiguration {
     pub source_repos: Vec<SourceRepo>,
@@ -261,6 +261,7 @@ pub(crate) struct ResolvedRepository {
     pub preserve_origin: bool,
     pub expected_sha: Option<String>,
 }
+
 impl WorkspaceConfiguration {
     pub(crate) fn bind_execution(
         &mut self,
@@ -522,11 +523,11 @@ pub(crate) fn merge_repos_deduped(
 /// Environment variable carrying the authenticated remote URL of a Factory's
 /// definition repository. Dispatch attaches it only to runs that execute as a
 /// Factory agent whose Factory definition lives in a Warp-managed repository.
-const FACTORY_REPO_CLONE_URL_ENV_VAR: &str = "WARP_FACTORY_REPO_CLONE_URL";
+pub(crate) const FACTORY_REPO_CLONE_URL_ENV_VAR: &str = "WARP_FACTORY_REPO_CLONE_URL";
 
 /// Environment variable carrying the directory, relative to the working
 /// directory, that the Factory definition repository is cloned into.
-const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
+pub(crate) const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
 
 /// Prepends the setup command that clones a Factory's definition repository
 /// when the dispatch attached the clone variables to this run, so the checkout
@@ -545,7 +546,8 @@ pub(super) fn prepend_factory_definition_clone(
     );
 }
 
-fn prepend_factory_definition_clone_for_values(
+/// Adds the Factory clone command from supplied variables without reading process state.
+pub(crate) fn prepend_factory_definition_clone_for_values(
     clone_url: &str,
     clone_dir: &str,
     shell_type: ShellType,
