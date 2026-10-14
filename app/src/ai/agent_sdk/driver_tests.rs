@@ -12,6 +12,7 @@ use command::blocking::Command as ProcessCommand;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::poll;
+use mockito::Matcher;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
@@ -2496,6 +2497,111 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
 }
 
 #[test]
+fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
+    if std::env::var_os("WARP_TEST_DEFERRED_ACP_PROMPT").is_none() {
+        let home = TempDir::new().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::deferred_repository_semantic_acp_consumes_server_resolved_text_once",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_ACP_PROMPT", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CODEX_HOME", home.path().join(".codex"))
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let mut server = ChannelState::mock_server();
+    let prompt =
+        "Current Factory deferred repository inventory:\n- GITHUB \"acme\"/\"repo\"\n\nimplement";
+    let resolved = server
+        .mock("POST", "/api/v1/harness-support/resolve-prompt")
+        .match_body(Matcher::Json(json!({})))
+        .with_status(200)
+        .with_body(json!({"prompt": prompt}).to_string())
+        .expect(1)
+        .create();
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let root = TempDir::new().unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.path().to_path_buf();
+        options.selected_harness = Harness::Codex;
+        options.harness_transport = HarnessTransport::Acp;
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let HarnessKind::ThirdParty(harness) =
+            harness_kind(Harness::Codex, HarnessTransport::Acp).unwrap()
+        else {
+            panic!("expected an ACP harness");
+        };
+        let runner = AgentDriver::prepare_harness(
+            &AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            &[],
+            harness.as_ref(),
+            &foreground,
+        )
+        .await
+        .unwrap();
+        assert_eq!(runner.prompt_text_for_test(), Some(prompt));
+    });
+    resolved.assert();
+}
+
+#[test]
+fn deferred_repository_semantic_skipped_server_startup_has_no_inventory_only_turn() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let root = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(root.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver
+        });
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        assert!(matches!(
+            completion.await.unwrap(),
+            SDKConversationOutputStatus::Success
+        ));
+        terminal.read(&app, |terminal, ctx| {
+            assert!(
+                terminal
+                    .ai_controller()
+                    .as_ref(ctx)
+                    .native_prompt_conversation_id()
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
 fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
     if std::env::var_os("WARP_TEST_DEFERRED_SKILL_PUBLICATION").is_none() {
         let home = TempDir::new().unwrap();
@@ -2563,6 +2669,18 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                             )),
                             !should_activate,
                         );
+                        let launch_env = driver
+                            .terminal_driver
+                            .as_ref(ctx)
+                            .launch_env_vars_for_test
+                            .as_ref()
+                            .unwrap();
+                        for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                            assert_eq!(
+                                launch_env.get(std::ffi::OsStr::new(name)),
+                                Some(&root.path().as_os_str().to_os_string())
+                            );
+                        }
                         ctx.spawner()
                     });
                     let HarnessKind::ThirdParty(harness) =
@@ -2611,10 +2729,19 @@ fn deferred_repository_runtime_exports_absolute_root_before_terminal_creation() 
             ManagedSecretValue::raw_value("/other/root"),
         );
         let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
-        driver.update(&mut app, |driver, _| {
+        driver.update(&mut app, |driver, ctx| {
             for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
                 assert_eq!(
                     driver.resolved_env_vars.get(std::ffi::OsStr::new(name)),
+                    Some(&root.as_os_str().to_os_string())
+                );
+                assert_eq!(
+                    driver
+                        .terminal_driver
+                        .as_ref(ctx)
+                        .launch_env_vars_for_test
+                        .as_ref()
+                        .and_then(|env| env.get(std::ffi::OsStr::new(name))),
                     Some(&root.as_os_str().to_os_string())
                 );
             }

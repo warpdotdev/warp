@@ -548,6 +548,10 @@ impl HarnessRunner for AcpHarnessRunner {
     fn harness_name(&self) -> &str {
         &self.launch.program
     }
+    #[cfg(test)]
+    fn prompt_text_for_test(&self) -> Option<&str> {
+        Some(&self.prompt_text)
+    }
 
     fn persistence(&self) -> &HarnessPersistence {
         &self.persistence

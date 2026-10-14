@@ -589,6 +589,10 @@ pub(crate) enum HarnessCleanupDisposition {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub(crate) trait HarnessRunner: Send + Sync + 'static {
     fn harness_name(&self) -> &str;
+    #[cfg(test)]
+    fn prompt_text_for_test(&self) -> Option<&str> {
+        None
+    }
 
     /// Create the external conversation on the server and start the harness
     /// command in the terminal.
