@@ -240,7 +240,6 @@ pub(super) fn convert_input(
             AIAgentInput::StartFromAmbientRunPrompt {
                 ambient_run_id,
                 context,
-                runtime_base_prompt,
                 runtime_skill,
                 attachments_dir,
             } => {
@@ -249,7 +248,8 @@ pub(super) fn convert_input(
                     r#type: Some(api::request::input::Type::StartFromAmbientRunPrompt(
                         api::request::input::StartFromAmbientRunPrompt {
                             ambient_run_id,
-                            runtime_base_prompt: runtime_base_prompt.unwrap_or_default(),
+                            // Deprecated, we always resolve base_prompt from the stored task config.
+                            runtime_base_prompt: String::new(),
 
                             runtime_skill: runtime_skill.map(|skill| skill.into()),
                             attachments_dir: attachments_dir.unwrap_or_default(),

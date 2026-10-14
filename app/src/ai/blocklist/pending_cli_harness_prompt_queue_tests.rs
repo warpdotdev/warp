@@ -45,30 +45,6 @@ fn queued_prompts_are_drained_in_fifo_order() {
 }
 
 #[test]
-fn deferred_repos_guidance_waits_until_the_first_cli_prompt_is_delivered() {
-    let mut queue = PendingCliHarnessPromptQueue::default();
-    let task_id = fixed_task_id();
-    queue.stage_deferred_repos_instruction(task_id, "clone acme/billing first".into());
-    assert!(queue.drain(task_id).is_empty());
-    assert_eq!(queue.prompt_for_delivery(task_id, String::new()), "");
-    assert_eq!(
-        queue.prompt_for_delivery(task_id, "inspect".into()),
-        "clone acme/billing first\n\ninspect"
-    );
-    assert_eq!(
-        queue.prompt_for_delivery(task_id, "follow-up".into()),
-        "follow-up"
-    );
-
-    queue.stage_deferred_repos_instruction(task_id, "clone acme/billing first".into());
-    queue.clear(task_id);
-    assert_eq!(
-        queue.prompt_for_delivery(task_id, "new run".into()),
-        "new run"
-    );
-}
-
-#[test]
 fn queues_for_different_tasks_are_independent() {
     let mut queue = PendingCliHarnessPromptQueue::default();
     let task_a: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440a00"

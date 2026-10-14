@@ -33,7 +33,6 @@ pub(crate) struct QueuedCliHarnessPrompt {
 #[derive(Default)]
 pub(crate) struct PendingCliHarnessPromptQueue {
     pending: HashMap<AmbientAgentTaskId, Vec<QueuedCliHarnessPrompt>>,
-    deferred_repos_instructions: HashMap<AmbientAgentTaskId, String>,
 }
 
 pub(crate) enum PendingCliHarnessPromptQueueEvent {}
@@ -41,29 +40,6 @@ pub(crate) enum PendingCliHarnessPromptQueueEvent {}
 impl PendingCliHarnessPromptQueue {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
         Self::default()
-    }
-
-    pub(crate) fn stage_deferred_repos_instruction(
-        &mut self,
-        task_id: AmbientAgentTaskId,
-        instruction: String,
-    ) {
-        self.deferred_repos_instructions
-            .insert(task_id, instruction);
-    }
-
-    pub(crate) fn prompt_for_delivery(
-        &mut self,
-        task_id: AmbientAgentTaskId,
-        prompt: String,
-    ) -> String {
-        if prompt.trim().is_empty() {
-            return prompt;
-        }
-        match self.deferred_repos_instructions.remove(&task_id) {
-            Some(instruction) => format!("{instruction}\n\n{prompt}"),
-            None => prompt,
-        }
     }
 
     /// Queues `prompt` for `task_id`'s not-yet-started CLI-harness session.
@@ -89,7 +65,6 @@ impl PendingCliHarnessPromptQueue {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn clear(&mut self, task_id: AmbientAgentTaskId) {
         self.pending.remove(&task_id);
-        self.deferred_repos_instructions.remove(&task_id);
     }
 }
 

@@ -147,17 +147,8 @@ fn accept_agent_prompt(
         // Reuse the rich input submit pipeline so agent-specific
         // strategies are applied. Bypasses the rich-input-UI side effects
         // (telemetry, draft clear, editor buffer clear, pending-image consumption).
-        let prompt = if let Some(task_id) = LocalAgentTaskSyncModel::as_ref(ctx)
-            .cli_harness_task_id_for_terminal_view(terminal_view_id)
-        {
-            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _| {
-                queue.prompt_for_delivery(task_id, request.prompt.clone())
-            })
-        } else {
-            request.prompt.clone()
-        };
         terminal_view.update(ctx, |view, ctx| {
-            view.submit_text_to_cli_agent_pty(prompt, ctx);
+            view.submit_text_to_cli_agent_pty(request.prompt.clone(), ctx);
         });
         return;
     }

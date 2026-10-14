@@ -1589,7 +1589,6 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     |context| AIAgentInput::StartFromAmbientRunPrompt {
                         ambient_run_id: "550e8400-e29b-41d4-a716-446655440a00".into(),
                         context,
-                        runtime_base_prompt: None,
                         runtime_skill: None,
                         attachments_dir: None,
                     },
@@ -1614,56 +1613,6 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
 }
 
 #[test]
-fn deferred_repos_startup_sends_runtime_prompt_without_changing_stored_input() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let terminal = add_window_with_terminal(&mut app, None);
-        terminal.update(&mut app, |terminal, ctx| {
-            terminal.ai_controller().update(ctx, |controller, ctx| {
-                let id = controller.bind_native_prompt_conversation(None, ctx);
-                controller.stage_deferred_repos_instruction("clone acme/billing first".into());
-                controller.send_ai_input_with_context(
-                    |context| AIAgentInput::StartFromAmbientRunPrompt {
-                        ambient_run_id: "550e8400-e29b-41d4-a716-446655440a00".into(),
-                        context,
-                        runtime_base_prompt: None,
-                        runtime_skill: None,
-                        attachments_dir: None,
-                    },
-                    ctx,
-                );
-
-                let stream_id = controller
-                    .in_flight_response_streams
-                    .stream_ids_for_conversation(id, ctx)
-                    .pop()
-                    .unwrap();
-                let stream = controller
-                    .in_flight_response_streams
-                    .stream_for_test(&stream_id);
-                assert!(matches!(&stream.as_ref(ctx).params_for_test().input[0],
-                    AIAgentInput::StartFromAmbientRunPrompt {
-                        runtime_base_prompt: Some(prompt), runtime_skill: None, ..
-                    } if prompt == "clone acme/billing first"));
-                let original = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&id)
-                    .unwrap()
-                    .root_task_exchanges()
-                    .last()
-                    .unwrap();
-                assert!(matches!(
-                    &original.input[0],
-                    AIAgentInput::StartFromAmbientRunPrompt {
-                        runtime_base_prompt: None,
-                        ..
-                    }
-                ));
-            });
-        });
-    });
-}
-
-#[test]
 fn unbind_native_prompt_conversation_releases_the_setup_barrier() {
     // Regression test: unbinding while setup never finished must not leave the conversation
     // permanently dispatch-blocked, since nothing else would ever release that barrier.
@@ -1674,13 +1623,11 @@ fn unbind_native_prompt_conversation_releases_the_setup_barrier() {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 let id = controller.bind_native_prompt_conversation(None, ctx);
                 assert!(QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
-                controller.stage_deferred_repos_instruction("clone acme/billing first".into());
 
                 controller.unbind_native_prompt_conversation(ctx);
 
                 assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
                 assert!(!QueuedQueryModel::as_ref(ctx).has_pending_native_injections(id));
-                assert!(controller.pending_deferred_repos_instruction.is_none());
             });
         });
     });
