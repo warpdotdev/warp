@@ -1,4 +1,60 @@
+use clap::Parser as _;
+
 use super::*;
+
+#[test]
+fn command_line_launch_preserves_sandbox_and_computer_use_settings() {
+    for (arguments, expected_sandboxed, expected_computer_use) in [
+        (vec!["agent", "run", "--prompt", "test"], false, None),
+        (
+            vec![
+                "agent",
+                "run",
+                "--prompt",
+                "test",
+                "--sandboxed",
+                "--computer-use",
+            ],
+            true,
+            Some(true),
+        ),
+        (
+            vec!["agent", "run", "--prompt", "test", "--no-computer-use"],
+            false,
+            Some(false),
+        ),
+        (vec!["whoami"], false, None),
+    ] {
+        let args =
+            warp_cli::Args::try_parse_from(std::iter::once("oz").chain(arguments.iter().copied()))
+                .unwrap();
+        let Some(warp_cli::Command::CommandLine(command)) = args.command() else {
+            panic!("expected a CLI command: {arguments:?}");
+        };
+        let launch_mode = LaunchMode::command_line(
+            command.as_ref().clone(),
+            args.global_options().clone(),
+            args.debug(),
+        );
+        assert_eq!(
+            launch_mode.is_sandboxed(),
+            expected_sandboxed,
+            "{arguments:?}"
+        );
+        assert_eq!(launch_mode.execution_mode(), ExecutionMode::Sdk);
+        let LaunchMode::CommandLine {
+            computer_use_override,
+            ..
+        } = launch_mode
+        else {
+            panic!("expected a CLI launch mode");
+        };
+        assert_eq!(
+            computer_use_override, expected_computer_use,
+            "{arguments:?}"
+        );
+    }
+}
 
 #[test]
 fn app_api_key_requires_validation() {
