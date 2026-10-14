@@ -120,18 +120,6 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                     )]
                 );
             }
-            if use_factory_repositories {
-                assert_eq!(
-                    options.workspace.deferred_repos,
-                    vec![SourceRepo::new(
-                        CodeForge::GitLab,
-                        "platform/backend".into(),
-                        "api".into(),
-                    )]
-                );
-            } else {
-                assert!(options.workspace.deferred_repos.is_empty());
-            }
             assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
         }
     });
@@ -282,10 +270,6 @@ fn deferred_capability_bootstrap_subprocess() {
         assert_eq!(
             options.workspace.source_repos.len(),
             usize::from(scenario == "eager")
-        );
-        assert_eq!(
-            options.workspace.deferred_repos.len(),
-            usize::from(scenario == "deferred")
         );
     });
     bootstrap.assert();

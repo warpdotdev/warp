@@ -67,7 +67,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _resume: Option<ResumePayload>,
         _resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         _resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -83,7 +83,7 @@ impl ThirdPartyHarness for GeminiHarness {
             workspace_root,
             harness_working_dir,
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -113,9 +113,9 @@ pub(super) fn publish_skills_for_gemini(
     workspace_root: &Path,
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
-    has_deferred_repositories: bool,
+    factory_repository_contract: bool,
 ) -> Result<()> {
-    if !has_deferred_repositories {
+    if !factory_repository_contract {
         return Ok(());
     }
     let skill_root = harness_working_dir.join(".gemini").join("skills");
@@ -124,7 +124,7 @@ pub(super) fn publish_skills_for_gemini(
         workspace_root,
         warp_isolation_platform::detect().is_some(),
         skill_dirs,
-        has_deferred_repositories,
+        factory_repository_contract,
     )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,

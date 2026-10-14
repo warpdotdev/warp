@@ -133,7 +133,7 @@ impl AcpHarness {
         harness_working_dir: &Path,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<()> {
@@ -143,7 +143,7 @@ impl AcpHarness {
                 harness_working_dir,
                 resolved_env_vars,
                 skill_dirs,
-                has_deferred_repositories,
+                factory_repository_contract,
             ),
             // MCP servers are handed to the agent in `session/new` rather than written into
             // `config.toml`, so they are not registered twice.
@@ -160,7 +160,7 @@ impl AcpHarness {
                     workspace_root,
                     harness_working_dir,
                     skill_dirs,
-                    has_deferred_repositories,
+                    factory_repository_contract,
                 )
             }
             Harness::Gemini => {
@@ -169,7 +169,7 @@ impl AcpHarness {
                     workspace_root,
                     harness_working_dir,
                     skill_dirs,
-                    has_deferred_repositories,
+                    factory_repository_contract,
                 )
             }
             Harness::Oz | Harness::OpenCode | Harness::Unknown => Ok(()),
@@ -232,7 +232,7 @@ impl ThirdPartyHarness for AcpHarness {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -243,7 +243,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness_working_dir,
             resolved_env_vars,
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
             resolved_secrets,
             third_party_harness_model_config,
         )

@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, WARP_SKILL_DIRS_ENV,
-    parse_bundled_skill, parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, WARP_SKILL_DIRS_ENV, parse_bundled_skill,
+    parse_skills_dirs_env, read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
@@ -105,7 +105,6 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
-use crate::terminal::shell::ShellType;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
@@ -772,7 +771,7 @@ pub struct AgentDriver {
 
     workspace: Option<environment::WorkspaceConfiguration>,
     skill_dirs: Vec<PathBuf>,
-    has_deferred_repositories: bool,
+    factory_repository_contract: bool,
     computer_use_configured: bool,
 
     // End-of-run snapshot upload controls.
@@ -873,31 +872,6 @@ pub enum AgentRunPrompt {
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
     },
-}
-
-/// Prepends runtime inventory instructions without replacing an attached skill.
-fn inject_deferred_repos_instruction(prompt: &mut AgentRunPrompt, instruction: String) {
-    match prompt {
-        AgentRunPrompt::Local(text) => *text = format!("{instruction}\n\n{text}"),
-        AgentRunPrompt::ServerSide { skill, .. } => {
-            *skill = Some(match skill.take() {
-                Some(mut existing) => {
-                    existing.content = format!("{instruction}\n\n{}", existing.content);
-                    existing
-                }
-                None => ParsedSkill {
-                    path: LocalOrRemotePath::Local(PathBuf::from("deferred-repositories")),
-                    name: "deferred-repositories".to_string(),
-                    description: "Instructions for dealing with repositories attached to this factory that are not cloned yet."
-                        .to_string(),
-                    content: instruction,
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
-            });
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1179,6 +1153,11 @@ impl AgentDriver {
             strict_mcp_startup,
             mcp_startup_timeout,
         } = options;
+        if !working_dir.is_absolute() {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+                "agent workspace root must be absolute"
+            )));
+        }
 
         // Split the unified resume option into the two internal slots that the rest of
         // the driver consumes: native conversation restoration vs. third-party
@@ -1231,14 +1210,16 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
+        for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+            env_vars.insert(OsString::from(name), working_dir.as_os_str().to_os_string());
+        }
         if let Some(dirs) = &workspace.factory_skill_dirs {
             env_vars.insert(
                 OsString::from(WARP_SKILL_DIRS_ENV),
                 OsString::from(dirs.iter().map(|dir| dir.to_string_lossy()).join(",")),
             );
         }
-        let has_deferred_repositories =
-            use_factory_repositories && !workspace.deferred_repos.is_empty();
+        let factory_repository_contract = use_factory_repositories;
         if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
             safe_warn!(
                 safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
@@ -1378,7 +1359,7 @@ impl AgentDriver {
             cloud_providers,
             workspace: Some(workspace),
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
             computer_use_configured,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
@@ -1434,7 +1415,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             workspace: Some(environment::WorkspaceConfiguration::default()),
             skill_dirs: parse_skills_dirs_env(),
-            has_deferred_repositories: false,
+            factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
@@ -2240,7 +2221,7 @@ impl AgentDriver {
     /// series of callbacks and state machine updates.
     #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
-        mut task: Task,
+        task: Task,
         foreground: ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
         safe_debug!(
@@ -2369,11 +2350,11 @@ impl AgentDriver {
                 .await?;
             let mut environment_skill_repos = Vec::new();
 
-            let (workspace, has_deferred_repositories, session_shell_type) = foreground
+            let (workspace, factory_repository_contract, session_shell_type) = foreground
                 .spawn(|me, ctx| {
                     (
                         me.workspace.take(),
-                        me.has_deferred_repositories,
+                        me.factory_repository_contract,
                         me.terminal_driver
                             .as_ref(ctx)
                             .active_session_shell_type(ctx),
@@ -2382,19 +2363,6 @@ impl AgentDriver {
                 .await?;
             let mut workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
             let source_repos = workspace.source_repos.clone();
-            if has_deferred_repositories {
-                let executable = std::env::current_exe()
-                    .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
-                if let Some(instruction) = environment::build_deferred_repos_instruction(
-                    &foreground.spawn(|me, _| me.working_dir.clone()).await?,
-                    &source_repos,
-                    &workspace.deferred_repos,
-                    &executable,
-                    session_shell_type.unwrap_or(ShellType::Bash),
-                )? {
-                    inject_deferred_repos_instruction(&mut task.prompt, instruction);
-                }
-            }
             // The Factory definition checkout is run-scoped: the dispatch decides
             // whether this run gets one by attaching the clone variables,
             // independent of which environment the run executes in.
@@ -2531,7 +2499,7 @@ impl AgentDriver {
                         Self::load_skills_dirs(&foreground),
                     )
                     .await;
-                if has_deferred_repositories {
+                if factory_repository_contract {
                     Self::load_factory_deferred_repositories_skill(&foreground).await;
                 }
             }
@@ -3254,7 +3222,7 @@ impl AgentDriver {
             managed_mcp_client,
             terminal_driver,
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
         ) = foreground
             .spawn(|me, ctx| {
                 if me.harness.is_some() {
@@ -3272,7 +3240,7 @@ impl AgentDriver {
                     ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
                     me.terminal_driver.clone(),
                     me.skill_dirs.clone(),
-                    me.has_deferred_repositories,
+                    me.factory_repository_contract,
                 ))
             })
             .await
@@ -3363,7 +3331,7 @@ impl AgentDriver {
                 resume,
                 &resolved_env_vars,
                 &skill_dirs,
-                has_deferred_repositories,
+                factory_repository_contract,
                 &secrets_for_harness,
                 &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
