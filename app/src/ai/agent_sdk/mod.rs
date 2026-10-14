@@ -645,7 +645,7 @@ fn build_execution_task_and_options(
     let mcp_specs = execution_config::mcp_specs(&config.mcp_servers_json)?;
     let repositories = execution_config::repositories(config.repositories)?;
     let deferred_repositories = if use_factory_repositories {
-        execution_config::repositories(config.prepared_deferred_repositories)?
+        execution_config::repositories(config.deferred_repositories)?
     } else {
         Vec::new()
     };

@@ -52,8 +52,10 @@ fn execution_bootstrap_response() -> Value {
                         "computerUseModelId": null,
                         "inferenceProviders": null,
                         "repositories": [],
-                        "preparedDeferredRepositories": [], "deferredRepositories": [{
-                            "codeForge": "GITLAB", "owner": "platform/backend", "repo": "api"
+                        "deferredRepositories": [{
+                            "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                            "ref": null, "cloneFrom": null, "preserveOrigin": true,
+                            "expectedSha": "0123456789abcdef0123456789abcdef01234567"
                         }],
                         "setupCommands": [],
                         "providers": null,
@@ -123,7 +125,7 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             let config = &mut response["data"]["task"]["task"]["executionConfig"];
             config["repositories"] = json!([{
                 "forge": "GITLAB", "owner": "platform/backend", "name": "api",
-                            "ref": null, "cloneFrom": null, "preserveOrigin": true, "expectedSha": null
+                "ref": null, "cloneFrom": null, "preserveOrigin": true, "expectedSha": null
             }]);
             config["deferredRepositories"] = json!([]);
         }
@@ -142,14 +144,18 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             assert!(data.config.repositories.is_empty());
             assert_eq!(data.config.deferred_repositories.len(), 1);
             assert_eq!(
-                data.config.deferred_repositories[0].code_forge,
+                data.config.deferred_repositories[0].forge,
                 CodeForge::GitLab,
             );
             assert_eq!(
                 data.config.deferred_repositories[0].owner,
                 "platform/backend"
             );
-            assert_eq!(data.config.deferred_repositories[0].repo, "api");
+            assert_eq!(data.config.deferred_repositories[0].name, "api");
+            assert_eq!(
+                data.config.deferred_repositories[0].expected_sha.as_deref(),
+                Some("0123456789abcdef0123456789abcdef01234567")
+            );
         } else {
             assert!(data.config.deferred_repositories.is_empty());
             assert_eq!(data.config.repositories.len(), 1);

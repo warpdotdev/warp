@@ -1767,7 +1767,6 @@ impl ServerApi {
         let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
             execution_id: execution_id.to_string().into(),
             supports_deferred_repositories,
-            supports_prepared_deferred_repositories: supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
                 task_id: task_id.to_string().into(),
                 workload_token,

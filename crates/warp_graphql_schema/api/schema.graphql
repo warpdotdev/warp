@@ -3875,7 +3875,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsPreparedDeferredRepositories: Boolean): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -5236,8 +5236,7 @@ type ExecutionConfiguration {
   computerUseModelId: String
   inferenceProviders: InferenceProviderClientConfigs
   repositories: [ExecutionRepository!]!
-  deferredRepositories: [SourceRepo!]!
-  preparedDeferredRepositories: [ExecutionRepository!]!
+  deferredRepositories: [ExecutionRepository!]!
   setupCommands: [String!]!
   providers: CloudProviderClientConfigs
   sessionSharingAcls: [SessionSharingAclSpec!]!

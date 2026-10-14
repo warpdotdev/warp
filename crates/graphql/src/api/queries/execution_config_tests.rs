@@ -11,7 +11,6 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
             execution_id: "execution".into(),
             supports_deferred_repositories,
-            supports_prepared_deferred_repositories: supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
                 task_id: "task".into(),
                 workload_token: "token".to_owned(),
@@ -40,6 +39,7 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             "factorySkillDirs",
             "preserveOrigin",
             "cloneFrom",
+            "expectedSha",
             "sessionSharingAcls",
             "snapshotDisabled",
             "awsSessionToken",

@@ -54,6 +54,7 @@ const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[test]
 fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
     App::test((), |mut app| async move {
         let root = tempfile::TempDir::new().unwrap();
         let args =
@@ -77,8 +78,11 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
                 "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
                 "computerUseEnabled": false, "repositories": eager,
-                "preparedDeferredRepositories": [{"forge": deferred_forge, "owner": "platform/backend", "name": "api", "ref": null, "cloneFrom": null, "expectedSha": null, "preserveOrigin": true}], "deferredRepositories": [{
-                    "codeForge": deferred_forge, "owner": "platform/backend", "repo": "api",
+                "deferredRepositories": [{
+                    "forge": deferred_forge, "owner": "platform/backend", "name": "api",
+                    "ref": {"type": "BRANCH", "value": "benchmark-base"},
+                    "cloneFrom": {"codeForge": "GITHUB", "owner": "benchmarks", "repo": "frozen-api"},
+                    "expectedSha": sha, "preserveOrigin": true,
                 }],
                 "setupCommands": [], "sessionSharingAcls": [],
                 "skipInitialTurn": false, "snapshotDisabled": false,
@@ -109,6 +113,21 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 );
             }
             if use_factory_repositories {
+                let deferred = &options.workspace.deferred_repos[0];
+                assert_eq!(deferred.expected_sha.as_deref(), Some(sha));
+                assert_eq!(
+                    deferred.checkout,
+                    Some(RepositoryHeadRef::Branch("benchmark-base".into()))
+                );
+                assert_eq!(
+                    deferred.clone_from,
+                    Some(SourceRepo::new(
+                        CodeForge::GitHub,
+                        "benchmarks".into(),
+                        "frozen-api".into(),
+                    ))
+                );
+                assert!(deferred.preserve_origin);
                 assert_eq!(
                     options
                         .workspace
@@ -168,7 +187,10 @@ fn deferred_capability_bootstrap_subprocess() {
         }])
     };
     let deferred = if scenario == "deferred" {
-        json!([{"codeForge": "GITLAB", "owner": "platform/backend", "repo": "api"}])
+        json!([{
+            "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+            "ref": null, "cloneFrom": null, "expectedSha": null, "preserveOrigin": true
+        }])
     } else {
         json!([])
     };
@@ -180,7 +202,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
         "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
         "computerUseEnabled": false, "repositories": eager,
-        "preparedDeferredRepositories": if scenario == "deferred" { json!([{ "forge": "GITLAB", "owner": "platform/backend", "name": "api", "ref": null, "cloneFrom": null, "expectedSha": null, "preserveOrigin": true }]) } else { json!([]) }, "deferredRepositories": deferred,
+        "deferredRepositories": deferred,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false,
     });
