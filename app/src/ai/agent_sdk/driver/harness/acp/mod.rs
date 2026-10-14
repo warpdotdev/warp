@@ -1506,5 +1506,5 @@ fn mcp_server_for_acp(name: &str, server: &JSONMCPServer) -> McpServer {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
