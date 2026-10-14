@@ -10,8 +10,9 @@ use warp_multi_agent_api::message::{
 };
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warp_multi_agent_api::{
-    ClientAction, Message, ResponseEvent, RunShellCommandResult, ShellCommandFinished, Task,
-    client_action, response_event, run_shell_command_result,
+    self as api, ClientAction, Message, QueryAuthor, ResponseEvent, RunShellCommandResult,
+    ShellCommandFinished, Task, client_action, query_author, response_event,
+    run_shell_command_result,
 };
 use warpui::{App, AppContext};
 
@@ -152,7 +153,7 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
         terminal.update(&mut app, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 let id = controller.bind_native_prompt_conversation(None, ctx);
-                controller.set_external_harness_prompt_sink(sink);
+                controller.set_external_harness_prompt_sink(sink, ctx);
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
                     "follow-up".into(),
                     None,
@@ -188,6 +189,101 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
                     prompts.is_closed(),
                     "unbinding must drop the sink so the harness sees the channel close"
                 );
+            });
+        });
+    });
+}
+
+#[test]
+fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (sink, prompts) = async_channel::unbounded();
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let author = QueryAuthor {
+                    principal: Some(query_author::Principal::User(api::WarpUser {
+                        uid: "viewer-uid".to_owned(),
+                        email: "viewer@example.com".to_owned(),
+                        team_uid: String::new(),
+                    })),
+                    resolution: api::IdentityResolution::ClientSession.into(),
+                };
+                let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+                    author: Some(author.clone()),
+                    ..Default::default()
+                });
+                let participant_id = ParticipantId::new();
+                for text in ["first", "second"] {
+                    controller.execute_warp_agent_prompt_from_shared_session_injection(
+                        text.into(),
+                        None,
+                        vec![AgentAttachment::PlainText {
+                            content: format!("{text} context"),
+                        }],
+                        participant_id.clone(),
+                        Some(base.clone()),
+                        ctx,
+                    );
+                }
+                assert_eq!(
+                    QueuedQueryModel::as_ref(ctx).queue(id).len(),
+                    2,
+                    "with no sink and setup pending, injections are held in the queue"
+                );
+
+                controller.set_external_harness_prompt_sink(sink, ctx);
+
+                for text in ["first", "second"] {
+                    let relayed = prompts
+                        .try_recv()
+                        .unwrap_or_else(|_| panic!("{text:?} must be relayed on install"));
+                    assert_eq!(relayed.text, text);
+                    assert!(
+                        matches!(
+                            relayed.attachments.as_slice(),
+                            [AgentAttachment::PlainText { content }]
+                                if *content == format!("{text} context")
+                        ),
+                        "attachments must survive the queue: {:?}",
+                        relayed.attachments
+                    );
+                    assert_eq!(relayed.participant_id, participant_id);
+                    assert_eq!(
+                        relayed.base.as_ref().map(|base| base.to_proto().author),
+                        Some(Some(author.clone())),
+                        "attribution must survive the queue"
+                    );
+                }
+                assert!(
+                    prompts.is_empty(),
+                    "each queued row is relayed exactly once"
+                );
+                assert!(
+                    !QueuedQueryModel::as_ref(ctx).has_queue(id),
+                    "relayed rows are removed from the queue"
+                );
+                assert_eq!(
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .unwrap()
+                        .exchange_count(),
+                    0,
+                    "nothing is sent to Warp's agent"
+                );
+
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "third".into(),
+                    None,
+                    vec![],
+                    participant_id.clone(),
+                    None,
+                    ctx,
+                );
+                assert_eq!(prompts.try_recv().unwrap().text, "third");
+                assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
             });
         });
     });

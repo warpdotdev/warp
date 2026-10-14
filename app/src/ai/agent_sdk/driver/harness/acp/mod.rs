@@ -773,8 +773,8 @@ impl HarnessRunner for AcpHarnessRunner {
         let run_id = self.task_id.map(|id| id.to_string());
         let turn = begin_turn(foreground, &self.terminal_driver, run_id.clone(), None).await?;
         let (follow_up_tx, follow_up_rx) = async_channel::unbounded::<ExternalHarnessPrompt>();
-        with_ai_controller(foreground, &self.terminal_driver, move |controller, _| {
-            controller.set_external_harness_prompt_sink(follow_up_tx);
+        with_ai_controller(foreground, &self.terminal_driver, move |controller, ctx| {
+            controller.set_external_harness_prompt_sink(follow_up_tx, ctx);
         })
         .await?;
 
