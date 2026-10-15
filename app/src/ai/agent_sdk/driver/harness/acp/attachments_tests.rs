@@ -201,26 +201,60 @@ fn blocks_serialize_in_acp_wire_shape() {
     assert!(resource["resource"].get("blob").is_none());
 }
 
+/// A scratch directory removed when dropped, so a failing assertion does not leak files.
+struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    fn new(label: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("acp-attachments-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    /// Writes `head` and extends the file with a hole to `len` bytes, so a file larger than
+    /// the inline caps costs no disk or time to create.
+    fn file(&self, name: &str, head: &[u8], len: u64) -> DownloadedAttachment {
+        let path = self.0.join(name);
+        std::fs::write(&path, head).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+        DownloadedAttachment {
+            file_id: "att-1".to_owned(),
+            file_name: name.to_owned(),
+            file_path: path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn read(file: &DownloadedAttachment, capabilities: PromptCapabilities) -> ResolvedFile {
+    futures::executor::block_on(ResolvedFile::read(file, capabilities))
+}
+
 #[test]
 fn reading_a_file_sniffs_its_mime_type_from_magic_bytes() {
-    let dir = std::env::temp_dir().join(format!("acp-attachments-read-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("photo.txt");
-    std::fs::write(&path, PNG_HEADER).unwrap();
-    let downloaded = DownloadedAttachment {
-        file_id: "att-1".to_owned(),
-        file_name: "photo.txt".to_owned(),
-        file_path: path.to_string_lossy().into_owned(),
-    };
+    let dir = ScratchDir::new("sniff");
+    let photo = dir.file("photo.txt", PNG_HEADER, PNG_HEADER.len() as u64);
 
-    let read = futures::executor::block_on(ResolvedFile::read(&downloaded, image_capable()));
-    assert_eq!(read.mime_type, "image/png");
-    assert_eq!(read.contents.as_deref(), Some(PNG_HEADER));
-
-    let unread = futures::executor::block_on(ResolvedFile::read(
-        &downloaded,
-        PromptCapabilities::default(),
+    let resolved = read(&photo, image_capable());
+    assert_eq!(resolved.mime_type, "image/png");
+    assert_eq!(resolved.contents.as_deref(), Some(PNG_HEADER));
+    assert!(matches!(
+        file_block(image_capable(), &resolved),
+        ContentBlock::Image { .. }
     ));
+
+    let unread = read(&photo, PromptCapabilities::default());
     assert!(
         unread.contents.is_none(),
         "baseline agents never need the bytes"
@@ -229,8 +263,63 @@ fn reading_a_file_sniffs_its_mime_type_from_magic_bytes() {
         unread.mime_type, "text/plain",
         "falls back to the extension without bytes"
     );
+}
 
-    std::fs::remove_dir_all(&dir).unwrap();
+#[test]
+fn oversize_files_are_not_read() {
+    let dir = ScratchDir::new("oversize");
+    let everything = PromptCapabilities {
+        image: true,
+        audio: true,
+        embedded_context: true,
+    };
+
+    let huge_image = dir.file("huge.png", PNG_HEADER, MAX_INLINE_IMAGE_BYTES as u64 + 1);
+    let resolved = read(&huge_image, everything);
+    assert!(resolved.contents.is_none());
+    assert_link(&file_block(everything, &resolved), &resolved);
+
+    let big_text = dir.file("big.txt", b"hello", MAX_EMBEDDED_TEXT_BYTES as u64 + 1);
+    let resolved = read(&big_text, everything);
+    assert!(
+        resolved.contents.is_none(),
+        "a text file over the text cap is not read even though it is under the image cap"
+    );
+    assert_link(&file_block(everything, &resolved), &resolved);
+
+    let image = dir.file("ok.png", PNG_HEADER, MAX_INLINE_IMAGE_BYTES as u64);
+    let resolved = read(&image, everything);
+    assert_eq!(
+        resolved.contents.as_ref().map(Vec::len),
+        Some(MAX_INLINE_IMAGE_BYTES)
+    );
+    assert!(matches!(
+        file_block(everything, &resolved),
+        ContentBlock::Image { .. }
+    ));
+}
+
+#[test]
+fn files_of_a_kind_the_agent_does_not_take_inline_are_not_read() {
+    let dir = ScratchDir::new("kind");
+    let text = dir.file("notes.txt", b"hello", 5);
+    let resolved = read(&text, image_capable());
+    assert!(resolved.contents.is_none());
+    assert_eq!(resolved.mime_type, "text/plain");
+
+    let image = dir.file("photo.png", PNG_HEADER, PNG_HEADER.len() as u64);
+    let resolved = read(&image, context_capable());
+    assert!(resolved.contents.is_none());
+    assert_eq!(resolved.mime_type, "image/png");
+
+    let missing = DownloadedAttachment {
+        file_id: "att-2".to_owned(),
+        file_name: "gone.txt".to_owned(),
+        file_path: dir.0.join("gone.txt").to_string_lossy().into_owned(),
+    };
+    let resolved = read(&missing, context_capable());
+    assert!(resolved.contents.is_none());
+    assert_link(&file_block(context_capable(), &resolved), &resolved);
 }
 
 #[test]

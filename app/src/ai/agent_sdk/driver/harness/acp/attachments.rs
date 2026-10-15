@@ -7,13 +7,16 @@
 //! go inline as embedded resources when it takes embedded context, and everything else is handed
 //! over as a resource link, which every ACP agent accepts. Block references need the terminal's
 //! block contents and are not forwarded yet.
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use base64::Engine as _;
+use futures::io::AsyncReadExt as _;
 use mime_guess::mime;
 use session_sharing_protocol::common::AgentAttachment;
 use url::Url;
+use warp_core::safe_warn;
 
 use super::protocol::{ContentBlock, EmbeddedResource, PromptCapabilities};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -137,31 +140,45 @@ pub(super) struct ResolvedFile {
     pub path: PathBuf,
     /// Sniffed from the leading bytes when they were read, otherwise guessed from the name.
     pub mime_type: String,
-    /// `None` when the file was not read: either the agent accepts nothing inline, so the bytes
-    /// were never needed, or reading failed.
+    /// `None` when the file was not read: the agent accepts nothing of its kind inline, it is
+    /// too large to inline, or reading failed. Such a file travels as a link.
     pub contents: Option<Vec<u8>>,
 }
 
 impl ResolvedFile {
-    /// Reads the file when `capabilities` leave a chance of sending it inline.
+    /// Reads the file only when `capabilities` and its size allow it to be sent inline, so a
+    /// batch of large attachments that will only be linked is never held in memory.
     async fn read(file: &DownloadedAttachment, capabilities: PromptCapabilities) -> Self {
         let path = PathBuf::from(&file.file_path);
-        let contents = if capabilities.image || capabilities.embedded_context {
-            match async_fs::read(&path).await {
-                Ok(bytes) => Some(bytes),
+        let largest_cap = [
+            capabilities.image.then_some(MAX_INLINE_IMAGE_BYTES),
+            capabilities
+                .embedded_context
+                .then_some(MAX_EMBEDDED_TEXT_BYTES),
+        ]
+        .into_iter()
+        .flatten()
+        .max();
+        let inlineable = match largest_cap {
+            Some(largest_cap) => match read_if_inlineable(&path, largest_cap, capabilities).await {
+                Ok(inlineable) => inlineable,
                 Err(error) => {
-                    log::warn!(
-                        "Linking attachment {} instead of inlining it: {error}",
-                        file.file_name
+                    safe_warn!(
+                        safe: ("Failed to read an ACP attachment; sending it as a resource link"),
+                        full: (
+                            "Failed to read ACP attachment {}; sending it as a resource link: {error}",
+                            file.file_name
+                        )
                     );
                     None
                 }
-            }
-        } else {
-            None
+            },
+            None => None,
         };
-        let sniff = contents.as_deref().unwrap_or_default();
-        let mime_type = infer_mime_type(&path, &sniff[..sniff.len().min(MIME_SNIFF_BYTES)]);
+        let (mime_type, contents) = match inlineable {
+            Some((mime_type, contents)) => (mime_type, Some(contents)),
+            None => (infer_mime_type(&path, &[]), None),
+        };
         Self {
             name: file.file_name.clone(),
             path,
@@ -176,6 +193,45 @@ impl ResolvedFile {
             name: Some(self.name.clone()),
         }
     }
+}
+
+/// Reads `path` when the agent accepts its kind inline and it fits that kind's cap, returning
+/// its sniffed MIME type and bytes. `None` means it should be linked instead. The size is
+/// checked against `largest_cap` before anything is read, and only the sniff prefix is read
+/// before the kind's own cap is known; the final read is bounded in case the file grew.
+async fn read_if_inlineable(
+    path: &Path,
+    largest_cap: usize,
+    capabilities: PromptCapabilities,
+) -> io::Result<Option<(String, Vec<u8>)>> {
+    let len = async_fs::metadata(path).await?.len();
+    if len > largest_cap as u64 {
+        return Ok(None);
+    }
+    let mut file = async_fs::File::open(path).await?;
+    let mut contents = Vec::new();
+    (&mut file)
+        .take(MIME_SNIFF_BYTES as u64)
+        .read_to_end(&mut contents)
+        .await?;
+    let mime_type = infer_mime_type(path, &contents);
+    let cap = if is_supported_image_mime_type(&mime_type) {
+        capabilities.image.then_some(MAX_INLINE_IMAGE_BYTES)
+    } else {
+        capabilities
+            .embedded_context
+            .then_some(MAX_EMBEDDED_TEXT_BYTES)
+    };
+    let Some(cap) = cap.filter(|cap| len <= *cap as u64) else {
+        return Ok(None);
+    };
+    file.take((cap + 1).saturating_sub(contents.len()) as u64)
+        .read_to_end(&mut contents)
+        .await?;
+    if contents.len() > cap {
+        return Ok(None);
+    }
+    Ok(Some((mime_type, contents)))
 }
 
 /// Orders the prompt as the user's text followed by each attachment, so agents that
