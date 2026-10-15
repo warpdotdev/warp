@@ -64,6 +64,9 @@ const EXTRA_HTTP_HEADERS_ENV_VAR: &str = "WARP_EXTRA_HTTP_HEADERS";
 /// run outside of a Tokio context.
 pub struct Client {
     wrapped: reqwest::Client,
+    include_warp_headers: bool,
+    #[cfg(target_family = "wasm")]
+    omit_credentials: bool,
 
     /// A callback that is executed before every request is sent with a cloned
     /// version of the outbound request.  If for some reason the request cannot be
@@ -155,6 +158,17 @@ impl Client {
         Self::from_client_builder(builder).expect("should not fail to create client")
     }
 
+    /// Creates a pooled client without automatic Warp headers, IAP tokens, or browser credentials.
+    pub fn new_external() -> Self {
+        let mut client = Self::new();
+        client.include_warp_headers = false;
+        #[cfg(target_family = "wasm")]
+        {
+            client.omit_credentials = true;
+        }
+        client
+    }
+
     #[cfg(feature = "test-util")]
     pub fn new_for_test() -> Self {
         let client_builder = reqwest::ClientBuilder::new()
@@ -170,6 +184,9 @@ impl Client {
     pub fn from_client_builder(client_builder: reqwest::ClientBuilder) -> reqwest::Result<Self> {
         client_builder.build().map(|client| Self {
             wrapped: client,
+            include_warp_headers: true,
+            #[cfg(target_family = "wasm")]
+            omit_credentials: false,
             before_request_sent: None,
             after_response_received: None,
             iap_token_provider: None,
@@ -194,6 +211,12 @@ impl Client {
         include_warp_headers: bool,
         iap_token: Option<String>,
     ) -> RequestBuilder<'_> {
+        #[cfg(target_family = "wasm")]
+        let wrapped = if self.omit_credentials {
+            wrapped.fetch_credentials_omit()
+        } else {
+            wrapped
+        };
         let mut builder = RequestBuilder {
             wrapped,
             client: self,
@@ -201,7 +224,7 @@ impl Client {
             prevent_sleep_reason: None,
         };
 
-        if include_warp_headers {
+        if include_warp_headers && self.include_warp_headers {
             builder = Self::add_warp_http_headers(builder);
         }
 

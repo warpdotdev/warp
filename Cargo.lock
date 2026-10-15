@@ -15810,6 +15810,7 @@ dependencies = [
  "notify-debouncer-full",
  "remote_server",
  "repo_metadata",
+ "same-file",
  "tempfile",
  "thiserror 2.0.17",
  "warp_core",
@@ -15935,7 +15936,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=6b33333f17ae74f1d18769672d6594d095b3f3da#6b33333f17ae74f1d18769672d6594d095b3f3da"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=30d54b549cf87930f3f071b38ade82bf13305ba2#30d54b549cf87930f3f071b38ade82bf13305ba2"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -16046,6 +16047,7 @@ dependencies = [
  "bincode",
  "blocking",
  "bounded-vec-deque",
+ "bytes",
  "cfg-if",
  "chrono",
  "cloud_object_client",

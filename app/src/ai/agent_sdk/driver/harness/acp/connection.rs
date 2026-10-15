@@ -15,8 +15,8 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use futures::lock::Mutex as AsyncMutex;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use warpui::r#async::executor::{Background, BackgroundTask};
 
@@ -25,6 +25,8 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
 
 /// A JSON-RPC error returned to the agent for a request it made to us.
+#[derive(Debug, Deserialize, thiserror::Error)]
+#[error("ACP error {code}: {message}")]
 pub(super) struct RpcError {
     pub code: i64,
     pub message: String,
@@ -230,7 +232,12 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 };
                 let error = message.get("error").filter(|error| !error.is_null());
                 let result = match (message.get("result"), error) {
-                    (_, Some(error)) => Err(anyhow!("ACP error response: {error}")),
+                    (_, Some(error)) => {
+                        Err(match serde_json::from_value::<RpcError>(error.clone()) {
+                            Ok(error) => anyhow!(error),
+                            Err(_) => anyhow!("Malformed ACP error response"),
+                        })
+                    }
                     (Some(result), None) => Ok(result.clone()),
                     (None, None) => Ok(Value::Null),
                 };

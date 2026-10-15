@@ -175,6 +175,27 @@ fn notifications_preceding_a_response_are_queued_before_it_resolves() {
 }
 
 #[test]
+fn authentication_error_code_survives_request_context() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/new", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {"code": -32000, "message": "Authentication required"},
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err().context("session/new failed");
+        assert_eq!(error.downcast_ref::<RpcError>().unwrap().code, -32000);
+    });
+}
+
+#[test]
 fn error_responses_surface_as_request_errors() {
     let (connection, _notifications, mut agent) = connect(rejecting_handler());
     block_on(async {

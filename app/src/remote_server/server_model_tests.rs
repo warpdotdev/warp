@@ -516,3 +516,6 @@ fn non_host_scoped_response_is_not_failed_over() {
 #[cfg(unix)]
 #[path = "server_model_unix_tests.rs"]
 mod unix;
+
+#[path = "file_operation_tests.rs"]
+mod file_operations;

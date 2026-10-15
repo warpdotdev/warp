@@ -133,6 +133,8 @@ pub struct HarnessAuthSecretsConfig {
     /// Name of a managed secret for Codex harness authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_auth_secret_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_auth_secret_name: Option<String>,
 }
 
 impl AgentConfigSnapshot {

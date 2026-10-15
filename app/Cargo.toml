@@ -445,7 +445,7 @@ warp_files = { workspace = true, features = ["test-util"] }
 repo_metadata = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time", "test-util"] }
 
 [build-dependencies]
 anyhow = "1.0"

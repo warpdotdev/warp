@@ -28,6 +28,7 @@ use warp_multi_agent_api::{
 use super::protocol::{
     PlanEntry, SessionUpdate, ToolCallContent, ToolCallFields, ToolCallStatus, ToolKind,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::serde_json_to_prost;
 
 const AGENT_OUTPUT_TEXT_PATH: &str = "agent_output.text";
@@ -312,14 +313,31 @@ impl AcpTurnMapper {
                     ..Default::default()
                 }),
             })),
-            self.user_query_action(prompt),
+            self.user_query_action(prompt, None),
         ]
     }
 
-    /// Echoes a user prompt into the task, as the MAA server does for each request.
-    pub(super) fn user_query_action(&self, prompt: &str) -> ClientAction {
+    /// Echoes a user prompt into the task, as the MAA server does for each request. The
+    /// attribution of `base` (who injected the prompt and from where), when there is one, is
+    /// carried onto the echoed query so viewers see the follow-up's author rather than the
+    /// sharer's.
+    pub(super) fn user_query_action(
+        &self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> ClientAction {
+        let (origin, author, source_message) = match base {
+            Some(base) => {
+                let base = base.to_proto();
+                (base.origin, base.author, base.source_message)
+            }
+            None => (None, None, None),
+        };
         self.add_messages(vec![self.new_message(MessageKind::UserQuery(UserQuery {
             query: prompt.to_owned(),
+            origin,
+            author,
+            source_message,
             ..Default::default()
         }))])
     }

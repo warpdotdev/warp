@@ -171,7 +171,7 @@ impl FileArtifactUploader {
         artifact: &PreparedUploadArtifact,
     ) -> Result<String> {
         upload_file_to_target(
-            self.server_api.http_client(),
+            self.server_api.external_http_client(),
             target,
             FileUploadBody::new(artifact.path.clone()),
         )

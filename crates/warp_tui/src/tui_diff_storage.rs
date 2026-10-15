@@ -85,19 +85,23 @@ enum PersistAction {
 }
 
 impl PersistAction {
-    /// Decides the write operation once from the diff op and backend. Remote
-    /// sessions have no rename primitive, so remote renames fall back to an
-    /// in-place write at the original path (and are reported as such).
-    fn resolve(op: &DiffType, session_type: &DiffSessionType, path: &str) -> Self {
-        match (op, session_type) {
-            (DiffType::Delete { .. }, _) => PersistAction::Delete,
-            (
-                DiffType::Update {
-                    rename: Some(to), ..
-                },
-                DiffSessionType::Local,
-            ) if to.to_string_lossy() != path => PersistAction::Rename(to.clone()),
-            _ => PersistAction::Write,
+    fn resolve(op: &DiffType, path: &str) -> Self {
+        match op {
+            DiffType::Delete { .. } => PersistAction::Delete,
+            DiffType::Update {
+                rename: Some(to), ..
+            } => {
+                let same_path = StandardizedPath::try_new(&to.to_string_lossy())
+                    .ok()
+                    .zip(StandardizedPath::try_new(path).ok())
+                    .is_some_and(|(to, from)| to == from);
+                if same_path {
+                    PersistAction::Write
+                } else {
+                    PersistAction::Rename(to.clone())
+                }
+            }
+            DiffType::Create { .. } | DiffType::Update { rename: None, .. } => PersistAction::Write,
         }
     }
 }
@@ -237,7 +241,7 @@ impl DiffStorage for TuiDiffStorage {
             .iter()
             .map(|diff| {
                 let path = diff.file_path();
-                let action = PersistAction::resolve(&diff.diff_type, &self.session_type, &path);
+                let action = PersistAction::resolve(&diff.diff_type, &path);
                 // A derivation failure is surfaced by `start_saving`; the
                 // snapshot is unused when the accept fails.
                 let final_content =
@@ -259,7 +263,7 @@ impl DiffStorage for TuiDiffStorage {
                     Ok(content) => content,
                     Err(error) => return ready_save_failure(FileSaveError::Other(error)),
                 };
-                let action = PersistAction::resolve(&diff.diff_type, &session_type, &path);
+                let action = PersistAction::resolve(&diff.diff_type, &path);
                 file_model
                     .update(app, |file_model, ctx| {
                         dispatch_write(

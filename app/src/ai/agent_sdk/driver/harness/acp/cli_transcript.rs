@@ -7,14 +7,19 @@
 //! One gap: when claude-agent-acp restarts a session to clear its context after a plan is
 //! approved, the SDK continues under a fresh id that the adapter never reports. Captures keep
 //! reading the transcript under the ACP session id, which stops at the restart.
+use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 
 use super::super::claude_transcript::{claude_config_dir, session_transcript_path};
 use super::super::codex_transcript::{codex_sessions_root, find_session_file};
+use super::super::pi::PI_CODING_AGENT_DIR_ENV;
+use super::super::pi_transcript::find_session_file as find_pi_session_file;
 use super::super::transcript_persistence::{CapturedTranscript, UploadedTranscriptUsage};
 use super::super::usage_reporting::CaptureIdentity;
 use super::super::{claude_code, codex};
@@ -24,6 +29,7 @@ use super::super::{claude_code, codex};
 pub(super) enum CliTranscriptKind {
     Codex,
     Claude,
+    Pi,
 }
 
 impl CliTranscriptKind {
@@ -32,6 +38,7 @@ impl CliTranscriptKind {
         match harness {
             Harness::Codex => Some(Self::Codex),
             Harness::Claude => Some(Self::Claude),
+            Harness::Pi => Some(Self::Pi),
             Harness::Gemini | Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
         }
     }
@@ -43,15 +50,22 @@ impl CliTranscriptKind {
             // codex-acp returns the Codex thread id from `session/new`, and claude-agent-acp
             // passes its session id to the Agent SDK as the Claude session id.
             Self::Codex | Self::Claude => Uuid::parse_str(acp_session_id).ok(),
+            // pi-acp mints its own id and records which native session it maps to; `locate`
+            // resolves the file through that map, so the id is only an identity here.
+            Self::Pi => Uuid::parse_str(acp_session_id).ok(),
         }
     }
 
     /// The directory the CLI keeps its transcripts under, from the same environment the adapter
     /// inherits.
-    pub(super) fn root(self) -> Result<PathBuf> {
+    pub(super) fn root(self, env_vars: &HashMap<OsString, OsString>) -> Result<PathBuf> {
         match self {
             Self::Codex => codex_sessions_root(),
             Self::Claude => claude_config_dir(),
+            Self::Pi => env_vars
+                .get(OsStr::new(PI_CODING_AGENT_DIR_ENV))
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("PI_CODING_AGENT_DIR is not configured")),
         }
     }
 
@@ -62,10 +76,11 @@ impl CliTranscriptKind {
             Self::Claude => {
                 Some(session_transcript_path(root, cwd, session_id)).filter(|path| path.exists())
             }
+            Self::Pi => find_pi_session_file(root, cwd, session_id),
         }
     }
 
-    /// Captures the transcript at `path` exactly as the terminal runner for this CLI does.
+    /// Captures native transcript bytes and any supported usage data.
     pub(super) fn capture(
         self,
         session_id: Uuid,
@@ -82,6 +97,11 @@ impl CliTranscriptKind {
             Self::Claude => claude_code::capture_transcript_with_usage(
                 session_id, cwd, root, None, is_final, identity,
             ),
+            Self::Pi => Ok(CapturedTranscript {
+                transcript_body: fs::read(path)?,
+                usage_request: None,
+                needs_retry: false,
+            }),
         }
     }
 

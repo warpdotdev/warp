@@ -274,7 +274,7 @@ impl CLIAgent {
             Harness::Gemini => Some(CLIAgent::Gemini),
             Harness::OpenCode => Some(CLIAgent::OpenCode),
             Harness::Codex => Some(CLIAgent::Codex),
-            Harness::Unknown => Some(CLIAgent::Unknown),
+            Harness::Pi | Harness::Unknown => Some(CLIAgent::Unknown),
         }
     }
 

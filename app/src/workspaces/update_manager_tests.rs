@@ -24,6 +24,7 @@ use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::team::Team;
 use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 use crate::workspaces::workspace::{
     ChargeUnit, PurchaseAddOnCreditsPolicy, UserTier, Workspace, WorkspaceUid,
 };
@@ -82,6 +83,64 @@ fn mock_server_workflow(id: WorkflowId, owner: Owner) -> ServerWorkflow {
             guests: vec![],
         },
     )
+}
+
+#[test]
+fn out_of_band_metadata_refresh_applies_metadata_without_waiting_for_the_receiver() {
+    App::test((), |mut app| async move {
+        let mut attempts = 0;
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_workspaces_metadata()
+            .times(2)
+            .returning(move || {
+                attempts += 1;
+                if attempts == 1 {
+                    return Err(anyhow::anyhow!("workspace metadata unavailable"));
+                }
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_tier: UserTier {
+                            charge_unit: ChargeUnit::Cents,
+                            ..Default::default()
+                        },
+                    },
+                    pricing_info: None,
+                })
+            });
+        let team_client = Arc::new(team_client);
+        initialize_app(
+            team_client.clone(),
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            &mut app,
+        );
+        let manager = app.add_singleton_model(|ctx| TeamUpdateManager::new(team_client, None, ctx));
+        let (sender, applied) = oneshot::channel();
+        app.update(|ctx| {
+            let mut sender = Some(sender);
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::TeamsChanged)
+                    && let Some(sender) = sender.take()
+                {
+                    let _ = sender.send(());
+                }
+            });
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            drop(manager.refresh_workspace_metadata(ctx));
+        });
+        applied.await.unwrap();
+
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).charge_unit(), ChargeUnit::Cents);
+        });
+    });
 }
 
 #[test]

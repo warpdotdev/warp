@@ -15,6 +15,7 @@ impl AcpLaunchSpec {
             Harness::Claude => ("claude-code-acp", &[]),
             Harness::Codex => ("codex-acp", &[]),
             Harness::Gemini => ("gemini", &["--experimental-acp"]),
+            Harness::Pi => ("pi-acp", &[]),
             Harness::Oz | Harness::OpenCode | Harness::Unknown => return None,
         };
         Some(Self {

@@ -161,7 +161,7 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by the coordinator")
     }
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }
@@ -292,7 +292,7 @@ impl HarnessSupportClient for RecordingClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by the coordinator")
     }
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }

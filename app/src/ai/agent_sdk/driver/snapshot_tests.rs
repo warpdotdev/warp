@@ -235,7 +235,7 @@ impl HarnessSupportClient for TestClient {
         })
     }
 
-    fn http_client(&self) -> &http_client::Client {
+    fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
 }

@@ -87,6 +87,8 @@ use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::update_manager::{TeamUpdateManager, WorkspaceMetadataRetryPolicy};
 use crate::workspaces::user_workspaces::HeadlessTeamScope;
 
 mod admin;
@@ -645,7 +647,11 @@ fn build_execution_task_and_options(
     let mcp_specs = execution_config::mcp_specs(&config.mcp_servers_json)?;
     let repositories = execution_config::repositories(config.repositories)?;
     let deferred_repositories = if use_factory_repositories {
-        execution_config::repositories(config.deferred_repositories)?
+        execution_config::repositories(
+            config
+                .deferred_repositories
+                .context("Execution configuration is missing deferred repositories")?,
+        )?
     } else {
         Vec::new()
     };
@@ -905,7 +911,7 @@ impl AgentDriverRunner {
             setup_events
                 .record_result(
                     SetupStep::TeamMetadataRefresh,
-                    Self::refresh_team_metadata(&foreground),
+                    Self::refresh_team_metadata(&foreground, args.task_id.is_some()),
                 )
                 .await?;
             let agent_driver_team_scope = if let Some(config) = execution_config {
@@ -1093,10 +1099,27 @@ impl AgentDriverRunner {
 
     async fn refresh_team_metadata(
         foreground: &ModelSpawner<Self>,
+        cloud_startup: bool,
     ) -> Result<(), AgentDriverError> {
         foreground
             .spawn(
-                |_, ctx| -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+                move |_, ctx| -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+                    #[cfg(not(target_family = "wasm"))]
+                    if cloud_startup {
+                        return Box::pin(TeamUpdateManager::handle(ctx).update(
+                            ctx,
+                            |manager, ctx| {
+                                manager.refresh_workspace_metadata_with_retry(
+                                    WorkspaceMetadataRetryPolicy::TimeBudget(Duration::from_secs(
+                                        30,
+                                    )),
+                                    ctx,
+                                )
+                            },
+                        ));
+                    }
+                    #[cfg(target_family = "wasm")]
+                    let _ = cloud_startup;
                     Box::pin(common::refresh_workspace_metadata(ctx))
                 },
             )
@@ -1726,7 +1749,7 @@ impl AgentDriverRunner {
             }
             driver::attachments::fetch_and_download_handoff_snapshot_attachments(
                 ai_client.clone(),
-                server_api.http_client(),
+                server_api.external_http_client(),
                 task_id,
                 attachments_dir.clone(),
             )
@@ -1825,7 +1848,7 @@ impl AgentDriverRunner {
             };
             driver::attachments::fetch_and_download_handoff_snapshot_attachments(
                 handoff_snapshot_ai_client,
-                handoff_snapshot_server_api.http_client(),
+                handoff_snapshot_server_api.external_http_client(),
                 task_id_parsed,
                 handoff_snapshot_download_dir,
             )
@@ -2375,6 +2398,7 @@ fn resolve_orchestration_harness_label() -> &'static str {
         Some(Harness::Claude) => "claude",
         Some(Harness::OpenCode) => "opencode",
         Some(Harness::Gemini) => "gemini",
+        Some(Harness::Pi) => "pi",
         Some(Harness::Codex) => "codex",
         Some(Harness::Unknown) | None => "unknown",
     }

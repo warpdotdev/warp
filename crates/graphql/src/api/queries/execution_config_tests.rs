@@ -1,4 +1,3 @@
-use cynic::QueryBuilder;
 
 use super::{ExecutionBootstrap, ExecutionBootstrapVariables};
 use crate::api::queries::task_attachments::TaskInput;
@@ -8,7 +7,7 @@ use crate::request_context::{ClientContext, OsContext, RequestContext};
 #[test]
 fn bootstrap_fetches_all_task_data_in_one_operation() {
     for supports_deferred_repositories in [false, true] {
-        let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
+        let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: "execution".into(),
             supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
@@ -27,7 +26,8 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
                     version: None,
                 },
             },
-        });
+        })
+        .unwrap();
         let query = operation.query;
         assert_eq!(query.matches("executionConfig(").count(), 1);
         assert!(query.contains("supportsDeferredRepositories: $supportsDeferredRepositories"));
@@ -39,16 +39,20 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
             "factorySkillDirs",
             "preserveOrigin",
             "cloneFrom",
-            "expectedSha",
             "sessionSharingAcls",
             "snapshotDisabled",
             "awsSessionToken",
             "downloadUrl",
             "mimeType",
-            "deferredRepositories",
         ] {
             assert!(query.contains(field), "missing {field}");
         }
+        assert_eq!(query.contains("expectedSha"), supports_deferred_repositories);
+        assert_eq!(
+            query.contains("deferredRepositories"),
+            supports_deferred_repositories
+        );
+        assert!(!query.contains("@skip"));
         let variables = serde_json::to_value(&operation.variables).unwrap();
         assert_eq!(variables["executionId"], "execution");
         assert_eq!(

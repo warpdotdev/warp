@@ -28,6 +28,7 @@ use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
     CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
     needs_capture_retry, upload_captured_transcript,
@@ -162,6 +163,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             resolved_env_vars,
             skill_dirs,
             has_deferred_repositories,
+            HarnessSupportSkills::Plugin,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -723,6 +725,7 @@ pub(crate) fn prepare_claude_environment_config(
     resolved_env_vars: &HashMap<OsString, OsString>,
     skill_dirs: &[PathBuf],
     has_deferred_repositories: bool,
+    harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
     let claude_dir = claude_config_dir()?;
@@ -739,6 +742,7 @@ pub(crate) fn prepare_claude_environment_config(
         harness_working_dir,
         skill_dirs,
         has_deferred_repositories,
+        harness_support_skills,
     )?;
     Ok(())
 }
@@ -761,6 +765,7 @@ fn publish_skills_for_claude(
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
     has_deferred_repositories: bool,
+    harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
     let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
@@ -770,6 +775,7 @@ fn publish_skills_for_claude(
         is_sandbox,
         skill_dirs,
         has_deferred_repositories,
+        harness_support_skills,
     )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,

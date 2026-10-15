@@ -2,15 +2,18 @@
 // conversation: the harness translates its own protocol into MAA response events, which flow
 // through the same controller path as events from the MAA server. The conversation stays owned
 // by this client (so task status syncing keeps working); only the turn itself is the harness's.
-use session_sharing_protocol::common::AgentAttachment;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api::response_event::StreamInit;
 use warp_multi_agent_api::{ResponseEvent, response_event};
 use warpui::{ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
+use crate::ai::blocklist::QueuedQueryModel;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
@@ -28,15 +31,74 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     /// Context the prompt's author attached, kept in its shared-session wire shape so the
     /// harness can decide how to present each kind to its agent.
     pub attachments: Vec<AgentAttachment>,
+    /// The shared-session participant who injected the prompt, so the turn it opens is
+    /// attributed to them for viewers.
+    pub participant_id: ParticipantId,
+    /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
+    /// Its attribution is copied onto the user query echoed into the conversation.
+    pub base: Option<BaseUserQuery>,
 }
 
 impl BlocklistAIController {
     /// Diverts prompts injected into the bound native conversation to an external harness.
+    /// Shared-session prompts that were queued for the conversation before the sink existed
+    /// (the conversation is bound at driver construction, long before the harness is up) are
+    /// relayed first, in arrival order, so the harness sees them ahead of anything injected
+    /// later. The native setup barrier is left in place: nothing may dispatch from the queue
+    /// to Warp's agent while the harness owns the conversation.
     pub(in crate::ai) fn set_external_harness_prompt_sink(
         &mut self,
         sink: async_channel::Sender<ExternalHarnessPrompt>,
+        ctx: &mut ModelContext<Self>,
     ) {
+        if let Some(conversation_id) = self.native_prompt_conversation_id {
+            self.relay_queued_shared_session_prompts(conversation_id, &sink, ctx);
+        }
         self.external_harness_prompt_sink = Some(sink);
+    }
+
+    fn relay_queued_shared_session_prompts(
+        &self,
+        conversation_id: AIConversationId,
+        sink: &async_channel::Sender<ExternalHarnessPrompt>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let queued: Vec<_> = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .filter_map(|row| {
+                let (participant_id, attachments) = row.shared_session_prompt()?;
+                Some((
+                    row.id(),
+                    ExternalHarnessPrompt {
+                        text: row.text().to_owned(),
+                        attachments: attachments.to_vec(),
+                        participant_id: participant_id.clone(),
+                        base: row.base_user_query().cloned(),
+                    },
+                ))
+            })
+            .collect();
+        if queued.is_empty() {
+            return;
+        }
+        log::info!(
+            "event=queued_injections_relayed_to_external_harness task_id={:?} terminal_id={:?} conversation_id={conversation_id} count={}",
+            self.ambient_agent_task_id,
+            self.terminal_surface_id,
+            queued.len(),
+        );
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            for (query_id, prompt) in queued {
+                if sink.try_send(prompt).is_err() {
+                    report_error!(
+                        "Dropped a queued shared-session prompt because the external harness is not accepting prompts",
+                        extra: { "conversation_id" => %conversation_id, "query_id" => ?query_id }
+                    );
+                }
+                queue.remove_fired_row(conversation_id, query_id, ctx);
+            }
+        });
     }
 
     /// Opens a harness-driven turn on `conversation_id`: registers an exchange with no inputs

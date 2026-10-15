@@ -7,6 +7,7 @@ pub(super) const PROTOCOL_VERSION: u16 = 1;
 
 pub(super) const METHOD_INITIALIZE: &str = "initialize";
 pub(super) const METHOD_SESSION_NEW: &str = "session/new";
+pub(super) const METHOD_SESSION_SET_CONFIG_OPTION: &str = "session/set_config_option";
 pub(super) const METHOD_SESSION_PROMPT: &str = "session/prompt";
 pub(super) const METHOD_SESSION_CANCEL: &str = "session/cancel";
 pub(super) const METHOD_SESSION_UPDATE: &str = "session/update";
@@ -102,6 +103,64 @@ pub(super) struct HttpHeader {
 #[serde(rename_all = "camelCase")]
 pub(super) struct NewSessionResponse {
     pub session_id: String,
+    #[serde(default)]
+    pub config_options: Vec<AcpAdvertisedSetting>,
+    /// Adapter-specific extension data.
+    #[serde(rename = "_meta", default)]
+    pub meta: Value,
+}
+
+/// An adapter-advertised ACP setting. Model and thinking settings share this wire representation.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AcpAdvertisedSetting {
+    /// Adapter-specific identifier passed to `session/set_config_option`.
+    pub id: String,
+    pub category: Option<String>,
+    #[serde(rename = "type")]
+    pub input_type: String,
+    #[serde(rename = "options", default)]
+    pub choices: Vec<AcpSettingChoice>,
+}
+
+/// Selectable values advertised by an ACP adapter.
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub(super) enum AcpSettingChoice {
+    Value {
+        value: String,
+    },
+    Group {
+        #[serde(rename = "options")]
+        choices: Vec<AcpSettingChoice>,
+    },
+    Unsupported {},
+}
+
+impl AcpSettingChoice {
+    pub(super) fn supports_value(&self, requested: &str) -> bool {
+        match self {
+            Self::Value { value } => value == requested,
+            Self::Group { choices } => choices
+                .iter()
+                .any(|choice| choice.supports_value(requested)),
+            Self::Unsupported {} => false,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AcpSetSettingParams {
+    pub session_id: String,
+    pub config_id: String,
+    pub value: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AcpSetSettingResponse {
+    pub config_options: Vec<AcpAdvertisedSetting>,
 }
 
 #[derive(Serialize)]

@@ -5,6 +5,58 @@ use tracing_subscriber::layer::SubscriberExt as _;
 
 use super::*;
 
+struct TestIapTokenProvider;
+
+impl IapTokenProvider for TestIapTokenProvider {
+    fn cached_token(&self) -> Option<String> {
+        Some("test-iap-token".into())
+    }
+}
+
+#[test]
+fn external_client_omits_automatic_headers_and_preserves_signing_headers() {
+    with_active_span(|| {
+        let mut client = Client::new();
+        client.set_iap_token_provider(Arc::new(TestIapTokenProvider));
+        let url = format!(
+            "{}/object?X-Amz-Signature=test%2Bsignature&x-id=PutObject",
+            ChannelState::server_root_url()
+        );
+        let api_request = client.get(&url).build().unwrap().wrapped;
+        assert!(
+            api_request
+                .headers()
+                .contains_key(headers::WARP_OS_CATEGORY)
+        );
+        assert!(
+            api_request
+                .headers()
+                .contains_key(headers::TRACE_LINK_HEADER)
+        );
+        assert!(
+            api_request
+                .headers()
+                .contains_key(iap::IAP_PROXY_AUTH_HEADER)
+        );
+
+        let external_client = Client::new_external();
+        let request = external_client
+            .put(&url)
+            .header("x-amz-checksum-crc32c", "EjRWeA==")
+            .header(AUTHORIZATION, "AWS4-HMAC-SHA256 test-signature")
+            .build()
+            .unwrap()
+            .wrapped;
+        assert_eq!(request.url().as_str(), url);
+        assert_eq!(request.headers().len(), 2);
+        assert_eq!(request.headers()["x-amz-checksum-crc32c"], "EjRWeA==");
+        assert_eq!(
+            request.headers()[AUTHORIZATION],
+            "AWS4-HMAC-SHA256 test-signature"
+        );
+    });
+}
+
 /// Runs `f` with a real OpenTelemetry subscriber installed and a span entered,
 /// so `Span::current()` resolves to a valid OTEL span context.
 fn with_active_span<R>(f: impl FnOnce() -> R) -> R {

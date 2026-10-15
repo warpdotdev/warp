@@ -164,7 +164,7 @@ async fn download_and_write_attachments(
         attachment_dir.display()
     );
 
-    let http = http_client.http_client();
+    let http = http_client.external_http_client();
     let download_futures = attachments
         .into_iter()
         .map(|attachment| download_task_attachment(attachment, attachment_dir, http));

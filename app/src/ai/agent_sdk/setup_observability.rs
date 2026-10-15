@@ -204,6 +204,9 @@ pub(crate) enum SetupStep {
     SkillsDirsLoading,
     ConversationResumeLoading,
     ThirdPartyHarnessPreparation,
+    /// Launching the harness through command startup and ACP runner initialization, including
+    /// conversation binding and first-turn setup for ACP harnesses.
+    ThirdPartyHarnessStart,
     ThirdPartyHarnessExternalConversation,
     /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] that track plugin
     /// install/update latency and reliability individually.
@@ -296,6 +299,9 @@ impl SetupStep {
             }
             Self::ThirdPartyHarnessPreparation => {
                 span_and_name!("setup_third_party_harness_preparation")
+            }
+            Self::ThirdPartyHarnessStart => {
+                span_and_name!("setup_third_party_harness_start")
             }
             Self::ThirdPartyHarnessExternalConversation => {
                 span_and_name!("setup_third_party_harness_external_conversation")

@@ -1,4 +1,55 @@
+use futures::executor::block_on;
+use mockito::{Matcher, Server};
+use warp_core::channel::ChannelState;
+use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
+
+use super::{HarnessSupportClient, ServerApi};
 use crate::ai::artifacts::Artifact;
+
+#[test]
+fn transcript_download_resolves_url_with_requested_task_scope() {
+    let ambient_task = "11111111-1111-4111-8111-111111111111";
+    for task_scope in [None, Some("22222222-2222-4222-8222-222222222222")] {
+        let mut storage = Server::new();
+        let storage_request = storage
+            .mock("GET", "/transcript")
+            .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, Matcher::Missing)
+            .match_header(CLOUD_AGENT_ID_HEADER, Matcher::Missing)
+            .match_header("x-warp-os-category", Matcher::Missing)
+            .with_status(200)
+            .with_body("raw transcript")
+            .create();
+        let api_request = {
+            let mut server = ChannelState::mock_server();
+            server
+                .mock("GET", "/api/v1/harness-support/transcript")
+                .match_query(Matcher::UrlEncoded("redirect".into(), "false".into()))
+                .match_header(CLOUD_AGENT_ID_HEADER, task_scope.unwrap_or(ambient_task))
+                .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+                .with_status(200)
+                .with_body(
+                    serde_json::json!({"url": format!("{}/transcript", storage.url())}).to_string(),
+                )
+                .create()
+        };
+        let api = ServerApi::new_for_test();
+        api.base_client
+            .set_ambient_workload_token_for_test("test-workload-token".into(), None);
+        api.set_ambient_agent_task_id(Some(ambient_task.parse().unwrap()));
+        let bytes = block_on(async {
+            if let Some(task_id) = task_scope {
+                api.fetch_transcript_for_task(&task_id.parse().unwrap())
+                    .await
+            } else {
+                api.fetch_transcript().await
+            }
+        })
+        .unwrap();
+        assert_eq!(bytes.as_ref(), b"raw transcript");
+        api_request.assert();
+        storage_request.assert();
+    }
+}
 
 /// The server marshals its unset Go maps and slices as `null`, which a POST
 /// target routinely carries for `headers`.

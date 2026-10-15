@@ -9,6 +9,11 @@ use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
+#[derive(serde::Deserialize)]
+pub struct PresignedDownloadResponse {
+    pub url: String,
+}
+
 /// Typed error for HTTP operations so retry classifiers can inspect status failures.
 #[derive(Debug, thiserror::Error)]
 #[error("HTTP request failed with status {status}: {body}")]
@@ -99,6 +104,25 @@ impl PublicApiError {
 }
 
 impl BaseClient {
+    /// Downloads bytes from a presigned URL without attaching Warp headers or credentials.
+    pub async fn download_presigned(&self, url: &str) -> Result<bytes::Bytes> {
+        let response = self
+            .external_http_client()
+            .get(url)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("Failed to send presigned download request")?;
+        if !response.status().is_success() {
+            return Err(HttpStatusError::new(response.status().as_u16(), String::new()).into());
+        }
+        response
+            .bytes()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("Failed to read presigned download")
+    }
+
     /// Sends a GET request to a public API endpoint and returns the raw response on success.
     ///
     /// Unlike [`get_public_api`], this does not attempt JSON deserialization on the

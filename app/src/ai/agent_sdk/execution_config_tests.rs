@@ -50,7 +50,7 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
             preserve_origin: true,
         },
         ExecutionRepository {
-            expected_sha: None,
+            expected_sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
 
             forge: CodeForge::GitLab,
             owner: "owner".into(),
@@ -75,6 +75,10 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
         Some(RepositoryHeadRef::CommitSha(sha)) if sha == "abcdef"
     ));
     assert_eq!(resolved[1].clone_from.as_ref().unwrap().owner, "source");
+    assert_eq!(
+        resolved[1].expected_sha.as_deref(),
+        Some("0123456789abcdef0123456789abcdef01234567")
+    );
 }
 
 #[test]

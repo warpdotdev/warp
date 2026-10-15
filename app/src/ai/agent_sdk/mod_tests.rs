@@ -1,10 +1,16 @@
 use std::fs;
+use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use chrono::Utc;
 use clap::Parser;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
+use futures::FutureExt;
+use http::StatusCode;
 use mockito::{Matcher, Server};
 use serde_json::json;
 use warp_cli::agent::{
@@ -38,17 +44,24 @@ use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
 use crate::network::NetworkStatus;
 use crate::root_view::NewWorkspaceSource;
+use crate::server::graphql::GraphQLError;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient};
 use crate::server::server_api::managed_secrets::AppManagedSecretManager;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::settings::PrivacySettings;
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{HeadlessTeamScope, TeamScope, UserWorkspaces};
-use crate::workspaces::workspace::{Workspace, WorkspaceUid};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::update_manager::WorkspaceMetadataRetryPolicy;
+use crate::workspaces::user_workspaces::{
+    HeadlessTeamScope, TeamScope, UserWorkspaces, WorkspacesMetadataResponse,
+    WorkspacesMetadataWithPricing,
+};
+use crate::workspaces::workspace::{ChargeUnit, UserTier, Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -59,6 +72,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
         let root = tempfile::TempDir::new().unwrap();
         let args =
             parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        let _capability = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
         let eager_repository = json!([{
             "forge": "GITHUB", "owner": "acme", "name": "api",
             "ref": {"type": "BRANCH", "value": "feature"},
@@ -150,31 +164,31 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
 }
 
 #[test]
-fn paired_execution_retains_deferred_capability_through_task_setup() {
-    for scenario in ["eager", "deferred", "empty"] {
-        let output = ProcessCommand::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
-                "--nocapture",
-            ])
-            .env("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO", scenario)
-            .env("WARP_ISOLATION_PLATFORM", "docker")
-            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{scenario}: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
+    for scenario in ["eager", "deferred", "empty", "missing"] {
+    let output = ProcessCommand::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
+            "--nocapture",
+        ])
+        .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
+        .env("WARP_ISOLATION_PLATFORM", "docker")
+        .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     }
 }
 
 #[test]
 fn deferred_capability_bootstrap_subprocess() {
-    let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO") else {
+    let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP") else {
         return;
     };
     let use_factory_repositories = scenario != "eager";
@@ -194,7 +208,7 @@ fn deferred_capability_bootstrap_subprocess() {
     } else {
         json!([])
     };
-    let config = json!({
+    let mut config = json!({
         "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
         "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
         "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
@@ -202,10 +216,12 @@ fn deferred_capability_bootstrap_subprocess() {
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
         "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
         "computerUseEnabled": false, "repositories": eager,
-        "deferredRepositories": deferred,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false,
     });
+    if use_factory_repositories && scenario != "missing" {
+        config["deferredRepositories"] = deferred;
+    }
     let mut server = warp_core::channel::ChannelState::mock_server();
     let bootstrap = server
         .mock("POST", "/graphql/v2")
@@ -260,7 +276,7 @@ fn deferred_capability_bootstrap_subprocess() {
     App::test((), |mut app| async move {
         let _refresh = FeatureFlag::GitCredentialRefresh.override_enabled(true);
         let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
-        let capability =
+        let _capability =
             FeatureFlag::FactoryDeferredRepositories.override_enabled(use_factory_repositories);
         let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         let ai_client = provider.read(&app, |provider, _| provider.get_ai_client());
@@ -275,15 +291,14 @@ fn deferred_capability_bootstrap_subprocess() {
             .await
             .unwrap();
         assert_eq!(data.use_factory_repositories, use_factory_repositories);
-        drop(capability);
-        let _opposite =
+        let _changed_capability =
             FeatureFlag::FactoryDeferredRepositories.override_enabled(!use_factory_repositories);
         let events = runner.update(&mut app, |_, ctx| {
             super::SetupClientEventReporter::noop(ai_client.clone(), ctx.background_executor())
         });
         let args =
             parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
-        let (options, _, _) = AgentDriverRunner::build_driver_options_and_task(
+        let result = AgentDriverRunner::build_driver_options_and_task(
             &foreground,
             args,
             None,
@@ -291,12 +306,17 @@ fn deferred_capability_bootstrap_subprocess() {
             &events,
             Some(data),
         )
-        .await
-        .unwrap();
+        .await;
+        if scenario == "missing" {
+            let error = result.err().expect("enabled bootstrap requires deferred inventory");
+            assert!(format!("{error:#}").contains("missing deferred repositories"));
+            return;
+        }
+        let (options, _, _) = result.unwrap();
         assert_eq!(options.use_factory_repositories, use_factory_repositories);
         assert_eq!(
             options.workspace.source_repos.len(),
-            usize::from(scenario == "eager")
+            usize::from(!use_factory_repositories)
         );
         assert_eq!(
             options.workspace.deferred_repos.len(),
@@ -726,6 +746,19 @@ fn factory_experiment_bootstrap_subprocess() {
     });
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn test_with_paused_time<F: Future<Output = ()> + 'static>(test: impl FnOnce(App) -> F) {
+    drop(warp_core::channel::ChannelState::mock_server());
+    let app = App::test((), |app| async move { app });
+    let executor = app.foreground_executor();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    runtime.block_on(executor.run(test(app)));
+}
+
 #[test]
 fn required_execution_launch_rejects_disabled_bootstrap_before_legacy_setup() {
     App::test((), |mut app| async move {
@@ -770,8 +803,9 @@ fn required_execution_launch_rejects_disabled_bootstrap_before_legacy_setup() {
 }
 
 #[test]
+#[cfg(not(target_family = "wasm"))]
 fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_failure() {
-    App::test((), |mut app| async move {
+    test_with_paused_time(|mut app| async move {
         let _execution_config = FeatureFlag::CloudAgentExecutionConfig.override_enabled(false);
         app.add_singleton_model(|_| NetworkStatus::new());
         app.add_singleton_model(TeamTesterStatus::new);
@@ -781,7 +815,7 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
         let mut team_client = MockTeamClient::new();
         team_client
             .expect_workspaces_metadata()
-            .times(4)
+            .times(1..)
             .returning(|| Err(anyhow::anyhow!("workspace metadata unavailable")));
         app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
         let mut ai_client = MockAIClient::new();
@@ -806,7 +840,7 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
                         && conversation_id.is_none()
                         && status_message.as_ref().is_some_and(|status| {
                             status.message
-                                == "Failed to refresh team metadata: workspace metadata unavailable"
+                                == "Failed to refresh team metadata: Timed out refreshing team metadata"
                         })
                         && session_debug_until.is_none()
                         && debug_agent_active.is_none()
@@ -826,6 +860,7 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
             "123",
         ]);
 
+        let started = tokio::time::Instant::now();
         let error = AgentDriverRunner::setup_and_run_driver(
             foreground,
             args,
@@ -837,7 +872,137 @@ fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_fai
         let AgentDriverError::TeamMetadataRefreshFailed(source) = error else {
             panic!("unexpected setup error: {error:#}");
         };
+        assert_eq!(source.to_string(), "Timed out refreshing team metadata");
+        assert_eq!(started.elapsed(), Duration::from_secs(30));
+    });
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn cloud_startup_refresh_applies_metadata_after_delayed_authorization() {
+    test_with_paused_time(|mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(PrivacySettings::mock);
+        initialize_team_scope_test_app(&mut app, vec![]);
+
+        let started = tokio::time::Instant::now();
+        let mut team_client = MockTeamClient::new();
+        team_client.expect_workspaces_metadata().returning(move || {
+            if started.elapsed() < Duration::from_secs(12) {
+                return Err(GraphQLError::HttpError {
+                    status: StatusCode::UNAUTHORIZED,
+                    body: "execution not claimed".to_string(),
+                }
+                .into());
+            }
+            Ok(WorkspacesMetadataWithPricing {
+                metadata: WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: None,
+                    ai_credit_availability: None,
+                    user_tier: UserTier {
+                        charge_unit: ChargeUnit::Cents,
+                        ..Default::default()
+                    },
+                },
+                pricing_info: None,
+            })
+        });
+        app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+
+        AgentDriverRunner::refresh_team_metadata(&foreground, true)
+            .await
+            .unwrap();
+
+        assert!(started.elapsed() >= Duration::from_secs(12));
+        assert!(started.elapsed() < Duration::from_secs(14));
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).charge_unit(), ChargeUnit::Cents);
+        });
+    });
+}
+
+#[test]
+fn ordinary_metadata_refresh_keeps_four_attempt_limit() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_workspaces_metadata()
+            .times(4)
+            .returning(|| Err(anyhow::anyhow!("workspace metadata unavailable")));
+        app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+
+        let error = AgentDriverRunner::refresh_team_metadata(&foreground, false)
+            .await
+            .unwrap_err();
+
+        let AgentDriverError::TeamMetadataRefreshFailed(source) = error else {
+            panic!("unexpected refresh error: {error:#}");
+        };
         assert_eq!(source.to_string(), "workspace metadata unavailable");
+    });
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn cloud_startup_metadata_refresh_is_a_logged_out_noop() {
+    test_with_paused_time(|mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+        let mut team_client = MockTeamClient::new();
+        team_client.expect_workspaces_metadata().never();
+        app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let started = tokio::time::Instant::now();
+
+        AgentDriverRunner::refresh_team_metadata(&foreground, true)
+            .await
+            .unwrap();
+
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    });
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn dropping_cloud_startup_metadata_refresh_stops_retries() {
+    test_with_paused_time(|mut app| async move {
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = attempts.clone();
+        let mut team_client = MockTeamClient::new();
+        team_client.expect_workspaces_metadata().returning(move || {
+            observed_attempts.fetch_add(1, Ordering::Relaxed);
+            Err(anyhow::anyhow!("workspace metadata unavailable"))
+        });
+        let manager =
+            app.add_singleton_model(|ctx| TeamUpdateManager::new(Arc::new(team_client), None, ctx));
+        let refresh = manager.update(&mut app, |manager, ctx| {
+            manager.refresh_workspace_metadata_with_retry(
+                WorkspaceMetadataRetryPolicy::TimeBudget(Duration::from_secs(30)),
+                ctx,
+            )
+        });
+
+        assert!(refresh.now_or_never().is_none());
+        tokio::time::advance(Duration::from_secs(31)).await;
+
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
     });
 }
 

@@ -4,10 +4,14 @@ use warp_multi_agent_api::message::Message as MessageKind;
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::update_todos::Operation;
-use warp_multi_agent_api::{apply_file_diffs_result, read_files_result};
+use warp_multi_agent_api::{
+    self as api, ExternalMessage, ExternalUser, QueryAuthor, UserQueryOrigin,
+    apply_file_diffs_result, query_author, read_files_result, user_query_origin,
+};
 
 use super::super::protocol::SessionUpdate;
 use super::{AcpTurnMapper, TurnEvent};
+use crate::ai::agent::BaseUserQuery;
 
 fn update(value: serde_json::Value) -> SessionUpdate {
     serde_json::from_value(value).expect("fixture should deserialize")
@@ -67,6 +71,61 @@ fn initial_actions_create_task_then_echo_user_query() {
     assert_eq!(messages[0].request_id, "req-1");
     match &messages[0].message {
         Some(MessageKind::UserQuery(query)) => assert_eq!(query.query, "hello"),
+        other => panic!("expected UserQuery, got {other:?}"),
+    }
+}
+
+#[test]
+fn user_query_action_copies_the_base_query_attribution() {
+    let origin = UserQueryOrigin {
+        variant: Some(user_query_origin::Variant::ServerSynthesized(
+            user_query_origin::ServerSynthesized {
+                reason: "slack_follow_up".to_owned(),
+            },
+        )),
+    };
+    let author = QueryAuthor {
+        principal: Some(query_author::Principal::User(api::WarpUser {
+            uid: "uid-1".to_owned(),
+            email: "viewer@example.com".to_owned(),
+            team_uid: String::new(),
+        })),
+        resolution: api::IdentityResolution::ClientSession.into(),
+    };
+    let source_message = ExternalMessage {
+        sender: Some(ExternalUser {
+            handle: "viewer".to_owned(),
+            ..Default::default()
+        }),
+        body: "please also run the tests".to_owned(),
+        ..Default::default()
+    };
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        query: "ignored: the echo shows the relayed text".to_owned(),
+        origin: Some(origin.clone()),
+        author: Some(author.clone()),
+        source_message: Some(source_message.clone()),
+        ..Default::default()
+    });
+
+    let attributed = mapper().user_query_action("run the tests", Some(&base));
+    match &added_messages(&attributed)[0].message {
+        Some(MessageKind::UserQuery(query)) => {
+            assert_eq!(query.query, "run the tests");
+            assert_eq!(query.origin, Some(origin));
+            assert_eq!(query.author, Some(author));
+            assert_eq!(query.source_message, Some(source_message));
+        }
+        other => panic!("expected UserQuery, got {other:?}"),
+    }
+
+    let unattributed = mapper().user_query_action("hello", None);
+    match &added_messages(&unattributed)[0].message {
+        Some(MessageKind::UserQuery(query)) => {
+            assert!(query.origin.is_none());
+            assert!(query.author.is_none());
+            assert!(query.source_message.is_none());
+        }
         other => panic!("expected UserQuery, got {other:?}"),
     }
 }

@@ -366,7 +366,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         AgentDriverError::HarnessSetupFailed { harness, reason } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
-                format!("Harness '{harness}' validation failed: {reason}"),
+                format!("Harness '{harness}' setup failed: {reason}"),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
@@ -377,11 +377,14 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+            let detail_separator = match detail.chars().last() {
+                Some('.' | '!' | '?') => " ",
+                _ => ". ",
+            };
             let message = format!(
-                "Harness '{harness}' authentication check failed: login credentials \
-                 are invalid or expired. Verify that the authentication secret \
-                 configured for this harness is correct."
+                "Harness '{harness}' authentication check failed: {detail}{detail_separator}\
+                 Verify that the authentication secret configured for this harness is correct."
             );
             (
                 AgentTaskState::Failed,

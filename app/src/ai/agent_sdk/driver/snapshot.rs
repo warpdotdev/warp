@@ -1222,7 +1222,7 @@ async fn upload_gathered_snapshot(
         }
     }
     upload_prepared_snapshot_files(
-        client.http_client(),
+        client.external_http_client(),
         manifest_filename,
         upload_files,
         repos,

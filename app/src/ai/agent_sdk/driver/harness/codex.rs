@@ -30,6 +30,7 @@ use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::read_json_file_or_default;
+use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
     CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
     needs_capture_retry, read_jsonl_capture, upload_captured_transcript,
@@ -160,6 +161,7 @@ impl ThirdPartyHarness for CodexHarness {
             harness_working_dir,
             skill_dirs,
             has_deferred_repositories,
+            HarnessSupportSkills::Plugin,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -645,6 +647,7 @@ pub(super) fn publish_skills_for_codex(
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
     has_deferred_repositories: bool,
+    harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
     let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
@@ -654,6 +657,7 @@ pub(super) fn publish_skills_for_codex(
         is_sandbox,
         skill_dirs,
         has_deferred_repositories,
+        harness_support_skills,
     )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,

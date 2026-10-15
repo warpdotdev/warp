@@ -18,6 +18,7 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::harness_persistence::{HarnessPersistence, PersistenceOutcome};
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::skill_dirs_publish::HarnessSupportSkills;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, write_temp_file,
@@ -84,6 +85,7 @@ impl ThirdPartyHarness for GeminiHarness {
             harness_working_dir,
             skill_dirs,
             has_deferred_repositories,
+            HarnessSupportSkills::Plugin,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -114,8 +116,9 @@ pub(super) fn publish_skills_for_gemini(
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
     has_deferred_repositories: bool,
+    harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
-    if !has_deferred_repositories {
+    if !has_deferred_repositories && harness_support_skills == HarnessSupportSkills::Plugin {
         return Ok(());
     }
     let skill_root = harness_working_dir.join(".gemini").join("skills");
@@ -125,6 +128,7 @@ pub(super) fn publish_skills_for_gemini(
         warp_isolation_platform::detect().is_some(),
         skill_dirs,
         has_deferred_repositories,
+        harness_support_skills,
     )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,
