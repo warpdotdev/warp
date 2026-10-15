@@ -9,4 +9,4 @@ mod public_api;
 
 pub use auth::UserUid;
 pub use cloud_objects::server_id_traits;
-pub use public_api::HttpStatusError;
+pub use public_api::{HttpStatusError, PresignedDownloadResponse};

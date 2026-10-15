@@ -47,6 +47,8 @@ pub(crate) mod exit_escalation;
 mod gemini;
 mod harness_persistence;
 mod json_utils;
+mod pi;
+mod pi_transcript;
 pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
@@ -60,6 +62,8 @@ use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
 use harness_persistence::{HarnessPersistence, PersistenceOutcome};
+use pi::pi_env_vars;
+pub(crate) use skill_dirs_publish::HarnessSupportSkills;
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
 
 const HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… harness output truncated …\n";
@@ -280,7 +284,7 @@ impl fmt::Debug for HarnessKind {
 /// a CLI agent block in the terminal.
 pub(crate) fn renders_natively(harness: Harness, transport: HarnessTransport) -> bool {
     match (harness, transport) {
-        (Harness::Oz, _) => true,
+        (Harness::Oz | Harness::Pi, _) => true,
         (
             Harness::Claude
             | Harness::Codex
@@ -308,18 +312,26 @@ pub(crate) fn harness_kind(
     harness: Harness,
     transport: HarnessTransport,
 ) -> Result<HarnessKind, AgentDriverError> {
-    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop.
-    if harness == Harness::Oz {
-        return Ok(HarnessKind::Oz);
+    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop
+    // and Pi has no interactive CLI mode, so neither consults it.
+    match harness {
+        Harness::Oz => return Ok(HarnessKind::Oz),
+        Harness::Pi => return acp_harness_kind(harness),
+        Harness::Claude
+        | Harness::Codex
+        | Harness::OpenCode
+        | Harness::Gemini
+        | Harness::Unknown => {}
     }
     match transport {
         HarnessTransport::Pty => match harness {
-            Harness::Oz => Ok(HarnessKind::Oz),
             Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
             Harness::Codex => Ok(HarnessKind::ThirdParty(Box::new(CodexHarness))),
             Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
             Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
-            Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
+            Harness::Oz | Harness::Pi | Harness::Unknown => {
+                Err(AgentDriverError::InvalidRuntimeState)
+            }
         },
         HarnessTransport::Acp => acp_harness_kind(harness),
     }
@@ -525,32 +537,37 @@ pub(crate) fn task_env_vars(
     task_env_vars_for_harness_name(task_id, parent_run_id, selected_harness)
 }
 
-/// Returns environment variables that configure the model for a third-party harness.
-/// Returns an empty map for Oz or when no model is specified.
+/// Returns the per-run environment for a third-party harness.
 ///
-/// We use the `ANTHROPIC_MODEL` env var rather than the `--model` CLI flag because
-/// the env var is the most reliable mechanism and avoids precedence conflicts with
-/// Claude Code's `settings.json`.
-pub(crate) fn harness_model_env_vars(
+/// Model selection is carried in the environment only for the PTY transport; ACP sessions
+/// select their model through the protocol instead. We use the `ANTHROPIC_MODEL` env var
+/// rather than the `--model` CLI flag because the env var is the most reliable mechanism and
+/// avoids precedence conflicts with Claude Code's `settings.json`.
+pub(crate) fn harness_env_vars(
     selected_harness: Harness,
+    transport: HarnessTransport,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
-) -> HashMap<OsString, OsString> {
+) -> Result<HashMap<OsString, OsString>> {
     let mut env_vars = HashMap::new();
-    let Some(model_id) = third_party_harness_model_config
-        .map(|config| config.model_id.as_str())
-        .filter(|id| !id.is_empty())
-    else {
-        return env_vars;
-    };
 
-    match selected_harness {
-        Harness::Claude => {
-            env_vars.insert(OsString::from("ANTHROPIC_MODEL"), OsString::from(model_id));
+    match (selected_harness, transport) {
+        (Harness::Claude, HarnessTransport::Pty) => {
+            if let Some(model_id) = third_party_harness_model_config
+                .map(|config| config.model_id.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                env_vars.insert(OsString::from("ANTHROPIC_MODEL"), OsString::from(model_id));
+            }
         }
-        Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown => {}
+        (Harness::Pi, _) => return pi_env_vars(),
+        (Harness::Claude, HarnessTransport::Acp)
+        | (
+            Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown,
+            _,
+        ) => {}
     }
 
-    env_vars
+    Ok(env_vars)
 }
 
 /// Indicates when the harness conversation is being saved.
@@ -746,7 +763,7 @@ pub(crate) async fn upload_block_snapshot(
         .to_json()
         .with_context(|| format!("Unable to serialize block for conversation {conversation_id}"))?;
 
-    upload_to_target(client.http_client(), &target, body).await
+    upload_to_target(client.external_http_client(), &target, body).await
 }
 
 /// Fetch the current block snapshot for `block_id` and upload it to the server.

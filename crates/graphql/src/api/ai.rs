@@ -190,6 +190,7 @@ pub enum AgentHarness {
     Oz,
     ClaudeCode,
     Gemini,
+    Pi,
     Codex,
     #[cynic(fallback)]
     Other(String),

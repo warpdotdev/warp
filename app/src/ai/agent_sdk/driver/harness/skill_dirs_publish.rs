@@ -11,7 +11,10 @@
 //! namespaced alias) because an agent prompt, or another skill, may
 //! reference a skill by that name. Skill frontmatter is never rewritten.
 //! The feature-gated Factory MCP bootstrap is appended after these configured
-//! sources, so a configured `factory-mcp` skill retains precedence.
+//! sources, so a configured `factory-mcp` skill retains precedence. Oz's
+//! harness-support skills (`oz-finish-task` and friends) follow when the run's
+//! transport has no plugin install step to supply them (see
+//! [`HarnessSupportSkills`]).
 //! A task's deferred-repository skill is reserved at its canonical name:
 //! configured sources cannot shadow it, and a non-sandbox conflict fails
 //! harness setup instead of silently publishing an unusable alias.
@@ -52,6 +55,7 @@ use std::path::{Path, PathBuf};
 use ai::skills::resolve_skills_dirs;
 use anyhow::{Context, Result};
 use warp_core::features::FeatureFlag;
+use warp_core::paths::bundled_resources_dir;
 use warp_core::safe_warn;
 
 use crate::ai::skills::{
@@ -67,16 +71,39 @@ const SANDBOX_BACKUP_SUFFIX: &str = ".backup";
 /// when a real, non-symlink entry already occupies its real name.
 const NON_SANDBOX_ALTERNATE_NAME_PREFIX: &str = "warp-";
 
+/// Where a run's Oz harness-support skills (`oz-finish-task`, `oz-report-pr`, ...) come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HarnessSupportSkills {
+    /// The harness's own plugin manager installs them from its marketplace at run start.
+    Plugin,
+    /// Published from the copies shipped in Warp's bundled resources, for transports that
+    /// never run a plugin install.
+    Bundled,
+}
+
+/// The bundled directory holding Oz's harness-support skills, when the bundled resources are
+/// available.
+fn bundled_harness_support_skills_dir() -> Option<PathBuf> {
+    bundled_resources_dir()
+        .map(|root| root.join("bundled").join("harness_skills"))
+        .filter(|dir| dir.is_dir())
+}
+
 pub(super) fn publish_skills_for_harness(
     skill_root: &Path,
     working_dir: &Path,
     is_sandbox: bool,
     configured_source_dirs: &[PathBuf],
     factory_repository_contract: bool,
+    harness_support_skills: HarnessSupportSkills,
 ) -> Result<Vec<PathBuf>> {
     let source_dirs = resolve_skills_dirs(working_dir, configured_source_dirs.to_vec());
-    let bundled_skill_dirs =
-        bundled_factory_mcp_skill_dirs(warp_core::paths::bundled_resources_dir());
+    let mut bundled_skill_dirs = bundled_factory_mcp_skill_dirs(bundled_resources_dir());
+    if harness_support_skills == HarnessSupportSkills::Bundled {
+        bundled_skill_dirs.extend(skill_dirs_from_source_dirs(
+            bundled_harness_support_skills_dir(),
+        ));
+    }
     let configured_skill_dirs = skill_dirs_from_source_dirs(&source_dirs);
     let deferred_skill_dir = if factory_repository_contract {
         Some(

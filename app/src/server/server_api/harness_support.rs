@@ -10,6 +10,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(test)]
 use mockall::automock;
 use warp_cli::agent::Harness;
+#[cfg(not(target_family = "wasm"))]
+use warp_server_client::PresignedDownloadResponse;
 
 #[path = "harness_usage/publication.rs"]
 mod publication;
@@ -401,7 +403,7 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Download the raw third-party harness transcript bytes for the current task's
     /// conversation.
     ///
-    /// Hits `GET /harness-support/transcript`, which redirects to a signed GCS URL.
+    /// Resolves a signed storage URL through `GET /harness-support/transcript?redirect=false`.
     /// The conversation is resolved from the task's `agent_conversation_id` server-side,
     /// so callers do not pass a conversation id. Each harness deserializes the returned
     /// bytes into its own envelope shape (e.g. Claude Code parses
@@ -411,7 +413,7 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes>;
 
     /// Get an HTTP client to use with [`UploadTarget`]s for saving blobs.
-    fn http_client(&self) -> &http_client::Client;
+    fn external_http_client(&self) -> &http_client::Client;
 }
 
 impl ServerApi {
@@ -508,12 +510,17 @@ impl ServerApi {
         {
             with_bounded_retry("fetch task-scoped harness-support transcript", || async {
                 let response = self
-                    .get_public_api_response_for_task(task_id, "harness-support/transcript")
+                    .get_public_api_response_for_task(
+                        task_id,
+                        "harness-support/transcript?redirect=false",
+                    )
                     .await?;
-                response
-                    .bytes()
+                let download = response
+                    .json::<PresignedDownloadResponse>()
                     .await
-                    .context("Failed to read task-scoped harness-support transcript body")
+                    .map_err(reqwest::Error::without_url)
+                    .context("Failed to decode task-scoped transcript download URL")?;
+                self.base_client.download_presigned(&download.url).await
             })
             .await
         }
@@ -664,12 +671,14 @@ impl HarnessSupportClient for ServerApi {
         {
             with_bounded_retry("fetch harness-support transcript", || async {
                 let response = self
-                    .get_public_api_response("harness-support/transcript")
+                    .get_public_api_response("harness-support/transcript?redirect=false")
                     .await?;
-                response
-                    .bytes()
+                let download = response
+                    .json::<PresignedDownloadResponse>()
                     .await
-                    .context("Failed to read harness-support transcript body")
+                    .map_err(reqwest::Error::without_url)
+                    .context("Failed to decode transcript download URL")?;
+                self.base_client.download_presigned(&download.url).await
             })
             .await
         }
@@ -681,8 +690,8 @@ impl HarnessSupportClient for ServerApi {
         }
     }
 
-    fn http_client(&self) -> &http_client::Client {
-        self.base_client.http_client()
+    fn external_http_client(&self) -> &http_client::Client {
+        self.base_client.external_http_client()
     }
 }
 

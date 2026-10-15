@@ -36,9 +36,12 @@ pub(crate) fn local_harness_product_disabled_message(harness: Harness) -> Option
         Harness::Codex if !local_codex_harness_is_enabled() => {
             Some(LOCAL_CODEX_HARNESS_DISABLED_MESSAGE)
         }
-        Harness::Oz | Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Unknown => {
-            None
-        }
+        Harness::Oz
+        | Harness::Claude
+        | Harness::OpenCode
+        | Harness::Gemini
+        | Harness::Pi
+        | Harness::Unknown => None,
         Harness::Codex => None,
     }
 }
@@ -76,6 +79,7 @@ fn local_harness_setup_state_with_cli_resolver(
         | Harness::Claude
         | Harness::OpenCode
         | Harness::Gemini
+        | Harness::Pi
         | Harness::Codex
         | Harness::Unknown => LocalHarnessSetupState::Ready,
     }

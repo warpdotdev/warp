@@ -90,6 +90,7 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
             api::harness::Variant::OpenCode(_) => "opencode",
             api::harness::Variant::Gemini(_) => "gemini",
             api::harness::Variant::Codex(_) => "codex",
+            api::harness::Variant::Pi(_) => "pi",
         }
         .to_string(),
     )

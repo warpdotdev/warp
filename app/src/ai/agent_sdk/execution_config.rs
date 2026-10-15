@@ -36,6 +36,7 @@ pub(super) fn harness(value: &AgentHarness) -> anyhow::Result<Harness> {
         AgentHarness::Oz => Ok(Harness::Oz),
         AgentHarness::ClaudeCode => Ok(Harness::Claude),
         AgentHarness::Gemini => Ok(Harness::Gemini),
+        AgentHarness::Pi => Ok(Harness::Pi),
         AgentHarness::Codex => Ok(Harness::Codex),
         AgentHarness::Other(name) => bail!("Unsupported execution harness {name}"),
     }

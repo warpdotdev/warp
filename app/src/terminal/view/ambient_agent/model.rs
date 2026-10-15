@@ -1114,12 +1114,18 @@ impl AmbientAgentViewModel {
                     Harness::Claude => Some(HarnessAuthSecretsConfig {
                         claude_auth_secret_name: Some(name.clone()),
                         codex_auth_secret_name: None,
+                        pi_auth_secret_name: None,
                     }),
                     Harness::Codex => Some(HarnessAuthSecretsConfig {
                         claude_auth_secret_name: None,
                         codex_auth_secret_name: Some(name.clone()),
+                        pi_auth_secret_name: None,
                     }),
-                    _ => None,
+                    Harness::Oz
+                    | Harness::OpenCode
+                    | Harness::Gemini
+                    | Harness::Pi
+                    | Harness::Unknown => None,
                 });
 
         AgentConfigSnapshot {

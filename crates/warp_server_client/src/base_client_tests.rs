@@ -33,6 +33,7 @@ fn client() -> BaseClient {
     authenticated_headers.insert("X-Test-Authenticated".to_string(), "true".to_string());
     BaseClient::new(
         Arc::new(http_client::Client::new()),
+        Arc::new(http_client::Client::new_external()),
         Arc::new(AuthState::new_for_test()),
         event_sender,
         Some("cloud_mode".to_string()),
@@ -51,6 +52,7 @@ fn iap_proxy_auth_header_uses_configured_provider() {
     let (event_sender, _) = async_channel::unbounded();
     let client = BaseClient::new(
         Arc::new(http_client::Client::new()),
+        Arc::new(http_client::Client::new_external()),
         Arc::new(AuthState::new_for_test()),
         event_sender,
         None,
@@ -297,6 +299,7 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
     headers.insert("x-eval-user-id".to_string(), "1234".to_string());
     let client = BaseClient::new(
         Arc::new(http_client::Client::new()),
+        Arc::new(http_client::Client::new_external()),
         Arc::new(AuthState::new_for_test()),
         event_sender,
         None,
@@ -341,6 +344,7 @@ fn api_key_client(path_prefix: &str) -> (AuthClientImpl, Arc<Mutex<Option<String
     let (event_sender, _) = async_channel::unbounded();
     let base_client = BaseClient::new(
         Arc::new(http_client),
+        Arc::new(http_client::Client::new_external()),
         Arc::new(auth_state),
         event_sender,
         None,

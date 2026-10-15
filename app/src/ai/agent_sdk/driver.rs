@@ -52,7 +52,7 @@ use crate::ai::agent_sdk::driver::harness::exit_escalation::{
 };
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
-    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, renders_natively,
+    ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
     task_env_vars,
 };
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -1206,10 +1206,17 @@ impl AgentDriver {
             parent_run_id.as_deref(),
             selected_harness,
         ));
-        env_vars.extend(harness_model_env_vars(
-            selected_harness,
-            third_party_harness_model_config.as_ref(),
-        ));
+        env_vars.extend(
+            harness_env_vars(
+                selected_harness,
+                harness_transport,
+                third_party_harness_model_config.as_ref(),
+            )
+            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+                harness: selected_harness.to_string(),
+                error,
+            })?,
+        );
         for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
             env_vars.insert(OsString::from(name), working_dir.as_os_str().to_os_string());
         }
@@ -3370,7 +3377,12 @@ impl AgentDriver {
         let harness_name = runner.harness_name().to_owned();
 
         // Start the third-party harness.
-        let command_handle = runner.start(foreground, setup_events).await?;
+        let command_handle = setup_events
+            .record_result(
+                SetupStep::ThirdPartyHarnessStart,
+                runner.start(foreground, setup_events),
+            )
+            .await?;
         setup_events
             .post_timeline_event(OzRunTimelineEvent::AgentStarted)
             .await;

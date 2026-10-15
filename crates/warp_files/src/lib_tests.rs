@@ -357,3 +357,42 @@ fn test_a_failed_open_registers_no_watcher() {
 }
 
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");
+
+#[test]
+fn remote_move_reports_disconnected_host_through_future_and_event() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(RemoteServerManager::new);
+        let files = app.add_singleton_model(FileModel::new);
+        let (tx, rx) = unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&files, move |_, event, _| {
+                if let FileModelEvent::FailedToSave { id, error } = event {
+                    tx.try_send((*id, error.clone())).unwrap();
+                }
+            });
+        });
+        let file_id = files.update(&mut app, |model, _| {
+            model.register_remote_file(
+                HostId::new("disconnected-host".to_owned()),
+                StandardizedPath::try_new("/repo/source.txt").unwrap(),
+            )
+        });
+        let future = files
+            .update(&mut app, |model, ctx| {
+                model.rename_and_save(
+                    file_id,
+                    PathBuf::from("/repo/target.txt"),
+                    "updated\n".to_owned(),
+                    ContentVersion::new(),
+                    ctx,
+                )
+            })
+            .expect("remote move must dispatch without a local file path");
+
+        let error = future.await.unwrap_err();
+        assert!(matches!(&*error, FileSaveError::RemoteError(_)));
+        let (event_id, event_error) = rx.recv().await.unwrap();
+        assert_eq!(event_id, file_id);
+        assert_eq!(error.to_string(), event_error.to_string());
+    });
+}

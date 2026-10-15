@@ -23,7 +23,7 @@ pub fn auth_secret_types_for_harness(harness: Harness) -> &'static [AuthSecretTy
     match harness {
         Harness::Claude => &CLAUDE_AUTH_SECRET_TYPES,
         Harness::Codex => &CODEX_AUTH_SECRET_TYPES,
-        _ => &[],
+        Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Pi | Harness::Unknown => &[],
     }
 }
 
@@ -31,7 +31,9 @@ pub fn learn_more_url_for_harness(harness: Harness) -> &'static str {
     match harness {
         Harness::Claude => CLAUDE_LEARN_MORE_URL,
         Harness::Codex => CODEX_LEARN_MORE_URL,
-        _ => DEFAULT_LEARN_MORE_URL,
+        Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Pi | Harness::Unknown => {
+            DEFAULT_LEARN_MORE_URL
+        }
     }
 }
 

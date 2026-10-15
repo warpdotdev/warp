@@ -21,6 +21,7 @@ pub fn display_name(harness: Harness) -> &'static str {
         Harness::Claude => "Claude Code",
         Harness::OpenCode => "OpenCode",
         Harness::Gemini => "Gemini CLI",
+        Harness::Pi => "Pi",
         Harness::Codex => "Codex",
         Harness::Unknown => "Unknown",
     }
@@ -34,6 +35,7 @@ pub fn icon_for(harness: Harness) -> Icon {
         Harness::OpenCode => Icon::OpenCodeLogo,
         Harness::Gemini => Icon::GeminiLogo,
         Harness::Codex => Icon::OpenAILogo,
+        Harness::Pi => Icon::Agent,
         Harness::Unknown => Icon::HelpCircle,
     }
 }
@@ -47,7 +49,7 @@ pub fn brand_color(harness: Harness) -> Option<ColorU> {
         Harness::OpenCode => None,
         Harness::Gemini => Some(GEMINI_BLUE),
         Harness::Codex => Some(OPENAI_COLOR),
-        Harness::Unknown => None,
+        Harness::Pi | Harness::Unknown => None,
     }
 }
 
@@ -60,7 +62,7 @@ pub fn circle_background(harness: Harness, theme: &WarpTheme) -> WarpThemeFill {
         Harness::Codex => WarpThemeFill::Solid(OPENAI_COLOR),
         Harness::Gemini => WarpThemeFill::Solid(GEMINI_BLUE),
         Harness::OpenCode => WarpThemeFill::Solid(OPENCODE_COLOR),
-        Harness::Unknown => internal_colors::fg_overlay_2(theme),
+        Harness::Pi | Harness::Unknown => internal_colors::fg_overlay_2(theme),
     }
 }
 
@@ -71,7 +73,9 @@ pub fn icon_fill_on_circle(harness: Harness, theme: &WarpTheme) -> WarpThemeFill
         Harness::Claude | Harness::Codex | Harness::Gemini | Harness::OpenCode => {
             WarpThemeFill::Solid(ColorU::white())
         }
-        Harness::Unknown => theme.main_text_color(internal_colors::fg_overlay_2(theme)),
+        Harness::Pi | Harness::Unknown => {
+            theme.main_text_color(internal_colors::fg_overlay_2(theme))
+        }
     }
 }
 
@@ -83,6 +87,7 @@ impl From<AIAgentHarness> for Harness {
             AIAgentHarness::Oz => Harness::Oz,
             AIAgentHarness::ClaudeCode => Harness::Claude,
             AIAgentHarness::Gemini => Harness::Gemini,
+            AIAgentHarness::Pi => Harness::Pi,
             AIAgentHarness::Codex => Harness::Codex,
             AIAgentHarness::Unknown => Harness::Unknown,
         }

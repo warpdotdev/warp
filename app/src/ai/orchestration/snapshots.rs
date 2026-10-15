@@ -190,6 +190,7 @@ fn build_harness_snapshot(
             Harness::Claude,
             Harness::OpenCode,
             Harness::Gemini,
+            Harness::Pi,
             Harness::Codex,
         ]
         .into_iter()
@@ -201,13 +202,14 @@ fn build_harness_snapshot(
 
     // Sort selectable harnesses before disabled ones, preserving
     // relative order within each group.
-    // Filter out Gemini — it is not yet supported as a multi-agent
-    // harness and causes an infinite "Spawning agents" hang.
+    // Gemini causes an infinite "Spawning agents" hang.
     let mut sorted: Vec<_> = entries
         .iter()
         .filter(|entry| {
             let harness = resolve_entry_harness(entry.harness, &entry.display_name);
-            harness != Harness::Gemini && (!is_local || local_harness_is_product_enabled(harness))
+            harness != Harness::Gemini
+                && (harness != Harness::Pi || (!is_local && entry.enabled))
+                && (!is_local || local_harness_is_product_enabled(harness))
         })
         .collect();
     sorted.sort_by_key(|entry| {

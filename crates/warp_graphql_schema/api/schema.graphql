@@ -289,6 +289,7 @@ enum AgentHarness {
   CODEX
   GEMINI
   OZ
+  PI
 }
 
 """Controls whether a team can configure settings for agent harnesses."""
@@ -2176,6 +2177,7 @@ union ListWarpDevImagesResult = ListWarpDevImagesOutput | UserFacingError
 type ListedHarnessAuthSecretsConfig {
   claudeAuthSecretName: String
   codexAuthSecretName: String
+  piAuthSecretName: String
 }
 
 type ListedHarnessConfig {

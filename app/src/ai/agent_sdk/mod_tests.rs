@@ -1,5 +1,6 @@
 use std::fs;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -65,7 +66,7 @@ use crate::workspaces::workspace::{ChargeUnit, UserTier, Workspace, WorkspaceUid
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[test]
-fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
+fn paired_execution_launch_preserves_eager_settings_without_deferred_inventory() {
     App::test((), |mut app| async move {
         let root = tempfile::TempDir::new().unwrap();
         let args =
@@ -75,70 +76,72 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
             "ref": {"type": "BRANCH", "value": "feature"},
             "cloneFrom": null, "preserveOrigin": true,
         }]);
-        for (use_factory_repositories, eager, deferred_forge) in [
-            (true, json!([]), "GITLAB"),
-            (true, eager_repository.clone(), "GITLAB"),
-            (false, eager_repository, "UNSUPPORTED_FORGE"),
-        ] {
-            let expected_eager_count = eager.as_array().unwrap().len();
-            let config = serde_json::from_value(json!({
-                "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
-                "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
-                "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
-                "inferenceProviders": null, "providers": null,
-                "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
-                "computerUseEnabled": false, "repositories": eager,
-                "deferredRepositories": [{
-                    "codeForge": deferred_forge, "owner": "platform/backend", "repo": "api",
-                }],
-                "setupCommands": [], "sessionSharingAcls": [],
-                "skipInitialTurn": false, "snapshotDisabled": false,
-            }))
-            .unwrap();
-            let (options, _, _, _) = app.update(|ctx| {
-                super::build_execution_task_and_options(
-                    &args,
-                    config,
-                    use_factory_repositories,
-                    root.path().to_path_buf(),
-                    None,
-                    Vec::new(),
-                    ctx,
-                )
-                .unwrap()
-            });
-            assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
-            assert_eq!(options.use_factory_repositories, use_factory_repositories);
-            if expected_eager_count != 0 {
-                assert_eq!(
-                    options.workspace.source_repos,
-                    vec![SourceRepo::new(
-                        CodeForge::GitHub,
-                        "acme".into(),
-                        "api".into(),
-                    )]
-                );
-            }
-            assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
-        }
+        let config = serde_json::from_value(json!({
+            "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
+            "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+            "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+            "inferenceProviders": null, "providers": null,
+            "idleOnCompleteSeconds": 120, "idleOnFailSeconds": 60,
+            "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [".agents/skills"],
+            "computerUseEnabled": false, "repositories": eager_repository,
+            "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
+            "skipInitialTurn": true, "snapshotDisabled": true,
+        }))
+        .unwrap();
+        let (options, _, _, _) = app.update(|ctx| {
+            super::build_execution_task_and_options(
+                &args,
+                config,
+                root.path().to_path_buf(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            options.workspace.source_repos,
+            vec![SourceRepo::new(
+                CodeForge::GitHub,
+                "acme".into(),
+                "api".into(),
+            )]
+        );
+        assert_eq!(options.workspace.setup_commands, ["prepare-workspace"]);
+        assert_eq!(
+            options.workspace.factory_skill_dirs,
+            Some(vec![PathBuf::from(".agents/skills")])
+        );
+        assert_eq!(options.idle_on_complete, Some(Duration::from_secs(120)));
+        assert_eq!(options.idle_on_fail, Some(Duration::from_secs(60)));
+        assert!(options.skip_initial_turn);
+        assert_eq!(options.snapshot_disabled, Some(true));
     });
 }
 
 #[test]
-fn paired_execution_retains_deferred_capability_through_task_setup() {
-    for scenario in ["eager", "deferred", "empty"] {
-        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+fn paired_execution_keeps_deferred_transport_disabled_and_scopes_factory_credentials() {
+    for (scenario, factory_marker) in [
+        ("factory", true),
+        ("non_factory", false),
+        ("flag_off", true),
+    ] {
+        let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--exact",
                 "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
                 "--nocapture",
             ])
-            .env("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO", scenario)
+            .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
             .env("WARP_ISOLATION_PLATFORM", "docker")
-            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
-            .output()
-            .unwrap();
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token");
+        if factory_marker {
+            command.env("WARP_FACTORY_ID", "factory-one");
+        } else {
+            command.env_remove("WARP_FACTORY_ID");
+        }
+        let output = command.output().unwrap();
         assert!(
             output.status.success(),
             "{scenario}: {}{}",
@@ -150,23 +153,14 @@ fn paired_execution_retains_deferred_capability_through_task_setup() {
 
 #[test]
 fn deferred_capability_bootstrap_subprocess() {
-    let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_SCENARIO") else {
+    let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP") else {
         return;
     };
-    let use_factory_repositories = scenario != "eager";
-    let eager = if use_factory_repositories {
-        json!([])
-    } else {
-        json!([{
-            "forge": "GITLAB", "owner": "platform/backend", "name": "api",
-            "ref": null, "cloneFrom": null, "preserveOrigin": true,
-        }])
-    };
-    let deferred = if scenario == "deferred" {
-        json!([{"codeForge": "GITLAB", "owner": "platform/backend", "repo": "api"}])
-    } else {
-        json!([])
-    };
+    let use_factory_repositories = scenario == "factory";
+    let eager = json!([{
+        "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+        "ref": null, "cloneFrom": null, "preserveOrigin": true,
+    }]);
     let config = json!({
         "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
         "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
@@ -175,7 +169,6 @@ fn deferred_capability_bootstrap_subprocess() {
         "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
         "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
         "computerUseEnabled": false, "repositories": eager,
-        "deferredRepositories": deferred,
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false,
     });
@@ -188,7 +181,7 @@ fn deferred_capability_bootstrap_subprocess() {
         ))
         .match_body(Matcher::PartialJson(json!({"variables": {
             "executionId": "42",
-            "supportsDeferredRepositories": use_factory_repositories,
+            "supportsDeferredRepositories": false,
             "secretsInput": {"taskId": TASK_ID, "workloadToken": "test-workload-token"},
             "taskInput": {"taskId": TASK_ID}
         }})))
@@ -233,8 +226,9 @@ fn deferred_capability_bootstrap_subprocess() {
     App::test((), |mut app| async move {
         let _refresh = FeatureFlag::GitCredentialRefresh.override_enabled(true);
         let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
-        let capability =
-            FeatureFlag::FactoryDeferredRepositories.override_enabled(use_factory_repositories);
+        let _capability =
+            FeatureFlag::FactoryDeferredRepositories.override_enabled(scenario != "flag_off");
+        assert!(!super::factory_repository_contract(None));
         let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         let ai_client = provider.read(&app, |provider, _| provider.get_ai_client());
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -247,10 +241,6 @@ fn deferred_capability_bootstrap_subprocess() {
         let data = AgentDriverRunner::fetch_execution_task_data(&foreground, TASK_ID, "42")
             .await
             .unwrap();
-        assert_eq!(data.use_factory_repositories, use_factory_repositories);
-        drop(capability);
-        let _opposite =
-            FeatureFlag::FactoryDeferredRepositories.override_enabled(!use_factory_repositories);
         let events = runner.update(&mut app, |_, ctx| {
             super::SetupClientEventReporter::noop(ai_client.clone(), ctx.background_executor())
         });
@@ -267,10 +257,7 @@ fn deferred_capability_bootstrap_subprocess() {
         .await
         .unwrap();
         assert_eq!(options.use_factory_repositories, use_factory_repositories);
-        assert_eq!(
-            options.workspace.source_repos.len(),
-            usize::from(scenario == "eager")
-        );
+        assert_eq!(options.workspace.source_repos.len(), 1);
     });
     bootstrap.assert();
     credentials.assert();

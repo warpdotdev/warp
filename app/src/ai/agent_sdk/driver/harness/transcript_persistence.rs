@@ -104,7 +104,7 @@ pub(super) async fn upload_captured_transcript(
 ) -> Result<UploadedTranscriptUsage> {
     let target = client.get_transcript_upload_target(conversation_id).await?;
     upload_to_target(
-        client.http_client(),
+        client.external_http_client(),
         &target,
         capture.transcript_body.clone(),
     )
