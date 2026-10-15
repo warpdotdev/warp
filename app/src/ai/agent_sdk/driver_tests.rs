@@ -2523,8 +2523,7 @@ fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
         return;
     }
     let mut server = ChannelState::mock_server();
-    let prompt =
-        "Current Factory deferred repository inventory:\n- GITHUB \"acme\"/\"repo\"\n\nimplement";
+    let prompt = "Factory deferred repository inventory at task creation:\n- GITHUB \"acme\"/\"repo\"\n\nimplement";
     let resolved = server
         .mock("POST", "/api/v1/harness-support/resolve-prompt")
         .match_body(Matcher::Json(json!({})))
