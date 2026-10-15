@@ -1,6 +1,6 @@
 ---
 name: factory-deferred-repositories
-description: Check out a Factory's deferred repository on demand with environment-checkout, without overwriting existing checkouts or exposing credentials
+description: Use when a Factory task's frozen deferred repository inventory lists a repository needed for the task that is not already checked out. Verify current access and an unused target before checking it out on demand; never overwrite an existing checkout or expose credentials.
 ---
 
 # Deferred Factory repositories
