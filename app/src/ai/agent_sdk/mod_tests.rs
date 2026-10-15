@@ -77,7 +77,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
             "ref": {"type": "BRANCH", "value": "feature"},
             "cloneFrom": null, "preserveOrigin": true, "expectedSha": null,
         }]);
-        for (use_factory_repositories, eager, deferred_forge) in [
+        for (supports_deferred_repositories, eager, deferred_forge) in [
             (true, json!([]), "GITLAB"),
             (true, eager_repository.clone(), "GITLAB"),
             (false, eager_repository, "UNSUPPORTED_FORGE"),
@@ -105,7 +105,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 super::build_execution_task_and_options(
                     &args,
                     config,
-                    use_factory_repositories,
+                    supports_deferred_repositories,
                     root.path().to_path_buf(),
                     None,
                     Vec::new(),
@@ -114,7 +114,10 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 .unwrap()
             });
             assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
-            assert_eq!(options.use_factory_repositories, use_factory_repositories);
+            assert_eq!(
+                options.use_factory_repositories,
+                supports_deferred_repositories
+            );
             if expected_eager_count != 0 {
                 assert_eq!(
                     options.workspace.source_repos,
@@ -125,7 +128,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                     )]
                 );
             }
-            if use_factory_repositories {
+            if supports_deferred_repositories {
                 let deferred = &options.workspace.deferred_repos[0];
                 assert_eq!(deferred.expected_sha.as_deref(), Some(sha));
                 assert_eq!(
@@ -198,8 +201,8 @@ fn deferred_capability_bootstrap_subprocess() {
     let Ok(scenario) = std::env::var("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP") else {
         return;
     };
-    let use_factory_repositories = scenario != "eager";
-    let eager = if use_factory_repositories {
+    let supports_deferred_repositories = scenario != "eager";
+    let eager = if supports_deferred_repositories {
         json!([])
     } else {
         json!([{
@@ -226,7 +229,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "setupCommands": [], "sessionSharingAcls": [],
         "skipInitialTurn": false, "snapshotDisabled": false,
     });
-    if use_factory_repositories && scenario != "missing" {
+    if supports_deferred_repositories && scenario != "missing" {
         config["deferredRepositories"] = deferred;
     }
     let mut server = warp_core::channel::ChannelState::mock_server();
@@ -238,7 +241,7 @@ fn deferred_capability_bootstrap_subprocess() {
         ))
         .match_body(Matcher::PartialJson(json!({"variables": {
             "executionId": "42",
-            "supportsDeferredRepositories": use_factory_repositories,
+            "supportsDeferredRepositories": supports_deferred_repositories,
             "secretsInput": {"taskId": TASK_ID, "workloadToken": "test-workload-token"},
             "taskInput": {"taskId": TASK_ID}
         }})))
@@ -258,7 +261,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "taskId": TASK_ID, "workloadToken": "test-workload-token",
         "acceptsPartialRefresh": false
     });
-    if use_factory_repositories {
+    if supports_deferred_repositories {
         credentials_input["useFactoryRepositories"] = json!(true);
     }
     let credentials = server
@@ -283,8 +286,8 @@ fn deferred_capability_bootstrap_subprocess() {
     App::test((), |mut app| async move {
         let _refresh = FeatureFlag::GitCredentialRefresh.override_enabled(true);
         let _handoff = FeatureFlag::OzHandoff.override_enabled(false);
-        let _capability =
-            FeatureFlag::FactoryDeferredRepositories.override_enabled(use_factory_repositories);
+        let _capability = FeatureFlag::FactoryDeferredRepositories
+            .override_enabled(supports_deferred_repositories);
         let provider = app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         let ai_client = provider.read(&app, |provider, _| provider.get_ai_client());
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -297,10 +300,13 @@ fn deferred_capability_bootstrap_subprocess() {
         let data = AgentDriverRunner::fetch_execution_task_data(&foreground, TASK_ID, "42")
             .await
             .unwrap();
-        assert_eq!(data.use_factory_repositories, use_factory_repositories);
+        assert_eq!(
+            data.supports_deferred_repositories,
+            supports_deferred_repositories
+        );
         drop(_capability);
-        let _changed_capability =
-            FeatureFlag::FactoryDeferredRepositories.override_enabled(!use_factory_repositories);
+        let _changed_capability = FeatureFlag::FactoryDeferredRepositories
+            .override_enabled(!supports_deferred_repositories);
         let events = runner.update(&mut app, |_, ctx| {
             super::SetupClientEventReporter::noop(ai_client.clone(), ctx.background_executor())
         });
@@ -329,10 +335,13 @@ fn deferred_capability_bootstrap_subprocess() {
             return;
         }
         let (options, _, _) = result.unwrap();
-        assert_eq!(options.use_factory_repositories, use_factory_repositories);
+        assert_eq!(
+            options.use_factory_repositories,
+            supports_deferred_repositories
+        );
         assert_eq!(
             options.workspace.source_repos.len(),
-            usize::from(!use_factory_repositories)
+            usize::from(!supports_deferred_repositories)
         );
         assert_eq!(
             options.workspace.deferred_repos.len(),

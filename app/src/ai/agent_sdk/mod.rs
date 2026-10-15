@@ -610,7 +610,7 @@ fn build_server_side_task(
 fn build_execution_task_and_options(
     args: &RunAgentArgs,
     config: ExecutionConfiguration,
-    use_factory_repositories: bool,
+    supports_deferred_repositories: bool,
     working_dir: PathBuf,
     first_skill: Option<ResolvedSkill>,
     skill_discovery_dirs: Vec<PathBuf>,
@@ -646,7 +646,7 @@ fn build_execution_task_and_options(
         .and_then(|config| config.model_config());
     let mcp_specs = execution_config::mcp_specs(&config.mcp_servers_json)?;
     let repositories = execution_config::repositories(config.repositories)?;
-    let deferred_repositories = if use_factory_repositories {
+    let deferred_repositories = if supports_deferred_repositories {
         execution_config::repositories(
             config
                 .deferred_repositories
@@ -680,7 +680,7 @@ fn build_execution_task_and_options(
     let options = AgentDriverOptions {
         working_dir,
         task_id: Some(task_id),
-        use_factory_repositories,
+        use_factory_repositories: supports_deferred_repositories,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
@@ -834,7 +834,7 @@ struct AgentDriverRunner;
 struct ExecutionTaskData {
     server_api: Arc<ServerApi>,
     config: ExecutionConfiguration,
-    use_factory_repositories: bool,
+    supports_deferred_repositories: bool,
     secrets: HashMap<String, ManagedSecretValue>,
     attachments: anyhow::Result<Vec<TaskAttachment>>,
 }
@@ -1152,7 +1152,7 @@ impl AgentDriverRunner {
         task_id: &str,
         execution_id: &str,
     ) -> Result<ExecutionTaskData, AgentDriverError> {
-        let use_factory_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
+        let supports_deferred_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
         let (workload_token, no_isolation) =
             match warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await
             {
@@ -1170,7 +1170,7 @@ impl AgentDriverRunner {
                     task_id,
                     execution_id,
                     workload_token.clone(),
-                    use_factory_repositories,
+                    supports_deferred_repositories,
                 )
             },
             retry::is_transient_graphql_or_http_error,
@@ -1194,7 +1194,7 @@ impl AgentDriverRunner {
         Ok(ExecutionTaskData {
             server_api: api,
             config: data.config,
-            use_factory_repositories,
+            supports_deferred_repositories,
             secrets,
             attachments: data.attachments,
         })
@@ -1459,14 +1459,14 @@ impl AgentDriverRunner {
                 &args,
                 execution_data
                     .as_ref()
-                    .is_some_and(|data| data.use_factory_repositories),
+                    .is_some_and(|data| data.supports_deferred_repositories),
             )
             .await?;
         }
         if let Some(ExecutionTaskData {
             server_api: execution_server_api,
             config,
-            use_factory_repositories,
+            supports_deferred_repositories,
             secrets,
             attachments,
         }) = execution_data
@@ -1484,7 +1484,7 @@ impl AgentDriverRunner {
                     build_execution_task_and_options(
                         &args,
                         config,
-                        use_factory_repositories,
+                        supports_deferred_repositories,
                         working_dir,
                         first_skill,
                         skill_discovery_dirs,
