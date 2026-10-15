@@ -1744,6 +1744,103 @@ fn enqueue_buffered_child_message(
     });
 }
 
+/// Regression for staging run `01a14135-7aca-754d-8abd-6544bd9f336c`: a parent driven over ACP
+/// (`ConversationDriver::ExternalHarness`) holds its native setup barrier for the run's whole
+/// lifetime, so `has_pending_native_injections` stays true. Its turn settling must still end
+/// the run, and the child message buffered behind that barrier must never become a native MAA
+/// request -- neither when the status settles nor when run teardown unbinds the conversation
+/// and releases the barrier.
+#[test]
+fn external_harness_run_exits_on_success_without_injecting_buffered_child_messages() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let ai_controller = terminal_view.read(&app, |view, _| view.ai_controller().clone());
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_complete = None;
+            driver
+        });
+        let (exit_tx, mut exit_rx) = oneshot::channel();
+        driver.update(&mut app, |driver, ctx| {
+            driver.subscribe_to_native_conversation_status_events(
+                IdleTimeoutSender::new(exit_tx),
+                ctx,
+            );
+        });
+
+        let (conversation_id, stream_id) = ai_controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            let turn = controller
+                .begin_external_harness_turn(id, Some("run-1".into()), ctx)
+                .unwrap();
+            (id, turn.stream_id)
+        });
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(
+                queue.has_pending_native_injections(conversation_id),
+                "precondition: the harness never releases the native setup barrier"
+            );
+        });
+        assert_eq!(exit_rx.try_recv().unwrap(), None);
+
+        ai_controller.update(&mut app, |controller, ctx| {
+            controller.apply_external_harness_event(
+                &stream_id,
+                warp_multi_agent_api::ResponseEvent {
+                    r#type: Some(response_event::Type::Finished(
+                        response_event::StreamFinished {
+                            reason: Some(response_event::stream_finished::Reason::Done(
+                                response_event::stream_finished::Done {},
+                            )),
+                            ..Default::default()
+                        },
+                    )),
+                },
+                ctx,
+            );
+        });
+        assert_eq!(
+            exit_rx.try_recv().unwrap(),
+            Some(()),
+            "the settled turn must end the run even though the barrier is still held"
+        );
+        let settled_exchanges = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::Success);
+            conversation.exchange_count()
+        });
+
+        // Run teardown unbinds the conversation, which releases the barrier that held the event.
+        driver.update(&mut app, |driver, ctx| {
+            driver.unregister_streamer_consumer(ctx)
+        });
+
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no native request may be opened for the buffered child message"
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.status(), &ConversationStatus::Success);
+            assert_eq!(conversation.exchange_count(), settled_exchanges);
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "the buffered event is dropped at unbind rather than left to inject later"
+            );
+        });
+    });
+}
+
 /// Builds a driver wired up (via the real `execute_run`) to observe the given
 /// terminal's history but that never submits any query itself, so the caller can
 /// drive the conversation manually. `idle_on_complete` controls whether the driver

@@ -2106,9 +2106,10 @@ impl BlocklistAIController {
         let will_trigger_server_subagent = finished_results
             .iter()
             .any(|r| r.result.triggers_server_subagent());
-        let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+        let (has_active_subagent, owns_turn_lifecycle) = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_active_subagent());
+            .map(|c| (c.has_active_subagent(), c.driver().owns_turn_lifecycle()))
+            .unwrap_or((false, true));
 
         let context = input_context_for_request(
             false,
@@ -2144,16 +2145,20 @@ impl BlocklistAIController {
         // Include any pending orchestration events in this follow-up rather
         // than waiting for a separate idle injection turn. Skip when a server
         // subagent is or will be active — events will be delivered via the idle
-        // path once the subagent session ends.
+        // path once the subagent session ends — and when this client does not
+        // author the conversation's turns at all, since the MAA server has no
+        // task of its own to attach the events to.
         let mut has_piggybacked_events = false;
-        if will_trigger_server_subagent || has_active_subagent {
+        if will_trigger_server_subagent || has_active_subagent || !owns_turn_lifecycle {
             log::debug!(
                 "Skipping event piggyback for conversation {conversation_id:?}: \
                  {}",
                 if will_trigger_server_subagent {
                     "results will trigger a server-side subagent"
-                } else {
+                } else if has_active_subagent {
                     "a subagent is currently active"
+                } else {
+                    "the conversation driver does not own the turn lifecycle"
                 }
             );
         } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
@@ -2216,9 +2221,20 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status || is_exiting || is_dispatch_blocked {
+        // Injection is a native MAA request against the conversation's root task. When another
+        // driver authors the turns (e.g. an ACP harness whose client-side mapper owns the task
+        // tree), the server has no task to attach the events to and fails the run instead;
+        // such runs are woken by the server when new messages arrive.
+        let owns_turn_lifecycle = conversation.driver().owns_turn_lifecycle();
+        if !owns
+            || has_active_stream
+            || !is_ready_status
+            || is_exiting
+            || is_dispatch_blocked
+            || !owns_turn_lifecycle
+        {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked} owns_turn_lifecycle={owns_turn_lifecycle}",
                 conversation.status()
             );
             return false;

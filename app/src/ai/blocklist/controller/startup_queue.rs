@@ -14,6 +14,7 @@ use crate::ai::attachment_utils::{
     build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId, QueuedQueryModel,
 };
@@ -62,6 +63,10 @@ impl BlocklistAIController {
     /// behind an active CLI subagent could go out) and releasing the native setup barrier if it
     /// was still held -- otherwise this conversation would stay permanently dispatch-blocked for
     /// any future local queueing against it, since nothing else would ever release that barrier.
+    ///
+    /// For a conversation whose turns an external harness authored, any orchestration events
+    /// still held behind that barrier are dropped first: releasing the barrier re-checks them,
+    /// and injecting them would open a native request the server cannot serve.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(id) = self.native_prompt_conversation_id.take() else {
@@ -74,6 +79,14 @@ impl BlocklistAIController {
             self.ambient_agent_task_id,
             self.terminal_surface_id,
         );
+        let owns_turn_lifecycle = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&id)
+            .is_none_or(|conversation| conversation.driver().owns_turn_lifecycle());
+        if !owns_turn_lifecycle {
+            OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                service.drop_pending_events_for_external_harness_conversation(id);
+            });
+        }
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
             queue.clear_queue(id, ctx);
             queue.finish_native_setup(id, ctx);

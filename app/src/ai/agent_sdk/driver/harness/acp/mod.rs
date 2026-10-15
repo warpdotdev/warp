@@ -605,14 +605,7 @@ impl HarnessRunner for AcpHarnessRunner {
     }
     #[cfg(test)]
     fn prompt_text_for_test(&self) -> Option<&str> {
-        // The composed turn text is always the first block; attachments follow it.
-        match self.initial_prompt.first()? {
-            ContentBlock::Text { text } => Some(text),
-            ContentBlock::Image { .. }
-            | ContentBlock::ResourceLink { .. }
-            | ContentBlock::Resource { .. }
-            | ContentBlock::Unsupported => None,
-        }
+        Some(&self.prompt_text)
     }
 
     fn persistence(&self) -> &HarnessPersistence {
