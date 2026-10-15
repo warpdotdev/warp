@@ -1,4 +1,3 @@
-
 use super::{ExecutionBootstrap, ExecutionBootstrapVariables};
 use crate::api::queries::task_attachments::TaskInput;
 use crate::api::queries::task_secrets::TaskSecretsInput;
@@ -47,7 +46,10 @@ fn bootstrap_fetches_all_task_data_in_one_operation() {
         ] {
             assert!(query.contains(field), "missing {field}");
         }
-        assert_eq!(query.contains("expectedSha"), supports_deferred_repositories);
+        assert_eq!(
+            query.contains("expectedSha"),
+            supports_deferred_repositories
+        );
         assert_eq!(
             query.contains("deferredRepositories"),
             supports_deferred_repositories

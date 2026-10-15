@@ -1,6 +1,5 @@
 use std::fs;
 use std::future::Future;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -89,8 +88,8 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
                 "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
                 "inferenceProviders": null, "providers": null,
-                "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
-                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "idleOnCompleteSeconds": 120, "idleOnFailSeconds": 60,
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [".agents/skills"],
                 "computerUseEnabled": false, "repositories": eager,
                 "deferredRepositories": [{
                     "forge": deferred_forge, "owner": "platform/backend", "name": "api",
@@ -98,8 +97,8 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                     "cloneFrom": {"codeForge": "GITHUB", "owner": "benchmarks", "repo": "frozen-api"},
                     "expectedSha": sha, "preserveOrigin": true,
                 }],
-                "setupCommands": [], "sessionSharingAcls": [],
-                "skipInitialTurn": false, "snapshotDisabled": false,
+                "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
+                "skipInitialTurn": true, "snapshotDisabled": true,
             }))
             .unwrap();
             let (options, _, _, _) = app.update(|ctx| {
@@ -158,7 +157,15 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
             } else {
                 assert!(options.workspace.deferred_repos.is_empty());
             }
-            assert_eq!(options.workspace.factory_skill_dirs, Some(Vec::new()));
+            assert_eq!(options.workspace.setup_commands, ["prepare-workspace"]);
+            assert_eq!(
+                options.workspace.factory_skill_dirs,
+                Some(vec![".agents/skills".into()])
+            );
+            assert_eq!(options.idle_on_complete, Some(Duration::from_secs(120)));
+            assert_eq!(options.idle_on_fail, Some(Duration::from_secs(60)));
+            assert!(options.skip_initial_turn);
+            assert_eq!(options.snapshot_disabled, Some(true));
         }
     });
 }
@@ -166,23 +173,23 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
 #[test]
 fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
     for scenario in ["eager", "deferred", "empty", "missing"] {
-    let output = ProcessCommand::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
-            "--nocapture",
-        ])
-        .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
-        .env("WARP_ISOLATION_PLATFORM", "docker")
-        .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::tests::deferred_capability_bootstrap_subprocess",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -291,6 +298,7 @@ fn deferred_capability_bootstrap_subprocess() {
             .await
             .unwrap();
         assert_eq!(data.use_factory_repositories, use_factory_repositories);
+        drop(_capability);
         let _changed_capability =
             FeatureFlag::FactoryDeferredRepositories.override_enabled(!use_factory_repositories);
         let events = runner.update(&mut app, |_, ctx| {
@@ -308,8 +316,16 @@ fn deferred_capability_bootstrap_subprocess() {
         )
         .await;
         if scenario == "missing" {
-            let error = result.err().expect("enabled bootstrap requires deferred inventory");
-            assert!(format!("{error:#}").contains("missing deferred repositories"));
+            let error = result
+                .err()
+                .expect("enabled bootstrap requires deferred inventory");
+            let AgentDriverError::ConfigBuildFailed(source) = error else {
+                panic!("unexpected bootstrap error: {error:?}");
+            };
+            assert_eq!(
+                source.to_string(),
+                "Execution configuration is missing deferred repositories"
+            );
             return;
         }
         let (options, _, _) = result.unwrap();

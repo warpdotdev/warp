@@ -161,9 +161,14 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             let config = &mut response["data"]["task"]["task"]["executionConfig"];
             config["repositories"] = json!([{
                 "forge": "GITLAB", "owner": "platform/backend", "name": "api",
-                "ref": null, "cloneFrom": null, "preserveOrigin": true
+                "ref": {"type": "COMMIT_SHA", "value": "0123456789abcdef0123456789abcdef01234567"},
+                "cloneFrom": {"codeForge": "GITHUB", "owner": "acme", "repo": "api"},
+                "preserveOrigin": true
             }]);
-            config.as_object_mut().unwrap().remove("deferredRepositories");
+            config
+                .as_object_mut()
+                .unwrap()
+                .remove("deferredRepositories");
         }
         let request =
             mock_execution_bootstrap(response, "token-success", supports_deferred_repositories);
@@ -180,14 +185,8 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             assert!(data.config.repositories.is_empty());
             let deferred_repositories = data.config.deferred_repositories.unwrap();
             assert_eq!(deferred_repositories.len(), 1);
-            assert_eq!(
-                deferred_repositories[0].forge,
-                CodeForge::GitLab,
-            );
-            assert_eq!(
-                deferred_repositories[0].owner,
-                "platform/backend"
-            );
+            assert_eq!(deferred_repositories[0].forge, CodeForge::GitLab,);
+            assert_eq!(deferred_repositories[0].owner, "platform/backend");
             assert_eq!(deferred_repositories[0].name, "api");
             assert_eq!(
                 deferred_repositories[0].expected_sha.as_deref(),
@@ -199,6 +198,20 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             assert_eq!(data.config.repositories[0].forge, CodeForge::GitLab);
             assert_eq!(data.config.repositories[0].owner, "platform/backend");
             assert_eq!(data.config.repositories[0].name, "api");
+            assert_eq!(
+                data.config.repositories[0].ref_.as_ref().unwrap().value,
+                "0123456789abcdef0123456789abcdef01234567"
+            );
+            assert_eq!(
+                data.config.repositories[0]
+                    .clone_from
+                    .as_ref()
+                    .unwrap()
+                    .code_forge,
+                CodeForge::GitHub
+            );
+            assert!(data.config.repositories[0].preserve_origin);
+            assert!(data.config.repositories[0].expected_sha.is_none());
         }
         assert!(data.secrets.unwrap().contains_key("API_KEY"));
         assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");

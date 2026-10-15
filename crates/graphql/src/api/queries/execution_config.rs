@@ -26,7 +26,8 @@ pub struct ExecutionBootstrap {
 impl ExecutionBootstrap {
     pub fn build_with_capabilities(
         variables: ExecutionBootstrapVariables,
-    ) -> Result<cynic::Operation<Self, ExecutionBootstrapVariables>, cynic::OperationBuildError> {
+    ) -> Result<cynic::Operation<Self, ExecutionBootstrapVariables>, cynic::OperationBuildError>
+    {
         let supports_deferred_repositories = variables.supports_deferred_repositories;
         let mut builder = cynic::OperationBuilder::query().with_variables(variables);
         if supports_deferred_repositories {
