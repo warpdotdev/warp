@@ -10,6 +10,7 @@ pub mod managed_mcp;
 pub mod managed_secrets;
 pub mod object;
 pub(crate) mod presigned_upload;
+pub mod prewarmed_sandbox;
 pub mod referral;
 pub mod team;
 #[cfg(feature = "tui")]
@@ -1627,6 +1628,16 @@ impl ServerApiProvider {
 
     #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_harness_support_client(&self) -> Arc<dyn harness_support::HarnessSupportClient> {
+        self.server_api.clone()
+    }
+
+    /// Returns the standby API client with the app's shared authentication state.
+    // The standby entrypoint that calls this is a follow-up change. `allow` rather than
+    // `expect` because whether this is reachable depends on the build's feature unification.
+    #[allow(dead_code)]
+    pub fn get_prewarmed_sandbox_client(
+        &self,
+    ) -> Arc<dyn prewarmed_sandbox::PrewarmedSandboxClient> {
         self.server_api.clone()
     }
 }

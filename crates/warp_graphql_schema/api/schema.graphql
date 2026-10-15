@@ -2849,6 +2849,39 @@ type PopulateMerkleTreeCacheOutput implements Response {
 
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
+input PrewarmedSandboxConfigInput {
+  sandboxId: ID!
+  workloadToken: String!
+}
+
+union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
+
+type PrewarmedSandboxConfiguration {
+  environmentVariables: [PrewarmedSandboxVariable!]!
+  expiresAt: Time!
+  generation: String!
+  gitCredentials: [TaskGitCredential!]!
+  managedSecrets: [PrewarmedSandboxVariable!]!
+  preparation: PrewarmedSandboxPreparation!
+  sandboxId: ID!
+}
+
+type PrewarmedSandboxPreparation {
+  computerUseEnabled: Boolean!
+  deferredRepositories: [SourceRepo!]!
+  factorySkillDirs: [String!]!
+  harness: String!
+  mcpServersJson: String!
+  repositories: [ExecutionRepository!]!
+  setupCommands: [String!]!
+  skills: [String!]!
+}
+
+type PrewarmedSandboxVariable {
+  name: String!
+  value: String!
+}
+
 type PricingInfo {
   addonCreditsOptions: [AddonCreditsOption!]!
   overages: OveragesPricing!
@@ -3334,6 +3367,7 @@ type RootMutation {
   mintCustomToken(requestContext: RequestContext!): MintCustomTokenResult!
   moveObject(input: MoveObjectInput!, requestContext: RequestContext!): MoveObjectResult!
   populateMerkleTreeCache(input: PopulateMerkleTreeCacheInput!, requestContext: RequestContext!): PopulateMerkleTreeCacheResult!
+  prewarmedSandboxConfig(input: PrewarmedSandboxConfigInput!, requestContext: RequestContext!): PrewarmedSandboxConfigResult!
   provideNegativeFeedbackResponseForAiConversation(input: ProvideNegativeFeedbackResponseForAiConversationInput!, requestContext: RequestContext!): RequestsRefundedResult!
   purchaseAddonCredits(input: PurchaseAddonCreditsInput!, requestContext: RequestContext!): PurchaseAddonCreditsResult!
 

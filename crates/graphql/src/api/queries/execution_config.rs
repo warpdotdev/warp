@@ -104,21 +104,21 @@ pub enum ExecutionRepositoryRefType {
     Unknown,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct ExecutionRepositoryRef {
     #[cynic(rename = "type")]
     pub type_: ExecutionRepositoryRefType,
     pub value: String,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct SourceRepo {
     pub code_forge: CodeForge,
     pub owner: String,
     pub repo: String,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct ExecutionRepository {
     pub forge: CodeForge,
     pub owner: String,
