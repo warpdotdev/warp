@@ -1,6 +1,7 @@
 use std::fs;
 
 use async_io::Async;
+use base64::Engine as _;
 use futures::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
 use serde_json::json;
 use tempfile::TempDir;
@@ -9,6 +10,8 @@ use warp_cli::agent::HarnessTransport;
 use warpui::App;
 use warpui::r#async::FutureExt as _;
 
+use super::attachments::ResolvedFile;
+use super::protocol::PromptCapabilities;
 use super::*;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::server::server_api::ServerApiProvider;
@@ -19,7 +22,13 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::view::Event;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
-async fn first_acp_prompt(stream: impl AsyncRead + AsyncWrite + Unpin, token: &str) -> Value {
+/// Plays the agent's side of the handshake, answering `initialize` with `initialize_result`,
+/// and returns the content of the first `session/prompt`.
+async fn first_acp_prompt(
+    stream: impl AsyncRead + AsyncWrite + Unpin,
+    token: &str,
+    initialize_result: Value,
+) -> Value {
     let mut stream = BufReader::new(stream);
     stream
         .get_mut()
@@ -30,7 +39,7 @@ async fn first_acp_prompt(stream: impl AsyncRead + AsyncWrite + Unpin, token: &s
     stream.read_line(&mut line).await.unwrap();
     assert_eq!(line.trim_end(), "ok");
     for (method, result) in [
-        ("initialize", json!({"protocolVersion": PROTOCOL_VERSION})),
+        ("initialize", initialize_result),
         ("session/new", json!({"sessionId": "test-session"})),
     ] {
         line.clear();
@@ -67,10 +76,31 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
         let external_conversation = ChannelState::mock_server()
             .mock("POST", "/api/v1/harness-support/external-conversation")
             .with_body(r#"{"conversation_id":"test-conversation"}"#)
-            .expect(2)
+            .expect(3)
             .create();
 
-        for transport in [HarnessTransport::Acp, HarnessTransport::Pty] {
+        let file_uri = Url::from_file_path(&file_path).unwrap();
+        let link_block = json!({
+            "type": "resource_link",
+            "uri": file_uri.as_str(),
+            "name": "image.png",
+        });
+        let image_block = json!({
+            "type": "image",
+            "data": base64::engine::general_purpose::STANDARD.encode(b"image bytes"),
+            "mimeType": "image/png",
+        });
+        let baseline_agent = json!({"protocolVersion": PROTOCOL_VERSION});
+        let image_agent = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "agentCapabilities": {"promptCapabilities": {"image": true}},
+        });
+        let cases = [
+            (HarnessTransport::Acp, baseline_agent, link_block),
+            (HarnessTransport::Acp, image_agent, image_block),
+            (HarnessTransport::Pty, Value::Null, Value::Null),
+        ];
+        for (transport, initialize_result, expected_file_block) in cases {
             let terminal = add_window_with_terminal(&mut app, None);
             let session_id = terminal.read(&app, |terminal, _| {
                 terminal
@@ -171,7 +201,7 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                                 let stream = Async::<std::os::unix::net::UnixStream>::connect(path)
                                     .await
                                     .unwrap();
-                                first_acp_prompt(stream, &launch.token).await
+                                first_acp_prompt(stream, &launch.token, initialize_result).await
                             }
                             #[cfg(not(unix))]
                             bridge::BridgeEndpoint::Unix(_) => panic!("expected a TCP endpoint"),
@@ -179,18 +209,14 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                                 let stream = Async::<std::net::TcpStream>::connect(address)
                                     .await
                                     .unwrap();
-                                first_acp_prompt(stream, &launch.token).await
+                                first_acp_prompt(stream, &launch.token, initialize_result).await
                             }
                         };
                         assert_eq!(
                             prompt,
                             json!([
                                 {"type": "text", "text": "context\n\ninspect these"},
-                                {
-                                    "type": "resource_link",
-                                    "uri": Url::from_file_path(&file_path).unwrap().as_str(),
-                                    "name": "image.png"
-                                }
+                                expected_file_block,
                             ])
                         );
                     }
@@ -222,29 +248,33 @@ fn initial_prompt_links_files_after_server_composed_text() {
     let dir = std::env::temp_dir().join("acp-initial-attachments");
     let screenshot = dir.join("image #雪%.png");
     let notes = dir.join("notes.txt");
-    let mut harness = AcpHarness::new(
+    let harness = AcpHarness::new(
         Harness::Claude,
         AcpLaunchSpec::for_harness(Harness::Claude).unwrap(),
     );
-    harness.set_initial_attachments(vec![
-        DownloadedAttachment {
-            file_id: "image-id".to_owned(),
-            file_name: "image #雪%.png".to_owned(),
-            file_path: screenshot.to_string_lossy().into_owned(),
-        },
-        DownloadedAttachment {
-            file_id: "notes-id".to_owned(),
-            file_name: "notes.txt".to_owned(),
-            file_path: notes.to_string_lossy().into_owned(),
-        },
-    ]);
-
-    let blocks = harness.initial_prompt(
+    let text = harness.initial_prompt_text(
         "inspect these",
         Some("system"),
         Some("recovery"),
         Some("context"),
     );
+    let files = [
+        ResolvedFile {
+            name: "image #雪%.png".to_owned(),
+            path: screenshot.clone(),
+            mime_type: "image/png".to_owned(),
+            contents: None,
+        },
+        ResolvedFile {
+            name: "notes.txt".to_owned(),
+            path: notes.clone(),
+            mime_type: "text/plain".to_owned(),
+            contents: None,
+        },
+    ];
+
+    let blocks =
+        attachments::prompt_content(PromptCapabilities::default(), text, Vec::new(), &files);
 
     assert_eq!(blocks.len(), 3);
     let ContentBlock::ResourceLink { uri: image_uri, .. } = &blocks[1] else {
@@ -279,10 +309,7 @@ fn initial_prompt_without_files_keeps_the_existing_text() {
         AcpLaunchSpec::for_harness(Harness::Codex).unwrap(),
     );
 
-    let blocks = harness.initial_prompt("hello", Some("staged in config"), Some(" "), None);
+    let text = harness.initial_prompt_text("hello", Some("staged in config"), Some(" "), None);
 
-    assert_eq!(
-        serde_json::to_value(blocks).unwrap(),
-        json!([{"type": "text", "text": "hello"}])
-    );
+    assert_eq!(text, "hello");
 }
