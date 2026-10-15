@@ -360,17 +360,50 @@ impl TurnHost for RecordingHost {
     }
 }
 
+#[derive(Default)]
+struct RecordingAcker {
+    acks: Mutex<Vec<(DeliveryAckTarget, DeliveryAckState, Option<String>)>>,
+}
+
+impl RecordingAcker {
+    fn acks(&self) -> Vec<(DeliveryAckTarget, DeliveryAckState, Option<String>)> {
+        self.acks.lock().clone()
+    }
+
+    fn states(&self) -> Vec<(DeliveryAckTarget, DeliveryAckState)> {
+        self.acks()
+            .into_iter()
+            .map(|(target, state, _)| (target, state))
+            .collect()
+    }
+}
+
+impl DeliveryAcker for RecordingAcker {
+    fn ack(&self, target: DeliveryAckTarget, state: DeliveryAckState, reason: Option<String>) {
+        self.acks.lock().push((target, state, reason));
+    }
+}
+
+fn followup(id: &str, state: DeliveryAckState) -> (DeliveryAckTarget, DeliveryAckState) {
+    (DeliveryAckTarget::Followup(id.to_owned()), state)
+}
+
+fn control_action(id: &str, state: DeliveryAckState) -> (DeliveryAckTarget, DeliveryAckState) {
+    (DeliveryAckTarget::ControlAction(id.to_owned()), state)
+}
+
 struct Fixture {
     agent: FakeAgent,
     follow_ups: async_channel::Sender<ExternalHarnessPrompt>,
     cancels: async_channel::Sender<ExternalHarnessCancel>,
     host: Arc<RecordingHost>,
+    acks: Arc<RecordingAcker>,
     state: Arc<TurnState>,
     connection: Arc<AcpConnection>,
 }
 
 impl Fixture {
-    async fn send_follow_up(&self, text: &str) -> ParticipantId {
+    async fn send_follow_up(&self, text: &str, request_id: Option<&str>) -> ParticipantId {
         let participant_id = ParticipantId::new();
         self.follow_ups
             .send(ExternalHarnessPrompt {
@@ -378,20 +411,28 @@ impl Fixture {
                 attachments: Vec::new(),
                 participant_id: participant_id.clone(),
                 base: None,
+                request_id: request_id.map(str::to_owned),
             })
             .await
             .unwrap();
         participant_id
     }
 
-    async fn send_interrupt(&self) {
-        self.cancels.send(ExternalHarnessCancel).await.unwrap();
+    async fn send_interrupt(&self, request_id: Option<&str>) {
+        self.cancels
+            .send(ExternalHarnessCancel {
+                request_id: request_id.map(str::to_owned),
+            })
+            .await
+            .unwrap();
     }
 
     /// Closes the controller's sinks, which ends the turn driver once it is between turns.
-    fn unbind(self) -> (Arc<RecordingHost>, Arc<TurnState>) {
-        let Fixture { host, state, .. } = self;
-        (host, state)
+    fn unbind(self) -> (Arc<RecordingHost>, Arc<RecordingAcker>, Arc<TurnState>) {
+        let Fixture {
+            host, acks, state, ..
+        } = self;
+        (host, acks, state)
     }
 }
 
@@ -420,6 +461,7 @@ fn start(
     let connection = Arc::new(connection);
     let state = Arc::new(TurnState::default());
     let host = Arc::new(RecordingHost::new(state.clone()));
+    let acks = Arc::new(RecordingAcker::default());
     let (follow_up_tx, follow_up_rx) = async_channel::unbounded();
     let (cancel_tx, cancel_rx) = async_channel::unbounded();
     let (save_tx, _save_rx) = async_channel::unbounded();
@@ -431,6 +473,7 @@ fn start(
         follow_ups: Some(follow_up_rx),
         cancels: Some(cancel_rx),
         host: host.clone(),
+        acks: acks.clone(),
         state: state.clone(),
         turn,
         session_id: SESSION.to_owned(),
@@ -457,6 +500,7 @@ fn start(
         follow_ups: follow_up_tx,
         cancels: cancel_tx,
         host,
+        acks,
         state,
         connection,
     };
@@ -483,7 +527,7 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
             })
             .await;
 
-        let participant = fixture.send_follow_up("steer").await;
+        let participant = fixture.send_follow_up("steer", Some("48213")).await;
         fixture.agent.expect_cancel().await;
         // What the agent streams before answering the cancel still belongs to the first turn.
         fixture.agent.send_chunk(" late").await;
@@ -501,7 +545,7 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
             .await;
         (participant, fixture.unbind())
     };
-    let ((participant, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((participant, (host, acks, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     let streams = host.streams();
     assert_eq!(streams.len(), 2, "{:?}", host.events());
@@ -567,6 +611,13 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
         ]
     );
     assert!(!state.is_settling());
+    assert_eq!(
+        acks.states(),
+        vec![
+            followup("48213", DeliveryAckState::Steering),
+            followup("48213", DeliveryAckState::Applied),
+        ]
+    );
 }
 
 #[test]
@@ -580,7 +631,7 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
             .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
 
-        fixture.send_follow_up("next").await;
+        fixture.send_follow_up("next", Some("48214")).await;
         let second = fixture.agent.next_prompt().await;
         assert_eq!(
             prompt_text(&second),
@@ -600,8 +651,12 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
             .await;
         fixture.unbind()
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, acks, _), ()) = block_on(join(script, driver.run(&mut mapper)));
 
+    assert_eq!(
+        acks.states(),
+        vec![followup("48214", DeliveryAckState::Applied)]
+    );
     assert_eq!(
         host.events().last(),
         Some(&HostEvent::Stopped),
@@ -622,9 +677,9 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
     let (driver, mut mapper, mut fixture) = start_default();
     let script = async {
         let first = fixture.agent.next_prompt().await;
-        let author_a = fixture.send_follow_up("a").await;
+        let author_a = fixture.send_follow_up("a", Some("1")).await;
         fixture.agent.expect_cancel().await;
-        fixture.send_follow_up("b").await;
+        fixture.send_follow_up("b", Some("2")).await;
         fixture
             .host
             .wait_for(|events| events.contains(&HostEvent::ShowQueued("b".to_owned())))
@@ -654,7 +709,7 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
             .await;
         (author_a, fixture.unbind())
     };
-    let ((author_a, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((author_a, (host, acks, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     let streams = host.streams();
     assert_eq!(streams.len(), 2);
@@ -667,6 +722,15 @@ fn follow_ups_that_arrive_during_one_cancel_go_out_together_in_order() {
         stream: streams[1].clone(),
         initiator: Some(author_a),
     }));
+    assert_eq!(
+        acks.states(),
+        vec![
+            followup("1", DeliveryAckState::Steering),
+            followup("2", DeliveryAckState::Steering),
+            followup("1", DeliveryAckState::Applied),
+            followup("2", DeliveryAckState::Applied),
+        ]
+    );
     assert!(host.queued_rows.lock().is_empty());
     assert!(!state.is_settling());
 }
@@ -676,7 +740,7 @@ fn an_unanswered_cancel_interrupts_the_terminal_and_fails_the_follow_up() {
     let (driver, mut mapper, mut fixture) = start(rejecting_handler(), Duration::from_millis(50));
     let script = async {
         let _first = fixture.agent.next_prompt().await;
-        fixture.send_follow_up("steer").await;
+        fixture.send_follow_up("steer", Some("9")).await;
         fixture.agent.expect_cancel().await;
         // The agent never answers.
         fixture
@@ -685,7 +749,7 @@ fn an_unanswered_cancel_interrupts_the_terminal_and_fails_the_follow_up() {
             .await;
         fixture.unbind()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, acks, state), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     let events = host.events();
     assert!(
@@ -709,6 +773,17 @@ fn an_unanswered_cancel_interrupts_the_terminal_and_fails_the_follow_up() {
     );
     assert!(host.queued_rows.lock().is_empty());
     assert!(!state.is_settling());
+    let acks = acks.acks();
+    assert_eq!(acks[0].1, DeliveryAckState::Steering);
+    assert_eq!(acks[1].1, DeliveryAckState::Failed);
+    assert!(
+        acks[1]
+            .2
+            .as_deref()
+            .unwrap()
+            .contains("did not answer session/cancel")
+    );
+    assert_eq!(acks.len(), 2);
 }
 
 #[test]
@@ -739,7 +814,7 @@ fn a_pending_permission_request_is_answered_cancelled_when_a_follow_up_steers() 
         }
         assert_eq!(connection.pending_inbound_requests().len(), 1);
 
-        fixture.send_follow_up("steer").await;
+        fixture.send_follow_up("steer", None).await;
         fixture.agent.expect_cancel().await;
         let answer = fixture.agent.next_message().await;
         assert_eq!(answer["id"], "perm-1", "got {answer}");
@@ -759,7 +834,11 @@ fn a_pending_permission_request_is_answered_cancelled_when_a_follow_up_steers() 
             .await;
         fixture.unbind()
     };
-    let ((_, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((_, acks, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert!(
+        acks.acks().is_empty(),
+        "a prompt without an id is only logged"
+    );
 }
 
 #[test]
@@ -767,7 +846,7 @@ fn an_interrupt_mid_turn_cancels_the_turn_and_marks_the_conversation_cancelled()
     let (driver, mut mapper, mut fixture) = start_default();
     let script = async {
         let first = fixture.agent.next_prompt().await;
-        fixture.send_interrupt().await;
+        fixture.send_interrupt(Some("77")).await;
         fixture.agent.expect_cancel().await;
         fixture.agent.respond(&first, "cancelled").await;
         fixture
@@ -776,7 +855,7 @@ fn an_interrupt_mid_turn_cancels_the_turn_and_marks_the_conversation_cancelled()
             .await;
         fixture.unbind()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, acks, state), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     let events = host.events();
     let stream = host.streams()[0].clone();
@@ -797,6 +876,10 @@ fn an_interrupt_mid_turn_cancels_the_turn_and_marks_the_conversation_cancelled()
     );
     assert_eq!(host.streams().len(), 1);
     assert!(!state.is_settling());
+    assert_eq!(
+        acks.states(),
+        vec![control_action("77", DeliveryAckState::Applied)]
+    );
 }
 
 #[test]
@@ -804,7 +887,7 @@ fn an_agent_error_while_a_cancel_is_pending_counts_as_the_cancellation() {
     let (driver, mut mapper, mut fixture) = start_default();
     let script = async {
         let first = fixture.agent.next_prompt().await;
-        fixture.send_interrupt().await;
+        fixture.send_interrupt(Some("78")).await;
         fixture.agent.expect_cancel().await;
         fixture
             .agent
@@ -820,7 +903,7 @@ fn an_agent_error_while_a_cancel_is_pending_counts_as_the_cancellation() {
             .await;
         fixture.unbind()
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, acks, _), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     assert!(
         host.events()
@@ -828,6 +911,10 @@ fn an_agent_error_while_a_cancel_is_pending_counts_as_the_cancellation() {
             .any(|event| matches!(event, HostEvent::Finished { reason: "done", .. })),
         "{:?}",
         host.events()
+    );
+    assert_eq!(
+        acks.states(),
+        vec![control_action("78", DeliveryAckState::Applied)]
     );
 }
 
@@ -841,14 +928,18 @@ fn an_interrupt_between_turns_is_applied_at_once() {
             .host
             .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
-        fixture.send_interrupt().await;
+        fixture.send_interrupt(Some("79")).await;
         fixture
             .host
             .wait_for(|events| matches!(events.last(), Some(HostEvent::MarkedCancelled { .. })))
             .await;
         fixture.unbind()
     };
-    let ((_, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((_, acks, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(
+        acks.states(),
+        vec![control_action("79", DeliveryAckState::Applied)]
+    );
 }
 
 #[test]

@@ -729,6 +729,7 @@ impl BlocklistAIController {
     /// `BlocklistAIHistoryModel`) or, on the no-token fallback path, wrongly create one. See
     /// `accept_agent_prompt` (`terminal_view_adaptor.rs`) for the routing choke point that
     /// guarantees this.
+    #[allow(clippy::too_many_arguments)]
     pub fn execute_warp_agent_prompt_from_shared_session_injection(
         &mut self,
         prompt: String,
@@ -736,6 +737,7 @@ impl BlocklistAIController {
         attachments: Vec<AgentAttachment>,
         participant_id: ParticipantId,
         base: Option<BaseUserQuery>,
+        request_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Route through the bound native conversation, if any -- see
@@ -747,6 +749,7 @@ impl BlocklistAIController {
             &attachments,
             &participant_id,
             base.as_ref(),
+            request_id.as_deref(),
             ctx,
         ) {
             return;

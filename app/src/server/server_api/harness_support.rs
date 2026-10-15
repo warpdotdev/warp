@@ -30,6 +30,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
+use crate::ai::delivery_acks::DeliveryAck;
 
 /// A presigned upload target returned by the server.
 #[serde_with::serde_as]
@@ -412,6 +413,23 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// surface a resume-specific error.
     async fn fetch_transcript(&self) -> Result<bytes::Bytes>;
 
+    /// Report what became of a follow-up warp-server injected into `run_id`. Idempotent and
+    /// monotonic server-side; an id the server does not know fails with 404.
+    async fn ack_followup(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        followup_id: &str,
+        ack: &DeliveryAck,
+    ) -> Result<()>;
+
+    /// [`Self::ack_followup`] for a control action (an interrupt) injected into `run_id`.
+    async fn ack_control_action(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        action_id: &str,
+        ack: &DeliveryAck,
+    ) -> Result<()>;
+
     /// Get an HTTP client to use with [`UploadTarget`]s for saving blobs.
     fn external_http_client(&self) -> &http_client::Client;
 }
@@ -688,6 +706,38 @@ impl HarnessSupportClient for ServerApi {
                 "fetch_transcript is not supported on wasm; agent_sdk is not built on this target"
             );
         }
+    }
+
+    async fn ack_followup(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        followup_id: &str,
+        ack: &DeliveryAck,
+    ) -> Result<()> {
+        self.post_public_api_unit(
+            &format!(
+                "agent/runs/{run_id}/followups/{}/ack",
+                urlencoding::encode(followup_id)
+            ),
+            ack,
+        )
+        .await
+    }
+
+    async fn ack_control_action(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        action_id: &str,
+        ack: &DeliveryAck,
+    ) -> Result<()> {
+        self.post_public_api_unit(
+            &format!(
+                "agent/runs/{run_id}/control-actions/{}/ack",
+                urlencoding::encode(action_id)
+            ),
+            ack,
+        )
+        .await
     }
 
     fn external_http_client(&self) -> &http_client::Client {

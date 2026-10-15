@@ -837,6 +837,7 @@ fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch()
                 }],
                 ParticipantId::new(),
                 None,
+                None,
                 ctx,
             );
             let row = &QueuedQueryModel::as_ref(ctx).queue(id)[0];
@@ -863,6 +864,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 vec![],
                 participant.clone(),
                 None,
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -870,6 +872,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 None,
                 ctx,
             );
@@ -983,6 +986,7 @@ fn agent_message_wake_origin_becomes_an_agent_wake_input_not_a_query() {
                 vec![],
                 participant,
                 Some(agent_message_wake_base()),
+                None,
                 ctx,
             );
             id
@@ -1020,6 +1024,7 @@ fn agent_message_wake_origin_is_recognized_when_steered_into_a_follow_up() {
                 vec![],
                 participant,
                 Some(agent_message_wake_base()),
+                None,
                 ctx,
             );
             assert_eq!(
@@ -1083,6 +1088,7 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
                     vec![],
                     ParticipantId::new(),
                     base,
+                    None,
                     ctx,
                 );
                 id
@@ -1222,6 +1228,7 @@ fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() 
                 vec![],
                 ParticipantId::new(),
                 None,
+                None,
                 ctx,
             );
         });
@@ -1271,6 +1278,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 vec![],
                 participant.clone(),
                 None,
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -1278,6 +1286,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
                 None,
                 vec![],
                 participant.clone(),
+                None,
                 None,
                 ctx,
             );
@@ -1342,6 +1351,7 @@ fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds(
                 vec![],
                 ParticipantId::new(),
                 None,
+                None,
                 ctx,
             );
             id
@@ -1405,6 +1415,7 @@ fn route_native_startup_injection_rejects_a_prompt_targeting_a_different_convers
                     vec![],
                     ParticipantId::new(),
                     None,
+                    None,
                     ctx,
                 );
                 assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
@@ -1449,6 +1460,7 @@ fn unmapped_token_never_bootstraps_a_new_conversation_when_not_bound() {
                     vec![],
                     ParticipantId::new(),
                     None,
+                    None,
                     ctx,
                 );
             });
@@ -1483,6 +1495,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
                     content: "remote context".into(),
                 }],
                 participant.clone(),
+                None,
                 None,
                 ctx,
             );
@@ -1551,6 +1564,7 @@ fn startup_injections_reuse_the_restored_conversation() {
                     vec![],
                     ParticipantId::new(),
                     None,
+                    None,
                     ctx,
                 );
                 let row = &QueuedQueryModel::as_ref(ctx).queue(restored)[0];
@@ -1582,6 +1596,7 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     None,
                     ctx,
                 );
@@ -1649,6 +1664,7 @@ fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
                     None,
                     vec![],
                     ParticipantId::new(),
+                    None,
                     None,
                     ctx,
                 );

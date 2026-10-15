@@ -1,9 +1,58 @@
 use std::sync::Arc;
 
-use super::is_setup_failure_debug_prompt_authorized;
+use parking_lot::Mutex;
+
+use super::{
+    NO_TURN_TO_INTERRUPT, ack_interrupt_outcome, is_setup_failure_debug_prompt_authorized,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::delivery_acks::{DeliveryAckState, DeliveryAckTarget, DeliveryAcker};
 use crate::auth::UserUid;
 use crate::server::server_api::ai::{AIClient, MockAIClient};
+
+#[derive(Default)]
+struct RecordingAcker {
+    acks: Mutex<Vec<(DeliveryAckTarget, DeliveryAckState, Option<String>)>>,
+}
+
+impl DeliveryAcker for RecordingAcker {
+    fn ack(&self, target: DeliveryAckTarget, state: DeliveryAckState, reason: Option<String>) {
+        self.acks.lock().push((target, state, reason));
+    }
+}
+
+/// An interrupt that arrives while the conversation is finished or unknown has nothing to
+/// apply to, so it must settle as `failed` instead of staying at `received` forever.
+#[test]
+fn an_interrupt_with_nothing_to_cancel_is_acked_failed() {
+    let acker = RecordingAcker::default();
+    ack_interrupt_outcome(
+        &acker,
+        DeliveryAckTarget::ControlAction("77".to_owned()),
+        false,
+    );
+    assert_eq!(
+        acker.acks.lock().as_slice(),
+        &[(
+            DeliveryAckTarget::ControlAction("77".to_owned()),
+            DeliveryAckState::Failed,
+            Some(NO_TURN_TO_INTERRUPT.to_owned()),
+        )]
+    );
+}
+
+/// An interrupt a turn took is acked `applied` by that turn once the agent answers the cancel,
+/// not here.
+#[test]
+fn an_interrupt_that_was_taken_is_left_for_the_turn_to_ack() {
+    let acker = RecordingAcker::default();
+    ack_interrupt_outcome(
+        &acker,
+        DeliveryAckTarget::ControlAction("77".to_owned()),
+        true,
+    );
+    assert!(acker.acks.lock().is_empty());
+}
 
 fn fixed_task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440b00"

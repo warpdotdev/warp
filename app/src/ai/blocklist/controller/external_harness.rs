@@ -13,6 +13,7 @@ use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
 use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryId, QueuedQueryModel};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
@@ -37,11 +38,18 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
     /// Its attribution is copied onto the user query echoed into the conversation.
     pub base: Option<BaseUserQuery>,
+    /// The id the prompt was injected under, which the harness acks its delivery against.
+    /// Viewer-typed prompts on older relays carry none.
+    pub request_id: Option<String>,
 }
 
 /// A request to interrupt the turn an external harness is running, relayed to that harness.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ExternalHarnessCancel;
+pub(crate) struct ExternalHarnessCancel {
+    /// The id the control action was injected under, which the harness acks against. A local
+    /// stop carries none.
+    pub request_id: Option<String>,
+}
 
 impl BlocklistAIController {
     /// Diverts prompts injected into the bound native conversation to an external harness.
@@ -103,6 +111,7 @@ impl BlocklistAIController {
     pub(crate) fn cancel_via_external_harness(
         &self,
         conversation_id: AIConversationId,
+        request_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         if !self.is_cancelled_via_external_harness(conversation_id, ctx) {
@@ -112,11 +121,11 @@ impl BlocklistAIController {
             return false;
         };
         log::info!(
-            "event=cancel_routed_to_external_harness task_id={:?} terminal_id={:?} conversation_id={conversation_id}",
+            "event=cancel_routed_to_external_harness task_id={:?} terminal_id={:?} conversation_id={conversation_id} request_id={request_id:?}",
             self.ambient_agent_task_id,
             self.terminal_surface_id,
         );
-        if sink.try_send(ExternalHarnessCancel).is_err() {
+        if sink.try_send(ExternalHarnessCancel { request_id }).is_err() {
             log::info!(
                 "event=cancel_fell_back_to_native task_id={:?} terminal_id={:?} conversation_id={conversation_id} reason=harness_stopped",
                 self.ambient_agent_task_id,
@@ -125,6 +134,10 @@ impl BlocklistAIController {
             return false;
         }
         true
+    }
+
+    pub(crate) fn ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
+        self.ambient_agent_task_id
     }
 
     /// Marks `conversation_id` cancelled once the harness has settled the turn it cut short.
@@ -157,7 +170,8 @@ impl BlocklistAIController {
             prompt.participant_id.clone(),
             prompt.attachments.clone(),
             prompt.base.clone(),
-        );
+        )
+        .with_request_id(prompt.request_id.clone());
         QueuedQueryModel::handle(ctx)
             .update(ctx, |queue, ctx| queue.append(conversation_id, row, ctx))
     }
@@ -191,6 +205,7 @@ impl BlocklistAIController {
                         attachments: attachments.to_vec(),
                         participant_id: participant_id.clone(),
                         base: row.base_user_query().cloned(),
+                        request_id: row.request_id().map(str::to_owned),
                     },
                 ))
             })

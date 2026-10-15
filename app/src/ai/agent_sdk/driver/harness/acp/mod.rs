@@ -97,6 +97,7 @@ use crate::ai::blocklist::{
     BlocklistAIController, BlocklistAIHistoryModel, ExternalHarnessCancel, ExternalHarnessPrompt,
     ExternalHarnessTurn, QueuedQueryId, ResponseStreamId,
 };
+use crate::ai::delivery_acks::ServerDeliveryAcker;
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
@@ -871,6 +872,11 @@ impl HarnessRunner for AcpHarnessRunner {
             follow_ups: Some(follow_up_rx),
             cancels: Some(cancel_rx),
             host,
+            acks: Arc::new(ServerDeliveryAcker::new(
+                self.client.clone(),
+                self.task_id,
+                background.clone(),
+            )),
             state: self.turn_state.clone(),
             turn,
             session_id,

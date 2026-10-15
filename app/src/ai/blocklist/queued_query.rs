@@ -63,6 +63,8 @@ enum QueuedQueryKind {
         /// The `Request.Input.UserQuery` warp-server injected with the prompt, when it sent one.
         /// It seeds the input and is the base of the request once the row dispatches.
         base: Option<BaseUserQuery>,
+        /// The id the prompt was injected under, which warp-server's delivery acks are keyed by.
+        request_id: Option<String>,
     },
     /// A shell command run in the terminal (or via the shared session for cloud panes).
     Command,
@@ -97,7 +99,24 @@ impl QueuedQuery {
                 attachments,
                 prepared_files,
                 base,
+                request_id: None,
             },
+        }
+    }
+
+    /// Records the id a shared-session prompt row was injected under. No-op for other rows.
+    pub(crate) fn with_request_id(mut self, id: Option<String>) -> Self {
+        if let QueuedQueryKind::SharedSessionPrompt { request_id, .. } = &mut self.kind {
+            *request_id = id;
+        }
+        self
+    }
+
+    /// The id a shared-session prompt row was injected under, if it carried one.
+    pub(crate) fn request_id(&self) -> Option<&str> {
+        match &self.kind {
+            QueuedQueryKind::SharedSessionPrompt { request_id, .. } => request_id.as_deref(),
+            QueuedQueryKind::Prompt { .. } | QueuedQueryKind::Command => None,
         }
     }
 

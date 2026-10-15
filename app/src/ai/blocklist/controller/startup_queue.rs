@@ -100,6 +100,7 @@ impl BlocklistAIController {
     /// be wrong: it has no way to find this binding once the conversation already has exchanges
     /// but hasn't been assigned a server token yet, which is routinely true for every follow-up
     /// after the first.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn route_native_startup_injection(
         &mut self,
         prompt: &str,
@@ -107,6 +108,7 @@ impl BlocklistAIController {
         attachments: &[AgentAttachment],
         participant_id: &ParticipantId,
         base: Option<&BaseUserQuery>,
+        request_id: Option<&str>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let Some(bound_id) = self.native_prompt_conversation_id else {
@@ -130,6 +132,7 @@ impl BlocklistAIController {
                 attachments: attachments.to_vec(),
                 participant_id: participant_id.clone(),
                 base: base.cloned(),
+                request_id: request_id.map(str::to_owned),
             };
             if sink.try_send(relayed).is_err() {
                 report_error!(
@@ -166,7 +169,8 @@ impl BlocklistAIController {
             participant_id.clone(),
             attachments.to_vec(),
             base.cloned(),
-        );
+        )
+        .with_request_id(request_id.map(str::to_owned));
         let query_id = row.id();
         let needs_preparation = !row.is_ready();
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {

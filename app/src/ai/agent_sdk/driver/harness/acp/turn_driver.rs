@@ -38,6 +38,7 @@ use crate::ai::blocklist::{
     ExternalHarnessCancel, ExternalHarnessPrompt, ExternalHarnessTurn, QueuedQueryId,
     ResponseStreamId,
 };
+use crate::ai::delivery_acks::{DeliveryAckState, DeliveryAckTarget, DeliveryAcker};
 
 /// Bound on the agent answering `session/cancel` with the cancelled turn's response. Past it the
 /// agent is interrupted in its terminal instead, and the turn is failed.
@@ -147,6 +148,12 @@ pub(super) struct QueuedFollowUp {
     row: Option<QueuedQueryId>,
 }
 
+/// A `session/cancel` whose response is awaited.
+struct PendingCancel {
+    /// Interrupts answered `applied` once the response arrives, or `failed` if it never does.
+    interrupts: Vec<ExternalHarnessCancel>,
+}
+
 enum Wake<T> {
     Notification(Result<InboundNotification, async_channel::RecvError>),
     FollowUp(Result<ExternalHarnessPrompt, async_channel::RecvError>),
@@ -191,6 +198,7 @@ pub(super) struct TurnDriver {
     /// Interrupts of the current turn. `None` once the controller has unbound the conversation.
     pub cancels: Option<async_channel::Receiver<ExternalHarnessCancel>>,
     pub host: Arc<dyn TurnHost>,
+    pub acks: Arc<dyn DeliveryAcker>,
     pub state: Arc<TurnState>,
     /// The currently open request stream.
     pub turn: ExternalHarnessTurn,
@@ -225,7 +233,7 @@ impl TurnDriver {
                 &self.initial_attachments,
             )
             .await;
-        let mut turn_result = self.run_turn(mapper, initial).await;
+        let mut turn_result = self.run_turn(mapper, initial, Vec::new()).await;
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -253,9 +261,14 @@ impl TurnDriver {
                 }
                 // The controller unbound the conversation; nothing more can be routed here.
                 Wake::FollowUp(Err(_)) => break,
-                Wake::Cancel(Ok(ExternalHarnessCancel)) => {
+                Wake::Cancel(Ok(interrupt)) => {
                     log::info!("ACP interrupt received between turns; nothing to cancel");
                     self.host.mark_conversation_cancelled().await;
+                    self.acks.ack_optional(
+                        DeliveryAckTarget::control_action(interrupt.request_id.as_deref()),
+                        DeliveryAckState::Applied,
+                        None,
+                    );
                 }
                 Wake::Cancel(Err(_)) => self.cancels = None,
                 Wake::Notification(Ok(notification)) => log::debug!(
@@ -295,10 +308,21 @@ impl TurnDriver {
             }
             prompts.push(prompt);
         }
+        let ack_targets: Vec<DeliveryAckTarget> = prompts
+            .iter()
+            .filter_map(|prompt| DeliveryAckTarget::followup(prompt.request_id.as_deref()))
+            .collect();
         let initiator = prompts.first().map(|prompt| prompt.participant_id.clone());
         let next = match self.host.begin_turn(initiator).await {
             Ok(next) => next,
             Err(error) => {
+                for target in ack_targets {
+                    self.acks.ack(
+                        target,
+                        DeliveryAckState::Failed,
+                        Some(format!("could not open a conversation turn: {error:#}")),
+                    );
+                }
                 self.state.set_settling(false);
                 return Err(error);
             }
@@ -326,15 +350,20 @@ impl TurnDriver {
                     .await,
             );
         }
-        self.run_turn(mapper, content).await
+        self.run_turn(mapper, content, ack_targets).await
     }
 
-    /// Runs one prompt turn to completion and finishes its last request stream.
+    /// Runs one prompt turn to completion and finishes its last request stream. `ack_targets`
+    /// are the injected follow-ups the prompt carries, acked `applied` as it is sent.
     async fn run_turn(
         &mut self,
         mapper: &mut AcpTurnMapper,
         prompt: Vec<ContentBlock>,
+        ack_targets: Vec<DeliveryAckTarget>,
     ) -> Result<TurnOutcome> {
+        for target in ack_targets {
+            self.acks.ack(target, DeliveryAckState::Applied, None);
+        }
         self.state.set_in_turn(true);
         let turn_result = self.prompt(mapper, prompt).await;
         let finished = match &turn_result {
@@ -420,7 +449,7 @@ impl TurnDriver {
             )
             .fuse();
         pin_mut!(prompt_fut);
-        let mut cancel_pending = false;
+        let mut cancel: Option<PendingCancel> = None;
         let mut deadline = no_deadline();
         loop {
             let wake = select! {
@@ -442,35 +471,50 @@ impl TurnDriver {
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
-                    return self.settle_response(response, cancel_pending);
+                    return self.settle_response(response, cancel);
                 }
                 Wake::FollowUp(Ok(prompt)) => {
                     self.hold_follow_up(prompt).await;
-                    if !cancel_pending {
-                        self.start_cancel().await?;
-                        cancel_pending = true;
+                    if cancel.is_none() {
+                        cancel = Some(self.start_cancel().await?);
                         deadline = cancel_deadline(self.cancel_deadline);
                     }
                 }
                 Wake::FollowUp(Err(_)) => self.follow_ups = None,
-                Wake::Cancel(Ok(ExternalHarnessCancel)) => {
-                    if !cancel_pending {
-                        self.start_cancel().await?;
-                        cancel_pending = true;
-                        deadline = cancel_deadline(self.cancel_deadline);
-                    }
-                }
+                Wake::Cancel(Ok(interrupt)) => match &mut cancel {
+                    Some(pending) => pending.interrupts.push(interrupt),
+                    None => match self.start_cancel().await {
+                        Ok(mut pending) => {
+                            pending.interrupts.push(interrupt);
+                            cancel = Some(pending);
+                            deadline = cancel_deadline(self.cancel_deadline);
+                        }
+                        Err(error) => {
+                            self.acks.ack_optional(
+                                DeliveryAckTarget::control_action(interrupt.request_id.as_deref()),
+                                DeliveryAckState::Failed,
+                                Some(format!("could not send session/cancel: {error:#}")),
+                            );
+                            return Err(error);
+                        }
+                    },
+                },
                 Wake::Cancel(Err(_)) => self.cancels = None,
-                Wake::Deadline => return self.cancel_timed_out().await,
+                Wake::Deadline => return self.cancel_timed_out(cancel.take()).await,
             }
         }
         let response = prompt_fut.await;
-        self.settle_response(response, cancel_pending)
+        self.settle_response(response, cancel)
     }
 
-    /// Takes a follow-up that arrived mid-turn: it is shown as queued and runs once the turn
-    /// has been cancelled.
+    /// Takes a follow-up that arrived mid-turn: it is shown as queued and acked `steering`,
+    /// and runs once the turn has been cancelled.
     async fn hold_follow_up(&mut self, prompt: ExternalHarnessPrompt) {
+        self.acks.ack_optional(
+            DeliveryAckTarget::followup(prompt.request_id.as_deref()),
+            DeliveryAckState::Steering,
+            None,
+        );
         let row = self.host.show_queued_prompt(&prompt).await;
         self.queued.push_back(QueuedFollowUp { prompt, row });
     }
@@ -478,7 +522,7 @@ impl TurnDriver {
     /// Asks the agent to end the current turn. Permission requests it is waiting on are answered
     /// `cancelled` at once, as the protocol requires, so it is not left deciding for work that
     /// will not proceed.
-    async fn start_cancel(&self) -> Result<()> {
+    async fn start_cancel(&self) -> Result<PendingCancel> {
         self.state.set_settling(true);
         log::info!("Cancelling the current ACP turn");
         self.connection
@@ -496,58 +540,82 @@ impl TurnDriver {
         if answered > 0 {
             log::info!("Answered {answered} pending ACP permission request(s) with cancelled");
         }
-        Ok(())
+        Ok(PendingCancel {
+            interrupts: Vec::new(),
+        })
     }
 
-    /// Maps the prompt response to the turn's outcome. While a cancel is pending an agent error
-    /// is taken as the cancellation (some agents report an aborted turn that way rather than
-    /// with a `cancelled` stop reason).
+    /// Maps the prompt response to the turn's outcome and settles the interrupts waiting on
+    /// it. While a cancel is pending an agent error is taken as the cancellation (some agents
+    /// report an aborted turn that way rather than with a `cancelled` stop reason).
     fn settle_response(
         &self,
         response: Result<PromptResponse>,
-        cancel_pending: bool,
+        cancel: Option<PendingCancel>,
     ) -> Result<TurnOutcome> {
-        match response {
+        let outcome = match response {
             Ok(response) if response.stop_reason == StopReason::Cancelled => {
                 Ok(TurnOutcome::Cancelled)
             }
             Ok(response) => Ok(TurnOutcome::Stopped(response.stop_reason)),
-            Err(error) if cancel_pending && error.downcast_ref::<RpcError>().is_some() => {
+            Err(error) if cancel.is_some() && error.downcast_ref::<RpcError>().is_some() => {
                 log::info!(
                     "Treating the agent's error while cancelling as the cancellation: {error}"
                 );
                 Ok(TurnOutcome::Cancelled)
             }
             Err(error) => Err(error),
+        };
+        if let Some(cancel) = cancel {
+            for interrupt in cancel.interrupts {
+                let target = DeliveryAckTarget::control_action(interrupt.request_id.as_deref());
+                match &outcome {
+                    Ok(_) => self
+                        .acks
+                        .ack_optional(target, DeliveryAckState::Applied, None),
+                    Err(error) => self.acks.ack_optional(
+                        target,
+                        DeliveryAckState::Failed,
+                        Some(format!("{error:#}")),
+                    ),
+                }
+            }
         }
+        outcome
     }
 
     /// The agent did not answer `session/cancel` in time: its block is interrupted (the
     /// driver's exit ladder force-kills it if that is not enough) and the turn is failed.
-    async fn cancel_timed_out(&mut self) -> Result<TurnOutcome> {
+    async fn cancel_timed_out(&mut self, cancel: Option<PendingCancel>) -> Result<TurnOutcome> {
         let reason = format!(
             "the agent did not answer session/cancel within {:?}",
             self.cancel_deadline
         );
         log::warn!("{reason}; interrupting its terminal");
         self.host.interrupt_terminal().await;
+        for interrupt in cancel.into_iter().flat_map(|cancel| cancel.interrupts) {
+            self.acks.ack_optional(
+                DeliveryAckTarget::control_action(interrupt.request_id.as_deref()),
+                DeliveryAckState::Failed,
+                Some(reason.clone()),
+            );
+        }
         self.fail_queued(&reason).await;
         Err(anyhow!(reason))
     }
 
-    /// Drops every held follow-up; `reason` is why they will not be sent.
+    /// Drops every held follow-up, acking each `failed` with `reason`.
     async fn fail_queued(&mut self, reason: &str) {
         self.state.set_settling(false);
-        if !self.queued.is_empty() {
-            log::warn!(
-                "Dropping {} held ACP follow-up(s): {reason}",
-                self.queued.len()
-            );
-        }
-        while let Some(QueuedFollowUp { row, .. }) = self.queued.pop_front() {
+        while let Some(QueuedFollowUp { prompt, row }) = self.queued.pop_front() {
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
             }
+            self.acks.ack_optional(
+                DeliveryAckTarget::followup(prompt.request_id.as_deref()),
+                DeliveryAckState::Failed,
+                Some(reason.to_owned()),
+            );
         }
     }
 

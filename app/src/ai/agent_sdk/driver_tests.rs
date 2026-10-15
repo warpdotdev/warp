@@ -2008,6 +2008,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 vec![],
                 ParticipantId::new(),
                 None,
+                None,
                 ctx,
             );
             controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -2015,6 +2016,7 @@ fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
                 None,
                 vec![],
                 ParticipantId::new(),
+                None,
                 None,
                 ctx,
             );

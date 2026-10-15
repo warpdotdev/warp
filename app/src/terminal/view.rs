@@ -9159,6 +9159,17 @@ impl TerminalView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.stop_agent_conversation(conversation_id, None, ctx);
+    }
+
+    /// Stops `conversation_id`'s turn. `request_id` is the id a shared-session cancellation was
+    /// injected under, for the external harness to ack when one drives the conversation.
+    fn stop_agent_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        request_id: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let had_active_stream = self
             .ai_controller
             .as_ref(ctx)
@@ -9168,6 +9179,7 @@ impl TerminalView {
             controller.cancel_conversation_progress_routed(
                 conversation_id,
                 CancellationReason::ManuallyCancelled,
+                request_id,
                 ctx,
             )
         });
@@ -9222,12 +9234,14 @@ impl TerminalView {
     /// Handles a shared-session cancel control action (a viewer's stop or a server-side steering
     /// interrupt) for the live conversation bound to `server_conversation_token`. The conversation
     /// is stopped the same way a local stop is, so an in-flight agent command is interrupted along
-    /// with the turn rather than left running to completion. Returns `false` when the token names
-    /// no live, unfinished conversation, in which case nothing was cancelled.
+    /// with the turn rather than left running to completion. `request_id` is the id the action
+    /// was injected under, which an external harness acks its delivery against. Returns `false`
+    /// when the token names no live, unfinished conversation, in which case nothing was cancelled.
     #[cfg(feature = "local_tty")]
     pub(crate) fn handle_shared_session_cancel_action(
         &mut self,
         server_conversation_token: SessionSharingServerConversationToken,
+        request_id: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let conversation_id = self.ai_controller.update(ctx, |controller, ctx| {
@@ -9236,7 +9250,7 @@ impl TerminalView {
         let Some(conversation_id) = conversation_id else {
             return false;
         };
-        self.stop_local_agent_conversation(conversation_id, ctx);
+        self.stop_agent_conversation(conversation_id, request_id, ctx);
         true
     }
 

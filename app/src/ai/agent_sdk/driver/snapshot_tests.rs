@@ -145,6 +145,22 @@ impl HarnessSupportClient for TestClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
+    async fn ack_followup(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _followup_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+    async fn ack_control_action(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _action_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
 
     async fn get_block_snapshot_upload_target(
         &self,

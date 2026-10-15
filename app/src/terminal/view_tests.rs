@@ -7653,7 +7653,7 @@ fn shared_session_cancel_action_interrupts_running_agent_command() {
         });
 
         let cancelled = terminal.update(&mut app, |view, ctx| {
-            view.handle_shared_session_cancel_action(server_conversation_token, ctx)
+            view.handle_shared_session_cancel_action(server_conversation_token, None, ctx)
         });
         assert!(cancelled);
 
@@ -7701,7 +7701,7 @@ fn shared_session_cancel_action_releases_agent_controlled_command_before_interru
         });
 
         terminal.update(&mut app, |view, ctx| {
-            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+            view.handle_shared_session_cancel_action(server_conversation_token, None, ctx);
         });
 
         // The agent-controlled block would otherwise swallow the Ctrl-C (see
@@ -7762,7 +7762,7 @@ fn stopping_a_harness_driven_conversation_goes_to_the_harness_not_the_pty() {
             view.stop_local_agent_conversation(conversation_id, ctx);
         });
 
-        assert!(cancels.try_recv().is_ok());
+        assert_eq!(cancels.try_recv().unwrap().request_id, None);
         assert!(
             pty_writes.borrow().is_empty(),
             "a Ctrl-C would kill the agent instead of interrupting its turn"
@@ -7829,6 +7829,7 @@ fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
         let cancelled = terminal.update(&mut app, |view, ctx| {
             view.handle_shared_session_cancel_action(
                 SessionSharingServerConversationToken::new(),
+                None,
                 ctx,
             )
         });
@@ -7846,7 +7847,7 @@ fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
                     ctx,
                 );
             });
-            view.handle_shared_session_cancel_action(server_conversation_token, ctx)
+            view.handle_shared_session_cancel_action(server_conversation_token, None, ctx)
         });
         assert!(!cancelled);
         assert!(pty_writes.borrow().is_empty());

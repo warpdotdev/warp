@@ -3300,17 +3300,19 @@ impl BlocklistAIController {
         reason: CancellationReason,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.cancel_conversation_progress_routed(conversation_id, reason, ctx);
+        self.cancel_conversation_progress_routed(conversation_id, reason, None, ctx);
     }
 
     /// [`Self::cancel_conversation_progress`], reporting who ended up cancelling the turn. A
     /// conversation driven by an external harness has its turn interrupted by that harness,
-    /// which settles the conversation status itself. The bookkeeping that is independent of who
-    /// runs the turn happens either way.
+    /// which settles the conversation status itself; `request_id` is the id the cancellation was
+    /// injected under, which the harness acks against. The bookkeeping that is independent of
+    /// who runs the turn happens either way.
     pub(crate) fn cancel_conversation_progress_routed(
         &mut self,
         conversation_id: AIConversationId,
         reason: CancellationReason,
+        request_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> CancellationRoute {
         self.commands_interrupted_for_injection
@@ -3337,7 +3339,7 @@ impl BlocklistAIController {
             model.remove_pending_lrc_rows(conversation_id, ctx);
         });
 
-        if self.cancel_via_external_harness(conversation_id, ctx) {
+        if self.cancel_via_external_harness(conversation_id, request_id, ctx) {
             return CancellationRoute::ExternalHarness;
         }
 

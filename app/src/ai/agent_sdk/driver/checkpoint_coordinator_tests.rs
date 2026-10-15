@@ -161,6 +161,22 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
         unimplemented!("not used by the coordinator")
     }
+    async fn ack_followup(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _followup_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn ack_control_action(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _action_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
+        unimplemented!("not used by the coordinator")
+    }
     fn external_http_client(&self) -> &http_client::Client {
         &self.http
     }
@@ -290,6 +306,22 @@ impl HarnessSupportClient for RecordingClient {
         })
     }
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn ack_followup(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _followup_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn ack_control_action(
+        &self,
+        _run_id: &crate::ai::ambient_agents::AmbientAgentTaskId,
+        _action_id: &str,
+        _ack: &crate::ai::delivery_acks::DeliveryAck,
+    ) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
     fn external_http_client(&self) -> &http_client::Client {

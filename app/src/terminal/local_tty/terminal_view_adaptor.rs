@@ -6,8 +6,8 @@ use std::sync::mpsc::SyncSender;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
-    ActivePrompt, AgentPromptFailureReason, AgentPromptRequest, CLIAgentSessionState,
-    CommandExecutionFailureReason, ControlAction, ControlActionFailureReason,
+    ActivePrompt, AgentPromptFailureReason, AgentPromptRequest, AgentPromptRequestId,
+    CLIAgentSessionState, CommandExecutionFailureReason, ControlAction, ControlActionFailureReason,
     LongRunningCommandAgentInteraction, ParticipantId, SelectedAgentModel,
     UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
 };
@@ -41,6 +41,9 @@ use crate::ai::blocklist::pending_cli_harness_prompt_queue::{
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem,
+};
+use crate::ai::delivery_acks::{
+    DeliveryAckState, DeliveryAckTarget, DeliveryAcker, ServerDeliveryAcker,
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::context_chips::current_prompt::CurrentPrompt;
@@ -121,6 +124,69 @@ async fn is_setup_failure_debug_prompt_authorized(
         .unwrap_or(false)
 }
 
+/// The wire form of a prompt request id. The protocol type exposes no accessor, but it
+/// serializes as its bare string, which is the id warp-server keys the follow-up by.
+fn agent_prompt_request_id_string(id: &AgentPromptRequestId) -> String {
+    serde_json::to_value(id)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{id:?}"))
+}
+
+/// Acks delivery states for items warp-server injected into this pane's run. Without a run
+/// there is nothing to ack against, and the transitions are only logged.
+fn delivery_acker(
+    terminal_view: &ViewHandle<TerminalView>,
+    ctx: &AppContext,
+) -> ServerDeliveryAcker {
+    let run_id = terminal_view
+        .as_ref(ctx)
+        .ai_controller()
+        .as_ref(ctx)
+        .ambient_agent_task_id();
+    ServerDeliveryAcker::new(
+        ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+        run_id,
+        ctx.background_executor().clone(),
+    )
+}
+
+/// Reason acked when an interrupt found nothing to cancel.
+const NO_TURN_TO_INTERRUPT: &str = "no turn in progress for the conversation";
+
+/// Settles an interrupt's ack once it has been routed. One that was taken by a turn is acked
+/// `applied` by whoever ends that turn; one that found no live, unfinished conversation is acked
+/// `failed` here, so the sender is not left waiting on an `applied` that cannot come.
+fn ack_interrupt_outcome(acker: &dyn DeliveryAcker, target: DeliveryAckTarget, cancelled: bool) {
+    if !cancelled {
+        acker.ack(
+            target,
+            DeliveryAckState::Failed,
+            Some(NO_TURN_TO_INTERRUPT.to_owned()),
+        );
+    }
+}
+
+/// Rejects an agent prompt back to session sharing and records the failure against its
+/// warp-server follow-up, so the server does not wait for a `received` that will never come.
+fn reject_agent_prompt(
+    terminal_view: &ViewHandle<TerminalView>,
+    network: &ModelHandle<Network>,
+    id: &AgentPromptRequestId,
+    participant_id: &ParticipantId,
+    reason: AgentPromptFailureReason,
+    ctx: &mut AppContext,
+) {
+    delivery_acker(terminal_view, ctx).ack(
+        DeliveryAckTarget::Followup(agent_prompt_request_id_string(id)),
+        DeliveryAckState::Failed,
+        Some(format!("rejected by client: {reason:?}")),
+    );
+    network.update(ctx, |network, _ctx| {
+        network.send_agent_prompt_rejection(id.clone(), participant_id.clone(), reason);
+    });
+}
+
 /// Honors an already-authorized agent prompt. Callers must have already checked that
 /// `participant_id` may submit this prompt. Routes to exactly one of three destinations:
 /// - A live CLI-harness PTY, when one is already running for this pane.
@@ -130,13 +196,24 @@ async fn is_setup_failure_debug_prompt_authorized(
 ///   `AIConversation` representation, so doing so would spawn a wrong, native "canonical"
 ///   conversation for the run (see `PendingCliHarnessPromptQueue`'s doc comment).
 /// - The Oz harness, via `BlocklistAIController`, for every other (genuinely native) case.
+///
+/// `id` is the id the prompt was injected under: warp-server's follow-up id for its own
+/// injections, which is acked `received` here and carried along so the harness that finally
+/// sends the prompt can ack that too.
 fn accept_agent_prompt(
     terminal_view: &ViewHandle<TerminalView>,
+    id: AgentPromptRequestId,
     request: AgentPromptRequest,
     participant_id: ParticipantId,
     ctx: &mut AppContext,
 ) {
     let terminal_view_id = terminal_view.id();
+    let request_id = agent_prompt_request_id_string(&id);
+    delivery_acker(terminal_view, ctx).ack(
+        DeliveryAckTarget::Followup(request_id.clone()),
+        DeliveryAckState::Received,
+        None,
+    );
     let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
         .session(terminal_view_id)
         .is_some();
@@ -221,6 +298,7 @@ fn accept_agent_prompt(
                 request.attachments.clone(),
                 participant_id.clone(),
                 Some(base),
+                Some(request_id),
                 ctx,
             );
         });
@@ -1236,6 +1314,13 @@ impl TerminalManager<TerminalView> {
                         }
                     });
 
+                let ack_target = DeliveryAckTarget::ControlAction(request_id.id().to_owned());
+                delivery_acker(&terminal_view, ctx).ack(
+                    ack_target.clone(),
+                    DeliveryAckState::Received,
+                    None,
+                );
+
                 if !is_sharer {
                     let viewer_is_executor = viewer_role_opt
                         .map(|role| role.can_execute())
@@ -1247,6 +1332,11 @@ impl TerminalManager<TerminalView> {
                         });
 
                     if !viewer_is_executor {
+                        delivery_acker(&terminal_view, ctx).ack(
+                            ack_target,
+                            DeliveryAckState::Failed,
+                            Some("rejected by client: InsufficientPermissions".to_owned()),
+                        );
                         network.update(ctx, |network, _ctx| {
                             network.send_control_action_rejection(
                                 participant_id.clone(),
@@ -1262,17 +1352,19 @@ impl TerminalManager<TerminalView> {
                     ControlAction::CancelConversation {
                         server_conversation_token,
                     } => {
+                        let request_id = request_id.id().to_owned();
                         let cancelled = terminal_view.update(ctx, |view, ctx| {
                             view.handle_shared_session_cancel_action(
                                 *server_conversation_token,
+                                Some(request_id),
                                 ctx,
                             )
                         });
-                        if !cancelled {
-                            log::info!(
-                                "event=control_action_ignored request_id={request_id:?} reason=no_turn_in_progress"
-                            );
-                        }
+                        ack_interrupt_outcome(
+                            &delivery_acker(&terminal_view, ctx),
+                            ack_target,
+                            cancelled,
+                        );
                     }
                 }
             }
@@ -1535,37 +1627,40 @@ impl TerminalManager<TerminalView> {
                         log::warn!(
                             "Failed to get viewer's role during agent prompt request for participant_id={participant_id} (not sharer)"
                         );
-                        network.update(ctx, |network, _ctx| {
-                            network.send_agent_prompt_rejection(
-                                id.clone(),
-                                participant_id.clone(),
-                                AgentPromptFailureReason::InsufficientPermissions,
-                            );
-                        });
+                        reject_agent_prompt(
+                            &terminal_view,
+                            &network,
+                            id,
+                            participant_id,
+                            AgentPromptFailureReason::InsufficientPermissions,
+                            ctx,
+                        );
                         return;
                     };
 
                     if !viewer_role.can_execute() {
-                        network.update(ctx, |network, _ctx| {
-                            network.send_agent_prompt_rejection(
-                                id.clone(),
-                                participant_id.clone(),
-                                AgentPromptFailureReason::InsufficientPermissions,
-                            );
-                        });
+                        reject_agent_prompt(
+                            &terminal_view,
+                            &network,
+                            id,
+                            participant_id,
+                            AgentPromptFailureReason::InsufficientPermissions,
+                            ctx,
+                        );
                         return;
                     }
 
                     // Reject the prompt if AI is disabled on the sharer's machine.
                     // TODO(APP-2894): We should create a failure variant that better matches the error.
                     if !crate::settings::ai::AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
-                        network.update(ctx, |network, _ctx| {
-                            network.send_agent_prompt_rejection(
-                                id.clone(),
-                                participant_id.clone(),
-                                AgentPromptFailureReason::InvalidConversation,
-                            );
-                        });
+                        reject_agent_prompt(
+                            &terminal_view,
+                            &network,
+                            id,
+                            participant_id,
+                            AgentPromptFailureReason::InvalidConversation,
+                            ctx,
+                        );
                         return;
                     }
 
@@ -1590,13 +1685,14 @@ impl TerminalManager<TerminalView> {
                                 log::warn!(
                                     "Rejecting a no-token agent prompt (REMOTE-2661): participant_id={participant_id} has no resolvable firebase_uid to authorize"
                                 );
-                                network.update(ctx, |network, _ctx| {
-                                    network.send_agent_prompt_rejection(
-                                        id.clone(),
-                                        participant_id.clone(),
-                                        AgentPromptFailureReason::InsufficientPermissions,
-                                    );
-                                });
+                                reject_agent_prompt(
+                                    &terminal_view,
+                                    &network,
+                                    id,
+                                    participant_id,
+                                    AgentPromptFailureReason::InsufficientPermissions,
+                                    ctx,
+                                );
                                 return;
                             };
 
@@ -1628,6 +1724,7 @@ impl TerminalManager<TerminalView> {
                                         if authorized {
                                             accept_agent_prompt(
                                                 &terminal_view,
+                                                id,
                                                 request,
                                                 participant_id,
                                                 ctx,
@@ -1635,6 +1732,17 @@ impl TerminalManager<TerminalView> {
                                         } else {
                                             log::warn!(
                                                 "Rejecting a no-token agent prompt while retaining a setup-failed run (REMOTE-2661): server denied authorization or the call failed"
+                                            );
+                                            delivery_acker(&terminal_view, ctx).ack(
+                                                DeliveryAckTarget::Followup(
+                                                    agent_prompt_request_id_string(&id),
+                                                ),
+                                                DeliveryAckState::Failed,
+                                                Some(
+                                                    "rejected by client: setup-failure debug \
+                                                     prompt not authorized"
+                                                        .to_owned(),
+                                                ),
                                             );
                                             network.send_agent_prompt_rejection(
                                                 id,
@@ -1650,7 +1758,13 @@ impl TerminalManager<TerminalView> {
                     }
                 }
 
-                accept_agent_prompt(&terminal_view, request.clone(), participant_id.clone(), ctx);
+                accept_agent_prompt(
+                    &terminal_view,
+                    id.clone(),
+                    request.clone(),
+                    participant_id.clone(),
+                    ctx,
+                );
             }
             NetworkEvent::LinkAccessLevelUpdateResponse { response } => {
                 terminal_view.update(ctx, |view, ctx| match response {

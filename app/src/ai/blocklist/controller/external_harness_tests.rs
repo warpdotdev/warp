@@ -162,6 +162,7 @@ fn shared_session_injections_go_to_the_prompt_sink_instead_of_the_queue() {
                     }],
                     ParticipantId::new(),
                     None,
+                    None,
                     ctx,
                 );
                 let relayed = prompts.try_recv().unwrap();
@@ -224,6 +225,7 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     }],
                     participant_id.clone(),
                     Some(base.clone()),
+                    None,
                     ctx,
                 );
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
@@ -234,6 +236,7 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
                     }],
                     participant_id.clone(),
                     Some(base),
+                    None,
                     ctx,
                 );
                 assert_eq!(
@@ -302,6 +305,45 @@ fn injections_queued_before_the_sink_exists_are_relayed_when_it_is_installed() {
 }
 
 #[test]
+fn relayed_prompts_carry_the_request_id_they_were_injected_under() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (sink, prompts) = async_channel::unbounded();
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.bind_native_prompt_conversation(None, ctx);
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "queued before the sink".into(),
+                    None,
+                    vec![],
+                    ParticipantId::new(),
+                    None,
+                    Some("48213".into()),
+                    ctx,
+                );
+                controller.set_external_harness_prompt_sink(sink, ctx);
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "relayed live".into(),
+                    None,
+                    vec![],
+                    ParticipantId::new(),
+                    None,
+                    Some("48214".into()),
+                    ctx,
+                );
+                let queued = prompts.try_recv().unwrap();
+                assert_eq!(queued.text, "queued before the sink");
+                assert_eq!(queued.request_id.as_deref(), Some("48213"));
+                let live = prompts.try_recv().unwrap();
+                assert_eq!(live.text, "relayed live");
+                assert_eq!(live.request_id.as_deref(), Some("48214"));
+            });
+        });
+    });
+}
+
+#[test]
 fn cancelling_a_harness_driven_conversation_goes_to_the_cancel_sink() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -311,20 +353,25 @@ fn cancelling_a_harness_driven_conversation_goes_to_the_cancel_sink() {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 let id = controller.bind_native_prompt_conversation(None, ctx);
                 assert!(
-                    !controller.cancel_via_external_harness(id, ctx),
+                    !controller.cancel_via_external_harness(id, None, ctx),
                     "without a sink the caller cancels the conversation itself"
                 );
                 controller.set_external_harness_cancel_sink(sink);
                 assert!(
-                    !controller.cancel_via_external_harness(id, ctx),
+                    !controller.cancel_via_external_harness(id, None, ctx),
                     "before the harness opens a turn the conversation is not its to cancel"
                 );
 
                 controller
                     .begin_external_harness_turn(id, Some("run-1".into()), ctx)
                     .unwrap();
-                assert!(controller.cancel_via_external_harness(id, ctx));
-                assert_eq!(cancels.try_recv().unwrap(), ExternalHarnessCancel);
+                assert!(controller.cancel_via_external_harness(id, Some("77".into()), ctx));
+                assert_eq!(
+                    cancels.try_recv().unwrap(),
+                    ExternalHarnessCancel {
+                        request_id: Some("77".into())
+                    }
+                );
                 assert_eq!(
                     status(ctx, id),
                     ConversationStatus::InProgress,
@@ -338,7 +385,10 @@ fn cancelling_a_harness_driven_conversation_goes_to_the_cancel_sink() {
                     crate::ai::agent::CancellationReason::ManuallyCancelled,
                     ctx,
                 );
-                assert_eq!(cancels.try_recv().unwrap(), ExternalHarnessCancel);
+                assert_eq!(
+                    cancels.try_recv().unwrap(),
+                    ExternalHarnessCancel { request_id: None }
+                );
                 assert_eq!(status(ctx, id), ConversationStatus::InProgress);
 
                 controller.mark_external_harness_conversation_cancelled(id, ctx);
@@ -368,13 +418,14 @@ fn a_cancel_falls_back_to_the_local_path_once_the_harness_stopped_listening() {
                 controller.set_external_harness_cancel_sink(sink);
                 drop(cancels);
                 assert!(
-                    !controller.cancel_via_external_harness(id, ctx),
+                    !controller.cancel_via_external_harness(id, Some("77".into()), ctx),
                     "a stopped harness cannot take the cancellation"
                 );
                 assert_eq!(
                     controller.cancel_conversation_progress_routed(
                         id,
                         crate::ai::agent::CancellationReason::ManuallyCancelled,
+                        None,
                         ctx,
                     ),
                     CancellationRoute::Local,
@@ -385,7 +436,7 @@ fn a_cancel_falls_back_to_the_local_path_once_the_harness_stopped_listening() {
                 let (sink, _cancels) = async_channel::unbounded::<ExternalHarnessCancel>();
                 controller.set_external_harness_cancel_sink(sink);
                 controller.release_external_harness_sinks();
-                assert!(!controller.cancel_via_external_harness(id, ctx));
+                assert!(!controller.cancel_via_external_harness(id, None, ctx));
             });
         });
     });
@@ -404,11 +455,13 @@ fn queued_harness_prompts_are_shown_as_rows_until_hidden() {
                     attachments: vec![],
                     participant_id: ParticipantId::new(),
                     base: None,
+                    request_id: Some("48213".into()),
                 };
                 let row = controller.show_external_harness_prompt_queued(id, &prompt, ctx);
                 let queue = QueuedQueryModel::as_ref(ctx);
                 assert_eq!(queue.queue(id).len(), 1);
                 assert_eq!(queue.queue(id)[0].text(), "waiting");
+                assert_eq!(queue.queue(id)[0].request_id(), Some("48213"));
                 assert!(
                     queue.is_dispatch_blocked(id),
                     "the row is for display; nothing may dispatch it to Warp's agent"
