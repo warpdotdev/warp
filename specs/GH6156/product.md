@@ -33,7 +33,7 @@ Right-clicking Warp's taskbar button on Windows shows a "New Window" task follow
 
 11. Users can't remove or pin individual tasks; Windows doesn't offer that for tasks. To change the list, users edit their Tab Configs.
 
-12. Tasks are shown whether or not "Show recently opened items in Start, Jump Lists, and File Explorer" is enabled in Windows settings.
+12. Tasks are shown whether or not the Windows privacy setting for Jump List items is enabled ("Show recommended files in Start, recent files in File Explorer, and items in Jump Lists" on Windows 11, "Show recently opened items in Start, Jump Lists, and File Explorer" on Windows 10).
 
 13. Every task uses the Warp app icon.
 

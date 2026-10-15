@@ -57,5 +57,5 @@ Everything a task needs to launch already exists:
   2. With Warp running in the background, select a Tab Config and a parametrized one. The tab or params modal opens in the active window, and the window comes to the front (4, 5).
   3. Quit Warp and select a Tab Config, with session restore on, then off (5).
   4. While Warp runs, add, rename, break and delete Tab Config files, and check the list after each change (6, 7).
-  5. Turn off "Show recently opened items…" and check the tasks still show (12).
+  5. Turn off the Jump List items privacy setting and check the tasks still show (12).
   6. With Stable and Preview installed, check each list opens its own channel (10).
