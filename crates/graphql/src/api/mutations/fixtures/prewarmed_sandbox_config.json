@@ -29,7 +29,16 @@
       "gitCredentials": [
         { "host": "github.com", "username": "x-access-token", "token": "ghs_secret", "email": null }
       ],
-      "managedSecrets": [{ "name": "API_TOKEN", "value": "value" }],
+      "managedSecrets": [
+        {
+          "name": "API_TOKEN",
+          "value": { "__typename": "ManagedSecretRawValue", "value": "value" }
+        },
+        {
+          "name": "CLAUDE_AUTH",
+          "value": { "__typename": "ManagedSecretAnthropicApiKeyValue", "apiKey": "sk-ant-key" }
+        }
+      ],
       "expiresAt": "2026-01-01T00:00:00Z"
     }
   }

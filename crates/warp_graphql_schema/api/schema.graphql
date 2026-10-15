@@ -2861,7 +2861,7 @@ type PrewarmedSandboxConfiguration {
   expiresAt: Time!
   generation: String!
   gitCredentials: [TaskGitCredential!]!
-  managedSecrets: [PrewarmedSandboxVariable!]!
+  managedSecrets: [TaskSecretEntry!]!
   preparation: PrewarmedSandboxPreparation!
   sandboxId: ID!
 }

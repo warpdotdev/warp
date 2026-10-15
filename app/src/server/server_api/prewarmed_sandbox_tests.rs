@@ -107,7 +107,14 @@ fn deserializes_a_server_configuration() {
         Some("x-access-token")
     );
     assert!(config.git_credentials[0].email.is_none());
-    assert_eq!(config.managed_secrets.len(), 1);
+    assert!(matches!(
+        config.managed_secrets.get("API_TOKEN"),
+        Some(ManagedSecretValue::RawValue { value }) if value == "value"
+    ));
+    assert!(matches!(
+        config.managed_secrets.get("CLAUDE_AUTH"),
+        Some(ManagedSecretValue::AnthropicApiKey { api_key }) if api_key == "sk-ant-key"
+    ));
 }
 
 #[test]
@@ -131,6 +138,20 @@ fn converts_empty_configuration_lists() {
     assert!(config.git_credentials.is_empty());
     assert!(config.managed_secrets.is_empty());
     assert_eq!(config.expires_at.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+}
+
+#[test]
+fn unknown_managed_secret_types_fail_conversion() {
+    let mut config = wire_configuration();
+    config.managed_secrets[0].value = serde_json::from_value(serde_json::json!({
+        "__typename": "ManagedSecretFutureValue"
+    }))
+    .unwrap();
+    let error = PrewarmedSandboxConfiguration::try_from(config).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Invalid pre-warmed sandbox managed secrets"
+    );
 }
 
 #[test]
@@ -228,9 +249,10 @@ fn configuration_rejects_user_errors_unknown_results_and_missing_data() {
 #[test]
 fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
     let mut config = parse_configuration();
-    config
-        .managed_secrets
-        .insert("TOKEN".into(), "managed-secret-value".into());
+    config.managed_secrets.insert(
+        "TOKEN".into(),
+        ManagedSecretValue::raw_value("managed-secret-value"),
+    );
     config.environment_variables.insert(
         "WARP_FACTORY_REPO_CLONE_URL".into(),
         "https://environment-secret-value@example.com/repo.git".into(),
@@ -258,6 +280,7 @@ fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
     ] {
         for secret in [
             "managed-secret-value",
+            "sk-ant-key",
             "environment-secret-value",
             "git-secret-value",
             "setup-secret-value",
@@ -272,7 +295,7 @@ fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
     }
     let output = format!("{config:?}");
     assert!(output.contains("abc123"));
-    assert!(output.contains("managed_secret_count: 2"));
+    assert!(output.contains("managed_secret_count: 3"));
     assert!(output.contains("git_credential_count: 1"));
 }
 

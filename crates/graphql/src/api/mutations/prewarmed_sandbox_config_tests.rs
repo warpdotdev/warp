@@ -4,6 +4,7 @@ use serde_json::json;
 use super::*;
 use crate::client::{RequestOptions, build_graphql_request, get_request_context};
 use crate::queries::execution_config::{CodeForge, ExecutionRepositoryRefType};
+use crate::queries::task_secrets::ManagedSecretValue;
 use crate::request_context::{ClientContext, OsContext};
 
 #[test]
@@ -68,6 +69,9 @@ fn serializes_configuration_mutation_and_workload_token() {
         "token",
         "email",
         "managedSecrets",
+        "... on ManagedSecretRawValue",
+        "... on ManagedSecretAnthropicApiKeyValue",
+        "apiKey",
         "expiresAt",
     ] {
         assert!(operation.query.contains(field), "missing {field}");
@@ -119,7 +123,17 @@ fn deserializes_configuration_response_with_shared_repository_types() {
     assert_eq!(config.environment_variables[0].value, "factory");
     assert_eq!(config.git_credentials[0].token, "ghs_secret");
     assert_eq!(config.managed_secrets[0].name, "API_TOKEN");
-    assert_eq!(config.managed_secrets[0].value, "value");
+    let ManagedSecretValue::ManagedSecretRawValue(raw) = &config.managed_secrets[0].value else {
+        panic!("expected a raw value secret");
+    };
+    assert_eq!(raw.value, "value");
+    assert_eq!(config.managed_secrets[1].name, "CLAUDE_AUTH");
+    let ManagedSecretValue::ManagedSecretAnthropicApiKeyValue(api_key) =
+        &config.managed_secrets[1].value
+    else {
+        panic!("expected an Anthropic API key secret");
+    };
+    assert_eq!(api_key.api_key, "sk-ant-key");
     assert_eq!(
         config.expires_at.utc().to_rfc3339(),
         "2026-01-01T00:00:00+00:00"

@@ -24,6 +24,7 @@ use warp_graphql::mutations::prewarmed_sandbox_config::{
     PrewarmedSandboxConfigVariables, PrewarmedSandboxConfiguration as GraphqlConfiguration,
 };
 use warp_graphql::queries::execution_config::{ExecutionRepository, SourceRepo};
+use warp_managed_secrets::{ManagedSecretValue, convert_task_secrets};
 use warpui::r#async::FutureExt as _;
 
 use super::ServerApi;
@@ -81,7 +82,7 @@ pub struct PrewarmedSandboxConfiguration {
     /// Supplies temporary credentials for the sandbox's Git credential files.
     pub git_credentials: Vec<GitCredential>,
     /// Supplies secret values for the terminal environment and MCP configuration.
-    pub managed_secrets: HashMap<String, String>,
+    pub managed_secrets: HashMap<String, ManagedSecretValue>,
     /// Sets the server deadline that the standby process must exit before.
     pub expires_at: DateTime<Utc>,
 }
@@ -114,11 +115,14 @@ impl TryFrom<GraphqlConfiguration> for PrewarmedSandboxConfiguration {
                 .into_iter()
                 .map(into_git_credential)
                 .collect(),
-            managed_secrets: config
-                .managed_secrets
-                .into_iter()
-                .map(|entry| (entry.name, entry.value))
-                .collect(),
+            managed_secrets: convert_task_secrets(
+                config
+                    .managed_secrets
+                    .into_iter()
+                    .map(|entry| (entry.name, entry.value))
+                    .collect(),
+            )
+            .context("Invalid pre-warmed sandbox managed secrets")?,
             expires_at: config.expires_at.utc(),
         })
     }
