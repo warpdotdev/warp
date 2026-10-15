@@ -652,11 +652,6 @@ pub enum FeatureFlag {
     /// Enables auto-syncing ambient plans to Warp Drive.
     SyncAmbientPlans,
 
-    /// Enables platform skills support (--skill flag) for agent runs.
-    ///
-    /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`
-    /// directories to provide base prompts for agent runs.
-    OzPlatformSkills,
     /// Enables Oz identity federation commands.
     OzIdentityFederation,
 
