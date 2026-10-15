@@ -11,8 +11,6 @@ pub struct EnvironmentCheckoutArgs {
     pub remove_origins_only: bool,
     #[arg(long, conflicts_with = "remove_origins_only")]
     pub fail_if_target_exists: bool,
-    #[arg(long, requires = "fail_if_target_exists")]
-    pub upload_report: bool,
 }
 
 #[cfg(test)]

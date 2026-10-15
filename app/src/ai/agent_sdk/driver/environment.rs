@@ -549,7 +549,7 @@ pub(crate) fn build_deferred_repos_instruction(
     );
     let runtime = serde_json::json!({
         "working_dir": working_dir.to_string_lossy(),
-        "command_template": format!("{command} --fail-if-target-exists --upload-report"),
+        "command_template": format!("{command} --fail-if-target-exists"),
     });
 
     Ok(Some(format!(

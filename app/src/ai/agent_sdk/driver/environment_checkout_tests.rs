@@ -28,18 +28,6 @@ use super::super::environment_checkout_protocol::{
 use super::{CachedCheckout, attempt_cached_checkout};
 use super::{Git, capture, mirror_key, optional_mirror_root, run};
 #[test]
-fn checkout_upload_locator_rejects_missing_or_unsafe_identifiers() {
-    let uid = uuid::Uuid::new_v4();
-    let uploaded = serde_json::json!({"artifact_uid": uid, "filepath": "sensitive", "description": "untrusted"});
-    assert_eq!(
-        super::checkout_report_artifact_locator(&serde_json::to_vec(&uploaded).unwrap()).unwrap(),
-        serde_json::json!({"checkout_report_artifact_uid": uid}).to_string()
-    );
-    for invalid in [b"{}".as_slice(), br#"{"artifact_uid":"uid\ninjected"}"#] {
-        assert!(super::checkout_report_artifact_locator(invalid).is_err());
-    }
-}
-#[test]
 fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
     fixture_test(
         "strict_checkout_preserves_existing_work_and_reports_partial_success",
@@ -51,8 +39,6 @@ fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
             let original_refs = git(&target, &["show-ref"]);
             let directory = TempDir::new().unwrap();
             let args = EnvironmentCheckoutArgs {
-                upload_report: false,
-
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
@@ -162,8 +148,6 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
             fs::write(target.join(".git/config.lock"), "").unwrap();
             let directory = TempDir::new().unwrap();
             let args = EnvironmentCheckoutArgs {
-                upload_report: false,
-
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: true,
@@ -293,8 +277,6 @@ fn helper_report_times_every_checkout_and_omits_unresolved_heads() {
             git(&empty, &["init", "--quiet"]);
             let directory = TempDir::new().unwrap();
             let mut args = EnvironmentCheckoutArgs {
-                upload_report: false,
-
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
@@ -1091,8 +1073,6 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
             );
             let directory = TempDir::new().unwrap();
             let args = EnvironmentCheckoutArgs {
-                upload_report: false,
-
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
@@ -1351,8 +1331,6 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
             tracing::subscriber::with_default(subscriber, || {
                 let directory = TempDir::new().unwrap();
                 let args = EnvironmentCheckoutArgs {
-                    upload_report: false,
-
                     requests_file: directory.path().join("requests.json"),
                     report_file: directory.path().join("report.json"),
                     remove_origins_only: false,
@@ -1464,8 +1442,6 @@ fn helper_without_handoff_keeps_checkout_working() {
     fixture_test("helper_without_handoff_keeps_checkout_working", |fixture| {
         let directory = TempDir::new().unwrap();
         let args = EnvironmentCheckoutArgs {
-            upload_report: false,
-
             requests_file: directory.path().join("requests.json"),
             report_file: directory.path().join("report.json"),
             remove_origins_only: false,
@@ -1492,8 +1468,6 @@ fn helper_with_expired_handoff_keeps_checkout_working() {
 
             let directory = TempDir::new().unwrap();
             let args = EnvironmentCheckoutArgs {
-                upload_report: false,
-
                 requests_file: directory.path().join("requests.json"),
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
@@ -1571,7 +1545,6 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: true,
-                upload_report: false,
             };
             fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
             assert!(run(&args).is_err());
@@ -1609,22 +1582,6 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
             assert_eq!(git(&target, &["rev-parse", "origin/HEAD"]), sha);
             assert_eq!(git(&fixture.work().join("source-pin"), &["remote"]), "");
             assert!(!fixture.mirror().exists());
-            let retry = EnvironmentCheckoutArgs {
-                upload_report: true,
-                ..args
-            };
-            fs::write(
-                &retry.requests_file,
-                serde_json::to_vec(&fixture.batch(Vec::new())).unwrap(),
-            )
-            .unwrap();
-            assert!(
-                run(&retry)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("evidence upload failed")
-            );
-            assert!(retry.report_file.is_file());
         },
     );
 }

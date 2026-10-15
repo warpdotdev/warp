@@ -207,8 +207,6 @@ fn head_probe_timeout_preserves_later_snapshot_repositories() {
     let mut batch = checkout_batch(["before", "slow-1", "slow-2", "slow-3", "slow-4", "later"]);
     batch.working_dir = directory.path().to_owned();
     let args = EnvironmentCheckoutArgs {
-        upload_report: false,
-
         requests_file: directory.path().join("requests.json"),
         report_file: directory.path().join("report.json"),
         remove_origins_only: false,
@@ -981,7 +979,7 @@ fn deferred_inventory_produces_valid_requests_and_a_quoted_runtime() {
     );
     assert_eq!(
         runtime["command_template"],
-        r#"'/opt/oz build/oz'"'"'preview' environment-checkout --requests-file '<requests-file>' --report-file '<report-file>' --fail-if-target-exists --upload-report"#
+        r#"'/opt/oz build/oz'"'"'preview' environment-checkout --requests-file '<requests-file>' --report-file '<report-file>' --fail-if-target-exists"#
     );
     let requests = instruction
         .lines()

@@ -21,16 +21,6 @@ fn strict_checkout_parses_and_conflicts_with_origin_cleanup() {
         panic!("checkout command")
     };
     assert!(args.fail_if_target_exists);
-    assert!(Args::try_parse_from(command.into_iter().chain(["--upload-report"])).is_ok());
-    assert!(
-        Args::try_parse_from(
-            command
-                .into_iter()
-                .filter(|arg| *arg != "--fail-if-target-exists")
-                .chain(["--upload-report"])
-        )
-        .is_err()
-    );
     assert_eq!(
         Args::try_parse_from(command.into_iter().chain(["--remove-origins-only"]))
             .unwrap_err()

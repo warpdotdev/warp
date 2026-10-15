@@ -58,63 +58,6 @@ pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     }
     result
 }
-async fn upload_checkout_report(path: &Path) -> anyhow::Result<()> {
-    let executable = std::env::current_exe()
-        .map_err(|error| sanitized_error("could not locate checkout evidence uploader", error))?;
-    let locator = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut child = Command::new(executable)
-            .args(["--output-format", "json", "artifact", "upload"])
-            .arg(path)
-            .args(["--description", "Deferred repository checkout outcomes"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| sanitized_error("checkout evidence upload failed", error))?;
-        let mut output = Vec::new();
-        Compat::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| anyhow!("checkout evidence output missing"))?,
-        )
-        .take(8193)
-        .read_to_end(&mut output)
-        .await
-        .map_err(|error| sanitized_error("checkout evidence output failed", error))?;
-        if output.len() > 8192 {
-            return Err(anyhow!(
-                "checkout evidence output exceeded limit; local report retained"
-            ));
-        }
-        let status = child
-            .status()
-            .await
-            .map_err(|error| sanitized_error("checkout evidence upload failed", error))?;
-        if !status.success() {
-            return Err(anyhow!(
-                "checkout evidence upload failed; local report retained"
-            ));
-        }
-        checkout_report_artifact_locator(&output)
-    })
-    .await
-    .map_err(|_| anyhow!("checkout evidence upload timed out"))??;
-    println!("{locator}");
-    Ok(())
-}
-fn checkout_report_artifact_locator(output: &[u8]) -> anyhow::Result<String> {
-    #[derive(serde::Deserialize)]
-    struct UploadResult {
-        artifact_uid: uuid::Uuid,
-    }
-    serde_json::from_slice::<UploadResult>(output)
-        .map(|result| {
-            serde_json::json!({"checkout_report_artifact_uid": result.artifact_uid}).to_string()
-        })
-        .map_err(|_| anyhow!("checkout evidence locator invalid; local report retained"))
-}
 
 /// Returns a redacted label naming the request's repository and checkout directory for logs.
 fn repository_label(request: &CheckoutRequest) -> String {
@@ -198,9 +141,6 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     fs::write(&args.report_file, bytes)
         .await
         .map_err(|error| sanitized_error("could not write environment checkout report", error))?;
-    if args.upload_report {
-        upload_checkout_report(&args.report_file).await?;
-    }
     if failed {
         Err(anyhow!("structured repository checkout failed"))
     } else {
