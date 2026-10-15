@@ -172,7 +172,7 @@ fn render_comment_text_section(
     if is_imported_from_github {
         left_section.add_child(
             Text::new(
-                "From GitHub".to_string(),
+                t!("code_review.from_github").to_string(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -475,7 +475,7 @@ impl CommentViewCard {
             _ => source
                 .head()
                 .map(|head| head.title())
-                .unwrap_or_else(|| "Review Comment".to_string()),
+                .unwrap_or_else(|| t!("code_review_ext.review_comment").to_string()),
         }
     }
 }

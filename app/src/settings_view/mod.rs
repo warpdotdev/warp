@@ -182,7 +182,7 @@ fn plan_header_presentation(
     is_anonymous: bool,
 ) -> PlanHeaderPresentation {
     let badge_label = if is_anonymous || billing_metadata.is_none() {
-        Some("Free".to_string())
+        Some(t!("onboarding.free_user_no_ai.free_badge").to_string())
     } else {
         billing_metadata
             .filter(|billing_metadata| billing_metadata.customer_type != CustomerType::Unknown)
@@ -239,7 +239,7 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
     Container::new(
-        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
+        Text::new_inline(t!("settings_ui.beta"), appearance.ui_font_family(), 10.)
             .with_color(chip_color)
             .finish(),
     )
@@ -344,27 +344,38 @@ use crate::util::bindings::custom_tag_to_keystroke;
 
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
-            SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
-            SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
-            SettingsSection::Scripting => write!(f, "Scripting"),
-            SettingsSection::WarpDrive => write!(f, "Warp Drive"),
-            SettingsSection::WarpAgent => write!(f, "Warp Agent"),
-            SettingsSection::AgentProfiles => write!(f, "Profiles"),
-            SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
-            SettingsSection::Knowledge => write!(f, "Knowledge"),
-            SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
-            SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
-            SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
-            SettingsSection::CloudEnvironments => write!(f, "Environments"),
-            SettingsSection::WarpCloudAgentAPIKeys => write!(f, "API keys"),
-            _ => write!(f, "{self:?}"),
-        }
+        f.write_str(self.display_label())
     }
 }
 
 impl SettingsSection {
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::About => t!("settings.about"),
+            Self::Account => t!("settings.account"),
+            Self::BillingAndUsage => t!("settings.billing_and_usage"),
+            Self::Appearance => t!("settings.appearance"),
+            Self::Features => t!("settings.features"),
+            Self::Keybindings => t!("settings.keyboard_shortcuts"),
+            Self::Privacy => t!("settings.privacy"),
+            Self::Referrals => t!("settings.referrals"),
+            Self::Scripting => t!("settings.scripting"),
+            Self::SharedBlocks => t!("settings.shared_blocks"),
+            Self::Teams => t!("settings.teams"),
+            Self::WarpDrive => t!("settings.warp_drive"),
+            Self::Warpify => t!("settings.warpify"),
+            Self::WarpAgent => t!("settings.warp_agent"),
+            Self::AgentProfiles => t!("settings.profiles"),
+            Self::AgentMCPServers => t!("settings.mcp_servers"),
+            Self::Knowledge => t!("settings.knowledge"),
+            Self::ThirdPartyCLIAgents => t!("settings.third_party_cli_agents"),
+            Self::CodeIndexing => t!("settings.indexing_and_projects"),
+            Self::EditorAndCodeReview => t!("settings.editor_and_code_review"),
+            Self::CloudEnvironments => t!("settings.environments"),
+            Self::WarpCloudAgentAPIKeys => t!("settings.api_keys"),
+        }
+    }
+
     /// Stable identifier for this section, used everywhere the section leaves
     /// the process: the SQLite session-restore key and the
     /// `surface.settings.open --page` warpctrl vocabulary.
@@ -850,8 +861,8 @@ impl<T: Action + Clone> ToggleSettingActionPair<T> {
 
         ToggleSettingActionPair {
             descriptions: SettingActionPairDescriptions {
-                enable: format!("Enable {description_suffix}"),
-                disable: format!("Disable {description_suffix}"),
+                enable: t!("settings_messages.enable", value_0 = description_suffix).into_owned(),
+                disable: t!("settings_messages.disable", value_0 = description_suffix).into_owned(),
             },
             contexts: SettingActionPairContexts {
                 enable_predicate: context_prefix.to_owned() & !id!(context_boolean_flag),
@@ -1198,7 +1209,8 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(t!("workspace.settings")));
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1356,7 +1368,7 @@ impl SettingsView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(t!("common.search"), ctx);
             editor
         });
 
@@ -1407,7 +1419,7 @@ impl SettingsView {
         let mut nav_items = vec![
             SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Agents",
+                t!("settings.agents"),
                 vec![
                     SettingsSection::WarpAgent,
                     SettingsSection::AgentProfiles,
@@ -1418,14 +1430,14 @@ impl SettingsView {
             )),
             SettingsNavItem::Page(SettingsSection::BillingAndUsage),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Code",
+                t!("settings.code"),
                 vec![
                     SettingsSection::CodeIndexing,
                     SettingsSection::EditorAndCodeReview,
                 ],
             )),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Cloud platform",
+                t!("settings.cloud_platform"),
                 vec![
                     SettingsSection::CloudEnvironments,
                     SettingsSection::WarpCloudAgentAPIKeys,
@@ -1652,28 +1664,28 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(t!("common.split_pane_right"))
                     .with_on_select_action(SettingsAction::Split(Direction::Right))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_right",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(t!("common.split_pane_left"))
                     .with_on_select_action(SettingsAction::Split(Direction::Left))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_left",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(t!("common.split_pane_down"))
                     .with_on_select_action(SettingsAction::Split(Direction::Down))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_down",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(t!("common.split_pane_up"))
                     .with_on_select_action(SettingsAction::Split(Direction::Up))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_up",
@@ -1702,7 +1714,7 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(t!("common.close_pane"))
                     .with_on_select_action(SettingsAction::Close)
                     .with_key_shortcut_label(
                         custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
@@ -2081,7 +2093,7 @@ impl SettingsView {
 
         #[cfg(feature = "crash_reporting")]
         {
-            crate::crash_reporting::set_tag("warp.settings_page", section.to_string());
+            crate::crash_reporting::set_tag("warp.settings_page", section.slug());
         }
 
         if let Some(settings_page) = self.current_settings_page() {
@@ -2414,10 +2426,10 @@ impl SettingsView {
         Container::new(
             Align::new(
                 Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_children([
                         Text::new(
-                            "No settings match your search.",
+                            t!("settings.no_settings_match"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2425,7 +2437,7 @@ impl SettingsView {
                         .with_color(theme.sub_text_color(theme.background()).into_solid())
                         .finish(),
                         Text::new(
-                            "You may want to try using different keywords or checking for any possible typos.",
+                            t!("settings.no_settings_match_hint"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2436,7 +2448,7 @@ impl SettingsView {
             )
             .finish(),
         )
-            .with_uniform_margin(16.)
+        .with_uniform_margin(16.)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
         .finish()
@@ -2898,7 +2910,7 @@ impl BackingView for SettingsView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Settings")
+        view::HeaderContent::simple(t!("workspace.settings"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

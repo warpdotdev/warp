@@ -122,7 +122,7 @@ impl PasteAuthTokenModalView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Enter auth token", ctx);
+            editor.set_placeholder_text(t!("auth.enter_auth_token"), ctx);
             editor
         });
 
@@ -331,7 +331,7 @@ impl View for PasteAuthTokenModalView {
         let cancel_button = self.cancel_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Cancel".into()),
+                content: button::Content::Label(t!("common.cancel").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -346,7 +346,7 @@ impl View for PasteAuthTokenModalView {
         let continue_button = self.continue_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Continue".into()),
+                content: button::Content::Label(t!("common.continue").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

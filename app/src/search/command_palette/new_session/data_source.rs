@@ -201,14 +201,16 @@ impl Entity for NewSessionDataSource {
 
 type SearcherAction = <NewSessionDataSource as SyncDataSource>::Action;
 
-const SEARCHER_BASE_STRINGS: [&str; 6] = [
-    "Create New Tab",
-    "Create New Window",
-    "Split Pane Down",
-    "Split Pane Right",
-    "Split Pane Up",
-    "Split Pane Left",
-];
+fn searcher_base_strings() -> [&'static str; 6] {
+    [
+        t!("command_palette.create_new_tab_base"),
+        t!("command_palette.create_new_window_base"),
+        t!("command_palette.split_pane_down"),
+        t!("command_palette.split_pane_right"),
+        t!("command_palette.split_pane_up"),
+        t!("command_palette.split_pane_left"),
+    ]
+}
 
 trait NewSessionSearcher {
     fn search(&self, _search_term: &str) -> anyhow::Result<Vec<QueryResult<SearcherAction>>>;
@@ -283,7 +285,7 @@ impl NewSessionSearcher for FuzzyNewSessionSearcher {
     }
 
     fn compute_max_match(&self, query_str: &str) -> Option<f64> {
-        SEARCHER_BASE_STRINGS
+        searcher_base_strings()
             .iter()
             .filter_map(|base| {
                 match_indices_case_insensitive(
@@ -307,7 +309,7 @@ mod full_text_searcher {
     use warpui::r#async::executor::Background;
 
     use crate::search::command_palette::new_session::data_source::{
-        NewSessionSearcher, SEARCHER_BASE_STRINGS, SearcherAction,
+        NewSessionSearcher, SearcherAction, searcher_base_strings,
     };
     use crate::search::command_palette::new_session::search_item::SearchItem;
     use crate::search::command_palette::new_session::{NewSessionOption, NewSessionOptionId};
@@ -404,9 +406,12 @@ mod full_text_searcher {
                 .create_async_searcher(DEFAULT_MEMORY_BUDGET, background_executor.clone());
             let mut max_match_searcher = BASE_TEXT_SEARCH_SCHEMA
                 .create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
-            let max_match_documents = SEARCHER_BASE_STRINGS.iter().map(|base| BaseTextDocument {
-                base_text: base.to_string(),
-            });
+            let max_match_documents =
+                searcher_base_strings()
+                    .into_iter()
+                    .map(|base| BaseTextDocument {
+                        base_text: base.to_string(),
+                    });
             if max_match_searcher
                 .build_index_async(max_match_documents)
                 .is_err()

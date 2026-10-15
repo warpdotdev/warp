@@ -205,7 +205,7 @@ mod package_manager {
                     ))],
                 }),
                 FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("If you installed Warp using "),
+                    FormattedTextFragment::plain_text(t!("autoupdate.installed_using_prefix")),
                     FormattedTextFragment::bold(package_manager_name),
                     FormattedTextFragment::plain_text(
                         " or a compatible tool, the pre-filled command will update Warp for you.",
@@ -237,11 +237,11 @@ mod package_manager {
             }
 
             lines.push(FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text("\nReview the command below, then "),
-                FormattedTextFragment::bold("press enter"),
-                FormattedTextFragment::plain_text(" to install the update and re-launch Warp.  "),
+                FormattedTextFragment::plain_text(t!("autoupdate.review_command_prefix")),
+                FormattedTextFragment::bold(t!("autoupdate.press_enter")),
+                FormattedTextFragment::plain_text(t!("autoupdate.install_relaunch_suffix")),
                 FormattedTextFragment::hyperlink(
-                    "Please report any issues",
+                    t!("autoupdate.report_issues"),
                     "https://github.com/warpdotdev/Warp/issues/new/choose",
                 ),
             ]));

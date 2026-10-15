@@ -564,14 +564,21 @@ impl InputSuggestions {
         self.get_selected_item()
             .and_then(|item| item.details.as_ref())
             .and_then(|details| match details {
-                DetailContent::RichHistory(entry) => entry
-                    .start_ts
-                    .map(|ts| format!("Last ran {}", format_approx_duration_from_now(ts))),
+                DetailContent::RichHistory(entry) => entry.start_ts.map(|ts| {
+                    t!(
+                        "help_messages.last_ran",
+                        value_0 = format_approx_duration_from_now(ts)
+                    )
+                    .into_owned()
+                }),
                 DetailContent::Description(desc) => Some(desc.clone()),
-                DetailContent::AIQueryHistory(entry) => Some(format!(
-                    "Last ran {}",
-                    format_approx_duration_from_now(entry.start_time)
-                )),
+                DetailContent::AIQueryHistory(entry) => Some(
+                    t!(
+                        "help_messages.last_ran",
+                        value_0 = format_approx_duration_from_now(entry.start_time)
+                    )
+                    .into_owned(),
+                ),
             })
     }
 
@@ -615,14 +622,14 @@ impl InputSuggestions {
         ) {
             (Some(text), Some(desc)) => {
                 ctx.emit_a11y_content(AccessibilityContent::new(
-                    format!("Suggestion: {text}.\n"),
+                    t!("help_messages.suggestion", value_0 = text).into_owned(),
                     desc,
                     WarpA11yRole::MenuItemRole,
                 ));
             }
             (Some(text), None) => {
                 ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                    format!("Suggestion: {text}.\n"),
+                    t!("help_messages.suggestion", value_0 = text).into_owned(),
                     WarpA11yRole::MenuItemRole,
                 ));
             }
@@ -646,7 +653,7 @@ impl InputSuggestions {
 
         if let Some(text) = self.get_selected_item_text() {
             ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                format!("Selected: {text}"),
+                t!("help_messages.selected", value_0 = text).into_owned(),
                 WarpA11yRole::MenuItemRole,
             ));
         }
@@ -671,7 +678,7 @@ impl InputSuggestions {
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-            "Closed suggestions.",
+            t!("help_ui.closed_suggestions"),
             WarpA11yRole::UserAction,
         ));
         ctx.emit(Event::CloseSuggestion {
@@ -727,7 +734,7 @@ impl InputSuggestions {
                     Align::new(
                         Container::new(
                             Text::new_inline(
-                                String::from("No suggestions"),
+                                String::from(t!("help_ui.no_suggestions")),
                                 appearance.monospace_font_family(),
                                 appearance.monospace_font_size(),
                             )
@@ -911,7 +918,10 @@ impl InputSuggestions {
 
                                             let tooltip_element = appearance
                                                 .ui_builder()
-                                                .tool_tip("Ignore this suggestion".to_string())
+                                                .tool_tip(
+                                                    t!("input_suggestions.ignore_this_suggestion")
+                                                        .to_string(),
+                                                )
                                                 .build()
                                                 .finish();
 
@@ -1110,10 +1120,9 @@ impl View for InputSuggestions {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Command suggestions.",
+            t!("help_ui.command_suggestions"),
             // TODO use bindings from user settings
-            "Navigate with tab and shift-tab, and confirm with enter. Execute selected command \
-                with command + enter. Esc leaves the suggestions menu.",
+            t!("help_ui.navigate_with_tab_and_shift_tab_and_confirm_with"),
             WarpA11yRole::MenuRole,
         ))
     }

@@ -51,10 +51,10 @@ use crate::workspaces::workspace::CustomerType;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const PHOTO_SIZE: f32 = 40.;
-const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
+
 const REGULAR_TEXT_FONT_SIZE: f32 = 12.;
 const VERTICAL_MARGIN: f32 = 24.;
-const LOG_OUT_TEXT: &str = "Log out";
+
 lazy_static! {
     static ref SETTINGS_SYNC_BINDINGS_ADDED: Arc<Mutex<bool>> = Default::default();
 }
@@ -303,7 +303,8 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(LogoutWidget::default()));
 
-        let page = PageType::new_uncategorized(widgets, Some(PageTitle::new("Account")));
+        let page =
+            PageType::new_uncategorized(widgets, Some(PageTitle::new(t!("settings.account"))));
 
         MainSettingsPageView {
             self_handle: ctx.handle(),
@@ -360,7 +361,7 @@ impl AccountWidget {
                 self.ui_state_handles.anonymous_user_sign_up_button.clone(),
             )
             .with_style(button_styles)
-            .with_text_label("Sign up".to_owned())
+            .with_text_label(t!("settings.sign_up").to_owned())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(MainPageAction::SignupAnonymousUser);
@@ -387,7 +388,7 @@ impl AccountWidget {
                     .with_text_and_icon_label(
                         TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
-                            "Compare plans",
+                            t!("settings.compare_plans"),
                             Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
                             MainAxisSize::Min,
                             MainAxisAlignment::Center,
@@ -526,7 +527,7 @@ impl AccountWidget {
                         appearance
                             .ui_builder()
                             .link(
-                                "Contact support".into(),
+                                t!("billing.contact_support").into(),
                                 Some("mailto:support@warp.dev".into()),
                                 None,
                                 self.ui_state_handles.enterprise_contact_us_link.clone(),
@@ -543,7 +544,7 @@ impl AccountWidget {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    "Manage billing".into(),
+                                    t!("billing.manage_billing").into(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(
@@ -566,9 +567,9 @@ impl AccountWidget {
                         .filter(|metadata| metadata.can_upgrade_to_higher_tier_plan())
                     {
                         let description = match billing_metadata.customer_type {
-                            CustomerType::Prosumer => "Upgrade to Turbo plan",
-                            CustomerType::Turbo => "Upgrade to Lightspeed plan",
-                            _ => "Compare plans",
+                            CustomerType::Prosumer => t!("settings.upgrade_to_turbo_plan"),
+                            CustomerType::Turbo => t!("settings.upgrade_to_lightspeed_plan"),
+                            _ => t!("billing.compare_plans"),
                         };
                         let team_uid = team.uid;
                         plan_info.add_child(
@@ -598,7 +599,7 @@ impl AccountWidget {
                 appearance
                     .ui_builder()
                     .link(
-                        "Compare plans".into(),
+                        t!("billing.compare_plans").into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(MainPageAction::Upgrade {
@@ -725,7 +726,7 @@ impl SettingsWidget for SettingsSyncWidget {
         };
 
         Container::new(render_body_item::<MainPageAction>(
-            "Settings sync".to_string(),
+            t!("settings.settings_sync").to_string(),
             Some(label_info),
             // Cloud prefs are always synced, so no need to show the local-only icon.
             LocalOnlyIconState::Hidden,
@@ -805,11 +806,11 @@ impl SettingsWidget for EarnRewardsWidget {
         Container::new(
             self.render_row(
                 appearance,
-                REFERRAL_CTA,
+                t!("referrals.cta"),
                 appearance
                     .ui_builder()
                     .link(
-                        "Refer a friend".into(),
+                        t!("settings.refer_a_friend").into(),
                         None,
                         Some(Box::new(move |ctx| {
                             ctx.dispatch_typed_action(WorkspaceAction::ShowReferralSettingsPage);
@@ -859,73 +860,73 @@ impl VersionInfoWidget {
                 match autoupdate::get_update_state(app) {
                     AutoupdateStage::NoUpdateAvailable => (
                         Some(StatusContent {
-                            text: "Up to date",
+                            text: t!("settings.up_to_date"),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Check for updates",
+                            text: t!("settings.check_for_updates"),
                             action: MainPageAction::CheckForUpdate,
                         }),
                     ),
                     AutoupdateStage::CheckingForUpdate => (
                         Some(StatusContent {
-                            text: "checking for update...",
+                            text: t!("settings.checking_for_update"),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::DownloadingUpdate => (
                         Some(StatusContent {
-                            text: "downloading update...",
+                            text: t!("settings.downloading_update"),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdateReady { .. } => (
                         Some(StatusContent {
-                            text: "Update available",
+                            text: t!("settings.update_available"),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: t!("settings.relaunch_warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::Updating { .. } => (
                         Some(StatusContent {
-                            text: "Updating...",
+                            text: t!("settings.updating"),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdatedPendingRestart { .. } => (
                         Some(StatusContent {
-                            text: "Installed update",
+                            text: t!("settings.installed_update"),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: t!("settings.relaunch_warp"),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is available but can't be installed",
+                            text: t!("settings.unable_update_new_version"),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: t!("settings.update_warp_manually"),
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
                     ),
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is installed but can't be launched.",
+                            text: t!("settings.unable_launch_new_version"),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: t!("settings.update_warp_manually"),
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
@@ -942,7 +943,7 @@ impl VersionInfoWidget {
                     1.0,
                     Align::new(
                         Text::new_inline(
-                            "Version".to_string(),
+                            t!("settings.version").to_string(),
                             appearance.ui_font_family(),
                             REGULAR_TEXT_FONT_SIZE,
                         )
@@ -1070,7 +1071,7 @@ impl LogoutWidget {
         appearance
             .ui_builder()
             .button(ButtonVariant::Secondary, self.mouse_state.clone())
-            .with_text_label(LOG_OUT_TEXT.into())
+            .with_text_label(t!("workspace.log_out").into())
             .with_style(UiComponentStyles {
                 font_size: Some(14.),
                 padding: Some(Coords::uniform(8.).left(32.).right(32.)),
@@ -1115,23 +1116,33 @@ impl SettingsWidget for IapCredentialsWidget {
         let disabled: ColorU = appearance.theme().disabled_ui_text_color().into();
         let active: ColorU = appearance.theme().active_ui_text_color().into();
         let (status_text, status_color): (String, ColorU) = match &state {
-            IapCredentialsState::Missing => ("Not yet loaded".to_string(), disabled),
-            IapCredentialsState::Refreshing { .. } => ("Refreshing…".to_string(), active),
+            IapCredentialsState::Missing => {
+                (t!("settings_ui.not_yet_loaded").to_string(), disabled)
+            }
+            IapCredentialsState::Refreshing { .. } => {
+                (t!("settings_ui.refreshing").to_string(), active)
+            }
             IapCredentialsState::Loaded(cached) => {
                 let remaining = cached
                     .expires_at
                     .saturating_duration_since(instant::Instant::now());
                 let mins = remaining.as_secs() / 60;
-                (format!("Loaded (refreshes in ~{mins}m)"), active)
+                (
+                    t!("settings_messages.loaded_refreshes_in_m", value_0 = mins).into_owned(),
+                    active,
+                )
             }
-            IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
+            IapCredentialsState::Failed { message, .. } => (
+                t!("settings_messages.failed", value_0 = message).into_owned(),
+                ansi_red,
+            ),
         };
 
         let is_refreshing = matches!(state, IapCredentialsState::Refreshing { .. });
 
         let label = Align::new(
             Text::new_inline(
-                "Staging IAP credentials".to_string(),
+                t!("settings_ui.staging_iap_credentials").to_string(),
                 appearance.ui_font_family(),
                 REGULAR_TEXT_FONT_SIZE,
             )
@@ -1163,9 +1174,9 @@ impl SettingsWidget for IapCredentialsWidget {
                 self.refresh_button_mouse_state.clone(),
             )
             .with_text_label(if is_refreshing {
-                "Refreshing…".into()
+                t!("settings_ui.refreshing").into()
             } else {
-                "Refresh".into()
+                t!("notebook.refresh").into()
             })
             .with_style(UiComponentStyles {
                 font_size: Some(12.),

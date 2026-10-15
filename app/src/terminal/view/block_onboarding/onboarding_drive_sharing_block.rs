@@ -44,7 +44,6 @@ impl Entity for OnboardingDriveSharingBlock {
     type Event = ();
 }
 
-const TITLE_TEXT: &str = "Sharing in Warp Drive";
 const BODY_TEXT: &[&str] = &[
     "You can now share drive objects, in Warp or on the web, with anyone - Warp user or not. Click Share in the Warp Drive menu or the pane header to share via link or email.",
     "You’ll be able to modify the access permissions any time.",
@@ -66,7 +65,7 @@ impl View for OnboardingDriveSharingBlock {
         let font_size = appearance.monospace_font_size();
 
         let header = Container::new(
-            Text::new(TITLE_TEXT, font_family, font_size)
+            Text::new(t!("help_ui.sharing_in_warp_drive"), font_family, font_size)
                 .with_color(appearance.theme().accent().into_solid())
                 .with_style(Properties::default().weight(Weight::Bold))
                 .finish(),
@@ -93,8 +92,12 @@ impl View for OnboardingDriveSharingBlock {
         }
 
         let button_label = match CloudModel::as_ref(app).get_by_uid(&self.object_id.uid()) {
-            Some(object) => format!("Share {}", object.display_name()),
-            None => format!("Share this {}", self.object_id.object_type()),
+            Some(object) => t!("help_messages.share", value_0 = object.display_name()).into_owned(),
+            None => t!(
+                "help_messages.share_this",
+                value_0 = self.object_id.object_type()
+            )
+            .into_owned(),
         };
         let object_id = self.object_id;
         let button = appearance

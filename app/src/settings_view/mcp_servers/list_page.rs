@@ -70,8 +70,6 @@ use crate::workflows::local_workflows::tail_command_for_shell;
 use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
-
 #[derive(Debug, Clone)]
 pub enum MCPServersListPageViewEvent {
     Add,
@@ -95,9 +93,6 @@ pub enum MCPServersListPageViewAction {
     Add,
     ToggleFileBasedMcp,
 }
-
-const EMPTY_STATE_TEXT: &str = "Once you add a MCP server, it will be shown here.";
-const NO_SEARCH_RESULTS_TEXT: &str = "No search results found";
 
 pub struct MCPServersListPageView {
     handle: WeakViewHandle<Self>,
@@ -207,12 +202,12 @@ impl MCPServersListPageView {
 
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text("Search MCP Servers", ctx);
+            editor.set_placeholder_text(t!("mcp.search_mcp_servers"), ctx);
         });
         let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
 
         let add_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Add", NakedTheme)
+            ActionButton::new(t!("mcp_ext.add"), NakedTheme)
                 .with_icon(Icon::Plus)
                 .on_click(|ctx| ctx.dispatch_typed_action(MCPServersListPageViewAction::Add))
         });
@@ -351,7 +346,7 @@ impl MCPServersListPageView {
             template
                 .description
                 .clone()
-                .or_else(|| Some("Available to install".to_string())),
+                .or_else(|| Some(t!("mcp.available_to_install").to_string())),
             None, // Templates can never have tools
             None, // Templates cannot have an error
             title_chip_text.into_iter().collect(),
@@ -848,7 +843,8 @@ impl MCPServersListPageView {
                 // Show the toast that the server updated, even though we don't update the cloud template in this case
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::success(String::from("MCP server updated"));
+                    let toast =
+                        DismissibleToast::success(String::from(t!("mcp_ext.server_updated")));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
@@ -1118,7 +1114,7 @@ impl MCPServersListPageView {
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
 
         let label = render_body_item_label::<MCPServersListPageViewAction>(
-            "Auto-spawn servers from third-party agents".to_string(),
+            t!("mcp.file_based_label").to_string(),
             None,
             None,
             LocalOnlyIconState::Hidden,
@@ -1191,9 +1187,9 @@ impl MCPServersListPageView {
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(DESCRIPTION_TEXT),
+            FormattedTextFragment::plain_text(t!("mcp.list_description")),
             FormattedTextFragment::hyperlink(
-                "Learn more.",
+                t!("settings_ui.learn_more"),
                 "https://docs.warp.dev/agents/capabilities/mcp",
             ),
         ];
@@ -1277,7 +1273,7 @@ impl MCPServersListPageView {
 
                 if !owned_server_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "My MCPs",
+                        t!("mcp.my_mcps"),
                         &owned_server_cards,
                         appearance,
                         app,
@@ -1289,8 +1285,10 @@ impl MCPServersListPageView {
                         .team_for_view_handle(&self.handle, app)
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => format!("Shared by Warp and {name}"),
-                        None => "Shared by Warp and from other devices".to_string(),
+                        Some(name) => {
+                            t!("settings_messages.shared_by_warp_and", value_0 = name).into_owned()
+                        }
+                        None => t!("mcp.shared_by_warp_and_other_devices").to_string(),
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1301,7 +1299,7 @@ impl MCPServersListPageView {
                     ));
                 } else if !filtered_gallery_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "Shared from Warp",
+                        t!("mcp.shared_from_warp"),
                         &filtered_gallery_cards,
                         appearance,
                         app,
@@ -1310,7 +1308,11 @@ impl MCPServersListPageView {
 
                 // Render one section per provider (e.g. "Detected from Claude").
                 for (provider, cards) in &filtered_file_based_cards {
-                    let section_title = format!("Detected from {}", provider.display_name());
+                    let section_title = t!(
+                        "settings_messages.detected_from",
+                        value_0 = provider.display_name()
+                    )
+                    .into_owned();
                     page.add_child(self.render_server_cards_section(
                         &section_title,
                         cards,
@@ -1506,7 +1508,7 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(EMPTY_STATE_TEXT, true)
+                                .wrappable_text(t!("mcp.empty_state"), true)
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),
@@ -1537,7 +1539,7 @@ impl MCPServersListPageView {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(NO_SEARCH_RESULTS_TEXT, true)
+                                .wrappable_text(t!("mcp.no_search_results"), true)
                                 .with_style(style::description_text(appearance))
                                 .build()
                                 .finish(),
@@ -1647,7 +1649,7 @@ impl MCPServersListPageView {
                     .templatable_mcp_server()
                     .description
                     .clone()
-                    .or_else(|| Some("Detected from config file".to_string())),
+                    .or_else(|| Some(t!("mcp.detected_from_config_file").to_string())),
                 None, // tools only available when running
                 None, // no error when not yet started
                 title_chips,
@@ -1781,11 +1783,13 @@ impl MCPServersListPageView {
 
                 if is_shared {
                     match creator {
-                        Some(creator) => Some(TitleChip::text(format!("Shared by: {creator}"))),
-                        None => Some(TitleChip::text("Shared by a team member")),
+                        Some(creator) => Some(TitleChip::text(
+                            t!("settings_messages.shared_by", value_0 = creator).into_owned(),
+                        )),
+                        None => Some(TitleChip::text(t!("mcp.shared_by_team_member"))),
                     }
                 } else if matches!(item_id, ServerCardItemId::TemplatableMCP(_)) {
-                    Some(TitleChip::text("From another device"))
+                    Some(TitleChip::text(t!("mcp.from_another_device")))
                 } else {
                     None
                 }

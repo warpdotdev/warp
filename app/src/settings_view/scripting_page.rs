@@ -71,7 +71,10 @@ impl ScriptingSettingsPageView {
             vec![Box::new(LocalControlModeWidget)];
 
         Self {
-            page: PageType::new_uncategorized(widgets, Some(PageTitle::new("Scripting"))),
+            page: PageType::new_uncategorized(
+                widgets,
+                Some(PageTitle::new(t!("settings.scripting"))),
+            ),
             local_only_icon_tooltip_states: RefCell::new(HashMap::new()),
             local_control_mode_dropdown,
             #[cfg(target_os = "macos")]
@@ -120,9 +123,11 @@ impl ScriptingSettingsPageView {
                 match result {
                     Ok(()) => {
                         let command_name = ChannelState::channel().warpctrl_command_name();
-                        let message = format!(
-                            "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."
-                        );
+                        let message = t!(
+                            "settings_messages.successfully_installed_the_warp_control_cli_you_can",
+                            value_0 = command_name
+                        )
+                        .into_owned();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
                                 DismissibleToast::success(message),
@@ -132,7 +137,11 @@ impl ScriptingSettingsPageView {
                         });
                     }
                     Err(error) => {
-                        let message = format!("Failed to install Warp Control command: {error}");
+                        let message = t!(
+                            "settings_messages.failed_to_install_warp_control_command",
+                            value_0 = error
+                        )
+                        .into_owned();
                         log::warn!("{message}");
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_persistent_toast(
@@ -231,11 +240,11 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         let installed = cli_install::is_warpctrl_installed();
         let disabled = view.warpctrl_installing || installed;
         let label = if view.warpctrl_installing {
-            "Installing…"
+            t!("settings_ui.installing")
         } else if installed {
-            "Installed"
+            t!("node.installed")
         } else {
-            "Install"
+            t!("common.install")
         };
         let mut button = appearance
             .ui_builder()
@@ -259,13 +268,16 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         };
 
         render_body_item::<ScriptingSettingsPageAction>(
-            "Warp Control CLI command".into(),
+            t!("settings_ui.warp_control_cli_command").into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
             appearance,
             button,
-            Some("Install the warpctrl command for scripting Warp from your terminal.".to_owned()),
+            Some(
+                t!("settings_ui.install_the_warpctrl_command_for_scripting_warp_from_your")
+                    .to_owned(),
+            ),
         )
     }
 }
@@ -285,7 +297,7 @@ impl SettingsWidget for LocalControlModeWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<ScriptingSettingsPageAction>(
-            "warpctrl CLI".into(),
+            t!("settings_ui.warpctrl_cli").into(),
             None,
             LocalOnlyIconState::for_setting(
                 LocalControlModeSetting::storage_key(),
@@ -296,7 +308,7 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some("warpctrl allows for scripting Warp's UI. Use with care.".to_owned()),
+            Some(t!("settings_ui.warpctrl_allows_for_scripting_warp_s_ui_use_with").to_owned()),
         )
     }
 }

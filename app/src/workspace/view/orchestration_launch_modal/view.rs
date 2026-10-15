@@ -63,26 +63,28 @@ struct FeatureItem {
     badge: Option<&'static str>,
 }
 
-const FEATURE_ITEMS: &[FeatureItem] = &[
-    FeatureItem {
-        icon: Icon::Cloud,
-        title: "Run any agent harness in the cloud",
-        description: "Use Oz to spin up Claude Code or Codex agents in the cloud; Oz will help you track and steer the agents.",
-        badge: None,
-    },
-    FeatureItem {
-        icon: Icon::Atom,
-        title: "Multi-agent orchestration",
-        description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
-        badge: None,
-    },
-    FeatureItem {
-        icon: Icon::Cognition,
-        title: "Agent Memory",
-        description: "Agents will now store and access long-term memories, enabling self-improvement over time.",
-        badge: Some("Research preview"),
-    },
-];
+fn feature_items() -> [FeatureItem; 3] {
+    [
+        FeatureItem {
+            icon: Icon::Cloud,
+            title: "Run any agent harness in the cloud",
+            description: "Use Oz to spin up Claude Code or Codex agents in the cloud; Oz will help you track and steer the agents.",
+            badge: None,
+        },
+        FeatureItem {
+            icon: Icon::Atom,
+            title: "Multi-agent orchestration",
+            description: t!("orchestration_launch.multi_agent_description"),
+            badge: None,
+        },
+        FeatureItem {
+            icon: Icon::Cognition,
+            title: t!("orchestration_launch.memory_title"),
+            description: t!("orchestration_launch.memory_description"),
+            badge: Some(t!("orchestration_launch.research_preview")),
+        },
+    ]
+}
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -184,7 +186,7 @@ impl OrchestrationLaunchModal {
         });
 
         let learn_more_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Learn more", LearnMoreButtonTheme)
+            ActionButton::new(t!("orchestration_launch.learn_more"), LearnMoreButtonTheme)
                 .with_icon(Icon::LinkExternal)
                 .with_full_width(true)
                 .on_click(|ctx| {
@@ -193,7 +195,7 @@ impl OrchestrationLaunchModal {
         });
 
         let go_to_warp_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Close", CtaButtonTheme)
+            ActionButton::new(t!("common.close"), CtaButtonTheme)
                 .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
         });
@@ -247,9 +249,13 @@ impl OrchestrationLaunchModal {
     fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
         let text_color = modal_terminal_magenta(appearance);
         let background_color = modal_terminal_magenta_overlay_1(appearance);
-        let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-            .with_color(text_color)
-            .finish();
+        let text = Text::new_inline(
+            t!("orchestration_launch.new_badge").to_string(),
+            appearance.ui_font_family(),
+            14.,
+        )
+        .with_color(text_color)
+        .finish();
         ConstrainedBox::new(
             Container::new(
                 Flex::row()
@@ -269,7 +275,7 @@ impl OrchestrationLaunchModal {
 
     fn render_title(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "Orchestrate any agent, anywhere",
+            t!("orchestration_launch.title"),
             appearance.ui_font_family(),
             20.,
         )
@@ -280,7 +286,7 @@ impl OrchestrationLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
+            t!("orchestration_launch.description"),
             appearance.ui_font_family(),
             14.,
         )
@@ -348,8 +354,8 @@ impl OrchestrationLaunchModal {
         let mut features_col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(12.);
-        for item in FEATURE_ITEMS {
-            features_col.add_child(self.render_feature_row(item, appearance));
+        for item in feature_items() {
+            features_col.add_child(self.render_feature_row(&item, appearance));
         }
 
         let footer = Flex::row()

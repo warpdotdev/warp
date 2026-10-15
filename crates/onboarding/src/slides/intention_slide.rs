@@ -81,7 +81,7 @@ impl IntentionSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Welcome to Warp")
+            .paragraph(t!("onboarding.welcome_title"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -91,7 +91,7 @@ impl IntentionSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "How do you want to work?",
+            t!("onboarding.intention.subtitle"),
             appearance.ui_font_family(),
             16.,
         )
@@ -319,7 +319,7 @@ impl IntentionSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Just use the terminal")
+            .paragraph(t!("onboarding.intention.terminal_title"))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -332,7 +332,7 @@ impl IntentionSlide {
         let badge = {
             let badge_text = appearance
                 .ui_builder()
-                .paragraph("No AI features")
+                .paragraph(t!("onboarding.intention.no_ai_features"))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_weight: Some(Weight::Semibold),
@@ -358,7 +358,7 @@ impl IntentionSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "A modern terminal optimized for speed, context, and control without AI.",
+            t!("onboarding.intention.terminal_description"),
             appearance.ui_font_family(),
             14.,
         )
@@ -386,7 +386,7 @@ impl IntentionSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(t!("onboarding.back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {

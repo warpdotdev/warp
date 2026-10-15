@@ -68,7 +68,7 @@ impl ConversationSearchItem {
         Flex::row()
             .with_child(
                 Text::new_inline(
-                    "New conversation",
+                    t!("command_palette.new_conversation"),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -89,7 +89,7 @@ impl ConversationSearchItem {
         let appearance = Appearance::as_ref(app);
 
         let action_title = Text::new_inline(
-            "Fork current conversation",
+            t!("ai_output.fork_current_conversation"),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -244,7 +244,7 @@ impl ConversationSearchItem {
 
             let fork_button_tool_tip = appearance
                 .ui_builder()
-                .tool_tip("Fork conversation".to_string())
+                .tool_tip(t!("ai_output.fork_conversation").to_string())
                 .build();
 
             let fork_button_inner = icon_button(
@@ -424,7 +424,7 @@ impl SearchItem for ConversationSearchItem {
             ConversationAction::Fork { title, .. } => {
                 format!("Fork current conversation ({title})")
             }
-            ConversationAction::New => "New conversation".to_string(),
+            ConversationAction::New => t!("command_palette.new_conversation").to_string(),
         }
     }
 
@@ -435,9 +435,11 @@ impl SearchItem for ConversationSearchItem {
                 matched_conversation.as_ref().conversation.title()
             )),
             ConversationAction::Fork { .. } => {
-                Some("Press enter to fork the current conversation into a new conversation.".into())
+                Some(t!("command_palette.fork_current_conversation_help").into())
             }
-            ConversationAction::New => Some("Press enter to create a new conversation.".into()),
+            ConversationAction::New => {
+                Some(t!("command_palette.create_new_conversation_help").into())
+            }
         }
     }
 }

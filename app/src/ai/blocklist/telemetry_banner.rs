@@ -99,7 +99,7 @@ impl View for TelemetryBanner {
                 Container::new(
                     ui_builder
                         .button(ButtonVariant::Text, self.learn_more_mouse_state.clone())
-                        .with_text_label("Learn more".into())
+                        .with_text_label(t!("ambient_agent.learn_more").into())
                         .with_style(UiComponentStyles {
                             height: Some(24.),
                             padding: Some(Coords {
@@ -130,7 +130,7 @@ impl View for TelemetryBanner {
                             ButtonVariant::Outlined,
                             self.privacy_settings_mouse_state.clone(),
                         )
-                        .with_text_label("Manage privacy settings".into())
+                        .with_text_label(t!("telemetry_banner.manage_privacy_settings").into())
                         .with_style(UiComponentStyles {
                             ..Default::default()
                         })

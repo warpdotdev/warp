@@ -312,7 +312,7 @@ impl CodeFooterView {
             button.set_disabled(!is_ai_enabled, ctx);
             button.set_tooltip(
                 Some(if is_ai_enabled {
-                    "Open agent input with the /update-tab-config skill"
+                    t!("code.open_tab_config_skill")
                 } else {
                     "Enable AI to use the /update-tab-config skill"
                 }),
@@ -675,9 +675,9 @@ impl CodeFooterView {
                     .iter()
                     .any(|s| matches!(s, LspRepoStatus::DisabledAndNotInstalled { .. }));
                 if any_needs_install {
-                    Some("Install servers".to_string())
+                    Some(t!("code.install_servers").to_string())
                 } else {
-                    Some("Enable servers".to_string())
+                    Some(t!("code.enable_servers").to_string())
                 }
             }
         }
@@ -1172,7 +1172,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Open logs",
+            t!("code.open_logs"),
             CodeFooterViewAction::OpenLogs,
         )
     }
@@ -1194,7 +1194,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Restart server",
+            t!("code.restart_server"),
             CodeFooterViewAction::RestartServer,
         )
     }
@@ -1217,7 +1217,7 @@ impl CodeFooterView {
                     .with_uniform_padding(2.)
                     .finish()
             },
-            "Stop server",
+            t!("code.stop_server"),
             CodeFooterViewAction::StopServer,
         )
     }
@@ -1239,7 +1239,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Start server",
+            t!("code.start_server"),
             CodeFooterViewAction::StartServer,
         )
     }
@@ -1261,7 +1261,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Remove server",
+            t!("code.remove_server"),
             CodeFooterViewAction::RemoveServer,
         )
     }
@@ -1285,9 +1285,9 @@ impl CodeFooterView {
                     .finish()
             },
             if is_plural {
-                "Restart all servers"
+                t!("code.restart_all_servers")
             } else {
-                "Restart server"
+                t!("code.restart_server")
             },
             CodeFooterViewAction::RestartAllServers,
         )
@@ -1313,9 +1313,9 @@ impl CodeFooterView {
                     .finish()
             },
             if is_plural {
-                "Stop all servers"
+                t!("code.stop_all_servers")
             } else {
-                "Stop server"
+                t!("code.stop_server")
             },
             CodeFooterViewAction::StopAllServers,
         )
@@ -1341,11 +1341,11 @@ impl CodeFooterView {
                     .finish()
             },
             if !is_plural {
-                "Start server"
+                t!("code.start_server")
             } else if has_running {
-                "Start all stopped servers"
+                t!("code.start_all_stopped_servers")
             } else {
-                "Start all servers"
+                t!("code.start_all_servers")
             },
             CodeFooterViewAction::StartAllServers,
         )
@@ -1368,7 +1368,7 @@ impl CodeFooterView {
                     .to_warpui_icon(ThemeFill::Solid(text_color))
                     .finish()
             },
-            "Manage servers",
+            t!("code.manage_servers"),
             CodeFooterViewAction::ManageServers,
         )
     }
@@ -1587,26 +1587,26 @@ impl CodeFooterView {
                 ..
             } => match PersistedWorkspace::as_ref(app).has_enabled_lsp_server_for_file_path(path) {
                 LSPEnablementResultForFile::UnsupportedLanguage => (
-                    Some("Language support is unavailable for this file type".to_string()),
+                    Some(t!("code.language_support_unavailable_file_type").to_string()),
                     false,
                 ),
                 LSPEnablementResultForFile::LSPNotEnabled { root_name } => match lsp_repo_status {
                     LspRepoStatus::CheckingForInstallation => (
                         Some(format!(
                             "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
+                            root_name.unwrap_or(t!("code.this_codebase").to_string())
                         )),
                         false,
                     ),
                     LspRepoStatus::Ready | LspRepoStatus::Enabled => (
-                        Some("Language server is unavailable for this codebase".to_string()),
+                        Some(t!("code.language_server_unavailable_codebase").to_string()),
                         false,
                     ),
                     LspRepoStatus::DisabledAndNotInstalled { .. }
                     | LspRepoStatus::DisabledAndInstalled { .. } => (
                         Some(format!(
                             "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
+                            root_name.unwrap_or(t!("code.this_codebase").to_string())
                         )),
                         true,
                     ),

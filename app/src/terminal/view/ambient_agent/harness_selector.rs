@@ -223,7 +223,7 @@ impl HarnessSelector {
             button.set_disabled(is_locked_to_oz, ctx);
             button.set_tooltip(
                 Some(if is_locked_to_oz {
-                    "This conversation is with the Warp Agent, so the cloud handoff will also use Warp"
+                    t!("ambient_agent.locked_to_warp_agent_handoff")
                 } else {
                     BUTTON_TOOLTIP
                 }),
@@ -310,7 +310,7 @@ fn build_menu_items(
             fields = fields
                 .with_disabled(true)
                 .with_override_text_color(disabled_text_color)
-                .with_tooltip("Disabled by your administrator");
+                .with_tooltip(t!("ambient_agent.disabled_by_admin"));
         }
         items.push(MenuItem::Item(fields));
     }

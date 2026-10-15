@@ -1047,7 +1047,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
         _ => {
             if let Some(link_target) = tip.link.clone() {
                 fragments.push(FormattedTextFragment::plain_text(" "));
-                fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+                fragments.push(FormattedTextFragment::hyperlink(
+                    t!("workspace.learn_more"),
+                    link_target,
+                ));
             }
         }
     }
@@ -1111,7 +1114,7 @@ fn render_fallback_explanation<V: View>(
         Some(primary) => {
             format!("The primary model ({primary}) failed. Retrying with the fallback model.")
         }
-        None => "The primary model failed. Retrying with the fallback model.".to_owned(),
+        None => t!("ai_ext.primary_model_failed").to_owned(),
     };
     let appearance = Appearance::as_ref(app);
     Text::new_inline(
@@ -1322,7 +1325,7 @@ impl View for BlocklistAIStatusBar {
                         WarpingIndicatorProps {
                             icon: None,
                             warping_indicator_text: MaybeShimmeringText::Shimmering {
-                                text: "Setting up environment".into(),
+                                text: t!("ai_ext.setting_up_environment").into(),
                                 shimmering_text_handle: self.shimmering_text_handle.clone(),
                             },
                             non_shimmering_text: None,
@@ -1354,7 +1357,7 @@ impl View for BlocklistAIStatusBar {
                             non_shimmering_text: None,
                             non_shimmering_suffix: None,
                             buttons: Some(render_switch_control_to_user_button(
-                                "Exit",
+                                t!("common.exit"),
                                 "Exit agent input",
                                 ButtonProps {
                                     button_handle: &self.state_handles.take_over_button,

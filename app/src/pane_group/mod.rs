@@ -3103,7 +3103,10 @@ impl PaneGroup {
                     FormattedTextFragment::plain_text(
                         "Warp doesn't currently support your default shell, falling back to zsh.  ",
                     ),
-                    FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
+                    FormattedTextFragment::hyperlink(
+                        t!("workspace.learn_more"),
+                        WARP_SHELL_COMPATIBILITY_DOCS,
+                    ),
                 ]),
             )
         });

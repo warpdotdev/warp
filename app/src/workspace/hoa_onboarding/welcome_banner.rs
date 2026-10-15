@@ -84,9 +84,13 @@ pub fn render_welcome_banner(
     );
 
     // "New" badge
-    let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
-        .with_color(PhenomenonStyle::modal_badge_text())
-        .finish();
+    let text = Text::new_inline(
+        t!("common.new_badge").to_string(),
+        appearance.ui_font_family(),
+        14.,
+    )
+    .with_color(PhenomenonStyle::modal_badge_text())
+    .finish();
     let badge = ConstrainedBox::new(
         Container::new(
             Flex::row()
@@ -105,7 +109,7 @@ pub fn render_welcome_banner(
 
     // Title
     let title = Text::new(
-        "Introducing universal agent support: level up any coding agent with Warp",
+        t!("hoa_onboarding.welcome_title"),
         appearance.ui_font_family(),
         20.,
     )

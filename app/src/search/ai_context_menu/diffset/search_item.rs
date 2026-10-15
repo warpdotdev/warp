@@ -21,16 +21,16 @@ pub struct DiffSetSearchItem {
 impl DiffSetSearchItem {
     pub fn name(&self) -> String {
         match &self.diff_mode {
-            DiffMode::Head => "Uncommitted changes".to_string(),
-            DiffMode::MainBranch => "Changes vs. main branch".to_string(),
+            DiffMode::Head => t!("code_review_ext.uncommitted_changes").to_string(),
+            DiffMode::MainBranch => t!("code_review_ext.changes_vs_main_branch").to_string(),
             DiffMode::OtherBranch(branch) => format!("Changes vs. {branch}"),
         }
     }
 
     pub fn description(&self) -> String {
         match &self.diff_mode {
-            DiffMode::Head => "All uncommitted changes in the working directory".to_string(),
-            DiffMode::MainBranch => "All changes compared to the main branch".to_string(),
+            DiffMode::Head => t!("code_review_ext.all_uncommitted_changes").to_string(),
+            DiffMode::MainBranch => t!("code_review_ext.all_changes_vs_main_branch").to_string(),
             DiffMode::OtherBranch(branch) => format!("All changes compared to {branch}"),
         }
     }

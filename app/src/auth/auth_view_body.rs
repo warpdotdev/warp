@@ -329,7 +329,7 @@ impl AuthViewBody {
             Flex::row()
                 .with_child(
                     ui_builder
-                        .span("By continuing, you agree to Warp's ")
+                        .span(t!("auth.continuing_agree_prefix"))
                         .with_style(disclaimer_styles)
                         .build()
                         .finish(),
@@ -378,7 +378,7 @@ impl AuthViewBody {
             Flex::column()
                 .with_child(
                     ui_builder
-                        .paragraph("If you'd like to opt out of analytics and AI features,")
+                        .paragraph(t!("auth.opt_out_analytics_ai"))
                         .with_style(disclaimer_styles)
                         .build()
                         .finish(),
@@ -475,7 +475,7 @@ impl AuthViewBody {
                 Some(click_button_style),
                 None,
             )
-            .with_centered_text_label("Sign up".into())
+            .with_centered_text_label(t!("workspace.sign_up").into())
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(on_click_action);
@@ -605,13 +605,13 @@ impl AuthViewBody {
 
         let text = match self.variant {
             AuthViewVariant::RequireLoginCloseable => {
-                "In order to use Warp’s AI features or collaborate with others, please create an account."
+                t!("auth.require_login_ai_collab")
             }
             AuthViewVariant::HitDriveObjectLimitCloseable => {
-                "In order to create more objects in Warp Drive, please create an account."
+                t!("auth.require_login_drive_limit")
             }
             AuthViewVariant::ShareRequirementCloseable => {
-                "In order to share, please create an account."
+                t!("auth.require_login_share")
             }
             _ => "",
         };
@@ -637,10 +637,10 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::Initial => "Welcome to Warp!",
+            AuthViewVariant::Initial => t!("auth.welcome_to_warp"),
             AuthViewVariant::RequireLoginCloseable
             | AuthViewVariant::HitDriveObjectLimitCloseable
-            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Warp",
+            | AuthViewVariant::ShareRequirementCloseable => t!("auth.sign_up_for_warp"),
         };
 
         ui_builder
@@ -756,7 +756,7 @@ impl AuthViewBody {
 
         let header = Container::new(
             ui_builder
-                .paragraph("Sign in on your browser \nto continue")
+                .paragraph(t!("auth.sign_in_browser_to_continue"))
                 .with_style(header_styles)
                 .build()
                 .finish(),

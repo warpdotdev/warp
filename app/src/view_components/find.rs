@@ -261,11 +261,11 @@ impl<T: FindModel + Entity<Event = FindEvent> + 'static> Find<T> {
                     match_index + 1,
                     self.model.as_ref(ctx).match_count()
                 ),
-                "Use enter and shift-enter to navigate between matches. Escape to quit.",
+                t!("find.result_help"),
                 WarpA11yRole::UserAction,
             )
         } else {
-            AccessibilityContent::new_without_help("No results.", WarpA11yRole::UserAction)
+            AccessibilityContent::new_without_help(t!("find.no_results"), WarpA11yRole::UserAction)
         };
         ctx.emit_a11y_content(content);
     }

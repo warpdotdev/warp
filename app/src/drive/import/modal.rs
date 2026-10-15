@@ -228,9 +228,13 @@ impl ImportModal {
                 Shrinkable::new(
                     1.0,
                     Align::new(
-                        Text::new_inline("Import", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                            .with_color(appearance.theme().active_ui_text_color().into())
-                            .finish(),
+                        Text::new_inline(
+                            t!("drive.import"),
+                            appearance.ui_font_family(),
+                            HEADER_FONT_SIZE,
+                        )
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
                     )
                     .left()
                     .finish(),

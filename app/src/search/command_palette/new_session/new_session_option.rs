@@ -31,10 +31,10 @@ impl fmt::Display for Direction {
             f,
             "{}",
             match self {
-                Direction::Down => "Down",
-                Direction::Right => "Right",
-                Direction::Up => "Up",
-                Direction::Left => "Left",
+                Direction::Down => t!("command_palette.direction_down"),
+                Direction::Right => t!("command_palette.direction_right"),
+                Direction::Up => t!("command_palette.direction_up"),
+                Direction::Left => t!("command_palette.direction_left"),
             }
         )
     }

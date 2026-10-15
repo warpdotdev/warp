@@ -92,7 +92,7 @@ pub fn render_header_section(
 
     if is_default_profile {
         column.add_child(render_info_section(
-            "Default profile name cannot be changed.",
+            t!("execution_profile.default_profile_name_cannot_be_changed"),
             None,
             appearance,
         ));
@@ -104,17 +104,25 @@ pub fn render_header_section(
 }
 
 fn render_header_title(appearance: &Appearance) -> Box<dyn Element> {
-    Text::new_inline("Edit Profile", appearance.ui_font_family(), 16.)
-        .with_style(Properties::default().weight(Weight::Bold))
-        .with_color(appearance.theme().active_ui_text_color().into())
-        .finish()
+    Text::new_inline(
+        t!("execution_profile.edit_profile"),
+        appearance.ui_font_family(),
+        16.,
+    )
+    .with_style(Properties::default().weight(Weight::Bold))
+    .with_color(appearance.theme().active_ui_text_color().into())
+    .finish()
 }
 
 fn render_header_name_label(appearance: &Appearance) -> Box<dyn Element> {
     Container::new(
-        Text::new("Name", appearance.ui_font_family(), 13.)
-            .with_color(appearance.theme().active_ui_text_color().into())
-            .finish(),
+        Text::new(
+            t!("execution_profile.name"),
+            appearance.ui_font_family(),
+            13.,
+        )
+        .with_color(appearance.theme().active_ui_text_color().into())
+        .finish(),
     )
     .with_margin_top(16.)
     .finish()

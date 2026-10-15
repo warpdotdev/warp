@@ -15,14 +15,14 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::CallToAction,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited prematurely!".to_string(),
+                title: t!("terminal_banner.shell_process_exited_prematurely").to_string(),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/warning.svg",
                     aspect_ratio: 1.,
                     color_override: Some(appearance.theme().foreground().into_solid()),
                 }),
                 content: Some(vec![Text::new(
-                    "The output from Warp's initialization script is visible above to assist with debugging.",
+                    t!("help_ui.the_output_from_warp_s_initialization_script_is_visible"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )]),
@@ -34,7 +34,7 @@ pub fn render_shell_process_terminated_banner(
             InlineBannerStyle::LowPriority,
             appearance,
             InlineBannerContent {
-                title: "Shell process exited".to_string(),
+                title: t!("terminal_banner.shell_process_exited").to_string(),
                 header_icon: Some(InlineBannerIcon {
                     asset_path: "bundled/svg/info.svg",
                     aspect_ratio: 1.,

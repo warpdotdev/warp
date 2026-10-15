@@ -147,7 +147,7 @@ pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::CloseCurrentSession,
         AIAssistantAction::ClosePanel,
-        "Close Warp AI",
+        t!("ai_assistant.close"),
         id!("AIAssistantPanel"),
     )]);
 
@@ -783,7 +783,7 @@ impl AIAssistantPanelView {
                 ..Default::default()
             };
             ui_builder
-                .tool_tip("Copy transcript to clipboard".to_owned())
+                .tool_tip(t!("ai_assistant.copy_transcript").to_owned())
                 .with_style(tool_tip_style)
                 .build()
                 .finish()
@@ -841,7 +841,7 @@ impl AIAssistantPanelView {
             .with_children([
                 Container::new(
                     Text::new_inline(
-                        "Character limit exceeded.",
+                        t!("ai_assistant.character_limit_exceeded"),
                         appearance.ui_font_family(),
                         BODY_FONT_SIZE,
                     )

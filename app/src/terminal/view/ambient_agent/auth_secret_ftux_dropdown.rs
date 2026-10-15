@@ -96,7 +96,7 @@ impl AuthSecretFtuxDropdown {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search secrets or create a new one", ctx);
+            editor.set_placeholder_text(t!("auth_secret_ftux.search_placeholder"), ctx);
             editor
         });
 
@@ -387,7 +387,7 @@ impl AuthSecretFtuxDropdown {
                 }
                 if !matched {
                     items.push(MenuItem::Item(
-                        MenuItemFields::new("No secrets found")
+                        MenuItemFields::new(t!("auth_secret_ftux.no_secrets_found"))
                             .with_font_size_override(FONT_SIZE)
                             .with_padding_override(
                                 MENU_ITEM_VERTICAL_PADDING,
@@ -400,7 +400,7 @@ impl AuthSecretFtuxDropdown {
             }
             AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Loading…")
+                    MenuItemFields::new(t!("auth_secret_ftux.loading"))
                         .with_font_size_override(FONT_SIZE)
                         .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                         .with_disabled(true)
@@ -409,7 +409,7 @@ impl AuthSecretFtuxDropdown {
             }
             AuthSecretFetchState::Failed(_) => {
                 items.push(MenuItem::Item(
-                    MenuItemFields::new("Unable to load secrets")
+                    MenuItemFields::new(t!("auth_secret_ftux.unable_to_load_secrets"))
                         .with_font_size_override(FONT_SIZE)
                         .with_padding_override(MENU_ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                         .with_disabled(true)

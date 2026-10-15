@@ -381,13 +381,13 @@ impl ImportModalBody {
 
         let file_picker_button = if is_loading {
             base_button
-                .with_centered_text_label("Preparing...".to_string())
+                .with_centered_text_label(t!("drive.preparing").to_string())
                 .disabled()
         } else {
             base_button.with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::TextFirst,
-                    "Choose files...".to_string(),
+                    t!("drive.choose_files").to_string(),
                     Icon::Import.to_warpui_icon(
                         appearance
                             .theme()

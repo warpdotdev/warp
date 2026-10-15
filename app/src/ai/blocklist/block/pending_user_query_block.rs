@@ -52,7 +52,7 @@ impl PendingUserQueryBlock {
     ) -> Self {
         let close_button = show_close_button.then(|| {
             ctx.add_typed_action_view(|_| {
-                ActionButton::new("Remove queued prompt", NakedTheme)
+                ActionButton::new(t!("ai_ext.remove_queued_prompt"), NakedTheme)
                     .with_icon(Icon::X)
                     .with_size(ButtonSize::XSmall)
                     .on_click(|ctx| {
@@ -62,7 +62,7 @@ impl PendingUserQueryBlock {
         });
         let send_now_button = show_send_now_button.then(|| {
             ctx.add_typed_action_view(|_| {
-                ActionButton::new("Send now", NakedTheme)
+                ActionButton::new(t!("ai_ext.send_now"), NakedTheme)
                     .with_icon(Icon::Play)
                     .with_size(ButtonSize::XSmall)
                     .on_click(|ctx| {

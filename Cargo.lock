@@ -9546,6 +9546,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_errors",
+ "warp_i18n",
  "warp_logging",
  "warpui",
  "warpui_core",
@@ -15508,6 +15509,7 @@ dependencies = [
  "warp_files",
  "warp_graphql",
  "warp_harness_usage",
+ "warp_i18n",
  "warp_isolation_platform",
  "warp_logging",
  "warp_managed_secrets",
@@ -15863,6 +15865,14 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "warp_i18n"
+version = "0.1.0"
+dependencies = [
+ "serde_yaml 0.8.26",
+ "sys-locale",
 ]
 
 [[package]]

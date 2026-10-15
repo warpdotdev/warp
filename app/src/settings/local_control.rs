@@ -55,8 +55,8 @@ impl LocalControlMode {
 
     pub fn as_dropdown_label(self) -> &'static str {
         match self {
-            Self::Disabled => "Disabled",
-            Self::Enabled => "Enabled",
+            Self::Disabled => t!("onboarding.disabled"),
+            Self::Enabled => t!("onboarding.enabled"),
         }
     }
 }

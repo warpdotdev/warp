@@ -37,15 +37,19 @@ pub struct RemoveCustomEndpointConfirmationDialog {
 impl RemoveCustomEndpointConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(t!("common.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Cancel);
             })
         });
 
         let confirm_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Remove endpoint", DangerPrimaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(RemoveCustomEndpointConfirmationDialogAction::Confirm);
-            })
+            ActionButton::new(t!("settings_ui.remove_endpoint"), DangerPrimaryTheme).on_click(
+                |ctx| {
+                    ctx.dispatch_typed_action(
+                        RemoveCustomEndpointConfirmationDialogAction::Confirm,
+                    );
+                },
+            )
         });
 
         Self {
@@ -99,7 +103,8 @@ impl View for RemoveCustomEndpointConfirmationDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let description = "Are you sure you want to remove this endpoint? You won't be able to use its models in your agent sessions moving forward.".to_string();
+        let description =
+            t!("settings_ui.are_you_sure_you_want_to_remove_this_endpoint").to_string();
 
         let endpoint_title = Text::new_inline(
             self.endpoint_name.clone(),

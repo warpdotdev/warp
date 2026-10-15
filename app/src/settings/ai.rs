@@ -180,13 +180,15 @@ impl VoiceInputToggleKey {
         // We use the underlying host OS to determine the correct key name to display.
         let (super_key_name, alt_key_name): (&'static str, &'static str) =
             match OperatingSystem::get() {
-                OperatingSystem::Mac => ("Command", "Option"),
-                OperatingSystem::Windows => ("Windows", "Alt"),
-                OperatingSystem::Linux | OperatingSystem::Other(_) => ("Super", "Alt"),
+                OperatingSystem::Mac => (t!("env_vars.command"), t!("settings_ui.option")),
+                OperatingSystem::Windows => (t!("settings_ui.windows"), t!("settings_ui.alt")),
+                OperatingSystem::Linux | OperatingSystem::Other(_) => {
+                    (t!("settings_ui.super"), t!("settings_ui.alt"))
+                }
             };
 
         match self {
-            VoiceInputToggleKey::None => "None",
+            VoiceInputToggleKey::None => t!("execution_profile.none"),
             VoiceInputToggleKey::Fn => "Fn",
             VoiceInputToggleKey::AltLeft => {
                 Box::leak(format!("{alt_key_name} (Left)").into_boxed_str())
@@ -194,16 +196,16 @@ impl VoiceInputToggleKey {
             VoiceInputToggleKey::AltRight => {
                 Box::leak(format!("{alt_key_name} (Right)").into_boxed_str())
             }
-            VoiceInputToggleKey::ControlLeft => "Control (Left)",
-            VoiceInputToggleKey::ControlRight => "Control (Right)",
+            VoiceInputToggleKey::ControlLeft => t!("settings_ui.control_left"),
+            VoiceInputToggleKey::ControlRight => t!("settings_ui.control_right"),
             VoiceInputToggleKey::SuperLeft => {
                 Box::leak(format!("{super_key_name} (Left)").into_boxed_str())
             }
             VoiceInputToggleKey::SuperRight => {
                 Box::leak(format!("{super_key_name} (Right)").into_boxed_str())
             }
-            VoiceInputToggleKey::ShiftLeft => "Shift (Left)",
-            VoiceInputToggleKey::ShiftRight => "Shift (Right)",
+            VoiceInputToggleKey::ShiftLeft => t!("settings_ui.shift_left"),
+            VoiceInputToggleKey::ShiftRight => t!("settings_ui.shift_right"),
         }
     }
 
@@ -526,11 +528,11 @@ impl DefaultSessionMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            DefaultSessionMode::Terminal => "Terminal",
-            DefaultSessionMode::Agent => "Agent",
-            DefaultSessionMode::CloudAgent => "Cloud agent",
-            DefaultSessionMode::TabConfig => "Tab Config",
-            DefaultSessionMode::DockerSandbox => "Local Docker Sandbox",
+            DefaultSessionMode::Terminal => t!("workspace.terminal"),
+            DefaultSessionMode::Agent => t!("workspace.agent"),
+            DefaultSessionMode::CloudAgent => t!("settings_ui.cloud_agent"),
+            DefaultSessionMode::TabConfig => t!("settings_ui.tab_config"),
+            DefaultSessionMode::DockerSandbox => t!("workspace.local_docker_sandbox"),
         }
     }
 }
@@ -577,9 +579,9 @@ impl ThinkingDisplayMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            ThinkingDisplayMode::ShowAndCollapse => "Show & collapse",
-            ThinkingDisplayMode::AlwaysShow => "Always show",
-            ThinkingDisplayMode::NeverShow => "Never show",
+            ThinkingDisplayMode::ShowAndCollapse => t!("settings_ui.show_collapse"),
+            ThinkingDisplayMode::AlwaysShow => t!("settings_ui.always_show"),
+            ThinkingDisplayMode::NeverShow => t!("settings_ui.never_show"),
         }
     }
 
@@ -711,8 +713,8 @@ settings::macros::implement_setting_for_enum!(
 impl UsageDisplayUnit {
     pub fn display_name(&self) -> &'static str {
         match self {
-            UsageDisplayUnit::Credits => "Credits",
-            UsageDisplayUnit::Dollars => "Dollars",
+            UsageDisplayUnit::Credits => t!("billing.credits"),
+            UsageDisplayUnit::Dollars => t!("settings_ui.dollars"),
         }
     }
 }
@@ -874,9 +876,9 @@ impl OrchestrationMessageDisplayMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            OrchestrationMessageDisplayMode::ShowAndCollapse => "Show & collapse",
-            OrchestrationMessageDisplayMode::AlwaysShow => "Always show",
-            OrchestrationMessageDisplayMode::AlwaysCollapse => "Always collapse",
+            OrchestrationMessageDisplayMode::ShowAndCollapse => t!("settings_ui.show_collapse"),
+            OrchestrationMessageDisplayMode::AlwaysShow => t!("settings_ui.always_show"),
+            OrchestrationMessageDisplayMode::AlwaysCollapse => t!("settings_ui.always_collapse"),
         }
     }
 
@@ -956,8 +958,8 @@ impl PromptSubmissionMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            PromptSubmissionMode::Interrupt => "Interrupt response",
-            PromptSubmissionMode::Queue => "Queue until response finishes",
+            PromptSubmissionMode::Interrupt => t!("settings_ui.interrupt_response"),
+            PromptSubmissionMode::Queue => t!("settings_ui.queue_until_response_finishes"),
         }
     }
 
@@ -1018,9 +1020,9 @@ impl LongRunningCommandSubmissionMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            LongRunningCommandSubmissionMode::SendImmediately => "Send immediately",
+            LongRunningCommandSubmissionMode::SendImmediately => t!("settings_ui.send_immediately"),
             LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
-                "Queue until command finishes"
+                t!("settings_ui.queue_until_command_finishes")
             }
         }
     }

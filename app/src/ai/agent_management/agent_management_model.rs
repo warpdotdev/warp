@@ -159,7 +159,7 @@ impl AgentNotificationsModel {
                         .display_title()
                         .unwrap_or_else(|| format!("{} completed", agent.display_name()));
                     let message = match agent {
-                        CLIAgent::Codex => "Notification from Codex",
+                        CLIAgent::Codex => t!("agent_management.notification_from_codex"),
                         _ => "Task completed.",
                     };
                     let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
@@ -216,7 +216,7 @@ impl AgentNotificationsModel {
                         title,
                         message
                             .clone()
-                            .unwrap_or_else(|| "Waiting for input.".to_owned()),
+                            .unwrap_or_else(|| t!("agent_management.waiting_for_input").to_owned()),
                         NotificationCategory::Request,
                         NotificationSourceAgent::CLI {
                             agent: *agent,
@@ -390,7 +390,7 @@ impl AgentNotificationsModel {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
                 self.add_notification(
                     title,
-                    "Task completed.".to_owned(),
+                    t!("agent_management.task_completed").to_owned(),
                     NotificationCategory::Complete,
                     oz_agent,
                     origin,

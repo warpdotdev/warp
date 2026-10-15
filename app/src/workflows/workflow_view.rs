@@ -1574,7 +1574,7 @@ impl WorkflowView {
     fn save_aliases(&mut self, ctx: &mut ViewContext<Self>) {
         if let Err(e) = self.alias_bar.update(ctx, |bar, ctx| bar.save(ctx)) {
             report_error!(e.context("Error saving aliases"));
-            self.display_error_toast("Error saving aliases".to_string(), ctx);
+            self.display_error_toast(t!("workflows.error_saving_aliases").to_string(), ctx);
         }
     }
 
@@ -1583,10 +1583,7 @@ impl WorkflowView {
 
         // Block saving if secrets are detected in the workflow when secret redaction is enabled.
         if self.workflow_contains_secrets(ctx) {
-            self.display_error_toast(
-                "This workflow cannot be saved because it contains secrets".to_string(),
-                ctx,
-            );
+            self.display_error_toast(t!("workflows.save_contains_secrets").to_string(), ctx);
             return;
         }
 
@@ -1618,7 +1615,7 @@ impl WorkflowView {
                     id
                 } else {
                     report_error!("No client_id obtained for creating workflow");
-                    self.display_error_toast(String::from("Could not create workflow"), ctx);
+                    self.display_error_toast(String::from(t!("workflows.create_failed")), ctx);
                     return;
                 };
 
@@ -1729,9 +1726,9 @@ impl WorkflowView {
         crate::workspace::ToastStack::handle(ctx).update(ctx, |stack, ctx| {
             stack.add_ephemeral_toast(
                 DismissibleToast::success(if self.is_for_agent_mode {
-                    "Prompt copied.".to_string()
+                    t!("workflows.prompt_copied").to_string()
                 } else {
-                    "Command copied.".to_string()
+                    t!("workflows.command_copied").to_string()
                 }),
                 window_id,
                 ctx,
@@ -1919,7 +1916,7 @@ impl WorkflowView {
             WorkflowViewMode::Edit => {
                 let mode_text = appearance
                     .ui_builder()
-                    .span("Editing")
+                    .span(t!("workflows.editing"))
                     .with_style(base_text_styles)
                     .build();
                 let edit_button = accent_icon_button(
@@ -1934,7 +1931,7 @@ impl WorkflowView {
             WorkflowViewMode::View => {
                 let mode_text = appearance
                     .ui_builder()
-                    .span("Viewing")
+                    .span(t!("workflows.viewing"))
                     .with_style(base_text_styles)
                     .build();
                 let edit_button = icon_button(
@@ -1954,7 +1951,7 @@ impl WorkflowView {
                 let ui_builder = appearance.ui_builder().clone();
                 edit_button = edit_button.with_tooltip(move || {
                     ui_builder
-                        .tool_tip("Sign in to edit".to_string())
+                        .tool_tip(t!("drive.sign_in_to_edit").to_string())
                         .build()
                         .finish()
                 });
@@ -2241,7 +2238,7 @@ impl WorkflowView {
             .with_children([
                 Flex::row()
                     .with_children([
-                        self.render_section_header("Aliases", appearance),
+                        self.render_section_header(t!("workflows.aliases"), appearance),
                         Container::new(help_icon).with_margin_left(4.).finish(),
                     ])
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2446,7 +2443,7 @@ impl WorkflowView {
                     .finish();
 
                 let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                    "Generate a title, descriptions, or parameters with Warp AI".to_string(),
+                    t!("drive.generate_workflow_fields_tooltip").to_string(),
                     self.ui_state_handles.ai_assist_tool_tip.clone(),
                     rendered_button,
                     ParentAnchor::TopMiddle,
@@ -2629,10 +2626,7 @@ impl WorkflowView {
                             environment_variables: None,
                         };
 
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AutoGenerateMetadataSuccess,
-                            ctx
-                        );
+                        send_telemetry_from_ctx!(TelemetryEvent::AutoGenerateMetadataSuccess, ctx);
 
                         pane.populate_missing_field_with_suggestion(workflow, ctx);
                         ctx.notify();
@@ -2644,30 +2638,30 @@ impl WorkflowView {
                             if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx) {
                                 let current_user_email =
                                     pane.auth_state.user_email().unwrap_or_default();
-                                let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+                                let has_admin_permissions =
+                                    team.has_admin_permissions(&current_user_email);
                                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                                     if has_admin_permissions {
-                                        pane.display_upgrade_error(Some(team.uid), current_user_id, ctx);
+                                        pane.display_upgrade_error(
+                                            Some(team.uid),
+                                            current_user_id,
+                                            ctx,
+                                        );
                                     } else {
                                         pane.display_error_toast(
-                                            "Looks like you're out of AI credits. Contact a team admin to upgrade for more credits.".to_string(),
+                                            t!("ai_assistant.out_of_credits_contact_admin_short")
+                                                .to_string(),
                                             ctx,
                                         );
                                     }
                                 } else {
-                                    pane.display_error_toast(
-                                        message.clone(),
-                                        ctx,
-                                    );
+                                    pane.display_error_toast(message.clone(), ctx);
                                 }
                             } else {
                                 pane.display_upgrade_error(None, current_user_id, ctx);
                             }
                         } else {
-                            pane.display_error_toast(
-                                message.clone(),
-                                ctx,
-                            );
+                            pane.display_error_toast(message.clone(), ctx);
                         }
 
                         send_telemetry_from_ctx!(
@@ -2685,7 +2679,7 @@ impl WorkflowView {
                 AIRequestUsageModel::handle(ctx).update(ctx, |request_usage_model, ctx| {
                     request_usage_model.refresh_request_usage_async(ctx);
                 });
-            }
+            },
         );
 
         self.ai_metadata_assist_state = AiAssistState::RequestInFlight;
@@ -2705,15 +2699,16 @@ impl WorkflowView {
 
         let window_id = ctx.window_id();
         let toast_link = if self.auth_state.is_anonymous_or_logged_out() {
-            ToastLink::new("Upgrade for more credits.".into())
+            ToastLink::new(t!("ai_assistant.upgrade_for_more_credits").into())
                 .with_onclick_action(WorkspaceAction::AttemptLoginGatedAIUpgrade)
         } else {
-            ToastLink::new("Upgrade for more credits.".into()).with_href(upgrade_link)
+            ToastLink::new(t!("ai_assistant.upgrade_for_more_credits").into())
+                .with_href(upgrade_link)
         };
 
         crate::workspace::ToastStack::handle(ctx).update(ctx, |stack, ctx| {
             stack.add_ephemeral_toast(
-                DismissibleToast::error("Looks like you're out of AI credits.".into())
+                DismissibleToast::error(t!("ai_assistant.out_of_credits_short").into())
                     .with_link(toast_link),
                 window_id,
                 ctx,
@@ -2812,9 +2807,9 @@ impl WorkflowView {
 
         let appearance = Appearance::as_ref(app);
         let text = if deleted {
-            "You no longer have access to this workflow"
+            t!("workflows.no_longer_have_access")
         } else {
-            "Workflow moved to trash"
+            t!("workflows.moved_to_trash")
         };
 
         let mut stack = Stack::new();
@@ -2872,7 +2867,7 @@ impl WorkflowView {
                                 .build()
                                 .finish()
                         })
-                        .with_text_label("Restore".to_string())
+                        .with_text_label(t!("drive.restore").to_string())
                         .build()
                         .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkflowAction::Untrash))
                         .finish(),
@@ -3182,7 +3177,7 @@ impl BackingView for WorkflowView {
         // Add "Copy Link" to menu
         if let Some(link) = self.workflow_link(ctx) {
             menu_items.push(
-                MenuItemFields::new("Copy link")
+                MenuItemFields::new(t!("drive.copy_link"))
                     .with_on_select_action(WorkflowAction::CopyLink(link))
                     .with_icon(Icon::Link)
                     .into_item(),
@@ -3194,7 +3189,7 @@ impl BackingView for WorkflowView {
             && let Ok(url) = Url::parse(&link)
         {
             menu_items.push(
-                MenuItemFields::new("Open on Desktop")
+                MenuItemFields::new(t!("drive.open_on_desktop"))
                     .with_on_select_action(WorkflowAction::OpenLinkOnDesktop(url))
                     .with_icon(Icon::Laptop)
                     .into_item(),
@@ -3206,7 +3201,7 @@ impl BackingView for WorkflowView {
         // Add "Duplicate" to menu
         if space != Some(Space::Shared) {
             menu_items.push(
-                MenuItemFields::new("Duplicate")
+                MenuItemFields::new(t!("drive.duplicate"))
                     .with_on_select_action(WorkflowAction::Duplicate)
                     .with_icon(Icon::Duplicate)
                     .into_item(),
@@ -3219,7 +3214,7 @@ impl BackingView for WorkflowView {
             && (!FeatureFlag::SharedWithMe.is_enabled() || access_level.can_trash())
         {
             menu_items.push(
-                MenuItemFields::new("Trash")
+                MenuItemFields::new(t!("drive.trash"))
                     .with_on_select_action(WorkflowAction::Trash)
                     .with_icon(Icon::Trash)
                     .into_item(),

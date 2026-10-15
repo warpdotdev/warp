@@ -290,7 +290,7 @@ impl LaunchConfigSaveModal {
     pub fn reset_editor(&mut self, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text("launch_config.yaml", ctx);
+            editor.set_placeholder_text(t!("launch_config_save.filename_placeholder"), ctx);
         });
     }
 
@@ -546,11 +546,18 @@ impl LaunchConfigSaveModal {
         let info = match &self.save_state {
             SaveState::Success => header
                 .with_child(
-                    self.render_formatted_text_line(appearance, vec![
-                        FormattedTextFragment::plain_text("Saved successfully to "),
-                        FormattedTextFragment::inline_code(self.file_name.clone().unwrap_or_default()),
-                        FormattedTextFragment::plain_text(".")
-                    ])
+                    self.render_formatted_text_line(
+                        appearance,
+                        vec![
+                            FormattedTextFragment::plain_text(t!(
+                                "launch_config_save.saved_to_start"
+                            )),
+                            FormattedTextFragment::inline_code(
+                                self.file_name.clone().unwrap_or_default(),
+                            ),
+                            FormattedTextFragment::plain_text("."),
+                        ],
+                    )
                     .with_padding_bottom(24.)
                     .finish(),
                 )
@@ -560,9 +567,9 @@ impl LaunchConfigSaveModal {
                     appearance,
                     match failure_type {
                         FailureType::FileAlreadyExists => {
-                            "Failed to save. A launch configuration with the same name already exists.".to_string()
+                            t!("launch_config_save.failed_same_name").to_string()
                         }
-                        FailureType::Other => "An issue was encountered while saving.".to_string(),
+                        FailureType::Other => t!("launch_config_save.failed_generic").to_string(),
                     },
                 )
                 .with_padding_bottom(24.)
@@ -570,7 +577,8 @@ impl LaunchConfigSaveModal {
             ),
             SaveState::NotSaved => {
                 let mut text = "This will save your current configuration of windows, tabs \
-                and panes to a file so you can easily open it again".to_string();
+                and panes to a file so you can easily open it again"
+                    .to_string();
                 if self.open_modal_keybinding_str.is_empty() {
                     text.push('.');
                 } else {
@@ -578,16 +586,23 @@ impl LaunchConfigSaveModal {
                 }
                 header
                     .with_child(
-                        self.render_formatted_text_line(appearance, vec![
-                            FormattedTextFragment::plain_text(text)
-                        ]).finish()
+                        self.render_formatted_text_line(
+                            appearance,
+                            vec![FormattedTextFragment::plain_text(text)],
+                        )
+                        .finish(),
                     )
                     .with_child(
-                        self.render_formatted_text_line(appearance, vec![
-                            FormattedTextFragment::plain_text("\nThe YAML file is saved to "),
-                            FormattedTextFragment::inline_code(home_relative_path(&launch_configs_dir())),
-                            FormattedTextFragment::plain_text("."),
-                        ])
+                        self.render_formatted_text_line(
+                            appearance,
+                            vec![
+                                FormattedTextFragment::plain_text("\nThe YAML file is saved to "),
+                                FormattedTextFragment::inline_code(home_relative_path(
+                                    &launch_configs_dir(),
+                                )),
+                                FormattedTextFragment::plain_text("."),
+                            ],
+                        )
                         .with_padding_bottom(24.)
                         .finish(),
                     )

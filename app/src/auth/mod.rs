@@ -157,36 +157,40 @@ pub fn maybe_log_out(app: &mut AppContext) {
                 "You have {num_long_running_commands} {plural} running."
             ));
 
-            button_data.push(ModalButton::for_app("Show running processes", move |ctx| {
-                send_telemetry_sync_from_app_ctx!(
-                    TelemetryEvent::LogOutModalCancel { nav_palette: true },
-                    ctx
-                );
-                let windowing_model = ctx.windows();
-                let window_id = if let Some(active_window_id) = windowing_model.active_window() {
-                    active_window_id
-                } else if let Some(window_id) = ctx.window_ids().collect_vec().first() {
-                    let window_id = *window_id;
-                    windowing_model.show_window_and_focus_app(window_id);
-                    window_id
-                } else {
-                    return;
-                };
-
-                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
-                    && let Some(handle) = workspaces.first()
-                {
-                    ctx.dispatch_typed_action_for_view(
-                        window_id,
-                        handle.id(),
-                        &WorkspaceAction::OpenPalette {
-                            mode: PaletteMode::Navigation,
-                            source: PaletteSource::LogOutModal,
-                            query: Some("running".to_owned()),
-                        },
+            button_data.push(ModalButton::for_app(
+                t!("auth.show_running_processes"),
+                move |ctx| {
+                    send_telemetry_sync_from_app_ctx!(
+                        TelemetryEvent::LogOutModalCancel { nav_palette: true },
+                        ctx
                     );
-                }
-            }))
+                    let windowing_model = ctx.windows();
+                    let window_id = if let Some(active_window_id) = windowing_model.active_window()
+                    {
+                        active_window_id
+                    } else if let Some(window_id) = ctx.window_ids().collect_vec().first() {
+                        let window_id = *window_id;
+                        windowing_model.show_window_and_focus_app(window_id);
+                        window_id
+                    } else {
+                        return;
+                    };
+
+                    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                        && let Some(handle) = workspaces.first()
+                    {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            handle.id(),
+                            &WorkspaceAction::OpenPalette {
+                                mode: PaletteMode::Navigation,
+                                source: PaletteSource::LogOutModal,
+                                query: Some("running".to_owned()),
+                            },
+                        );
+                    }
+                },
+            ))
         }
 
         if num_shared_sessions > 0 {

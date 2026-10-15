@@ -48,7 +48,7 @@ impl CustomRouterView {
     pub fn new(router: CustomModelRouter, ctx: &mut ViewContext<Self>) -> Self {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         let open_file_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Open file", SecondaryTheme)
+            ActionButton::new(t!("workspace.open_file"), SecondaryTheme)
                 .with_icon(Icon::File)
                 .with_size(ButtonSize::Small)
                 .with_height(HEADER_BUTTON_HEIGHT)
@@ -61,7 +61,7 @@ impl CustomRouterView {
         });
 
         let edit_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Edit", SecondaryTheme)
+            ActionButton::new(t!("menu.edit"), SecondaryTheme)
                 .with_icon(Icon::Pencil)
                 .with_size(ButtonSize::Small)
                 .with_height(HEADER_BUTTON_HEIGHT)
@@ -74,7 +74,7 @@ impl CustomRouterView {
         });
 
         let delete_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Delete", DangerSecondaryTheme)
+            ActionButton::new(t!("code_file_tree.delete"), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .with_size(ButtonSize::Small)
                 .with_height(HEADER_BUTTON_HEIGHT)
@@ -178,8 +178,8 @@ impl View for CustomRouterView {
 
         // Type label row
         let type_label = match &self.router.routing {
-            CustomModelRouting::Complexity(_) => "Complexity-based routing",
-            CustomModelRouting::Prompt(_) => "Prompt-based routing",
+            CustomModelRouting::Complexity(_) => t!("settings_ui.complexity_based_routing"),
+            CustomModelRouting::Prompt(_) => t!("settings_ui.prompt_based_routing"),
         };
         let type_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -257,7 +257,7 @@ fn render_targets_row(
     match routing {
         CustomModelRouting::Complexity(c) => {
             flex.add_child(render_model_line(
-                "Default:",
+                t!("settings_ui.default"),
                 model_display_name(&c.default, app),
                 appearance,
                 sub_color,
@@ -265,7 +265,7 @@ fn render_targets_row(
             if let Some(easy) = &c.easy {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Easy:",
+                        t!("settings_ui.easy"),
                         model_display_name(easy, app),
                         appearance,
                         sub_color,
@@ -277,7 +277,7 @@ fn render_targets_row(
             if let Some(medium) = &c.medium {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Medium:",
+                        t!("settings_ui.medium"),
                         model_display_name(medium, app),
                         appearance,
                         sub_color,
@@ -289,7 +289,7 @@ fn render_targets_row(
             if let Some(hard) = &c.hard {
                 flex.add_child(
                     Container::new(render_model_line(
-                        "Hard:",
+                        t!("settings_ui.hard"),
                         model_display_name(hard, app),
                         appearance,
                         sub_color,
@@ -301,7 +301,7 @@ fn render_targets_row(
         }
         CustomModelRouting::Prompt(p) => {
             flex.add_child(render_model_line(
-                "Default:",
+                t!("settings_ui.default"),
                 model_display_name(&p.default_model, app),
                 appearance,
                 sub_color,
@@ -309,9 +309,9 @@ fn render_targets_row(
             let rule_count = p.rules.len();
             if rule_count > 0 {
                 let label = if rule_count == 1 {
-                    "1 rule".to_string()
+                    t!("settings_ui.1_rule").to_string()
                 } else {
-                    format!("{rule_count} rules")
+                    t!("settings_messages.rules", value_0 = rule_count).into_owned()
                 };
                 flex.add_child(
                     Container::new(

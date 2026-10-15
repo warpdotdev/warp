@@ -180,7 +180,7 @@ impl NewWorktreeModal {
         let editor = ctx.add_typed_action_view(|ctx| {
             let options = SingleLineEditorOptions::default();
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("my-feature-branch", ctx);
+            editor.set_placeholder_text(t!("tab_configs.worktree_branch_placeholder"), ctx);
             editor
         });
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
@@ -539,7 +539,7 @@ impl View for NewWorktreeModal {
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, self.cancel_button_mouse_state.clone())
-            .with_text_label("Cancel".to_string())
+            .with_text_label(t!("common.cancel").to_string())
             .with_style(text_button_base)
             .with_style(UiComponentStyles {
                 font_color: Some(main_text.into()),
@@ -561,7 +561,7 @@ impl View for NewWorktreeModal {
             let mut builder = appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, self.open_button_mouse_state.clone())
-                .with_text_label("Open".to_string())
+                .with_text_label(t!("common.open").to_string())
                 .with_style(text_button_base)
                 .with_style(UiComponentStyles {
                     font_color: Some(font_color.into()),

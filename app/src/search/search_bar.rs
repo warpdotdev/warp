@@ -700,7 +700,7 @@ impl<T: Action + Clone> SearchBar<T> {
 
         if let Some((.., data_source_err)) = self.mixer.as_ref(ctx).first_data_source_error() {
             ctx.emit_a11y_content(AccessibilityContent::new(
-                "Error finding results",
+                t!("search_bar.error_finding_results"),
                 data_source_err.user_facing_error(),
                 WarpA11yRole::MenuItemRole,
             ));

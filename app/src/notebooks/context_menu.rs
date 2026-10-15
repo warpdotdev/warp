@@ -128,19 +128,19 @@ where
         };
 
         if has_selection && can_edit {
-            let item = MenuItemFields::new("Cut")
+            let item = MenuItemFields::new(t!("common.cut"))
                 .with_on_select_action(V::Action::from(ContextMenuAction::CutSelectedText))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Cut));
             items.push(item.into_item());
         }
         if has_selection {
-            let item = MenuItemFields::new("Copy")
+            let item = MenuItemFields::new(t!("common.copy"))
                 .with_on_select_action(V::Action::from(ContextMenuAction::CopySelectedText))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Copy));
             items.push(item.into_item());
         }
         if can_edit {
-            let item = MenuItemFields::new("Paste")
+            let item = MenuItemFields::new(t!("common.paste"))
                 .with_on_select_action(V::Action::from(ContextMenuAction::Paste))
                 .with_key_shortcut_label(custom_action_to_display(CustomAction::Paste));
             items.push(item.into_item());
@@ -179,7 +179,7 @@ where
         let mut items = vec![];
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend([
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(t!("common.split_pane_right"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitRight(None),
                     )))
@@ -188,7 +188,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(t!("common.split_pane_left"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitLeft(None),
                     )))
@@ -197,7 +197,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(t!("common.split_pane_down"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitDown(None),
                     )))
@@ -206,7 +206,7 @@ where
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(t!("common.split_pane_up"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::SplitUp(None),
                     )))
@@ -237,7 +237,7 @@ where
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(t!("common.close_pane"))
                     .with_on_select_action(V::Action::from(ContextMenuAction::EmitPaneEvent(
                         PaneEvent::Close,
                     )))

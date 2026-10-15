@@ -1,0 +1,11 @@
+[package]
+name = "warp_i18n"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_yaml.workspace = true
+sys-locale = "0.3.2"

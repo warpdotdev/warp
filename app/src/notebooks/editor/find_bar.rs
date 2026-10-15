@@ -535,21 +535,21 @@ impl TypedActionView for FindBar {
         let text = match action {
             FindBarAction::ToggleRegex => {
                 if self.searcher.as_ref(ctx).is_regex() {
-                    "Enable regex search"
+                    t!("find.enable_regex_search")
                 } else {
                     "Disable regex search"
                 }
             }
             FindBarAction::ToggleCaseSensitive => {
                 if self.searcher.as_ref(ctx).is_case_sensitive() {
-                    "Enable case-sensitive search"
+                    t!("find.enable_case_sensitive_search")
                 } else {
                     "Disable case-sensitive search"
                 }
             }
-            FindBarAction::FocusNextMatch => "Focus next match",
-            FindBarAction::FocusPreviousMatch => "Focus previous match",
-            FindBarAction::Close => "Close find bar",
+            FindBarAction::FocusNextMatch => t!("find.focus_next_match"),
+            FindBarAction::FocusPreviousMatch => t!("find.focus_previous_match"),
+            FindBarAction::Close => t!("find.close_find_bar"),
         };
         Some(AccessibilityContent::new_without_help(
             text,

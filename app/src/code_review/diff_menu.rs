@@ -112,7 +112,7 @@ impl CodeReviewDiffMenu {
                 ..Default::default()
             };
             let mut editor = EditorView::new(options, ctx);
-            editor.set_placeholder_text("Search diff sets or branches to compare…", ctx);
+            editor.set_placeholder_text(t!("code_review_ext.search_diff_sets"), ctx);
             editor
         });
 
@@ -279,7 +279,7 @@ impl CodeReviewDiffMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No matches",
+                t!("code_review.no_matches"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )

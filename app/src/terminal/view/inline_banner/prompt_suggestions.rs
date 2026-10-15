@@ -68,18 +68,18 @@ impl ZeroStatePromptSuggestionType {
 
     pub fn query(&self) -> &'static str {
         match self {
-            Self::Explain => "Explain this to me.",
-            Self::Fix => "Help me fix this.",
+            Self::Explain => t!("help_ui.explain_this_to_me"),
+            Self::Fix => t!("help_ui.help_me_fix_this"),
             Self::Install => {
-                "Help me install a binary/dependency. What information do I need to provide to you to do this?"
+                t!("help_ui.help_me_install_a_binary_dependency_what_information_do")
             }
             Self::Code => {
-                "Help me write some code. What information do I need to provide to you to do this?"
+                t!("help_ui.help_me_write_some_code_what_information_do_i")
             }
             Self::Deploy => {
-                "Help me deploy my project. What information do I need to provide to you to do this?"
+                t!("help_ui.help_me_deploy_my_project_what_information_do_i")
             }
-            Self::SomethingElse => "Something else?",
+            Self::SomethingElse => t!("help_ui.something_else"),
         }
     }
 

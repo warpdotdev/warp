@@ -1050,7 +1050,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 });
 
                             let done = is_finished || is_cancelled;
-                            let verb = if done { "Searched" } else { "Searching" };
+                            let verb = if done {
+                                t!("ai_output.searched")
+                            } else {
+                                t!("ai_output.searching")
+                            };
 
                             let mut fragments: Vec<FormattedTextFragment> =
                                 vec![FormattedTextFragment::plain_text(format!("{verb} "))];
@@ -2210,7 +2214,7 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
                 .initial_query()
                 .map(|task_name| format!("Stopped task: \"{task_name}\""))
         })
-        .unwrap_or_else(|| "Stopped task".to_string());
+        .unwrap_or_else(|| t!("ai_output.stopped_task").to_string());
 
     let stop_icon = Container::new(
         ConstrainedBox::new(gray_stop_icon(appearance).finish())
@@ -2305,7 +2309,7 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
         .with_custom_label(button_content)
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Resume conversation".to_string())
+                .tool_tip(t!("ai_output.resume_conversation").to_string())
                 .build()
                 .finish()
         })
@@ -2358,7 +2362,7 @@ fn render_requested_edits_output_message(
             .view
             .as_ref(app)
             .title()
-            .unwrap_or("Could not apply changes to file.");
+            .unwrap_or(t!("ai_output.could_not_apply_changes"));
         RenderableAction::new(title, app)
             .with_icon(inline_action_icons::cancelled_icon(appearance).finish())
             .render(app)
@@ -2367,7 +2371,7 @@ fn render_requested_edits_output_message(
         match requested_edit.view.as_ref(app).display_mode() {
             DisplayMode::FullPane => Align::new(
                 Text::new_inline(
-                    "This suggestion is being edited in another tab.",
+                    t!("ai_output.suggestion_edited_elsewhere"),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -2477,11 +2481,11 @@ fn render_suggest_new_conversation(
         };
         let (label, status_icon) = match result {
             SuggestNewConversationResult::Accepted { .. } => (
-                "New conversation started",
+                t!("ai_output.new_conversation_started"),
                 inline_action_icons::green_check_icon(appearance).finish(),
             ),
             SuggestNewConversationResult::Rejected => (
-                "Continuing current conversation",
+                t!("ai_output.continuing_current_conversation"),
                 warpui::elements::Icon::new(
                     Icon::FlipForward.into(),
                     internal_colors::neutral_6(theme),
@@ -2489,7 +2493,7 @@ fn render_suggest_new_conversation(
                 .finish(),
             ),
             SuggestNewConversationResult::Cancelled => (
-                "New conversation suggestion cancelled",
+                t!("ai_output.new_conversation_suggestion_cancelled"),
                 inline_action_icons::cancelled_icon(appearance).finish(),
             ),
         };
@@ -2511,7 +2515,7 @@ fn render_suggest_new_conversation(
     }
 
     if props.shared_session_status.is_viewer() {
-        let header_element = HeaderConfig::new("Start a new conversation", app)
+        let header_element = HeaderConfig::new(t!("ai_output.start_new_conversation"), app)
             .with_icon(gray_stop_icon(appearance))
             .render(app);
 
@@ -2526,8 +2530,7 @@ fn render_suggest_new_conversation(
 
     let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-    let new_conversation_header_text =
-        "It seems like the topic changed. Would you like to make a new conversation?";
+    let new_conversation_header_text = t!("ai_output.topic_changed_new_conversation");
     let new_conversation_header_element = HeaderConfig::new(new_conversation_header_text, app)
         .with_icon(yellow_stop_icon(appearance))
         .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
@@ -2589,12 +2592,12 @@ fn create_formatted_text_for_grep(
             .expect("Queries slice should have an element");
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Grep for "),
+                FormattedTextFragment::plain_text(t!("ai_output.grep_for")),
                 FormattedTextFragment::inline_code(query),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Grepping for "),
+                FormattedTextFragment::plain_text(t!("ai_output.grepping_for")),
                 FormattedTextFragment::inline_code(query),
             ]
         };
@@ -2694,12 +2697,12 @@ fn create_formatted_text_for_file_glob(
 
         let mut fragments = if is_cancelled || is_queued {
             vec![
-                FormattedTextFragment::plain_text("Search for files that match "),
+                FormattedTextFragment::plain_text(t!("ai_output.search_files_that_match")),
                 FormattedTextFragment::inline_code(pattern),
             ]
         } else {
             vec![
-                FormattedTextFragment::plain_text("Finding files that match "),
+                FormattedTextFragment::plain_text(t!("ai_output.finding_files_that_match")),
                 FormattedTextFragment::inline_code(pattern),
             ]
         };
@@ -2814,7 +2817,7 @@ fn render_file_retrieval_tool(
         } if show_for_action_id == action_id => {
             *shown.lock() = true;
             config = config.with_footer(render_autonomy_checkbox_setting_speedbump_footer(
-                "Always allow file access for coding tasks",
+                t!("ai_output.always_allow_file_access_coding_tasks"),
                 *checked,
                 AIBlockAction::ToggleAutoreadFilesSpeedbumpCheckbox,
                 props
@@ -2900,7 +2903,7 @@ fn render_read_mcp_resource(
         renderable_action = renderable_action
             .with_header(blocked_action_header(
                 action_id.clone(),
-                "OK if I read this MCP resource?",
+                t!("ai_output.read_mcp_resource_permission"),
                 buttons.run_button.clone(),
                 buttons.cancel_button.clone(),
                 props.action_model,
@@ -3296,7 +3299,7 @@ fn render_request_computer_use(
         renderable_action = renderable_action
             .with_header(blocked_action_header(
                 action_id.clone(),
-                "OK if I use computer control for this task?",
+                t!("ai_output.use_computer_permission"),
                 buttons.run_button.clone(),
                 buttons.cancel_button.clone(),
                 props.action_model,
@@ -3342,7 +3345,7 @@ fn render_references_footer(
     )?;
 
     let title = Text::new_inline(
-        "References",
+        t!("ai_output.references"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3427,7 +3430,7 @@ fn render_suggested_rules_and_prompts_footer(
     let theme = appearance.theme();
     let title_row_color = theme.sub_text_color(theme.background());
     let title_text = Text::new_inline(
-        "Suggestions:",
+        t!("ai_output.suggestions"),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3546,7 +3549,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Good response".to_string())
+                .tool_tip(t!("ai_output.good_response").to_string())
                 .build()
                 .finish()
         })
@@ -3567,7 +3570,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         .with_tooltip(move || {
             ui_builder
                 .clone()
-                .tool_tip("Bad response".to_string())
+                .tool_tip(t!("ai_output.bad_response").to_string())
                 .build()
                 .finish()
         })
@@ -3639,7 +3642,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Continue conversation".to_string())
+                .tool_tip(t!("ai_output.continue_conversation").to_string())
                 .build()
                 .finish()
         })
@@ -3906,7 +3909,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // Show tooltip on hover or while clicked
                 let mut stack = Stack::new().with_child(content.finish());
                 let tooltip = ui_builder
-                    .tool_tip("Show credit usage details".to_string())
+                    .tool_tip(t!("ai_output.show_credit_usage_details").to_string())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(
@@ -4248,7 +4251,7 @@ fn render_collapsible_debug_output(
         // "Debug output" label
         row.add_child(
             Text::new(
-                "Debug output".to_string(),
+                t!("ai_output.debug_output").to_string(),
                 appearance.ai_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -4391,10 +4394,10 @@ fn conversation_search_phase(task: &crate::ai::agent::task::Task) -> Conversatio
 
 fn format_conversation_search_phase(phase: &ConversationSearchPhase) -> String {
     match phase {
-        ConversationSearchPhase::ListingMessages => "Listing messages".to_string(),
+        ConversationSearchPhase::ListingMessages => t!("ai_output.listing_messages").to_string(),
         ConversationSearchPhase::Grepping { patterns } => {
             if patterns.is_empty() {
-                return "Grepping for patterns".to_string();
+                return t!("ai_output.grepping_for_patterns").to_string();
             }
             let joined = truncate_from_end(&patterns.join(", "), 60);
             format!("Grepping for patterns: {joined}")

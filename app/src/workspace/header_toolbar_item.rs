@@ -36,11 +36,11 @@ pub enum HeaderToolbarItemKind {
 impl HeaderToolbarItemKind {
     pub fn display_label(&self) -> &'static str {
         match self {
-            Self::TabsPanel => "Tabs Panel",
-            Self::ToolsPanel => "Tools Panel",
-            Self::AgentManagement => "Agent Management",
-            Self::CodeReview => "Code Review",
-            Self::NotificationsMailbox => "Notifications",
+            Self::TabsPanel => t!("settings_ui.tabs_panel"),
+            Self::ToolsPanel => t!("settings_ui.tools_panel"),
+            Self::AgentManagement => t!("settings_ui.agent_management"),
+            Self::CodeReview => t!("settings_ui.code_review"),
+            Self::NotificationsMailbox => t!("features.category_notifications"),
         }
     }
 

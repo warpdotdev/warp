@@ -164,18 +164,18 @@ impl View for WasmNUXDialog {
 
         let dialog = if self.requested_download {
             Dialog::new(
-                "Open in Warp Desktop?".to_string(),
-                Some("Future links will automatically open on desktop.".to_string()),
+                t!("wasm_nux.open_in_desktop_title").to_string(),
+                Some(t!("wasm_nux.future_links_desktop").to_string()),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Open in Warp",
+                t!("wasm_nux.open_in_warp"),
                 WasmNUXDialogAction::OpenNativeAndClose,
                 &self.confirm_mouse_state,
                 appearance,
             ))
         } else if app_install_detected == &UserAppInstallStatus::NotDetected {
-            Dialog::new("Download Warp Desktop?".to_string(), None, dialog_styles)
+            Dialog::new(t!("wasm_nux.download_desktop_title").to_string(), None, dialog_styles)
                 .with_child(
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -221,7 +221,7 @@ impl View for WasmNUXDialog {
                         .finish(),
                 )
                 .with_bottom_row_child(Self::render_dialog_button(
-                    "Download",
+                    t!("wasm_nux.download"),
                     WasmNUXDialogAction::OpenDownloadDesktopAppLink,
                     &self.download_warp_mouse_state,
                     appearance,
@@ -235,11 +235,11 @@ impl View for WasmNUXDialog {
 
             Dialog::new(
                 format!("Always open {object_kind} on the web?"),
-                Some("You can change this at any time in settings.".to_string()),
+                Some(t!("wasm_nux.change_any_time").to_string()),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Yes",
+                t!("common.yes"),
                 WasmNUXDialogAction::SetWebAndClose,
                 &self.confirm_mouse_state,
                 appearance,

@@ -116,13 +116,13 @@ impl ThemeChooserMode {
         let hint_text = match self {
             ThemeChooserMode::SystemAgnostic => appearance
                 .ui_builder()
-                .paragraph("Change your current theme.".to_string()),
+                .paragraph(t!("themes.change_current_theme").to_string()),
             ThemeChooserMode::SystemLight => appearance
                 .ui_builder()
-                .paragraph("Pick a theme for when your system is in light mode.".to_string()),
+                .paragraph(t!("themes.pick_light_theme").to_string()),
             ThemeChooserMode::SystemDark => appearance
                 .ui_builder()
-                .paragraph("Pick a theme for when your system is in dark mode.".to_string()),
+                .paragraph(t!("themes.pick_dark_theme").to_string()),
         };
         hint_text
             .build()
@@ -745,7 +745,7 @@ impl ThemeChooser {
                 .with_child(
                     appearance
                         .ui_builder()
-                        .span("No matching themes!".to_string())
+                        .span(t!("themes.no_matching_themes").to_string())
                         .build()
                         .finish(),
                 )

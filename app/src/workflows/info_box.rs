@@ -438,7 +438,7 @@ impl WorkflowsMoreInfoView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Command edited.",
+                        t!("workflows.command_edited"),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )

@@ -62,7 +62,7 @@ impl SearchItem for NotebookSearchItem {
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let title = if self.cloud_notebook.model().title.is_empty() {
-            "Untitled".to_string()
+            t!("drive.untitled").to_string()
         } else {
             self.cloud_notebook.model().title.clone()
         };

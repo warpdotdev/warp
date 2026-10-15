@@ -71,7 +71,7 @@ pub struct CodexModal {
 impl CodexModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cta_button = ctx.add_view(|_| {
-            ActionButton::new("Use latest codex model", WhiteButtonTheme)
+            ActionButton::new(t!("codex_modal.use_latest_codex_model"), WhiteButtonTheme)
                 .with_icon(Icon::OpenAILogo)
                 .with_full_width(true)
                 .on_click(|ctx| {
@@ -90,7 +90,7 @@ impl CodexModal {
         // Magenta/pink color for the badge
         let magenta: ColorU = theme.terminal_colors().normal.magenta.into();
         Container::new(
-            Text::new("New", appearance.ui_font_family(), 12.)
+            Text::new(t!("common.new_badge"), appearance.ui_font_family(), 12.)
                 .with_color(magenta)
                 .finish(),
         )
@@ -110,7 +110,7 @@ impl CodexModal {
 
         // Title
         let title = FormattedTextElement::from_str(
-            "Use Codex models in Warp",
+            t!("codex_modal.title"),
             appearance.ui_font_family(),
             24.,
         )
@@ -123,7 +123,7 @@ impl CodexModal {
 
         // Description - first paragraph
         let description_1 = FormattedTextElement::from_str(
-            "Codex is OpenAI's most advanced agentic coding model for real-world engineering.",
+            t!("codex_modal.description_1"),
             appearance.ui_font_family(),
             14.,
         )

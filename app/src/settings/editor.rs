@@ -104,8 +104,8 @@ pub enum CodeEditorLineNumberMode {
 impl CodeEditorLineNumberMode {
     pub fn dropdown_item_label(&self) -> &'static str {
         match self {
-            Self::Absolute => "Absolute",
-            Self::Relative => "Relative",
+            Self::Absolute => t!("settings_ui.absolute"),
+            Self::Relative => t!("settings_ui.relative"),
         }
     }
 }
@@ -121,9 +121,9 @@ pub enum TabBehavior {
 impl TabBehavior {
     pub fn dropdown_item_label(&self) -> &'static str {
         match self {
-            TabBehavior::Completions => "Open completions menu",
-            TabBehavior::Autosuggestions => "Accept autosuggestion",
-            TabBehavior::UserDefined => "User defined",
+            TabBehavior::Completions => t!("settings_ui.open_completions_menu"),
+            TabBehavior::Autosuggestions => t!("settings_ui.accept_autosuggestion"),
+            TabBehavior::UserDefined => t!("settings_ui.user_defined"),
         }
     }
 }
@@ -161,7 +161,7 @@ pub enum WarpPromptSeparator {
 impl WarpPromptSeparator {
     pub fn dropdown_item_label(&self) -> &'static str {
         match self {
-            Self::None => "None",
+            Self::None => t!("execution_profile.none"),
             Self::PercentSign => "%",
             Self::DollarSign => "$",
             Self::ChevronSymbol => ">",

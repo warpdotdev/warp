@@ -465,8 +465,8 @@ pub fn render_warping_indicator<V: View>(
     if let Some(take_over_button_props) = props.take_over_lrc_control_button {
         has_buttons = true;
         buttons_row.add_child(render_switch_control_to_user_button(
-            "Take over",
-            "Take over control of the command",
+            t!("ai_ext.take_over"),
+            t!("ai_ext.take_over_control"),
             take_over_button_props,
             appearance,
         ));
@@ -790,9 +790,9 @@ fn render_hide_responses_button(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let button_text = if should_hide_responses {
-        "Show responses"
+        t!("ai_ext.show_responses")
     } else {
-        "Hide responses"
+        t!("ai_ext.hide_responses")
     };
     let text = Container::new(
         Text::new(
@@ -806,9 +806,9 @@ fn render_hide_responses_button(
     .finish();
 
     let tooltip_text = if should_hide_responses {
-        "Show agent responses"
+        t!("ai_ext.show_agent_responses")
     } else {
-        "Hide agent responses"
+        t!("ai_ext.hide_agent_responses")
     };
 
     render_warping_indicator_button(
@@ -872,7 +872,7 @@ fn render_stop_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn El
         appearance,
         stop_icon,
         props.keystroke,
-        "Stop agent task".to_string(),
+        t!("ai_ext.stop_agent_task").to_string(),
         props.is_active,
         false,
         |ctx: &mut EventContext<'_>| {
@@ -900,9 +900,9 @@ fn render_queue_next_prompt_button(
     .finish();
 
     let tooltip_text = if props.is_active {
-        "Auto-queue is on: your next prompt will be queued"
+        t!("ai_ext.auto_queue_on")
     } else {
-        "Auto-queue next prompt while agent is responding"
+        t!("ai_ext.auto_queue_next_prompt")
     };
 
     render_warping_indicator_button(
@@ -948,7 +948,7 @@ fn render_auto_approve_button(
     } else if is_active {
         "Turn off auto-approve all agent actions"
     } else {
-        "Auto-approve all agent actions for this task"
+        t!("ai_ext.auto_approve_actions")
     };
 
     render_warping_indicator_button(
@@ -1002,13 +1002,17 @@ fn render_force_refresh_inline(
         // Mirror `render_output_status_text` exactly: same `Text` configuration plus
         // the `Container::with_margin_top(1.)` wrapper so this sits on the same
         // baseline as the adjacent `Last seen by agent ...` text.
-        let text = Text::new(" · Check now".to_string(), font_family, font_size)
-            .with_color(color)
-            .with_style(Properties::default())
-            .with_clip(ClipConfig::end())
-            .with_selectable(false)
-            .soft_wrap(false)
-            .finish();
+        let text = Text::new(
+            t!("ai_output.check_now").to_string(),
+            font_family,
+            font_size,
+        )
+        .with_color(color)
+        .with_style(Properties::default())
+        .with_clip(ClipConfig::end())
+        .with_selectable(false)
+        .soft_wrap(false)
+        .finish();
         let text_with_margin = Container::new(text).with_margin_top(1.).finish();
 
         // Tooltip overlay, positioned above the element on hover. Same pattern as
@@ -1016,7 +1020,7 @@ fn render_force_refresh_inline(
         let mut stack = Stack::new().with_child(text_with_margin);
         if state.is_hovered() {
             let tool_tip = ui_builder
-                .tool_tip("Ask the agent to check this command now, skipping its timer.".to_owned())
+                .tool_tip(t!("ai_output.check_now_tooltip").to_owned())
                 .build()
                 .finish();
             stack.add_positioned_overlay_child(
@@ -2218,7 +2222,7 @@ fn render_mermaid_diagram_section<A: Action>(
         .finish();
 
     render_visual_card(
-        "Mermaid diagram".to_string(),
+        t!("ai_ext.mermaid_diagram").to_string(),
         Icon::Dataflow,
         Container::new(mermaid_canvas)
             .with_background(theme.background())

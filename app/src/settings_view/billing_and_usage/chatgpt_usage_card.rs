@@ -15,7 +15,7 @@ use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 
 /// The button that opens OpenAI's usage page from [`render_chatgpt_usage_card`].
 pub(crate) fn chatgpt_manage_usage_button() -> ActionButton {
-    ActionButton::new("Manage usage", SecondaryTheme)
+    ActionButton::new(t!("settings_ui.manage_usage"), SecondaryTheme)
         .with_icon(Icon::LinkExternal)
         .on_click(|ctx| {
             ctx.dispatch_typed_action(BillingAndUsagePageAction::OpenUrl(HyperlinkUrl {
@@ -46,7 +46,7 @@ pub(crate) fn render_chatgpt_usage_card(
         .with_height(16.)
         .finish();
     let label = Text::new_inline(
-        "View and manage your ChatGPT usage",
+        t!("settings_ui.view_and_manage_your_chatgpt_usage"),
         appearance.ui_font_family(),
         14.,
     )

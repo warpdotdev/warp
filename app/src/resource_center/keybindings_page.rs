@@ -29,7 +29,6 @@ use crate::editor::{
     TextOptions,
 };
 use crate::search_bar::SearchBar;
-use crate::settings_view;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::util::bindings::{CommandBinding, filter_bindings_including_keystroke};
 use crate::workspace::WorkspaceAction;
@@ -90,7 +89,7 @@ impl KeybindingsView {
 
         search_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.set_placeholder_text(settings_view::keybindings::SEARCH_PLACEHOLDER, ctx);
+            editor.set_placeholder_text(t!("keybindings.search_placeholder"), ctx);
         });
 
         let search_bar = {
@@ -346,7 +345,11 @@ impl KeybindingsView {
                         .build()
                         .finish(),
                 )
-                .with_child(self.render_text("To toggle this panel".into(), None, appearance))
+                .with_child(self.render_text(
+                    t!("help_ui.to_toggle_this_panel").into(),
+                    None,
+                    appearance,
+                ))
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .finish();
 
@@ -384,7 +387,7 @@ impl KeybindingsView {
         Container::new(
             column
                 .with_child(self.render_text(
-                    "Go to settings > keyboard shortcuts to configure custom keybindings".into(),
+                    t!("help_ui.go_to_settings_keyboard_shortcuts_to_configure_custom_keybindings").into(),
                     None,
                     appearance,
                 ))
@@ -412,11 +415,11 @@ impl KeybindingsView {
             Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         let title = match section {
-            KeybindingSection::Essentials => "Essentials",
-            KeybindingSection::Blocks => "Blocks",
-            KeybindingSection::InputEditor => "Input Editor",
-            KeybindingSection::Terminal => "Terminal",
-            KeybindingSection::Fundamentals => "Fundamentals",
+            KeybindingSection::Essentials => t!("resource_center.keybindings_essentials"),
+            KeybindingSection::Blocks => t!("resource_center.keybindings_blocks"),
+            KeybindingSection::InputEditor => t!("resource_center.keybindings_input_editor"),
+            KeybindingSection::Terminal => t!("resource_center.keybindings_terminal"),
+            KeybindingSection::Fundamentals => t!("resource_center.keybindings_fundamentals"),
         };
 
         let mut section_header = self.render_text(

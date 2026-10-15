@@ -1,5 +1,8 @@
 // Onboarding library crate
 
+#[macro_use]
+extern crate warp_i18n;
+
 mod agent_onboarding_view;
 pub mod callout;
 mod model;

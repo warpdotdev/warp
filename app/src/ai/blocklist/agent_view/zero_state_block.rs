@@ -407,7 +407,7 @@ impl View for AgentViewZeroStateBlock {
 
         let header_props = if self.origin.is_cloud_agent() {
             HeaderProps {
-                title: "New cloud agent conversation".into(),
+                title: t!("help_ui.new_cloud_agent_conversation").into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
                 icon: IconWithStatusVariant::OzAgent {
                     status: None,
@@ -416,7 +416,7 @@ impl View for AgentViewZeroStateBlock {
             }
         } else {
             let mut local_description =
-                "Send a prompt below to start a new conversation".to_owned();
+                t!("help_ui.send_a_prompt_below_to_start_a_new_conversation").to_owned();
             let active_session = self.active_session(app);
             let location_label = active_session.as_deref().and_then(|session| {
                 format_session_location(session, self.current_working_directory.as_deref())
@@ -426,7 +426,7 @@ impl View for AgentViewZeroStateBlock {
             }
 
             HeaderProps {
-                title: "New Warp Agent conversation".into(),
+                title: t!("help_ui.new_warp_agent_conversation").into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
                 icon: IconWithStatusVariant::OzAgent {
                     status: None,
@@ -652,7 +652,7 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             items.push(
                 Container::new(
                     Text::new(
-                        "Run your agent task in an isolated cloud environment.",
+                        t!("help_ui.run_your_agent_task_in_an_isolated_cloud_environment"),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -665,10 +665,13 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
 
             // Second line: text with "Visit docs" hyperlink.
             let description_with_link = FormattedText::new([FormattedTextLine::Line(vec![
-                FormattedTextFragment::plain_text(
-                    "Use cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
+                FormattedTextFragment::plain_text(t!(
+                    "agent_management.cloud_agents_description_prefix"
+                )),
+                FormattedTextFragment::hyperlink(
+                    t!("agent_management.visit_docs"),
+                    CLOUD_AGENT_DOCS_URL,
                 ),
-                FormattedTextFragment::hyperlink("Visit docs", CLOUD_AGENT_DOCS_URL),
             ])]);
 
             items.push(
@@ -741,7 +744,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                             MessageItem::keystroke(
                                 ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
                             ),
-                            MessageItem::text("start a new agent conversation"),
+                            MessageItem::text(t!("terminal.start_agent_conversation")),
                         ],
                         |ctx| {
                             ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
@@ -760,7 +763,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                             MessageItem::keystroke(
                                 ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
                             ),
-                            MessageItem::text("start a new cloud agent conversation"),
+                            MessageItem::text(t!("terminal.start_cloud_agent_conversation")),
                         ],
                         |ctx| {
                             ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
@@ -776,7 +779,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                                 key: "/model".to_owned(),
                                 ..Default::default()
                             }),
-                            MessageItem::text("switch model"),
+                            MessageItem::text(t!("help_ui.switch_model")),
                         ],
                         |ctx| {
                             ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
@@ -796,7 +799,7 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                                 key: "escape".to_owned(),
                                 ..Default::default()
                             }),
-                            MessageItem::text("go back to terminal"),
+                            MessageItem::text(t!("help_ui.go_back_to_terminal")),
                         ],
                         |ctx| {
                             ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
@@ -820,9 +823,9 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                 key: "/init".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(
-                "to index this codebase and generate an AGENTS.md for optimal performance",
-            ),
+            MessageItem::text(t!(
+                "help_ui.to_index_this_codebase_and_generate_an_agents_md"
+            )),
         ])
         .with_text_color(main_text_color);
         body_items.push(
@@ -892,7 +895,7 @@ fn render_recent_conversations_section(
         .with_child(
             Container::new(
                 Text::new(
-                    "RECENT ACTIVITY",
+                    t!("help_ui.recent_activity"),
                     appearance.ui_font_family(),
                     header_font_size,
                 )
@@ -1078,15 +1081,16 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                             Container::new(
                                 Text::new(
                                     if changelog_model.oz_updates.len() == 1 {
-                                        "1 update".to_owned()
+                                        t!("help_ui.1_update").to_owned()
                                     } else {
-                                        format!(
-                                            "{} updates",
-                                            changelog_model
+                                        t!(
+                                            "help_messages.updates",
+                                            value_0 = changelog_model
                                                 .oz_updates
                                                 .len()
                                                 .min(MAX_OZ_UPDATE_COUNT)
                                         )
+                                        .into_owned()
                                     },
                                     appearance.ui_font_family(),
                                     appearance.monospace_font_size() - 2.,
@@ -1123,7 +1127,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                 .with_child(
                                     Container::new(
                                         Text::new(
-                                            "View changelog",
+                                            t!("workspace.view_changelog"),
                                             appearance.ui_font_family(),
                                             appearance.monospace_font_size() - 2.,
                                         )
@@ -1251,8 +1255,12 @@ where
 
 fn ambient_credits_banner_label(credits: i32, usage_cents: Option<f64>) -> String {
     match usage_cents {
-        Some(cents) => format!("{} free cloud agent usage", format_dollars(cents as f32)),
-        None => format!("{credits} free cloud agent credits"),
+        Some(cents) => t!(
+            "help_messages.free_cloud_agent_usage",
+            value_0 = format_dollars(cents as f32)
+        )
+        .into_owned(),
+        None => t!("help_messages.free_cloud_agent_credits", value_0 = credits).into_owned(),
     }
 }
 

@@ -53,14 +53,14 @@ pub struct DeleteConversationConfirmationDialog {
 impl DeleteConversationConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(t!("common.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(DeleteConversationConfirmationAction::Cancel);
             })
         });
 
         let enter_keystroke = Keystroke::parse("enter").expect("Valid keystroke");
         let delete_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Delete", DangerPrimaryTheme)
+            ActionButton::new(t!("common.delete"), DangerPrimaryTheme)
                 .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(DeleteConversationConfirmationAction::Confirm);
@@ -103,7 +103,7 @@ impl View for DeleteConversationConfirmationDialog {
             .source
             .as_ref()
             .map(|s| format!("Delete '{}'?", s.conversation_title))
-            .unwrap_or_else(|| "Delete conversation?".into());
+            .unwrap_or_else(|| t!("workspace.delete_conversation_confirm_title_unknown").into());
 
         let dialog = Dialog::new(
             title,

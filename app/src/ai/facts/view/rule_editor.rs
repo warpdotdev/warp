@@ -134,7 +134,7 @@ impl RuleEditorView {
         });
 
         let save_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("Save", PrimaryTheme)
+            let mut button = ActionButton::new(t!("ai_ext.save"), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RuleEditorViewAction::Save);
@@ -145,7 +145,7 @@ impl RuleEditorView {
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete rule", DangerSecondaryTheme)
+            ActionButton::new(t!("ai_ext.delete_rule"), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RuleEditorViewAction::Delete);
@@ -258,9 +258,9 @@ impl RuleEditorView {
 
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = if self.ai_fact.is_none() {
-            "Add Rule"
+            t!("rules.add_rule")
         } else {
-            "Edit Rule"
+            t!("rules.edit_rule")
         };
         Container::new(
             Flex::row()
@@ -333,15 +333,27 @@ impl RuleEditorView {
     fn render_form(&self, appearance: &Appearance) -> Box<dyn Element> {
         Flex::column()
             .with_child(
-                Container::new(appearance.ui_builder().span("Name").build().finish())
-                    .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
-                    .finish(),
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .span(t!("rules.name"))
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
+                .finish(),
             )
             .with_child(self.render_name_editor(appearance))
             .with_child(
-                Container::new(appearance.ui_builder().span("Rule").build().finish())
-                    .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
-                    .finish(),
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .span(t!("rules.rule"))
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(style::ITEM_BOTTOM_MARGIN)
+                .finish(),
             )
             .with_child(self.render_content_editor(appearance))
             .finish()

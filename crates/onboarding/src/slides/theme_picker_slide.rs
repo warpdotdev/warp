@@ -192,7 +192,7 @@ impl ThemePickerSlide {
     fn render_header_text(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Choose a theme")
+            .paragraph(t!("onboarding.theme_picker.title"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -202,7 +202,7 @@ impl ThemePickerSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Click or use arrow keys to select, Enter to confirm.",
+            t!("onboarding.theme_picker.subtitle"),
             appearance.ui_font_family(),
             16.,
         )
@@ -259,7 +259,7 @@ impl ThemePickerSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(t!("onboarding.back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -514,7 +514,7 @@ impl ThemePickerSlide {
             .finish();
 
         let label = Text::new(
-            "Sync light/dark theme with OS",
+            t!("onboarding.theme_picker.sync_with_os"),
             appearance.ui_font_family(),
             14.0,
         )
@@ -558,7 +558,7 @@ impl ThemePickerSlide {
         let privacy_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("If you'd like to opt out of analytics, you can adjust your ")
+                    .span(t!("auth.privacy_disclaimer_analytics"))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),
@@ -585,7 +585,7 @@ impl ThemePickerSlide {
         let tos_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("By continuing, you agree to Warp's ")
+                    .span(t!("auth.continuing_agree_prefix"))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),

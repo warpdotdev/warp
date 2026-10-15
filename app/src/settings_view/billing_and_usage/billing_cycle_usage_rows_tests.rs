@@ -1,9 +1,6 @@
 use pathfinder_color::ColorU;
 
-use super::{
-    DISABLED_MEMBER_TOOLTIP_TEXT, MemberUsageRow, SourceFilter, dimmed_row_text_color,
-    disabled_member_tooltip_text,
-};
+use super::{MemberUsageRow, SourceFilter, dimmed_row_text_color, disabled_member_tooltip_text};
 use crate::auth::UserUid;
 use crate::workspaces::team::MembershipRole;
 use crate::workspaces::workspace::{
@@ -275,7 +272,7 @@ fn disabled_row_renders_dimmed_and_tooltipped() {
     assert_eq!(dimmed_row_text_color(main, dimmed, false), main);
     assert_eq!(
         disabled_member_tooltip_text(true),
-        Some(DISABLED_MEMBER_TOOLTIP_TEXT)
+        Some(t!("settings_ui.this_user_s_account_is_disabled"))
     );
     assert_eq!(disabled_member_tooltip_text(false), None);
 }

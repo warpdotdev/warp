@@ -34,8 +34,8 @@ pub enum RightClickBehavior {
 impl RightClickBehavior {
     pub fn as_dropdown_label(&self) -> &str {
         match self {
-            Self::ContextMenu => "Open the context menu",
-            Self::Paste => "Paste from the clipboard",
+            Self::ContextMenu => t!("settings_ui.open_the_context_menu"),
+            Self::Paste => t!("settings_ui.paste_from_the_clipboard"),
         }
     }
 }

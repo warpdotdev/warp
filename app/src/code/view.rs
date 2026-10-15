@@ -2170,9 +2170,9 @@ impl CodeView {
 
             if local_path.is_some() {
                 let reveal_label = if cfg!(target_os = "macos") {
-                    "Reveal in Finder"
+                    t!("code_file_tree.reveal_in_finder")
                 } else if cfg!(target_os = "windows") {
-                    "Reveal in Explorer"
+                    t!("code_file_tree.reveal_in_explorer")
                 } else {
                     "Reveal in file manager"
                 };
@@ -2197,7 +2197,7 @@ impl CodeView {
                 });
             if renders_in_notebook_viewer {
                 items.push(
-                    MenuItemFields::new("View Markdown preview")
+                    MenuItemFields::new(t!("code.view_markdown_preview"))
                         .with_on_select_action(CodeViewAction::RenderMarkdown)
                         .into_item(),
                 );

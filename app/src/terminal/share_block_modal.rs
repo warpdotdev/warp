@@ -162,7 +162,7 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::custom(
             CustomAction::Copy,
             ShareBlockModalAction::CopyLink,
-            "Copy",
+            t!("common.copy"),
             id!(ShareBlockModal::ui_name()),
         ),
         FixedBinding::new(
@@ -500,7 +500,7 @@ impl ShareBlockModal {
             );
             ctx.clipboard().write(ClipboardContent::plain_text(link));
             ctx.emit(ShareBlockModalEvent::ShowToast {
-                message: "Link copied.".to_string(),
+                message: t!("share_block.link_copied").to_string(),
                 flavor: ToastFlavor::Default,
             });
         }
@@ -546,7 +546,7 @@ impl ShareBlockModal {
         ctx.clipboard()
             .write(ClipboardContent::plain_text(embed_snippet));
         ctx.emit(ShareBlockModalEvent::ShowToast {
-            message: "Embed code copied.".to_string(),
+            message: t!("share_block.embed_code_copied").to_string(),
             flavor: ToastFlavor::Success,
         });
     }
@@ -626,7 +626,7 @@ impl ShareBlockModal {
     fn render_create_block_buttons_row(&self, appearance: &Appearance) -> Box<dyn Element> {
         let create_link_button = self.render_create_block_button(
             appearance,
-            "Create link",
+            t!("share_block.create_link"),
             Icon::Link,
             ButtonVariant::Accent,
             self.mouse_state_handles
@@ -636,7 +636,7 @@ impl ShareBlockModal {
         );
         let get_embed_button = self.render_create_block_button(
             appearance,
-            "Get embed",
+            t!("share_block.get_embed"),
             Icon::Code1,
             ButtonVariant::Basic,
             self.mouse_state_handles
@@ -663,7 +663,7 @@ impl ShareBlockModal {
             TextAndIconAlignment::TextFirst,
             if let ShareRequestState::Pending(pending_share_type) = self.request_state {
                 if pending_share_type == share_type {
-                    "Creating block...".to_string()
+                    t!("share_block.creating_block").to_string()
                 } else {
                     text_label.to_string()
                 }
@@ -738,7 +738,7 @@ impl ShareBlockModal {
         } else {
             let embed_snippet = self
                 .generate_embed_snippet(app)
-                .unwrap_or("Error generating embed snippet".to_string());
+                .unwrap_or(t!("share_block.embed_generation_error").to_string());
             col.add_child(self.render_embed_label(appearance, embed_snippet));
             col.add_child(
                 Align::new(
@@ -764,7 +764,7 @@ impl ShareBlockModal {
                     .manage_permalinks_mouse_state
                     .clone(),
             )
-            .with_centered_text_label("Manage shared blocks".to_string())
+            .with_centered_text_label(t!("shared_blocks.manage_shared_blocks").to_string())
             .with_style(
                 self.button_style_overrides(appearance)
                     .set_font_size(12.)
@@ -796,7 +796,7 @@ impl ShareBlockModal {
     ) -> Box<dyn Element> {
         let text_and_icon = TextAndIcon::new(
             TextAndIconAlignment::TextFirst,
-            "Copy".to_string(),
+            t!("common.copy").to_string(),
             Icon::Copy.to_warpui_icon(appearance.theme().active_ui_text_color()),
             MainAxisSize::Max,
             MainAxisAlignment::Center,
@@ -870,7 +870,7 @@ impl ShareBlockModal {
             if link_generated {
                 self.block_title_editor.as_ref(app).buffer_text(app)
             } else {
-                "Share block".to_string()
+                t!("share_block.title").to_string()
             },
             appearance.ui_font_family(),
             24.,
@@ -958,7 +958,7 @@ impl ShareBlockModal {
                 .finish();
             let show_prompt_description = appearance
                 .ui_builder()
-                .span("Show prompt".to_string())
+                .span(t!("share_block.show_prompt").to_string())
                 .build()
                 .with_margin_left(2.)
                 .finish();
@@ -1059,7 +1059,7 @@ impl ShareBlockModal {
 
             let redact_secrets_description = appearance
                 .ui_builder()
-                .span("Redact secrets (API keys, passwords, IP addresses, PII etc.)".to_string())
+                .span(t!("share_block.redact_secrets").to_string())
                 .build()
                 .with_margin_left(4.)
                 .finish();

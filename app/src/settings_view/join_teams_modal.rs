@@ -12,7 +12,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::workspaces::team::DiscoverableTeam;
-const SUBTITLE: &str = "You can join any open team in your Warp workspace.";
+
 const MAX_VISIBLE_TEAMS: usize = 4;
 const TEAM_LIST_MAX_HEIGHT: f32 = 264.;
 
@@ -81,8 +81,8 @@ impl JoinTeamsModal {
         let team_uid = ServerId::from_string_lossy(&team_state.team.team_uid);
         let is_joining = self.joining_team_uid == Some(team_uid);
         let teammate_count = match team_state.team.num_members {
-            1 => "1 teammate".to_string(),
-            count => format!("{count} teammates"),
+            1 => t!("teams.one_teammate").to_string(),
+            count => t!("settings_messages.teammates", value_0 = count).into_owned(),
         };
 
         let team_details = Flex::column()
@@ -114,9 +114,9 @@ impl JoinTeamsModal {
                 team_state.join_button_mouse_state.clone(),
             )
             .with_centered_text_label(if is_joining {
-                "Joining…".to_string()
+                t!("settings_ui.joining").to_string()
             } else {
-                "Join".to_string()
+                t!("teams.join").to_string()
             })
             .with_style(UiComponentStyles {
                 width: Some(88.),
@@ -190,7 +190,7 @@ impl View for JoinTeamsModal {
         Flex::column()
             .with_child(
                 Text::new(
-                    SUBTITLE.to_string(),
+                    t!("settings_ui.you_can_join_any_open_team_in_your_warp").to_string(),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

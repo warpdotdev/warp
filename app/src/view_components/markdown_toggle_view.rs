@@ -34,7 +34,7 @@ impl MarkdownToggleView {
                         icon_color: theme.main_text_color(theme.background()).into(),
                         label: Some(LabelConfig {
                             label: match mode {
-                                MarkdownDisplayMode::Rendered => "Rendered".into(),
+                                MarkdownDisplayMode::Rendered => t!("notebook.rendered").into(),
                                 MarkdownDisplayMode::Raw => "Raw".into(),
                             },
                             width_override: Some(55.0),

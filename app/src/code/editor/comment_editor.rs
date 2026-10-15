@@ -164,7 +164,7 @@ impl CommentEditor {
         ViewHandle<ActionButton>,
     ) {
         let save_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Comment", PrimaryTheme)
+            ActionButton::new(t!("code_review.comment"), PrimaryTheme)
                 .with_keybinding(
                     KeystrokeSource::Fixed(
                         Keystroke::parse(crate::code_review::CODE_REVIEW_SUBMIT_KEYSTROKE)
@@ -183,7 +183,7 @@ impl CommentEditor {
         });
 
         let close_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
+            ActionButton::new(t!("common.cancel"), NakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::CloseEditor);
                 })
@@ -191,7 +191,7 @@ impl CommentEditor {
         });
 
         let remove_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Remove", DangerNakedTheme)
+            ActionButton::new(t!("common.remove"), DangerNakedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentEditorAction::RemoveComment);
                 })
@@ -279,7 +279,7 @@ impl CommentEditor {
         self.is_imported_comment = origin.is_imported_from_github();
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Update", ctx);
+            button.set_label(t!("common.update"), ctx);
         });
         ctx.notify();
 
@@ -298,7 +298,7 @@ impl CommentEditor {
         self.is_imported_comment = false;
 
         self.save_button.update(ctx, |button, ctx| {
-            button.set_label("Comment", ctx);
+            button.set_label(t!("code_review.comment"), ctx);
         });
         ctx.notify();
 
@@ -334,7 +334,7 @@ impl CommentEditor {
             .finish();
 
         let label = Text::new(
-            "Comment imported from GitHub".to_string(),
+            t!("code_review.comment_imported_from_github").to_string(),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )

@@ -582,7 +582,7 @@ impl WorkflowView {
                 )
                 .with_tooltip(move || {
                     ui_builder
-                        .tool_tip("Add a workflow argument".to_string())
+                        .tool_tip(t!("arguments.add_workflow_argument").to_string())
                         .build()
                         .finish()
                 })
@@ -591,26 +591,27 @@ impl WorkflowView {
                 .finish(),
             )
         } else {
-            arguments_section_row.add_child(Shrinkable::new(
+            arguments_section_row.add_child(
+                Shrinkable::new(
                     1.,
                     Container::new(
                         appearance
-                        .ui_builder()
-                        .span("Fill out the arguments in this workflow and copy it to run in your terminal session")
-                        .with_soft_wrap()
-                        .with_style(UiComponentStyles {
-                            font_size: Some(EDITOR_FONT_SIZE),
-                            font_color: Some(sub_text_color),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
+                            .ui_builder()
+                            .span(t!("arguments.fill_out_workflow_arguments"))
+                            .with_soft_wrap()
+                            .with_style(UiComponentStyles {
+                                font_size: Some(EDITOR_FONT_SIZE),
+                                font_color: Some(sub_text_color),
+                                ..Default::default()
+                            })
+                            .build()
+                            .finish(),
                     )
                     .with_margin_left(40.)
-                    .finish()
+                    .finish(),
                 )
-                .finish()
-                );
+                .finish(),
+            );
         }
 
         arguments_section_row.finish()
@@ -820,7 +821,7 @@ impl WorkflowView {
                         .add_environment_variables_mouse_state
                         .clone(),
                 )
-                .with_centered_text_label("Add environment variables".to_string())
+                .with_centered_text_label(t!("arguments.add_environment_variables").to_string())
                 .build()
                 .on_click(|ctx, _, _| {
                     ctx.dispatch_typed_action(WorkspaceAction::CreatePersonalEnvVarCollection);
@@ -832,7 +833,7 @@ impl WorkflowView {
             .with_children([
                 appearance
                     .ui_builder()
-                    .span("Environment variables")
+                    .span(t!("arguments.environment_variables"))
                     .with_style(UiComponentStyles {
                         font_size: Some(13.),
                         ..Default::default()

@@ -106,9 +106,13 @@ impl View for RewindConfirmationDialog {
         let rewind_button_label = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Text::new_inline("Rewind", appearance.ui_font_family(), 14.)
-                    .with_color(text_color)
-                    .finish(),
+                Text::new_inline(
+                    t!("rewind_confirmation.rewind"),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(text_color)
+                .finish(),
             )
             .with_child(
                 Container::new(
@@ -160,7 +164,7 @@ impl View for RewindConfirmationDialog {
                 } else {
                     cancel_text_color
                 };
-                Text::new_inline("Cancel", appearance.ui_font_family(), 14.)
+                Text::new_inline(t!("common.cancel"), appearance.ui_font_family(), 14.)
                     .with_color(color.into_solid())
                     .finish()
             })
@@ -187,7 +191,7 @@ impl View for RewindConfirmationDialog {
             )
             .with_child(
                 Text::new_inline(
-                    "Rewinding does not affect files edited manually or via shell commands.",
+                    t!("rewind_confirmation.info"),
                     appearance.ui_font_family(),
                     12.,
                 )
@@ -198,7 +202,7 @@ impl View for RewindConfirmationDialog {
 
         let dialog = Container::new(
             Dialog::new(
-                "Rewind".into(),
+                t!("rewind_confirmation.rewind").into(),
                 Some(
                     "Are you sure you want to rewind? This will restore your code and conversation to before this point, and cancel any commands the agent is currently running. A copy of the original conversation will be saved in your conversation history."
                         .into(),

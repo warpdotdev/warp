@@ -94,24 +94,24 @@ pub fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
 
 fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => "Base",
-        AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
-        AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
-        AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
-        AiCreditsUsageAndCostType::Aggregate => "Combined",
-        AiCreditsUsageAndCostType::Other(_) => "Other",
+        AiCreditsUsageAndCostType::BaseLimit => t!("settings_ui.base"),
+        AiCreditsUsageAndCostType::BonusGrant => t!("settings_ui.add_ons"),
+        AiCreditsUsageAndCostType::Payg => t!("settings_ui.pay_as_you_go"),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => t!("settings_ui.cloud_only"),
+        AiCreditsUsageAndCostType::Aggregate => t!("settings_ui.combined"),
+        AiCreditsUsageAndCostType::Other(_) => t!("ai_settings_page.other"),
     }
 }
 
 fn bucket_label(bucket: &AiCreditsUsageBucket) -> &'static str {
     match bucket {
         AiCreditsUsageBucket::Ai => "AI",
-        AiCreditsUsageBucket::Compute => "Compute",
-        AiCreditsUsageBucket::Platform => "Platform",
-        AiCreditsUsageBucket::SuggestedCodeDiffs => "Suggested code diffs",
-        AiCreditsUsageBucket::Voice => "Voice",
-        AiCreditsUsageBucket::Aggregate => "Total",
-        AiCreditsUsageBucket::Other(_) => "Other",
+        AiCreditsUsageBucket::Compute => t!("settings_ui.compute"),
+        AiCreditsUsageBucket::Platform => t!("settings_ui.platform"),
+        AiCreditsUsageBucket::SuggestedCodeDiffs => t!("settings_ui.suggested_code_diffs"),
+        AiCreditsUsageBucket::Voice => t!("ai_settings_page.voice"),
+        AiCreditsUsageBucket::Aggregate => t!("settings_ui.total"),
+        AiCreditsUsageBucket::Other(_) => t!("ai_settings_page.other"),
     }
 }
 
@@ -337,7 +337,7 @@ pub fn render_breakdown_tooltip(
 
     column.add_child(render_tooltip_row(
         /* no swatch on the total row */ None,
-        "Total usage".to_string(),
+        t!("settings_ui.total_usage").to_string(),
         total_credits,
         total_cost_cents,
         main,

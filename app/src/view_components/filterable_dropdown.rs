@@ -112,7 +112,7 @@ where
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(t!("common.search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&filter_editor, |me, _, event, ctx| {
@@ -612,7 +612,7 @@ where
         let background_fill = appearance.theme().surface_2();
         let empty_text = appearance
             .ui_builder()
-            .span("No matches found.")
+            .span(t!("common.no_matches_found"))
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background_fill).into()),
                 ..Default::default()

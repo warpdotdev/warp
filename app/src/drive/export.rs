@@ -230,9 +230,9 @@ impl ExportManager {
         if is_bulk && self.exports.is_empty() {
             ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
                 let link_label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
+                    t!("drive.open_in_finder")
                 } else {
-                    "Open in folder"
+                    t!("drive.open_in_folder")
                 };
 
                 let mut toast_link = ToastLink::new(link_label.to_string());
@@ -243,7 +243,7 @@ impl ExportManager {
                         .with_onclick_action(WorkspaceAction::OpenInExplorer { path: root_dir });
                 }
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::success("Finished exporting objects".to_string())
+                    DismissibleToast::success(t!("drive.finished_exporting_objects").to_string())
                         .with_link(toast_link),
                     window_id,
                     ctx,
@@ -398,9 +398,9 @@ impl ExportManager {
                 };
 
                 let link_label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
+                    t!("drive.open_in_finder")
                 } else {
-                    "Open in folder"
+                    t!("drive.open_in_folder")
                 };
 
                 toast_stack.add_ephemeral_toast(

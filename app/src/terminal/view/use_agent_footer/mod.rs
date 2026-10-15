@@ -935,9 +935,16 @@ impl TerminalView {
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| path_str.clone());
                             let limit_mb = MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT / 1_000_000;
-                            let msg = format!(
-                                "{filename} is too large to send to the agent (limit {limit_mb}MB)."
-                            );
+                            let msg = {
+                                let localization_arg_0 = &(filename);
+                                let localization_arg_1 = &(limit_mb);
+                                t!(
+                                    "help_messages.is_too_large_to_send_to_the_agent",
+                                    value_0 = localization_arg_0,
+                                    value_1 = localization_arg_1
+                                )
+                                .into_owned()
+                            };
                             let _ = spawner
                                 .spawn(move |me, ctx| {
                                     me.show_error_toast(msg, ctx);
@@ -1155,13 +1162,13 @@ impl UseAgentToolbar {
 
         let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(
-                "Use agent",
+                t!("warpify.use_agent"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .with_icon(Icon::Agent)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to assist")
+            .with_tooltip(t!("warpify.ask_agent_to_assist"))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
@@ -1169,13 +1176,13 @@ impl UseAgentToolbar {
         });
         let give_control_back_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(
-                "Give control back to agent",
+                t!("warpify.give_control_back_to_agent"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .with_icon(Icon::Agent)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to resume")
+            .with_tooltip(t!("warpify.ask_agent_to_resume"))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
@@ -1183,7 +1190,7 @@ impl UseAgentToolbar {
         });
         let dismiss_button = ctx.add_typed_action_view(|_| {
             ActionButton::new(
-                "Dismiss",
+                t!("common.dismiss"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .on_click(|ctx| {
@@ -1193,7 +1200,7 @@ impl UseAgentToolbar {
         });
         let dont_show_again_button = ctx.add_typed_action_view(|_| {
             ActionButton::new(
-                "Don't show again",
+                t!("common.dont_show_again"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .on_click(|ctx| {

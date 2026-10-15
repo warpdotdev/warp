@@ -713,7 +713,7 @@ fn non_native_workspace_keeps_create_team_ui() {
         vec![
             TeamsPageSection::CreateTeam,
             TeamsPageSection::JoinTeams {
-                header: OR_JOIN_TEAM_HEADER
+                header: t!("teams.join_existing_company_team")
             }
         ]
     );
@@ -739,7 +739,7 @@ fn native_workspace_admin_gets_admin_panel_cta() {
         TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), true),
         vec![
             TeamsPageSection::JoinTeams {
-                header: JOIN_TEAM_HEADER
+                header: t!("settings_ui.join_an_existing_team_within_your_company")
             },
             TeamsPageSection::AdminPanelCta
         ]
@@ -757,7 +757,7 @@ fn native_workspace_member_gets_join_or_empty_state() {
     assert_eq!(
         TeamsWidget::page_sections_for(Some(&workspace), Some(MEMBER_EMAIL), true),
         vec![TeamsPageSection::JoinTeams {
-            header: JOIN_TEAM_HEADER
+            header: t!("settings_ui.join_an_existing_team_within_your_company")
         }]
     );
     assert_eq!(
@@ -998,7 +998,7 @@ fn disabled_row_renders_dimmed_and_tooltipped() {
     );
     assert_eq!(
         disabled_member_tooltip_text(true),
-        Some(DISABLED_MEMBER_TOOLTIP_TEXT)
+        Some(t!("settings_ui.this_user_s_account_is_disabled"))
     );
     assert_eq!(disabled_member_tooltip_text(false), None);
 }

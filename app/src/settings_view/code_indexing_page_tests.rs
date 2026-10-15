@@ -1,9 +1,6 @@
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 
-use super::{
-    INDEXING_DISABLED_ADMIN_TEXT, codebase_indexing_disabled_admin_text,
-    remote_codebase_index_limit_reached,
-};
+use super::{codebase_indexing_disabled_admin_text, remote_codebase_index_limit_reached};
 
 fn remote_status_with_failure(failure_message: Option<&str>) -> RemoteCodebaseIndexStatus {
     RemoteCodebaseIndexStatus {
@@ -39,7 +36,7 @@ fn other_unavailable_failures_are_not_index_limit_failures() {
 fn current_team_disabling_indexing_uses_generic_tooltip_text() {
     assert_eq!(
         codebase_indexing_disabled_admin_text(Some("Team A"), true),
-        INDEXING_DISABLED_ADMIN_TEXT
+        t!("code.indexing_disabled_admin")
     );
 }
 

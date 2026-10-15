@@ -1,5 +1,8 @@
 #![allow(clippy::doc_lazy_continuation)]
 
+#[macro_use]
+extern crate warp_i18n;
+
 mod ai;
 mod alloc;
 mod antivirus;
@@ -753,6 +756,7 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
 /// parser and therefore do not require a separate mode flag.
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub fn run() -> Result<()> {
+    warp_i18n::init_locale();
     // Perform any necessary platform-specific initialization.
     platform::init();
 

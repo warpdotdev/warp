@@ -41,14 +41,12 @@ const ROW_PADDING: f32 = 12.;
 const SELF_OWN_KEY: &str = "__self_own__";
 const OTHER_MEMBERS_KEY: &str = "__other_members__";
 
-const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
-
 fn dimmed_row_text_color(main: ColorU, dimmed: ColorU, is_dimmed: bool) -> ColorU {
     if is_dimmed { dimmed } else { main }
 }
 
 fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
-    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+    is_disabled.then_some(t!("settings_ui.this_user_s_account_is_disabled"))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,9 +60,9 @@ pub enum SourceFilter {
 impl SourceFilter {
     pub fn label(self) -> &'static str {
         match self {
-            SourceFilter::All => "All",
-            SourceFilter::Local => "Local",
-            SourceFilter::Cloud => "Cloud",
+            SourceFilter::All => t!("ai_ext.all"),
+            SourceFilter::Local => t!("settings_ui.local"),
+            SourceFilter::Cloud => t!("settings_ui.cloud"),
         }
     }
 
@@ -102,7 +100,7 @@ fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
         .display_name()
         .or_else(|| auth_state.username_for_display())
         .or_else(|| auth_state.user_email())
-        .unwrap_or_else(|| "Your usage".to_string());
+        .unwrap_or_else(|| t!("settings_ui.your_usage").to_string());
     (viewer_uid, display_name)
 }
 
@@ -189,7 +187,7 @@ impl MemberUsageRow {
             subject_type: AiCreditsUsageAndCostSubjectType::Team,
             subject_key: OTHER_MEMBERS_KEY.to_string(),
             subject_uid: None,
-            display_name: "Other members".to_string(),
+            display_name: t!("settings_ui.other_members").to_string(),
             total_credits,
             total_cost_cents,
             segments,
@@ -237,7 +235,7 @@ impl MemberUsageRow {
                         display_name: entry
                             .subject_display_name
                             .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
+                            .unwrap_or_else(|| t!("execution_profile.unknown").to_string()),
                         entries: Vec::new(),
                     });
             group.entries.push(entry.clone());
@@ -464,7 +462,7 @@ fn render_usage_tooltip_content(row: &MemberUsageRow, appearance: &Appearance) -
 fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "This is an automated agent on your team.".to_string(),
+        t!("settings_ui.this_is_an_automated_agent_on_your_team").to_string(),
         appearance.ui_font_family(),
         12.,
     )
@@ -581,7 +579,7 @@ fn render_row_card(
         name_row.add_child(
             Container::new(
                 Text::new_inline(
-                    "Former member",
+                    t!("settings_ui.former_member"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() - 1.,
                 )
@@ -873,7 +871,7 @@ fn render_member_header(
     let show_toggle = visibility.granularity == UsageVisibilityGranularity::FullBreakdown
         && has_cloud_usage(entries);
 
-    let subheader = render_section_subheader("Members", appearance);
+    let subheader = render_section_subheader(t!("settings_ui.members"), appearance);
     let header = if show_toggle {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

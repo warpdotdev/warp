@@ -44,9 +44,9 @@ impl Osc52ClipboardAccess {
 
     pub fn as_dropdown_label(self) -> &'static str {
         match self {
-            Self::Deny => "Deny",
-            Self::WriteOnly => "Write only",
-            Self::ReadWrite => "Read and write",
+            Self::Deny => t!("settings_ui.deny"),
+            Self::WriteOnly => t!("settings_ui.write_only"),
+            Self::ReadWrite => t!("settings_ui.read_and_write"),
         }
     }
 }
