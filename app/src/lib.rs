@@ -446,7 +446,6 @@ enum AuthInitialization {
 }
 
 impl LaunchMode {
-    /// Derives the sandbox and computer-use launch flags that a CLI command implies.
     fn command_line(command: CliCommand, global_options: GlobalOptions, debug: bool) -> Self {
         let (is_sandboxed, computer_use_override) = match &command {
             CliCommand::Agent(AgentCommand::Run(args)) => {
