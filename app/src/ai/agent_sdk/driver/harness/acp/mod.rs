@@ -140,7 +140,7 @@ impl AcpHarness {
         harness_working_dir: &Path,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -151,7 +151,7 @@ impl AcpHarness {
                 harness_working_dir,
                 resolved_env_vars,
                 skill_dirs,
-                has_deferred_repositories,
+                factory_repository_contract,
                 HarnessSupportSkills::Bundled,
             ),
             // MCP servers are handed to the agent in `session/new` and the model is selected
@@ -169,7 +169,7 @@ impl AcpHarness {
                     workspace_root,
                     harness_working_dir,
                     skill_dirs,
-                    has_deferred_repositories,
+                    factory_repository_contract,
                     HarnessSupportSkills::Bundled,
                 )
             }
@@ -179,7 +179,7 @@ impl AcpHarness {
                     workspace_root,
                     harness_working_dir,
                     skill_dirs,
-                    has_deferred_repositories,
+                    factory_repository_contract,
                     HarnessSupportSkills::Bundled,
                 )
             }
@@ -196,7 +196,7 @@ impl AcpHarness {
                     workspace_root,
                     &agent_dir,
                     skill_dirs,
-                    has_deferred_repositories,
+                    factory_repository_contract,
                 )
             }
             Harness::Oz | Harness::OpenCode | Harness::Unknown => Ok(()),
@@ -259,7 +259,7 @@ impl ThirdPartyHarness for AcpHarness {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -270,7 +270,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness_working_dir,
             resolved_env_vars,
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
             resolved_secrets,
             resolved_mcp_servers,
             third_party_harness_model_config,
@@ -578,6 +578,10 @@ impl AcpHarnessRunner {
 impl HarnessRunner for AcpHarnessRunner {
     fn harness_name(&self) -> &str {
         &self.launch.program
+    }
+    #[cfg(test)]
+    fn prompt_text_for_test(&self) -> Option<&str> {
+        Some(&self.prompt_text)
     }
 
     fn persistence(&self) -> &HarnessPersistence {

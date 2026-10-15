@@ -143,6 +143,8 @@ pub(crate) enum TerminalDriverEvent {
 /// - Detecting block completion
 pub(crate) struct TerminalDriver {
     terminal_view: ViewHandle<TerminalView>,
+    #[cfg(test)]
+    pub(super) launch_env_vars_for_test: Option<HashMap<OsString, OsString>>,
     /// Sender half of the bootstrap result channel. Exactly one of
     /// `SessionBootstrapped`, `PtySpawnFailed`, or `Exited` (pre-bootstrap)
     /// will send the outcome; all others no-op after the first send.
@@ -237,11 +239,19 @@ impl TerminalDriver {
         options: TerminalDriverOptions<'_>,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, AgentDriverError> {
+        #[cfg(test)]
+        let launch_env_vars_for_test = options.env_vars.clone();
         let should_share = options.should_share;
         let task_id = options.task_id;
         let working_dir = options.working_dir.clone();
         let terminal_view = create_terminal_view(options, ctx)?;
-        Ok(ctx.add_model(|ctx| Self::new(terminal_view, should_share, task_id, working_dir, ctx)))
+        let driver =
+            ctx.add_model(|ctx| Self::new(terminal_view, should_share, task_id, working_dir, ctx));
+        #[cfg(test)]
+        driver.update(ctx, |driver, _| {
+            driver.launch_env_vars_for_test = Some(launch_env_vars_for_test);
+        });
+        Ok(driver)
     }
 
     /// Wrap an already-created terminal view in a new `TerminalDriver` model.
@@ -337,6 +347,8 @@ impl TerminalDriver {
 
         Self {
             terminal_view,
+            #[cfg(test)]
+            launch_env_vars_for_test: None,
             bootstrap_tx,
             bootstrap_rx: Some(bootstrap_rx),
             shared_session_id: None,

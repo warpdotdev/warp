@@ -607,10 +607,22 @@ fn build_server_side_task(
     Ok((config, task))
 }
 
+fn factory_repository_contract(task_id: Option<AmbientAgentTaskId>, enabled: bool) -> bool {
+    task_id.is_some()
+        && enabled
+        && std::env::var_os("WARP_FACTORY_ID").is_some_and(|id| !id.is_empty())
+}
+
+#[derive(Clone, Copy)]
+struct RepositoryContract {
+    supports_deferred_repositories: bool,
+    use_factory_repositories: bool,
+}
+
 fn build_execution_task_and_options(
     args: &RunAgentArgs,
     config: ExecutionConfiguration,
-    supports_deferred_repositories: bool,
+    repository_contract: RepositoryContract,
     working_dir: PathBuf,
     first_skill: Option<ResolvedSkill>,
     skill_discovery_dirs: Vec<PathBuf>,
@@ -621,12 +633,28 @@ fn build_execution_task_and_options(
     Option<String>,
     crate::ai::cloud_environments::ProvidersConfig,
 )> {
+    let RepositoryContract {
+        supports_deferred_repositories,
+        use_factory_repositories,
+    } = repository_contract;
     let task_id = args
         .task_id
         .as_deref()
         .context("Execution configuration requires a task ID")?
         .parse::<AmbientAgentTaskId>()
         .context("Invalid execution task ID")?;
+    anyhow::ensure!(
+        config.task_id.inner() == task_id.to_string(),
+        "Execution configuration task mismatch"
+    );
+    let execution_id = args
+        .execution_id
+        .as_deref()
+        .context("Execution configuration requires an execution ID")?;
+    anyhow::ensure!(
+        !execution_id.is_empty() && config.execution_id.inner() == execution_id,
+        "Execution configuration execution mismatch"
+    );
     let selected_harness = execution_config::harness(&config.harness)?;
     let model = if selected_harness == Harness::Oz {
         config
@@ -678,9 +706,9 @@ fn build_execution_task_and_options(
         harness: harness_kind(selected_harness, args.harness_transport.unwrap_or_default())?,
     };
     let options = AgentDriverOptions {
-        working_dir,
+        working_dir: working_dir.clone(),
         task_id: Some(task_id),
-        use_factory_repositories: supports_deferred_repositories,
+        use_factory_repositories,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
@@ -694,6 +722,12 @@ fn build_execution_task_and_options(
                 repositories,
                 deferred_repositories,
                 config.setup_commands,
+            )?;
+            workspace.bind_execution(
+                task_id.to_string(),
+                execution_id.to_owned(),
+                working_dir.clone(),
+                supports_deferred_repositories,
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
             workspace
@@ -834,7 +868,7 @@ struct AgentDriverRunner;
 struct ExecutionTaskData {
     server_api: Arc<ServerApi>,
     config: ExecutionConfiguration,
-    supports_deferred_repositories: bool,
+    repository_contract: RepositoryContract,
     secrets: HashMap<String, ManagedSecretValue>,
     attachments: anyhow::Result<Vec<TaskAttachment>>,
 }
@@ -887,10 +921,11 @@ impl AgentDriverRunner {
             setup_events
                 .post_timeline_event(OzRunTimelineEvent::WorkerContainerReady)
                 .await;
+            let execution_id = args.execution_id.as_deref().filter(|id| !id.is_empty());
             if args.require_execution_config
                 && (!FeatureFlag::CloudAgentExecutionConfig.is_enabled()
                     || args.task_id.is_none()
-                    || args.execution_id.is_none())
+                    || execution_id.is_none())
             {
                 return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
                     "unsupported benchmark deferred repository preparation: execution bootstrap is required"
@@ -898,7 +933,7 @@ impl AgentDriverRunner {
             }
             let execution_data = if FeatureFlag::CloudAgentExecutionConfig.is_enabled()
                 && let (Some(task_id), Some(execution_id)) =
-                    (args.task_id.as_deref(), args.execution_id.as_deref())
+                    (args.task_id.as_deref(), execution_id)
             {
                 Some(Self::fetch_execution_task_data(&foreground, task_id, execution_id).await?)
             } else {
@@ -1153,6 +1188,8 @@ impl AgentDriverRunner {
         execution_id: &str,
     ) -> Result<ExecutionTaskData, AgentDriverError> {
         let supports_deferred_repositories = FeatureFlag::FactoryDeferredRepositories.is_enabled();
+        let use_factory_repositories =
+            factory_repository_contract(task_id.parse().ok(), supports_deferred_repositories);
         let (workload_token, no_isolation) =
             match warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await
             {
@@ -1194,7 +1231,10 @@ impl AgentDriverRunner {
         Ok(ExecutionTaskData {
             server_api: api,
             config: data.config,
-            supports_deferred_repositories,
+            repository_contract: RepositoryContract {
+                supports_deferred_repositories,
+                use_factory_repositories,
+            },
             secrets,
             attachments: data.attachments,
         })
@@ -1452,21 +1492,28 @@ impl AgentDriverRunner {
         }
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
+        let use_factory_repositories = execution_data
+            .as_ref()
+            .map(|data| data.repository_contract.use_factory_repositories)
+            .unwrap_or_else(|| {
+                factory_repository_contract(
+                    args.task_id.as_deref().and_then(|id| id.parse().ok()),
+                    FeatureFlag::FactoryDeferredRepositories.is_enabled(),
+                )
+            });
         if let Some(task_id_str) = args.task_id.as_ref() {
             Self::bootstrap_git_credentials_for_task(
                 foreground,
                 task_id_str,
                 &args,
-                execution_data
-                    .as_ref()
-                    .is_some_and(|data| data.supports_deferred_repositories),
+                use_factory_repositories,
             )
             .await?;
         }
         if let Some(ExecutionTaskData {
             server_api: execution_server_api,
             config,
-            supports_deferred_repositories,
+            repository_contract,
             secrets,
             attachments,
         }) = execution_data
@@ -1484,7 +1531,7 @@ impl AgentDriverRunner {
                     build_execution_task_and_options(
                         &args,
                         config,
-                        supports_deferred_repositories,
+                        repository_contract,
                         working_dir,
                         first_skill,
                         skill_discovery_dirs,
@@ -1562,7 +1609,7 @@ impl AgentDriverRunner {
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
-                    use_factory_repositories: false,
+                    use_factory_repositories,
                     experimental: None,
                     parent_run_id: None,
                     should_share,

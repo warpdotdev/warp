@@ -151,7 +151,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         resume: Option<ResumePayload>,
         resolved_env_vars: &HashMap<OsString, OsString>,
         skill_dirs: &[PathBuf],
-        has_deferred_repositories: bool,
+        factory_repository_contract: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
@@ -162,7 +162,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             harness_working_dir,
             resolved_env_vars,
             skill_dirs,
-            has_deferred_repositories,
+            factory_repository_contract,
             HarnessSupportSkills::Plugin,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -724,7 +724,7 @@ pub(crate) fn prepare_claude_environment_config(
     harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
     skill_dirs: &[PathBuf],
-    has_deferred_repositories: bool,
+    factory_repository_contract: bool,
     harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
@@ -741,7 +741,7 @@ pub(crate) fn prepare_claude_environment_config(
         workspace_root,
         harness_working_dir,
         skill_dirs,
-        has_deferred_repositories,
+        factory_repository_contract,
         harness_support_skills,
     )?;
     Ok(())
@@ -764,7 +764,7 @@ fn publish_skills_for_claude(
     workspace_root: &Path,
     harness_working_dir: &Path,
     skill_dirs: &[PathBuf],
-    has_deferred_repositories: bool,
+    factory_repository_contract: bool,
     harness_support_skills: HarnessSupportSkills,
 ) -> Result<()> {
     let skill_root = harness_working_dir.join(".claude").join("skills");
@@ -774,7 +774,7 @@ fn publish_skills_for_claude(
         workspace_root,
         is_sandbox,
         skill_dirs,
-        has_deferred_repositories,
+        factory_repository_contract,
         harness_support_skills,
     )?;
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(

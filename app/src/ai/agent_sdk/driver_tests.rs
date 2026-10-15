@@ -12,6 +12,7 @@ use command::blocking::Command as ProcessCommand;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::poll;
+use mockito::Matcher;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
@@ -39,7 +40,7 @@ use super::{
     SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
     debug_turn_task_state, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    inject_deferred_repos_instruction, setup_failure_status_update, terminal_status_log_outcome,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -2496,13 +2497,117 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
 }
 
 #[test]
-fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
+fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
+    if std::env::var_os("WARP_TEST_DEFERRED_ACP_PROMPT").is_none() {
+        let home = TempDir::new().unwrap();
+        let output = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::tests::deferred_repository_semantic_acp_consumes_server_resolved_text_once",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_DEFERRED_ACP_PROMPT", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CODEX_HOME", home.path().join(".codex"))
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let mut server = ChannelState::mock_server();
+    let prompt = "Factory deferred repository inventory at task creation:\n- GITHUB \"acme\"/\"repo\"\n\nimplement";
+    let resolved = server
+        .mock("POST", "/api/v1/harness-support/resolve-prompt")
+        .match_body(Matcher::Json(json!({})))
+        .with_status(200)
+        .with_body(json!({"prompt": prompt}).to_string())
+        .expect(1)
+        .create();
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let root = TempDir::new().unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.path().to_path_buf();
+        options.selected_harness = Harness::Codex;
+        options.harness_transport = HarnessTransport::Acp;
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let HarnessKind::ThirdParty(harness) =
+            harness_kind(Harness::Codex, HarnessTransport::Acp).unwrap()
+        else {
+            panic!("expected an ACP harness");
+        };
+        let runner = AgentDriver::prepare_harness(
+            &AgentRunPrompt::ServerSide {
+                skill: None,
+                attachments_dir: None,
+            },
+            &[],
+            harness.as_ref(),
+            &foreground,
+        )
+        .await
+        .unwrap();
+        assert_eq!(runner.prompt_text_for_test(), Some(prompt));
+    });
+    resolved.assert();
+}
+
+#[test]
+fn deferred_repository_semantic_skipped_server_startup_has_no_inventory_only_turn() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let root = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(root.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver
+        });
+        let completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(
+                AgentRunPrompt::ServerSide {
+                    skill: None,
+                    attachments_dir: None,
+                },
+                ctx,
+            )
+        });
+        assert!(matches!(
+            completion.await.unwrap(),
+            SDKConversationOutputStatus::Success
+        ));
+        terminal.read(&app, |terminal, ctx| {
+            assert!(
+                terminal
+                    .ai_controller()
+                    .as_ref(ctx)
+                    .native_prompt_conversation_id()
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
+fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
     if std::env::var_os("WARP_TEST_DEFERRED_SKILL_PUBLICATION").is_none() {
         let home = TempDir::new().unwrap();
         let output = ProcessCommand::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "ai::agent_sdk::driver::tests::deferred_skill_publication_uses_inventory_after_workspace_consumption",
+                "ai::agent_sdk::driver::tests::deferred_repository_semantic_skill_publication_without_initial_inventory",
                 "--nocapture",
             ])
             .env("WARP_TEST_DEFERRED_SKILL_PUBLICATION", "1")
@@ -2522,9 +2627,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
     }
     let _factory_mcp = warp_core::features::FeatureFlag::FactoryMcp.override_enabled(false);
     for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
-        for (use_factory_repositories, has_deferred_repositories) in
-            [(true, true), (false, true), (true, false)]
-        {
+        for use_factory_repositories in [true, false] {
             for (harness, skill_parent) in [
                 (Harness::Claude, ".claude"),
                 (Harness::Codex, ".agents"),
@@ -2533,7 +2636,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                 App::test((), |mut app| async move {
                     let _capability = warp_core::features::FeatureFlag::FactoryDeferredRepositories
                         .override_enabled(!use_factory_repositories);
-                    let should_activate = use_factory_repositories && has_deferred_repositories;
+                    let should_activate = use_factory_repositories;
                     initialize_workspace_test_app(&mut app);
                     let root = TempDir::new().unwrap();
                     let skill_parent = root.path().join(skill_parent);
@@ -2545,21 +2648,7 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                     options.harness_transport = transport;
                     options.workspace = super::environment::WorkspaceConfiguration::from_resolved(
                         Vec::new(),
-                        if has_deferred_repositories {
-                            vec![super::environment::ResolvedRepository {
-                                source: SourceRepo::new(
-                                    CodeForge::GitLab,
-                                    "platform/backend".into(),
-                                    "api".into(),
-                                ),
-                                checkout: None,
-                                clone_from: None,
-                                expected_sha: None,
-                                preserve_origin: true,
-                            }]
-                        } else {
-                            Vec::new()
-                        },
+                        Vec::new(),
                         Vec::new(),
                     )
                     .unwrap();
@@ -2573,13 +2662,25 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
                     let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
                     let foreground = driver.update(&mut app, |driver, ctx| {
                         assert!(driver.workspace.take().unwrap().source_repos.is_empty());
-                        assert_eq!(driver.has_deferred_repositories, should_activate);
+                        assert_eq!(driver.factory_repository_contract, should_activate);
                         assert_eq!(
                             driver.resolved_env_vars.contains_key(std::ffi::OsStr::new(
                                 "WARP_FACTORY_DEFERRED_REPOSITORIES_SKILL",
                             )),
                             !should_activate,
                         );
+                        let launch_env = driver
+                            .terminal_driver
+                            .as_ref(ctx)
+                            .launch_env_vars_for_test
+                            .as_ref()
+                            .unwrap();
+                        for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                            assert_eq!(
+                                launch_env.get(std::ffi::OsStr::new(name)),
+                                Some(&root.path().as_os_str().to_os_string())
+                            );
+                        }
                         ctx.spawner()
                     });
                     let HarnessKind::ThirdParty(harness) =
@@ -2611,61 +2712,176 @@ fn deferred_skill_publication_uses_inventory_after_workspace_consumption() {
 }
 
 #[test]
-fn inject_deferred_repos_instruction_prepends_to_local_prompt() {
-    let mut prompt = AgentRunPrompt::Local("do the task".to_string());
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::Local(text) = prompt else {
-        panic!("expected a Local prompt");
-    };
-    assert_eq!(text, "clone acme/billing first\n\ndo the task");
+fn deferred_repository_runtime_exports_absolute_root_before_terminal_creation() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("workspace with 'quotes'");
+        fs::create_dir(&root).unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.clone();
+        options.secrets.insert(
+            "OZ_WORKSPACE_ROOT".into(),
+            ManagedSecretValue::raw_value("relative/stale"),
+        );
+        options.secrets.insert(
+            "WARP_WORKSPACE_ROOT".into(),
+            ManagedSecretValue::raw_value("/other/root"),
+        );
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.update(&mut app, |driver, ctx| {
+            for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                assert_eq!(
+                    driver.resolved_env_vars.get(std::ffi::OsStr::new(name)),
+                    Some(&root.as_os_str().to_os_string())
+                );
+                assert_eq!(
+                    driver
+                        .terminal_driver
+                        .as_ref(ctx)
+                        .launch_env_vars_for_test
+                        .as_ref()
+                        .and_then(|env| env.get(std::ffi::OsStr::new(name))),
+                    Some(&root.as_os_str().to_os_string())
+                );
+            }
+            driver.harness_working_dir = root.join("eager-repository");
+            assert_eq!(
+                driver
+                    .resolved_env_vars
+                    .get(std::ffi::OsStr::new("OZ_WORKSPACE_ROOT")),
+                Some(&root.as_os_str().to_os_string())
+            );
+        });
+    });
 }
 
 #[test]
-fn inject_deferred_repos_instruction_synthesizes_hidden_skill_when_none_requested() {
-    let mut prompt = AgentRunPrompt::ServerSide {
-        skill: None,
-        attachments_dir: None,
-    };
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
-        panic!("expected a ServerSide prompt");
-    };
-    let skill = skill.expect("a synthetic skill should carry the hidden instruction");
-    assert_eq!(skill.content, "clone acme/billing first");
+fn deferred_repository_runtime_exports_root_when_unset() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let root = TempDir::new().unwrap();
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = root.path().to_path_buf();
+        let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+        driver.read(&app, |driver, _| {
+            for name in ["OZ_WORKSPACE_ROOT", "WARP_WORKSPACE_ROOT"] {
+                assert_eq!(
+                    driver.resolved_env_vars.get(std::ffi::OsStr::new(name)),
+                    Some(&root.path().as_os_str().to_os_string())
+                );
+            }
+        });
+    });
 }
 
 #[test]
-fn inject_deferred_repos_instruction_prepends_to_requested_skill_content() {
-    let requested_skill = ai::skills::ParsedSkill {
-        path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(std::path::PathBuf::from(
-            "/skills/reviewer/SKILL.md",
-        )),
-        name: "reviewer".to_string(),
-        description: "Reviews billing changes.".to_string(),
-        content: "Review the diff carefully.".to_string(),
-        line_range: None,
-        provider: ai::skills::SkillProvider::Agents,
-        scope: ai::skills::SkillScope::Project,
-    };
-    let mut prompt = AgentRunPrompt::ServerSide {
-        skill: Some(requested_skill),
-        attachments_dir: None,
-    };
-    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
-
-    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
-        panic!("expected a ServerSide prompt");
-    };
-    let skill = skill.expect("the requested skill must be preserved");
-    assert_eq!(skill.name, "reviewer");
-    assert_eq!(
-        skill.content,
-        "clone acme/billing first\n\nReview the diff carefully."
-    );
+fn deferred_execution_policy_reaches_every_launch_and_legacy_clears_inheritance() {
+    use super::environment_preparation::{FILE_ENV, MODE_ENV};
+    for (harness, transport) in [
+        (Harness::Oz, HarnessTransport::Pty),
+        (Harness::Claude, HarnessTransport::Pty),
+        (Harness::Claude, HarnessTransport::Acp),
+        (Harness::Codex, HarnessTransport::Pty),
+        (Harness::Codex, HarnessTransport::Acp),
+        (Harness::Gemini, HarnessTransport::Pty),
+        (Harness::Gemini, HarnessTransport::Acp),
+    ] {
+        for capability in [None, Some(false), Some(true)] {
+            App::test((), |mut app| async move {
+                initialize_workspace_test_app(&mut app);
+                let root = TempDir::new().unwrap();
+                let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+                options.working_dir = root.path().to_owned();
+                options.selected_harness = harness;
+                options.harness_transport = transport;
+                let task_id = "00000000-0000-0000-0000-000000000001";
+                options.task_id = Some(task_id.parse().unwrap());
+                for name in [
+                    FILE_ENV,
+                    MODE_ENV,
+                    "OZ_RUN_ID",
+                    "WARP_RUN_ID",
+                    "WARP_EXECUTION_ID",
+                ] {
+                    options
+                        .secrets
+                        .insert(name.into(), ManagedSecretValue::raw_value("stale"));
+                }
+                if let Some(capability) = capability {
+                    options
+                        .workspace
+                        .bind_execution(
+                            task_id.into(),
+                            "42".into(),
+                            root.path().to_owned(),
+                            capability,
+                        )
+                        .unwrap();
+                }
+                let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+                driver.read(&app, |driver, ctx| {
+                    let launch = driver
+                        .terminal_driver
+                        .as_ref(ctx)
+                        .launch_env_vars_for_test
+                        .as_ref()
+                        .unwrap();
+                    for name in [
+                        FILE_ENV,
+                        MODE_ENV,
+                        "OZ_RUN_ID",
+                        "WARP_RUN_ID",
+                        "WARP_EXECUTION_ID",
+                        "OZ_WORKSPACE_ROOT",
+                        "WARP_WORKSPACE_ROOT",
+                    ] {
+                        assert_eq!(
+                            launch.get(std::ffi::OsStr::new(name)),
+                            driver.resolved_env_vars.get(std::ffi::OsStr::new(name))
+                        );
+                    }
+                    let value = |name: &str| launch.get(std::ffi::OsStr::new(name)).unwrap();
+                    assert_eq!(value("OZ_RUN_ID"), task_id);
+                    assert_eq!(value("WARP_RUN_ID"), task_id);
+                    if let Some(capability) = capability {
+                        assert_eq!(value(MODE_ENV), "execution");
+                        assert_eq!(value("WARP_EXECUTION_ID"), "42");
+                        let policy: serde_json::Value =
+                            serde_json::from_slice(&fs::read(value(FILE_ENV)).unwrap()).unwrap();
+                        assert_eq!(policy["supports_deferred_repositories"], capability);
+                        assert_eq!(policy["task_id"], task_id);
+                        assert_eq!(policy["execution_id"], "42");
+                        assert_eq!(policy["working_dir"], root.path().to_str().unwrap());
+                        assert_eq!(policy["eager"], json!([]));
+                        assert_eq!(policy["deferred"], json!([]));
+                    } else {
+                        assert_eq!(value(MODE_ENV), "legacy");
+                        assert!(value(FILE_ENV).is_empty());
+                        assert!(value("WARP_EXECUTION_ID").is_empty());
+                    }
+                });
+            });
+        }
+    }
 }
-
+#[test]
+fn deferred_repository_runtime_rejects_relative_root() {
+    App::test((), |mut app| async move {
+        initialize_workspace_test_app(&mut app);
+        let mut options = crate::ai::agent_sdk::tests::agent_driver_options();
+        options.working_dir = "relative-workspace".into();
+        app.add_model(|ctx| {
+            let error = AgentDriver::new(options, ctx).err().expect("invalid root");
+            assert!(matches!(
+                error,
+                AgentDriverError::ConfigBuildFailed(source)
+                    if source.to_string().contains("workspace root must be absolute")
+            ));
+            AgentDriver::new(crate::ai::agent_sdk::tests::agent_driver_options(), ctx).unwrap()
+        });
+    });
+}
 #[test]
 #[serial_test::serial]
 fn openai_api_key_exports_only_api_key_not_base_url() {

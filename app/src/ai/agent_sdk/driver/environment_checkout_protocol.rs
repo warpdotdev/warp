@@ -35,7 +35,7 @@ pub(super) fn sanitize_git_credential_username(value: &str) -> Option<String> {
     .then(|| value.to_owned())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutRequest {
     pub source: RepositoryIdentity,

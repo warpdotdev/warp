@@ -94,7 +94,7 @@ pub(super) fn publish_skills_for_harness(
     working_dir: &Path,
     is_sandbox: bool,
     configured_source_dirs: &[PathBuf],
-    has_deferred_repositories: bool,
+    factory_repository_contract: bool,
     harness_support_skills: HarnessSupportSkills,
 ) -> Result<Vec<PathBuf>> {
     let source_dirs = resolve_skills_dirs(working_dir, configured_source_dirs.to_vec());
@@ -105,7 +105,7 @@ pub(super) fn publish_skills_for_harness(
         ));
     }
     let configured_skill_dirs = skill_dirs_from_source_dirs(&source_dirs);
-    let deferred_skill_dir = if has_deferred_repositories {
+    let deferred_skill_dir = if factory_repository_contract {
         Some(
             factory_deferred_repositories_skill_path()
                 .context("bundled deferred repositories skill is unavailable")?,

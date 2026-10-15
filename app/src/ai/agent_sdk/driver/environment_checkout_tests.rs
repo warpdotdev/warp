@@ -1508,6 +1508,189 @@ fn helper_with_expired_handoff_keeps_checkout_working() {
 // Fixtures and helpers shared by the tests above.
 
 const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
+#[test]
+fn execution_policy_helper_subprocess() {
+    let Some(requests_file) = std::env::var_os("WARP_TEST_POLICY_REQUESTS") else {
+        return;
+    };
+    let report_file = PathBuf::from(std::env::var_os("WARP_TEST_POLICY_REPORT").unwrap());
+    let cleanup = std::env::var_os("WARP_TEST_POLICY_CLEANUP").is_some();
+    let strict = std::env::var_os("WARP_TEST_POLICY_STRICT").is_some();
+    let args = EnvironmentCheckoutArgs {
+        requests_file: requests_file.into(),
+        report_file: report_file.clone(),
+        remove_origins_only: cleanup,
+        fail_if_target_exists: strict,
+    };
+    let result = run(&args);
+    match std::env::var("WARP_TEST_POLICY_EXPECT").unwrap().as_str() {
+        "success" => result.unwrap(),
+        "partial" => {
+            assert!(result.is_err());
+            assert!(report_file.exists());
+        }
+        "blocked" => {
+            assert!(result.is_err());
+            assert!(!report_file.exists());
+        }
+        value => panic!("unknown expectation {value}"),
+    }
+}
+
+#[test]
+fn execution_policy_checkout_enforces_binding_and_preparation() {
+    fixture_test(
+        "execution_policy_checkout_enforces_binding_and_preparation",
+        |fixture| {
+            use super::super::environment_preparation::{
+                FILE_ENV, MODE_ENV, PreparationPolicy, PreparationRepository, launch_environment,
+            };
+            let sha = fixture.pinned();
+            let branch = format!("benchmark-base/{sha}");
+            git(
+                &fixture.origin(),
+                &["update-ref", &format!("refs/heads/{branch}"), &sha],
+            );
+            let root = dunce::canonicalize(fixture.work()).unwrap();
+            let mut selected = fixture.request("original", None);
+            selected.source.repo_owner = "configured".into();
+            selected.source.repo_name = "original".into();
+            let mut frozen = fixture.request("original", Some(RepositoryHeadRef::Branch(branch)));
+            frozen.expected_sha = Some(sha.clone());
+            frozen.fetch_branch_only = true;
+            let mut mismatch = frozen.clone();
+            mismatch.checkout_name = "mismatch".into();
+            mismatch.expected_sha = Some(fixture.base());
+            let mut mismatch_selection = selected.clone();
+            mismatch_selection.source.repo_name = "mismatch".into();
+            mismatch_selection.checkout_name = "mismatch".into();
+            let mut policy = PreparationPolicy {
+                task_id: "task".into(),
+                execution_id: "execution".into(),
+                working_dir: root.clone(),
+                supports_deferred_repositories: true,
+                eager: Vec::new(),
+                deferred: vec![
+                    PreparationRepository {
+                        source: selected.source.clone(),
+                        request: frozen,
+                    },
+                    PreparationRepository {
+                        source: mismatch_selection.source.clone(),
+                        request: mismatch,
+                    },
+                ],
+            };
+            let mut eager = fixture.request("eager", None);
+            eager.remove_origin = true;
+            policy.eager.push(PreparationRepository {
+                source: RepositoryIdentity {
+                    repo_name: "eager".into(),
+                    ..eager.source.clone()
+                },
+                request: eager.clone(),
+            });
+            let mut env = std::collections::HashMap::new();
+            let owner = launch_environment(Some(&policy), Some("task"), &root, &mut env).unwrap();
+            let scratch = TempDir::new().unwrap();
+            let requests = scratch.path().join("requests.json");
+            let invoke =
+                |batch: &CheckoutBatch,
+                 env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+                 strict: bool,
+                 cleanup: bool,
+                 expected: &str,
+                 name: &str| {
+                    let report = scratch.path().join(format!("{name}.json"));
+                    fs::write(&requests, serde_json::to_vec(batch).unwrap()).unwrap();
+                    let mut command =
+                        isolated_test_command(fixture, "execution_policy_helper_subprocess");
+                    command
+                        .envs(env)
+                        .env("WARP_TEST_POLICY_REQUESTS", &requests)
+                        .env("WARP_TEST_POLICY_REPORT", &report)
+                        .env("WARP_TEST_POLICY_EXPECT", expected);
+                    if strict {
+                        command.env("WARP_TEST_POLICY_STRICT", "1");
+                    }
+                    if cleanup {
+                        command.env("WARP_TEST_POLICY_CLEANUP", "1");
+                    }
+                    let output = command.output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{name}: {}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    report
+                };
+            let mut batch = CheckoutBatch {
+                working_dir: root.clone(),
+                repositories: vec![selected.clone()],
+            };
+            for (name, key, value) in [
+                ("missing-mode", MODE_ENV, ""),
+                ("legacy-bypass", MODE_ENV, "legacy"),
+                ("missing-file", FILE_ENV, ""),
+                ("unreadable-file", FILE_ENV, "/absent/preparation.json"),
+                ("stale-task", "OZ_RUN_ID", "other-task"),
+                ("stale-execution", "WARP_EXECUTION_ID", "other-execution"),
+                ("stale-root", "WARP_WORKSPACE_ROOT", "/other-root"),
+            ] {
+                let mut invalid = env.clone();
+                invalid.insert(key.into(), value.into());
+                invoke(&batch, &invalid, true, false, "blocked", name);
+                assert!(!root.join("original").exists());
+            }
+            let malformed = scratch.path().join("malformed-policy.json");
+            fs::write(&malformed, "{}").unwrap();
+            let mut invalid = env.clone();
+            invalid.insert(FILE_ENV.into(), malformed.into_os_string());
+            invoke(&batch, &invalid, true, false, "blocked", "malformed");
+            invoke(&batch, &env, false, false, "blocked", "strict-flag-dropped");
+            batch.repositories[0] = fixture.request("substitute-identity", None);
+            invoke(
+                &batch,
+                &env,
+                true,
+                false,
+                "blocked",
+                "substitute-not-original",
+            );
+            batch.repositories = vec![selected, mismatch_selection];
+            let report = invoke(&batch, &env, true, false, "partial", "substituted");
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+            assert_eq!(report.requests[0].source.repo_owner, "fixtures");
+            assert_eq!(report.requests[0].source.repo_name, "source");
+            assert_eq!(report.requests[0].checkout_name, "original");
+            assert!(report.requests[0].fetch_branch_only);
+            assert_eq!(
+                report.requests[0].expected_sha.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(report.outcomes[0].failure, None);
+            assert_eq!(
+                report.outcomes[0].resolved_head.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(
+                report.outcomes[1].failure,
+                Some(CheckoutFailureKind::VerifyHead)
+            );
+            assert_eq!(git(&root.join("original"), &["rev-parse", "HEAD"]), sha);
+            eager.remove_origin = false;
+            batch.repositories = vec![eager];
+            invoke(&batch, &env, false, false, "success", "eager-clone");
+            assert_eq!(git(&root.join("eager"), &["remote"]), "origin");
+            invoke(&batch, &env, false, true, "success", "eager-cleanup");
+            assert_eq!(git(&root.join("eager"), &["remote"]), "");
+            drop(owner);
+            invoke(&batch, &env, false, false, "blocked", "expired-owner");
+        },
+    );
+}
 
 #[test]
 fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
@@ -1754,6 +1937,9 @@ fn isolated_test_command(fixture: &Fixture, name: &str) -> Command {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("WARP_ISOLATION_PLATFORM", "namespace")
         .env("WARP_BUILD_CACHE_ROOT", fixture.root.join("cache"))
+        .env(super::super::environment_preparation::MODE_ENV, "legacy")
+        .env(super::super::environment_preparation::FILE_ENV, "")
+        .env("WARP_EXECUTION_ID", "")
         .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE");

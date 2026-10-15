@@ -18,9 +18,8 @@ use super::super::environment_checkout_protocol::{
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command,
-    build_deferred_repos_instruction, environment_snapshot, merge_repos_deduped,
-    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command, environment_snapshot,
+    merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
@@ -65,6 +64,43 @@ fn resolved_repositories_apply_origin_policy_per_checkout() {
     assert!(requests[1].remove_origin);
     assert!(requests[1].fetch_branch_only);
     assert_eq!(requests[1].remote.owner, "source");
+}
+
+#[test]
+fn deferred_policy_keeps_same_name_identities_for_unused_target_selection() {
+    let root = tempfile::TempDir::new().unwrap();
+    let mut workspace = WorkspaceConfiguration::from_resolved(
+        Vec::new(),
+        vec![
+            resolved_repo(CodeForge::GitHub, "first", "api"),
+            resolved_repo(CodeForge::GitLab, "second", "api"),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    workspace
+        .bind_execution(
+            "task".into(),
+            "execution".into(),
+            root.path().to_owned(),
+            true,
+        )
+        .unwrap();
+    let policy = workspace.preparation_policy.unwrap();
+    let mut requests = policy
+        .deferred
+        .iter()
+        .map(|record| record.request.clone())
+        .collect::<Vec<_>>();
+    requests[1].checkout_name = "api-second".into();
+    let mut batch = CheckoutBatch {
+        working_dir: root.path().to_owned(),
+        repositories: requests,
+    };
+    policy.resolve(&mut batch, true, false).unwrap();
+    assert_eq!(batch.repositories[0].checkout_name, "api");
+    assert_eq!(batch.repositories[1].checkout_name, "api-second");
+    assert!(workspace.source_repos.is_empty());
 }
 
 #[test]
@@ -148,6 +184,27 @@ fn reported_heads_are_keyed_by_checkout_name_and_omit_unresolved_heads() {
 #[cfg(unix)]
 #[test]
 fn head_probe_timeout_preserves_later_snapshot_repositories() {
+    if std::env::var_os("WARP_TEST_HEAD_PROBE").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::environment::tests::head_probe_timeout_preserves_later_snapshot_repositories",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_HEAD_PROBE", "1")
+            .env(super::super::environment_preparation::MODE_ENV, "legacy")
+            .env(super::super::environment_preparation::FILE_ENV, "")
+            .env("WARP_EXECUTION_ID", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     use std::io::Write as _;
 
     use nix::sys::stat::Mode;
@@ -781,242 +838,6 @@ fn resolved_repositories_reject_clone_directory_collisions() {
     ));
 }
 
-fn test_working_dir() -> PathBuf {
-    PathBuf::from("/home/agent")
-}
-
-#[test]
-fn deferred_instruction_absent_when_nothing_deferred() {
-    let eager = vec![repo(CodeForge::GitHub, "acme", "monolith")];
-    assert!(
-        build_deferred_repos_instruction(
-            &test_working_dir(),
-            &eager,
-            &[],
-            Path::new("/opt/oz"),
-            ShellType::Bash
-        )
-        .unwrap()
-        .is_none()
-    );
-}
-
-#[test]
-fn deferred_instruction_lists_github_and_nested_gitlab_repos_in_order() {
-    let deferred = vec![
-        resolved_repo(CodeForge::GitLab, "platform/backend", "api"),
-        resolved_repo(CodeForge::GitHub, "acme", "billing"),
-    ];
-    let instruction = build_deferred_repos_instruction(
-        &test_working_dir(),
-        &[],
-        &deferred,
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-
-    let github_pos = instruction.find("GitHub acme/billing").unwrap();
-    let gitlab_pos = instruction.find("GitLab platform/backend/api").unwrap();
-    assert!(
-        github_pos < gitlab_pos,
-        "repos must be sorted by forge, then owner, then name: {instruction}"
-    );
-    assert!(instruction.contains("https://github.com/acme/billing.git"));
-    assert!(instruction.contains("https://gitlab.com/platform/backend/api.git"));
-    assert!(instruction.contains("preferred target: /home/agent/billing"));
-    assert!(instruction.contains("preferred target: /home/agent/api"));
-    assert!(instruction.contains("read the built-in factory-deferred-repositories skill"));
-    assert!(!instruction.contains("git clone"));
-}
-
-#[test]
-fn deferred_instruction_targets_absolute_paths_under_the_single_eager_repo_auto_cd_state() {
-    let working_dir = test_working_dir();
-    let eager = vec![repo(CodeForge::GitHub, "acme", "eager-repo")];
-    let deferred = vec![resolved_repo(CodeForge::GitHub, "acme", "billing")];
-    let instruction = build_deferred_repos_instruction(
-        &working_dir,
-        &eager,
-        &deferred,
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert!(instruction.contains("preferred target: /home/agent/billing"));
-}
-
-#[test]
-fn deferred_instruction_is_deterministic_regardless_of_input_order() {
-    let a = vec![
-        resolved_repo(CodeForge::GitHub, "acme", "billing"),
-        resolved_repo(CodeForge::GitHub, "acme", "monolith"),
-    ];
-    let b = vec![
-        resolved_repo(CodeForge::GitHub, "acme", "monolith"),
-        resolved_repo(CodeForge::GitHub, "acme", "billing"),
-    ];
-
-    assert_eq!(
-        build_deferred_repos_instruction(
-            &test_working_dir(),
-            &[],
-            &a,
-            Path::new("/opt/oz"),
-            ShellType::Bash
-        )
-        .unwrap(),
-        build_deferred_repos_instruction(
-            &test_working_dir(),
-            &[],
-            &b,
-            Path::new("/opt/oz"),
-            ShellType::Bash
-        )
-        .unwrap()
-    );
-}
-
-#[test]
-fn deferred_instruction_flags_conflict_with_shared_target_name_and_never_emits_it() {
-    let deferred = vec![
-        resolved_repo(CodeForge::GitHub, "acme", "widget"),
-        resolved_repo(CodeForge::GitLab, "other", "widget"),
-    ];
-    let instruction = build_deferred_repos_instruction(
-        &test_working_dir(),
-        &[],
-        &deferred,
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert!(!instruction.contains("preferred target: /home/agent/widget"));
-    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
-    assert!(instruction.contains("target 'widget' conflicts with GitLab other/widget"));
-    assert!(
-        instruction.contains(
-            "set checkout_name to an unused single directory name under the workspace root"
-        )
-    );
-}
-
-#[test]
-fn deferred_instruction_flags_conflict_with_an_eager_repo_target() {
-    let eager = vec![repo(CodeForge::GitHub, "acme", "widget")];
-    let deferred = vec![resolved_repo(CodeForge::GitLab, "other", "widget")];
-    let instruction = build_deferred_repos_instruction(
-        &test_working_dir(),
-        &eager,
-        &deferred,
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert!(!instruction.contains("preferred target: /home/agent/widget"));
-    assert!(instruction.contains("target 'widget' conflicts with GitHub acme/widget"));
-}
-
-#[test]
-fn deferred_instruction_never_contains_secret_bearing_content() {
-    let deferred = vec![resolved_repo(CodeForge::GitHub, "acme", "billing")];
-    let instruction = build_deferred_repos_instruction(
-        &test_working_dir(),
-        &[],
-        &deferred,
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert!(!instruction.contains("WARP_FACTORY_REPO_CLONE_URL"));
-    assert!(
-        !instruction.contains("://") || !instruction.contains('@'),
-        "must not contain a user:pass@ URL: {instruction}"
-    );
-    for url in instruction.split_whitespace().filter(|s| s.contains("://")) {
-        assert!(
-            url.starts_with("https://github.com/") || url.starts_with("https://gitlab.com/"),
-            "unexpected URL shape (must be a plain forge HTTPS clone URL): {url}"
-        );
-    }
-}
-
-#[test]
-fn deferred_inventory_produces_valid_requests_and_a_quoted_runtime() {
-    let root = tempfile::TempDir::new().unwrap();
-    let instruction = build_deferred_repos_instruction(
-        root.path(),
-        &[],
-        &[
-            resolved_repo(CodeForge::GitHub, "Acme", "Billing"),
-            resolved_repo(CodeForge::GitLab, "Platform/Backend", "Api"),
-            resolved_repo(CodeForge::AzureDevOps, "Acme/Project", "Tools"),
-        ],
-        Path::new("/opt/oz build/oz'preview"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-    let runtime: serde_json::Value = serde_json::from_str(
-        instruction
-            .lines()
-            .find_map(|line| line.strip_prefix("Checkout runtime: "))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        runtime["working_dir"],
-        root.path().to_string_lossy().as_ref()
-    );
-    assert_eq!(
-        runtime["command_template"],
-        r#"'/opt/oz build/oz'"'"'preview' environment-checkout --requests-file '<requests-file>' --report-file '<report-file>' --fail-if-target-exists"#
-    );
-    let requests = instruction
-        .lines()
-        .filter_map(|line| {
-            line.split_once("; checkout request: ")
-                .map(|(_, request)| serde_json::from_str::<CheckoutRequest>(request).unwrap())
-        })
-        .collect::<Vec<_>>();
-    let batch = CheckoutBatch {
-        working_dir: root.path().to_owned(),
-        repositories: requests,
-    };
-    batch.validate().unwrap();
-    assert_eq!(batch.repositories.len(), 3);
-    let github = batch
-        .repositories
-        .iter()
-        .find(|request| request.source.code_forge == RepositoryForge::GitHub)
-        .unwrap();
-    assert_eq!(github.source.repo_owner, "Acme");
-    assert_eq!(github.source.repo_name, "Billing");
-    assert_eq!(github.checkout_name, "Billing");
-}
-
-#[test]
-fn deferred_inventory_rejects_unsupported_forges() {
-    assert!(matches!(
-        build_deferred_repos_instruction(
-            &test_working_dir(),
-            &[],
-            &[resolved_repo(CodeForge::Unknown, "acme", "billing")],
-            Path::new("/opt/oz"),
-            ShellType::Bash,
-        ),
-        Err(PrepareEnvironmentError::UnsupportedRepositoryForge { .. })
-    ));
-}
 #[test]
 fn single_repo_name_returns_none_for_zero_or_many_repos() {
     let no_repos = Vec::<SourceRepo>::new();
@@ -1673,25 +1494,21 @@ fn deferred_inventory_keeps_source_path_and_all_frozen_preparation() {
         expected_sha: Some(sha.into()),
         preserve_origin: true,
     };
-    let instruction = build_deferred_repos_instruction(
-        root.path(),
-        &[],
-        &[deferred],
-        Path::new("/opt/oz"),
-        ShellType::Bash,
-    )
-    .unwrap()
-    .unwrap();
-    let request: CheckoutRequest = serde_json::from_str(
-        instruction
-            .lines()
-            .find_map(|line| {
-                line.split_once("; checkout request: ")
-                    .map(|(_, request)| request)
-            })
-            .unwrap(),
-    )
-    .unwrap();
+    let mut workspace =
+        WorkspaceConfiguration::from_resolved(Vec::new(), vec![deferred], Vec::new()).unwrap();
+    workspace
+        .bind_execution(
+            "task".into(),
+            "execution".into(),
+            root.path().to_owned(),
+            true,
+        )
+        .unwrap();
+    let policy = workspace.preparation_policy.unwrap();
+    assert!(policy.eager.is_empty());
+    assert_eq!(policy.deferred[0].source.repo_owner, "source");
+    assert_eq!(policy.deferred[0].source.repo_name, "source-name");
+    let request = &policy.deferred[0].request;
     request.validate().unwrap();
     assert_eq!(request.source.repo_owner, "benchmarks");
     assert_eq!(request.source.repo_name, "substitute");
@@ -1703,5 +1520,4 @@ fn deferred_inventory_keeps_source_path_and_all_frozen_preparation() {
     assert_eq!(request.expected_sha.as_deref(), Some(sha));
     assert!(request.fetch_branch_only);
     assert!(!request.remove_origin);
-    assert!(!instruction.contains("https://github.com/source/source-name.git"));
 }

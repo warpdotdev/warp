@@ -71,7 +71,6 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
         let root = tempfile::TempDir::new().unwrap();
         let args =
             parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
-        let _capability = FeatureFlag::FactoryDeferredRepositories.override_enabled(true);
         let eager_repository = json!([{
             "forge": "GITHUB", "owner": "acme", "name": "api",
             "ref": {"type": "BRANCH", "value": "feature"},
@@ -105,7 +104,10 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 super::build_execution_task_and_options(
                     &args,
                     config,
-                    supports_deferred_repositories,
+                    super::RepositoryContract {
+                        supports_deferred_repositories,
+                        use_factory_repositories: false,
+                    },
                     root.path().to_path_buf(),
                     None,
                     Vec::new(),
@@ -114,10 +116,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                 .unwrap()
             });
             assert_eq!(options.workspace.source_repos.len(), expected_eager_count);
-            assert_eq!(
-                options.use_factory_repositories,
-                supports_deferred_repositories
-            );
+            assert!(!options.use_factory_repositories);
             if expected_eager_count != 0 {
                 assert_eq!(
                     options.workspace.source_repos,
@@ -174,8 +173,49 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
 }
 
 #[test]
+fn paired_execution_rejects_a_different_task_or_execution() {
+    App::test((), |mut app| async move {
+        let root = tempfile::TempDir::new().unwrap();
+        let args =
+            parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+        for (task_id, execution_id) in [
+            ("00000000-0000-0000-0000-000000000002", "42"),
+            (TASK_ID, "43"),
+        ] {
+            let config = serde_json::from_value(json!({
+                "taskId": task_id, "executionId": execution_id, "harness": "OZ",
+                "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+                "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+                "inferenceProviders": null, "providers": null,
+                "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
+                "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+                "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
+                "setupCommands": [], "sessionSharingAcls": [],
+                "skipInitialTurn": false, "snapshotDisabled": false,
+            }))
+            .unwrap();
+            let result = app.update(|ctx| {
+                super::build_execution_task_and_options(
+                    &args,
+                    config,
+                    super::RepositoryContract {
+                        supports_deferred_repositories: true,
+                        use_factory_repositories: false,
+                    },
+                    root.path().to_owned(),
+                    None,
+                    Vec::new(),
+                    ctx,
+                )
+            });
+            assert!(result.is_err());
+        }
+    });
+}
+
+#[test]
 fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
-    for scenario in ["eager", "deferred", "empty", "missing"] {
+    for scenario in ["eager", "deferred", "empty", "non-factory", "missing"] {
         let output = ProcessCommand::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -183,6 +223,14 @@ fn paired_execution_keeps_captured_capability_after_runtime_flag_changes() {
                 "--nocapture",
             ])
             .env("WARP_TEST_DEFERRED_CAPABILITY_BOOTSTRAP", scenario)
+            .env(
+                "WARP_FACTORY_ID",
+                if scenario == "non-factory" {
+                    ""
+                } else {
+                    "factory"
+                },
+            )
             .env("WARP_ISOLATION_PLATFORM", "docker")
             .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
             .output()
@@ -202,6 +250,7 @@ fn deferred_capability_bootstrap_subprocess() {
         return;
     };
     let supports_deferred_repositories = scenario != "eager";
+    let use_factory_repositories = supports_deferred_repositories && scenario != "non-factory";
     let eager = if supports_deferred_repositories {
         json!([])
     } else {
@@ -261,7 +310,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "taskId": TASK_ID, "workloadToken": "test-workload-token",
         "acceptsPartialRefresh": false
     });
-    if supports_deferred_repositories {
+    if use_factory_repositories {
         credentials_input["useFactoryRepositories"] = json!(true);
     }
     let credentials = server
@@ -301,7 +350,7 @@ fn deferred_capability_bootstrap_subprocess() {
             .await
             .unwrap();
         assert_eq!(
-            data.supports_deferred_repositories,
+            data.repository_contract.supports_deferred_repositories,
             supports_deferred_repositories
         );
         drop(_capability);
@@ -335,10 +384,7 @@ fn deferred_capability_bootstrap_subprocess() {
             return;
         }
         let (options, _, _) = result.unwrap();
-        assert_eq!(
-            options.use_factory_repositories,
-            supports_deferred_repositories
-        );
+        assert_eq!(options.use_factory_repositories, use_factory_repositories);
         assert_eq!(
             options.workspace.source_repos.len(),
             usize::from(!supports_deferred_repositories)
@@ -785,46 +831,49 @@ fn test_with_paused_time<F: Future<Output = ()> + 'static>(test: impl FnOnce(App
 }
 
 #[test]
-fn required_execution_launch_rejects_disabled_bootstrap_before_legacy_setup() {
-    App::test((), |mut app| async move {
-        let _execution_config = FeatureFlag::CloudAgentExecutionConfig.override_enabled(false);
-        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        let mut ai_client = MockAIClient::new();
-        ai_client
-            .expect_post_agent_run_client_event()
-            .times(1)
-            .returning(|_, _| Ok(()));
-        ai_client
-            .expect_update_agent_task()
-            .times(1)
-            .withf(|_, state, _, _, status, _, _| {
-                *state == Some(AgentTaskState::Failed)
-                    && status.as_ref().is_some_and(|status| {
-                        status.message.contains("execution bootstrap is required")
-                    })
-            })
-            .returning(|_, _, _, _, _, _, _| Ok(()));
-        let runner = app.add_singleton_model(|_| AgentDriverRunner);
-        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-        let args = parse_run_agent_args(&[
-            "agent",
-            "run",
-            "--task-id",
-            TASK_ID,
-            "--execution-id",
-            "42",
-            "--require-execution-config",
-        ]);
-        let error = AgentDriverRunner::setup_and_run_driver(
-            foreground,
-            args,
-            Arc::new(ai_client),
-            OutputFormat::Text,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, AgentDriverError::ConfigBuildFailed(_)));
-    });
+fn required_execution_launch_rejects_unavailable_bootstrap_before_legacy_setup() {
+    for enabled in [false, true] {
+        App::test((), move |mut app| async move {
+            let _execution_config =
+                FeatureFlag::CloudAgentExecutionConfig.override_enabled(enabled);
+            app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+            let mut ai_client = MockAIClient::new();
+            ai_client
+                .expect_post_agent_run_client_event()
+                .times(1)
+                .returning(|_, _| Ok(()));
+            ai_client
+                .expect_update_agent_task()
+                .times(1)
+                .withf(|_, state, _, _, status, _, _| {
+                    *state == Some(AgentTaskState::Failed)
+                        && status.as_ref().is_some_and(|status| {
+                            status.message.contains("execution bootstrap is required")
+                        })
+                })
+                .returning(|_, _, _, _, _, _, _| Ok(()));
+            let runner = app.add_singleton_model(|_| AgentDriverRunner);
+            let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+            let args = parse_run_agent_args(&[
+                "agent",
+                "run",
+                "--task-id",
+                TASK_ID,
+                "--execution-id",
+                if enabled { "" } else { "42" },
+                "--require-execution-config",
+            ]);
+            let error = AgentDriverRunner::setup_and_run_driver(
+                foreground,
+                args,
+                Arc::new(ai_client),
+                OutputFormat::Text,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, AgentDriverError::ConfigBuildFailed(_)));
+        });
+    }
 }
 
 #[test]

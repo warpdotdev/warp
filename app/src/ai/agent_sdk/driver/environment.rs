@@ -30,6 +30,7 @@ use super::environment_checkout_protocol::{
     CloneFailureIdentityDiagnostics, ResolvedHeads, parse_resolved_head_sha,
     sanitize_git_author_name, sanitize_git_credential_username,
 };
+use super::environment_preparation::{PreparationPolicy, PreparationRepository};
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, failure_output, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -245,6 +246,8 @@ pub(crate) struct WorkspaceConfiguration {
     pub setup_commands: Vec<String>,
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
     pub has_environment: bool,
+    pub(super) preparation_policy: Option<PreparationPolicy>,
+    resolved_repos: Vec<ResolvedRepository>,
     clone_requests: Vec<RepositoryCloneRequest>,
 }
 
@@ -257,6 +260,50 @@ pub(crate) struct ResolvedRepository {
     pub expected_sha: Option<String>,
 }
 impl WorkspaceConfiguration {
+    pub(crate) fn bind_execution(
+        &mut self,
+        task_id: String,
+        execution_id: String,
+        working_dir: PathBuf,
+        supports_deferred_repositories: bool,
+    ) -> anyhow::Result<()> {
+        let records = |repos: &[ResolvedRepository]| -> anyhow::Result<Vec<PreparationRepository>> {
+            repos
+                .iter()
+                .map(|repo| {
+                    let clones = resolved_repository_clone_requests(std::slice::from_ref(repo))?;
+                    let batch = checkout_requests_batch(&clones, &working_dir)?;
+                    let mut request = batch
+                        .repositories
+                        .into_iter()
+                        .next()
+                        .ok_or(PrepareEnvironmentError::InvalidRuntimeState)?;
+                    request.remove_origin = clones[0].remove_origin;
+                    Ok(PreparationRepository {
+                        source: RepositoryIdentity {
+                            code_forge: repository_forge_for_repo(&repo.source)
+                                .ok_or(PrepareEnvironmentError::InvalidRuntimeState)?,
+                            repo_owner: repo.source.owner.clone(),
+                            repo_name: repo.source.repo.clone(),
+                        },
+                        request,
+                    })
+                })
+                .collect()
+        };
+        let policy = PreparationPolicy {
+            task_id,
+            execution_id,
+            working_dir: working_dir.clone(),
+            supports_deferred_repositories,
+            eager: records(&self.resolved_repos)?,
+            deferred: records(&self.deferred_repos)?,
+        };
+        policy.validate()?;
+        self.preparation_policy = Some(policy);
+        Ok(())
+    }
+
     pub fn from_legacy(
         environment: Option<&AmbientAgentEnvironment>,
         additional_source_repos: Vec<SourceRepo>,
@@ -281,6 +328,8 @@ impl WorkspaceConfiguration {
             factory_skill_dirs: None,
             has_environment: environment.is_some(),
             clone_requests,
+            preparation_policy: None,
+            resolved_repos: Vec::new(),
         })
     }
 
@@ -300,6 +349,8 @@ impl WorkspaceConfiguration {
             factory_skill_dirs: None,
             has_environment: false,
             clone_requests,
+            preparation_policy: None,
+            resolved_repos: repositories,
         })
     }
 }
@@ -381,11 +432,13 @@ pub(crate) fn prepare_environment(
     async move {
         let WorkspaceConfiguration {
             source_repos,
-            deferred_repos: _,
             setup_commands,
             factory_skill_dirs: _,
             clone_requests,
             has_environment: _,
+            deferred_repos: _,
+            preparation_policy: _,
+            resolved_repos: _,
         } = workspace;
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
@@ -456,144 +509,6 @@ pub(crate) fn merge_repos_deduped(
     }
 
     Ok(merged)
-}
-
-/// Builds the inventory for a run with deferred Factory repositories.
-pub(crate) fn build_deferred_repos_instruction(
-    working_dir: &Path,
-    eager_repos: &[SourceRepo],
-    deferred_repos: &[ResolvedRepository],
-    executable: &Path,
-    shell_type: ShellType,
-) -> Result<Option<String>, PrepareEnvironmentError> {
-    if deferred_repos.is_empty() {
-        return Ok(None);
-    }
-
-    let mut sorted_deferred = deferred_repos.to_vec();
-    sorted_deferred.sort_by(|a, b| {
-        a.source
-            .code_forge
-            .unwrap_or_default()
-            .to_string()
-            .cmp(&b.source.code_forge.unwrap_or_default().to_string())
-            .then_with(|| {
-                a.source
-                    .owner
-                    .to_lowercase()
-                    .cmp(&b.source.owner.to_lowercase())
-            })
-            .then_with(|| {
-                a.source
-                    .repo
-                    .to_lowercase()
-                    .cmp(&b.source.repo.to_lowercase())
-            })
-    });
-
-    let deferred_sources = sorted_deferred
-        .iter()
-        .map(|repo| repo.source.clone())
-        .collect::<Vec<_>>();
-    let entries = sorted_deferred
-        .iter()
-        .map(|prepared| {
-            let repo = &prepared.source;
-            let forge = repo.code_forge.unwrap_or_default();
-            let remote = prepared.clone_from.as_ref().unwrap_or(repo);
-            let clone_url = remote.https_clone_url();
-            let identity = format!("{forge} {}/{}", repo.owner, repo.repo);
-            let code_forge = repository_forge_for_repo(remote).ok_or_else(|| {
-                PrepareEnvironmentError::UnsupportedRepositoryForge {
-                    repo_name: format!("{}/{}", repo.owner, repo.repo),
-                }
-            })?;
-            let request = CheckoutRequest {
-                source: RepositoryIdentity {
-                    code_forge,
-                    repo_owner: remote.owner.clone(),
-                    repo_name: remote.repo.clone(),
-                },
-                checkout_name: repo.repo.clone(),
-                head: prepared.checkout.clone(),
-                fetch_branch_only: prepared.clone_from.is_some()
-                    && matches!(prepared.checkout, Some(RepositoryHeadRef::Branch(_))),
-                expected_sha: prepared.expected_sha.clone(),
-                remove_origin: !prepared.preserve_origin,
-            };
-            request.validate().map_err(|reason| PrepareEnvironmentError::InvalidRepositoryPreparationOverrides { reason: reason.to_owned() })?;
-            let request = serde_json::to_string(&request)
-            .map_err(|_| PrepareEnvironmentError::CheckoutHelper {
-                reason: "could not serialize deferred checkout request",
-            })?;
-            let target = if let Some(conflicting) =
-                target_name_conflict(repo, eager_repos, &deferred_sources)
-            {
-                format!(
-                    "- {identity} — {clone_url}; target '{}' conflicts with {conflicting}; set checkout_name to an unused single directory name under the workspace root",
-                    repo.repo
-                )
-            } else {
-                let target = deferred_repo_target(working_dir, &repo.repo);
-                format!("- {identity} — {clone_url}; preferred target: {target}")
-            };
-            Ok(format!("{target}; checkout request: {request}"))
-        })
-        .collect::<Result<Vec<_>, PrepareEnvironmentError>>()?;
-    let command = build_checkout_helper_command(
-        executable,
-        Path::new("<requests-file>"),
-        Path::new("<report-file>"),
-        false,
-        shell_type,
-    );
-    let runtime = serde_json::json!({
-        "working_dir": working_dir.to_string_lossy(),
-        "command_template": format!("{command} --fail-if-target-exists"),
-    });
-
-    Ok(Some(format!(
-        "Deferred Factory repositories (not yet cloned):\nCheckout runtime: {runtime}\n{}\n\
-         When needed, read the built-in factory-deferred-repositories skill before cloning.",
-        entries.join("\n\n")
-    )))
-}
-
-/// Uses POSIX separators because the target belongs to the agent's shell, not the host OS.
-fn deferred_repo_target(working_dir: &Path, repo_name: &str) -> String {
-    format!(
-        "{}/{repo_name}",
-        working_dir.to_string_lossy().trim_end_matches('/')
-    )
-}
-
-/// Names other repository identities sharing the same checkout directory.
-fn target_name_conflict(
-    repo: &SourceRepo,
-    eager_repos: &[SourceRepo],
-    deferred_repos: &[SourceRepo],
-) -> Option<String> {
-    let conflicting: Vec<String> = eager_repos
-        .iter()
-        .chain(deferred_repos.iter())
-        .filter(|other| {
-            other.repo == repo.repo
-                && (other.owner != repo.owner || other.code_forge != repo.code_forge)
-        })
-        .map(|other| {
-            format!(
-                "{} {}/{}",
-                other.code_forge.unwrap_or_default(),
-                other.owner,
-                other.repo
-            )
-        })
-        .collect();
-    if conflicting.is_empty() {
-        None
-    } else {
-        Some(conflicting.join(", "))
-    }
 }
 
 /// Environment variable carrying the authenticated remote URL of a Factory's

@@ -149,7 +149,7 @@ fn factory_deferred_repositories_skill_is_not_in_the_general_catalog() {
     let skill = parse_bundled_skill(&path).expect("Factory deferred skill parses");
     assert_eq!(skill.name, FACTORY_DEFERRED_REPOSITORIES_SKILL);
     assert!(skill.content.contains("--fail-if-target-exists"));
-    assert!(skill.content.contains("command_template"));
+    assert!(skill.content.contains("checkout_name"));
     assert!(skill.content.contains("request_index"));
     assert!(
         skill
