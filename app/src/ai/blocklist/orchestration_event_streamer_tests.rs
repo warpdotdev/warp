@@ -3139,6 +3139,10 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
         let mut mock = MockAIClient::new();
         mock.expect_update_event_sequence_on_server()
             .returning(|_, _| Ok(()));
+        // Child discovery kicks off placeholder / tracker metadata fetches in the background;
+        // they are not under test here.
+        mock.expect_get_ambient_agent_task()
+            .returning(|_| Err(anyhow::anyhow!("not under test")));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let server_api = ServerApiProvider::new_for_test().get();
         let streamer = app.add_singleton_model(|ctx| {
@@ -3161,11 +3165,13 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
             });
         });
 
+        // Non-terminal child lifecycle events only: a terminal one would also evict the child's
+        // cached task through `AgentConversationsModel`, which this fixture does not register.
         let events = vec![
             make_seq_event(EVENT_CHILD_AGENT_STARTED, &parent_run_id, Some(&child), 20),
             make_seq_event("run_in_progress", &child, None, 21),
             make_seq_event("new_message", &parent_run_id, Some("msg-1"), 22),
-            make_seq_event("run_succeeded", &child, None, 23),
+            make_seq_event("run_blocked", &child, None, 23),
         ];
         let messages = vec![ReceivedMessageInput {
             message_id: "msg-1".to_string(),
@@ -3203,7 +3209,12 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
             *watched_statuses.borrow(),
             vec![
                 (child.clone(), ConversationStatus::InProgress),
-                (child.clone(), ConversationStatus::Success),
+                (
+                    child.clone(),
+                    ConversationStatus::Blocked {
+                        blocked_action: String::new(),
+                    },
+                ),
             ],
             "watched-run status updates still reach the pill bar"
         );
