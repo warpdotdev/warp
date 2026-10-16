@@ -913,14 +913,12 @@ impl TerminalManager {
                     && orchestration_viewer_model.lock().is_none()
                     && let Some(task_id) = ambient_task_id {
                         let terminal_view_id = view.id();
-                        let weak_view_handle_for_orch = weak_view_handle.clone();
                         let orchestration_viewer_model_slot =
                             orchestration_viewer_model.clone();
                         let model = ctx.add_model(|model_ctx| {
                             OrchestrationViewerModel::new(
                                 task_id,
                                 terminal_view_id,
-                                weak_view_handle_for_orch,
                                 model_ctx,
                             )
                         });

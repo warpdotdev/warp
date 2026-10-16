@@ -62,9 +62,8 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
     });
 
     // The OVM registers with the streamer on construction.
-    let ovm_handle = app.add_model(|ctx| {
-        OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
-    });
+    let ovm_handle =
+        app.add_model(|ctx| OrchestrationViewerModel::new(parent, terminal_view_id, ctx));
 
     // Build the minimal field values the `TerminalManager` struct needs.
     // The network-side fields are left in their `Idle` / `None` defaults

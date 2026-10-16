@@ -162,12 +162,15 @@ impl PaneGroup {
                     .child_agent_panes
                     .get(&child_id)
                     .is_some_and(|pane_id| self.has_pane_id(*pane_id))
+                    && self
+                        .create_child_loading_placeholder(
+                            child_conversation,
+                            AgentViewEntryOrigin::CloudAgent,
+                            ctx,
+                        )
+                        .is_none()
                 {
-                    let _ = self.create_child_loading_placeholder(
-                        child_conversation,
-                        AgentViewEntryOrigin::CloudAgent,
-                        ctx,
-                    );
+                    return;
                 }
                 self.pending_child_hydrations.insert(task_id, child_id);
                 self.ensure_pending_ambient_restoration_subscription(ctx);
