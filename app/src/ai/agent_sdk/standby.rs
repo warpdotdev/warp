@@ -229,9 +229,12 @@ async fn prepare(
             )
         })
         .map_err(AgentDriverError::ConfigBuildFailed)?;
+    // Deferred checkouts belong to the claiming task, so the standby workspace declares none and
+    // carries them on the prepared sandbox instead.
     let mut workspace = WorkspaceConfiguration::from_resolved(
         execution_config::repositories(preparation.repositories)
             .map_err(AgentDriverError::ConfigBuildFailed)?,
+        Vec::new(),
         preparation.setup_commands,
     )
     .map_err(|error| AgentDriverError::ConfigBuildFailed(error.into()))?;
