@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use warp_cli::agent::{Harness, HarnessTransport};
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
@@ -589,7 +589,7 @@ pub(crate) fn harness_env_vars(
     selected_harness: Harness,
     transport: HarnessTransport,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
-) -> Result<HashMap<OsString, OsString>> {
+) -> Result<(HashMap<OsString, OsString>, Option<TempDir>)> {
     let mut env_vars = HashMap::new();
 
     match (selected_harness, transport) {
@@ -610,14 +610,17 @@ pub(crate) fn harness_env_vars(
                 }
             }
         }
-        (Harness::Pi, _) => return pi_env_vars(),
+        (Harness::Pi, _) => {
+            let (env_vars, dir) = pi_env_vars()?;
+            return Ok((env_vars, Some(dir)));
+        }
         (
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Unknown,
             _,
         ) => {}
     }
 
-    Ok(env_vars)
+    Ok((env_vars, None))
 }
 
 /// Indicates when the harness conversation is being saved.

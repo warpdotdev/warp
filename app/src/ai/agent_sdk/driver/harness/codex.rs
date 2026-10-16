@@ -813,6 +813,14 @@ fn resolve_openai_base_url_from_secret(
             .as_ref()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty()),
+        ManagedSecretValue::LlmProviderApiKey {
+            provider_id,
+            base_url,
+            ..
+        } if provider_id == "openai" => base_url
+            .as_ref()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
         _ => None,
     })
 }

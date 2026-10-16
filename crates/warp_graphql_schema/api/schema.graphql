@@ -1957,6 +1957,8 @@ type HarnessInfo {
   displayName: String!
   enabled: Boolean!
   harness: AgentHarness!
+  piVersion: String
+  piProviders: [PiProviderInfo!]
 }
 
 input HarnessInput {
@@ -2401,6 +2403,13 @@ type MCPTemplateVariable {
   key: String!
 }
 
+type PiProviderInfo {
+  id: String!
+  name: String!
+  apiKeySupported: Boolean!
+  unsupportedReason: String
+}
+
 type ManagedSecret {
   createdAt: Time!
 
@@ -2414,6 +2423,7 @@ type ManagedSecret {
 
   """The user or team who owns this secret."""
   owner: Space!
+  providerId: String
 
   """The kind of secret value."""
   type: ManagedSecretType!
@@ -2489,6 +2499,12 @@ type ManagedSecretOpenAiApiKeyValue {
   baseUrl: String
 }
 
+type ManagedSecretLlmProviderApiKeyValue {
+  providerId: String!
+  apiKey: String!
+  baseUrl: String
+}
+
 """A raw, unencrypted managed secret value."""
 type ManagedSecretRawValue {
   value: String!
@@ -2508,10 +2524,11 @@ enum ManagedSecretType {
   DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
+  LLM_PROVIDER_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretLlmProviderApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""

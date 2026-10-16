@@ -111,14 +111,14 @@ fn claude_model_env_vars_depend_on_transport() {
         reasoning_level: None,
     };
 
-    let pty = harness_env_vars(Harness::Claude, HarnessTransport::Pty, Some(&config)).unwrap();
+    let (pty, _) = harness_env_vars(Harness::Claude, HarnessTransport::Pty, Some(&config)).unwrap();
     assert_eq!(
         pty.get(OsStr::new("ANTHROPIC_MODEL")).map(|v| v.to_str()),
         Some(Some("claude-fable-5-1"))
     );
     assert!(!pty.contains_key(OsStr::new("ANTHROPIC_CUSTOM_MODEL_OPTION")));
 
-    let acp = harness_env_vars(Harness::Claude, HarnessTransport::Acp, Some(&config)).unwrap();
+    let (acp, _) = harness_env_vars(Harness::Claude, HarnessTransport::Acp, Some(&config)).unwrap();
     assert_eq!(
         acp.get(OsStr::new("ANTHROPIC_MODEL")).map(|v| v.to_str()),
         Some(Some("claude-fable-5-1"))
@@ -133,7 +133,7 @@ fn claude_model_env_vars_depend_on_transport() {
         model_id: "default".to_string(),
         reasoning_level: None,
     };
-    let acp_default = harness_env_vars(
+    let (acp_default, _) = harness_env_vars(
         Harness::Claude,
         HarnessTransport::Acp,
         Some(&default_config),
@@ -144,6 +144,7 @@ fn claude_model_env_vars_depend_on_transport() {
     assert!(
         harness_env_vars(Harness::Claude, HarnessTransport::Acp, None)
             .unwrap()
+            .0
             .is_empty()
     );
 }
