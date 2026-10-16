@@ -68,7 +68,7 @@ use self::protocol::{
     RequestPermissionParams, RequestPermissionResponse, WriteTextFileParams,
 };
 use self::turn_driver::{
-    EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, TurnDriver, TurnHost, TurnState,
+    EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, TurnCancellation, TurnDriver, TurnHost, TurnState,
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
@@ -87,6 +87,7 @@ use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, validate_cli_installed,
 };
+use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -1106,6 +1107,26 @@ impl TurnHost for DriverTurnHost {
         )
         .await
         .map_err(|error| anyhow!("{error}"))
+    }
+
+    async fn cancel_turn(&self, stream_id: ResponseStreamId, by: TurnCancellation) {
+        let reason = match by {
+            TurnCancellation::FollowUp => CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: true,
+            },
+            TurnCancellation::Interrupt => CancellationReason::ManuallyCancelled,
+        };
+        let cancelled = with_ai_controller(
+            &self.foreground,
+            &self.terminal_driver,
+            move |controller, ctx| {
+                controller.cancel_external_harness_turn(&stream_id, reason, ctx);
+            },
+        )
+        .await;
+        if cancelled.is_err() {
+            log::warn!("Agent driver dropped before the cancelled ACP turn could be finished");
+        }
     }
 
     async fn mark_conversation_cancelled(&self) {

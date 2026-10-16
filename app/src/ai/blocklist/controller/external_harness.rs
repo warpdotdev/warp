@@ -5,14 +5,14 @@
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warp_errors::report_error;
-use warp_multi_agent_api::response_event::StreamInit;
+use warp_multi_agent_api::response_event::{StreamFinished, StreamInit, stream_finished};
 use warp_multi_agent_api::{ResponseEvent, response_event};
 use warpui::{ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
-use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
+use crate::ai::agent::{BaseUserQuery, CancellationReason};
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryId, QueuedQueryModel};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
@@ -127,7 +127,42 @@ impl BlocklistAIController {
         true
     }
 
-    /// Marks `conversation_id` cancelled once the harness has settled the turn it cut short.
+    /// Ends the harness-driven turn open on `stream_id` as a cancellation, the way an
+    /// interrupted native request ends: its exchanges finish as cancelled and the conversation
+    /// status follows `reason` (a follow-up that cut the turn short keeps it `InProgress`; an
+    /// interrupt marks it `Cancelled`). Viewers see the stream finish.
+    pub(in crate::ai) fn cancel_external_harness_turn(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_for_response_stream(stream_id)
+        else {
+            log::warn!("No conversation for external harness response stream {stream_id:?}");
+            return;
+        };
+        let finished = ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        };
+        self.tee_response_event_to_viewers(&finished, conversation_id, ctx);
+        let terminal_surface_id = self.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.mark_response_stream_cancelled(
+                stream_id,
+                conversation_id,
+                terminal_surface_id,
+                reason,
+                ctx,
+            );
+        });
+    }
+
+    /// Marks `conversation_id` cancelled when an interrupt arrives with no turn to cut short.
     pub(in crate::ai) fn mark_external_harness_conversation_cancelled(
         &self,
         conversation_id: AIConversationId,

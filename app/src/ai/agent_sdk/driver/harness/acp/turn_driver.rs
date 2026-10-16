@@ -73,7 +73,10 @@ pub(super) trait TurnHost: Send + Sync {
         stream_id: ResponseStreamId,
         finished: StreamFinished,
     ) -> Result<()>;
-    /// Marks the conversation cancelled, after a cancelled turn's stream has been finished.
+    /// Ends the stream of a turn the agent cancelled; `by` decides what the conversation's
+    /// status becomes.
+    async fn cancel_turn(&self, stream_id: ResponseStreamId, by: TurnCancellation);
+    /// Marks the conversation cancelled when an interrupt arrives with no turn to cut short.
     async fn mark_conversation_cancelled(&self);
     /// Captures the conversation as encoded `ConversationData`, or `None` when there is nothing
     /// to upload.
@@ -139,6 +142,16 @@ pub(super) enum TurnOutcome {
     Stopped(StopReason),
     /// The agent acknowledged a `session/cancel`.
     Cancelled,
+}
+
+/// What cut a turn short. The distinction is the conversation's status afterwards, which is
+/// what the run state and its integrations mirror: a follow-up continues the conversation at
+/// once, so the turn boundary is internal and the status stays `InProgress`, as when a native
+/// follow-up interrupts a request; an interrupt ends it, as a native stop does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnCancellation {
+    FollowUp,
+    Interrupt,
 }
 
 /// A follow-up taken while a turn was still running, waiting for that turn to be cancelled.
@@ -337,43 +350,39 @@ impl TurnDriver {
     ) -> Result<TurnOutcome> {
         self.state.set_in_turn(true);
         let turn_result = self.prompt(mapper, prompt).await;
-        let finished = match &turn_result {
-            Ok(TurnOutcome::Stopped(stop_reason)) => stream_finished_for(*stop_reason),
-            Ok(TurnOutcome::Cancelled) => done(),
+        let finish_events = mapper.finish_events();
+        if let Err(error) = self.apply_events(mapper, finish_events).await {
+            log::warn!("Failed to settle ACP tool calls: {error}");
+        }
+        // The settling flag must be accurate before the status change that ends the turn is
+        // emitted, since that is what gates the driver's idle exit.
+        self.state.set_settling(!self.queued.is_empty());
+        let stream_id = self.turn.stream_id.clone();
+        match &turn_result {
+            Ok(TurnOutcome::Cancelled) => {
+                let by = if self.queued.is_empty() {
+                    TurnCancellation::Interrupt
+                } else {
+                    TurnCancellation::FollowUp
+                };
+                self.host.cancel_turn(stream_id, by).await;
+            }
+            Ok(TurnOutcome::Stopped(stop_reason)) => {
+                self.finish_turn(stream_id, stream_finished_for(*stop_reason))
+                    .await;
+            }
             Err(error) => {
                 log::error!("ACP turn failed: {error:#}");
-                StreamFinished {
+                let finished = StreamFinished {
                     reason: Some(stream_finished::Reason::InternalError(
                         stream_finished::InternalError {
                             message: format!("{error:#}"),
                         },
                     )),
                     ..Default::default()
-                }
+                };
+                self.finish_turn(stream_id, finished).await;
             }
-        };
-        let finish_events = mapper.finish_events();
-        if let Err(error) = self.apply_events(mapper, finish_events).await {
-            log::warn!("Failed to settle ACP tool calls: {error}");
-        }
-        // The settling flag must be accurate before the status changes it gates are emitted:
-        // a turn that is not steering a queued follow-up settles with its stream, a cancelled
-        // one with the `Cancelled` status that follows it.
-        let cancelled = matches!(turn_result, Ok(TurnOutcome::Cancelled));
-        if !cancelled {
-            self.state.set_settling(!self.queued.is_empty());
-        }
-        if self
-            .host
-            .finish_turn(self.turn.stream_id.clone(), finished)
-            .await
-            .is_err()
-        {
-            log::warn!("Agent driver dropped before the ACP turn could be finished");
-        }
-        if cancelled {
-            self.state.set_settling(!self.queued.is_empty());
-            self.host.mark_conversation_cancelled().await;
         }
         self.request_save().await;
         self.state.set_in_turn(false);
@@ -382,6 +391,12 @@ impl TurnDriver {
                 .await;
         }
         turn_result
+    }
+
+    async fn finish_turn(&self, stream_id: ResponseStreamId, finished: StreamFinished) {
+        if self.host.finish_turn(stream_id, finished).await.is_err() {
+            log::warn!("Agent driver dropped before the ACP turn could be finished");
+        }
     }
 
     /// Captures the conversation at the request-stream boundary just closed and asks the driver
@@ -604,13 +619,6 @@ impl TurnDriver {
             }
         }
         Ok(())
-    }
-}
-
-fn done() -> StreamFinished {
-    StreamFinished {
-        reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
-        ..Default::default()
     }
 }
 

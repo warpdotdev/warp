@@ -18,7 +18,7 @@ use warpui::{App, AppContext};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
-use crate::ai::agent::{AIAgentActionId, AIAgentInput};
+use crate::ai::agent::{AIAgentActionId, AIAgentInput, CancellationReason};
 use crate::ai::blocklist::controller::ParticipantId;
 use crate::ai::blocklist::{CancellationRoute, QueuedQueryModel};
 use crate::persistence::model::AgentConversationData;
@@ -142,6 +142,49 @@ fn status(ctx: &AppContext, id: AIConversationId) -> ConversationStatus {
         .unwrap()
         .status()
         .clone()
+}
+
+/// The cancellation reason of every root-task exchange, `None` for those not cancelled.
+fn exchange_cancel_reasons(
+    ctx: &AppContext,
+    id: AIConversationId,
+) -> Vec<Option<CancellationReason>> {
+    BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&id)
+        .unwrap()
+        .root_task_exchanges()
+        .map(|exchange| exchange.output_status.cancel_reason().copied())
+        .collect()
+}
+
+/// Opens a harness turn on `id` and echoes `query` into it, as the harness does before the
+/// agent starts answering. The first turn also creates the root task, as the ACP mapper's
+/// initial actions do.
+fn begin_turn_with_query(
+    controller: &mut BlocklistAIController,
+    id: AIConversationId,
+    query: &str,
+    ctx: &mut ModelContext<BlocklistAIController>,
+) -> ExternalHarnessTurn {
+    let turn = controller
+        .begin_external_harness_turn(id, Some("run-1".into()), ctx)
+        .unwrap();
+    let task_id = root_task_id(ctx, id);
+    let root_is_optimistic = BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&id)
+        .unwrap()
+        .get_root_task()
+        .is_none_or(|task| task.source().is_none());
+    let mut actions = Vec::new();
+    if root_is_optimistic {
+        actions.push(create_task(&task_id));
+    }
+    actions.push(add_messages(
+        &task_id,
+        vec![user_query(&task_id, &turn.request_id, query)],
+    ));
+    controller.apply_external_harness_event(&turn.stream_id, client_actions(actions), ctx);
+    turn
 }
 
 #[test]
@@ -346,6 +389,65 @@ fn cancelling_a_harness_driven_conversation_goes_to_the_cancel_sink() {
 
                 controller.unbind_native_prompt_conversation(ctx);
                 assert!(cancels.is_closed(), "unbinding drops the cancel sink too");
+            });
+        });
+    });
+}
+
+#[test]
+fn a_turn_cut_short_by_a_follow_up_ends_cancelled_with_the_status_still_in_progress() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "hello", ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::InProgress);
+
+                let reason = CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                };
+                controller.cancel_external_harness_turn(&turn.stream_id, reason, ctx);
+                assert_eq!(exchange_cancel_reasons(ctx, id), vec![Some(reason)]);
+                assert_eq!(
+                    status(ctx, id),
+                    ConversationStatus::InProgress,
+                    "the follow-up continues the conversation, so no terminal status is \
+                     reported to the run"
+                );
+
+                // The follow-up's turn opens on the same conversation as usual.
+                let next = begin_turn_with_query(controller, id, "steer", ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::InProgress);
+                controller.apply_external_harness_event(&next.stream_id, done(), ctx);
+                assert_eq!(status(ctx, id), ConversationStatus::Success);
+                assert_eq!(exchange_cancel_reasons(ctx, id), vec![Some(reason), None]);
+            });
+        });
+    });
+}
+
+#[test]
+fn a_turn_cut_short_by_an_interrupt_ends_cancelled_and_marks_the_conversation_cancelled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "hello", ctx);
+
+                controller.cancel_external_harness_turn(
+                    &turn.stream_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+                assert_eq!(
+                    exchange_cancel_reasons(ctx, id),
+                    vec![Some(CancellationReason::ManuallyCancelled)]
+                );
+                assert_eq!(status(ctx, id), ConversationStatus::Cancelled);
             });
         });
     });
