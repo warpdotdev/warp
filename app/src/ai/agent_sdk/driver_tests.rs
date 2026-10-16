@@ -2959,7 +2959,7 @@ fn deferred_execution_policy_reaches_every_launch_and_legacy_clears_inheritance(
                         )
                         .unwrap();
                 }
-                let driver = app.add_model(|ctx| AgentDriver::new(options, ctx).unwrap());
+                let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
                 driver.read(&app, |driver, ctx| {
                     let launch = driver
                         .terminal_driver

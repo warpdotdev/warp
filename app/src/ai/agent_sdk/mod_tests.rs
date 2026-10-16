@@ -831,52 +831,6 @@ fn test_with_paused_time<F: Future<Output = ()> + 'static>(test: impl FnOnce(App
 }
 
 #[test]
-fn required_execution_launch_rejects_unavailable_bootstrap_before_legacy_setup() {
-    for enabled in [false, true] {
-        App::test((), move |mut app| async move {
-            let _execution_config =
-                FeatureFlag::CloudAgentExecutionConfig.override_enabled(enabled);
-            app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-            let mut ai_client = MockAIClient::new();
-            ai_client
-                .expect_post_agent_run_client_event()
-                .times(1)
-                .returning(|_, _| Ok(()));
-            ai_client
-                .expect_update_agent_task()
-                .times(1)
-                .withf(|_, state, _, _, status, _, _| {
-                    *state == Some(AgentTaskState::Failed)
-                        && status.as_ref().is_some_and(|status| {
-                            status.message.contains("execution bootstrap is required")
-                        })
-                })
-                .returning(|_, _, _, _, _, _, _| Ok(()));
-            let runner = app.add_singleton_model(|_| AgentDriverRunner);
-            let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
-            let args = parse_run_agent_args(&[
-                "agent",
-                "run",
-                "--task-id",
-                TASK_ID,
-                "--execution-id",
-                if enabled { "" } else { "42" },
-                "--require-execution-config",
-            ]);
-            let error = AgentDriverRunner::setup_and_run_driver(
-                foreground,
-                args,
-                Arc::new(ai_client),
-                OutputFormat::Text,
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(error, AgentDriverError::ConfigBuildFailed(_)));
-        });
-    }
-}
-
-#[test]
 #[cfg(not(target_family = "wasm"))]
 fn legacy_execution_launch_skips_bootstrap_and_reports_team_metadata_refresh_failure() {
     test_with_paused_time(|mut app| async move {

@@ -599,9 +599,6 @@ pub struct RunAgentArgs {
         requires = "task_id"
     )]
     pub execution_id: Option<String>,
-    /// Require server-owned execution bootstrap instead of legacy task setup.
-    #[arg(long, hide = true, requires_all = ["task_id", "execution_id"])]
-    pub require_execution_config: bool,
 
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]
