@@ -5,6 +5,7 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
+use float_cmp::assert_approx_eq;
 use instant::Instant;
 use mockito::Matcher;
 use pathfinder_geometry::rect::RectF;
@@ -4717,6 +4718,75 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 file_view.as_ref(ctx).file_id_for_test().is_none(),
                 "a permanently discarded pane should release its file"
             );
+        });
+    });
+}
+
+/// Lays out a two-pane horizontal split as if it had just been rendered at 500px + 500px, then
+/// starts dragging the divider from x = 500.
+fn start_dragging_divider_of_rendered_split(
+    panes: &mut PaneGroup,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    let left_pane_id = get_newly_created_pane_id(panes, &[]);
+    panes.add_terminal_pane(Direction::Right, None, ctx);
+    let right_pane_id = get_newly_created_pane_id(panes, &[left_pane_id]);
+
+    let presenter = ctx.presenter(ctx.window_id()).unwrap();
+    let mut presenter = presenter.borrow_mut();
+    let position_cache = presenter.position_cache_mut();
+    position_cache.start();
+    position_cache.cache_position_indefinitely(
+        left_pane_id.position_id(),
+        RectF::new(Vector2F::new(0., 0.), Vector2F::new(500., 768.)),
+    );
+    position_cache.cache_position_indefinitely(
+        right_pane_id.position_id(),
+        RectF::new(Vector2F::new(500., 0.), Vector2F::new(500., 768.)),
+    );
+    position_cache.end();
+    drop(presenter);
+
+    let PaneNode::Branch(branch) = &panes.panes.root else {
+        panic!("expected the root to be a split");
+    };
+    let border_id = branch.divider_ids()[0];
+    panes.start_resizing(
+        DraggedBorder {
+            border_id,
+            direction: SplitDirection::Horizontal,
+            start_mouse_location: Vector2F::new(500., 300.),
+            anchor: None,
+        },
+        ctx,
+    );
+}
+
+fn root_flexes(panes: &PaneGroup) -> (f32, f32) {
+    let PaneNode::Branch(branch) = &panes.panes.root else {
+        panic!("expected the root to be a split");
+    };
+    (branch.nodes[0].0.0, branch.nodes[1].0.0)
+}
+
+#[test]
+fn divider_drag_applies_every_mouse_event_received_before_the_next_layout() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            start_dragging_divider_of_rendered_split(panes, ctx);
+
+            // Three 10px mouse moves arrive before the panes are laid out again.
+            panes.resize_pane(Vector2F::new(510., 300.), ctx);
+            panes.resize_pane(Vector2F::new(520., 300.), ctx);
+            panes.resize_pane(Vector2F::new(530., 300.), ctx);
+
+            // The divider should sit 30px right of where it started: 530px / 470px.
+            let (left_flex, right_flex) = root_flexes(panes);
+            assert_approx_eq!(f32, left_flex, 1.06, epsilon = 0.0001);
+            assert_approx_eq!(f32, right_flex, 0.94, epsilon = 0.0001);
         });
     });
 }
