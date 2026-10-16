@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate changelog draft
-        uses: warpdotdev/oz-agent-action@d5c5a5c9eddb2abd3f7e9e171c6118ca401dd0b5 # main
+        uses: warpdotdev/oz-agent-action@ccb5247d8faee3d0a4b70b8a776727c8f52e2355 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ inputs.release_tag }}.
