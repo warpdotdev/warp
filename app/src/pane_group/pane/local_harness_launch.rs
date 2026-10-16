@@ -282,14 +282,19 @@ pub(super) async fn prepare_local_harness_child_launch(
     // Propagate the selected model to Claude Code via ANTHROPIC_MODEL.
     // Codex local children never receive a model override — the UI
     // ensures model_id is empty for local Codex.
-    env_vars.extend(
-        harness_env_vars(
-            harness,
-            HarnessTransport::Pty,
-            harness_model_config.as_ref(),
-        )
-        .map_err(|error| error.to_string())?,
+    let (harness_env, harness_config_dir) = harness_env_vars(
+        harness,
+        HarnessTransport::Pty,
+        harness_model_config.as_ref(),
+    )
+    .map_err(|error| error.to_string())?;
+    // A harness config dir is deleted when dropped, which would happen before the child
+    // launches; only Pi creates one, and Pi is filtered out of local children above.
+    debug_assert!(
+        harness_config_dir.is_none(),
+        "local harness children cannot own a harness config dir"
     );
+    env_vars.extend(harness_env);
 
     Ok(PreparedLocalHarnessLaunch {
         command,

@@ -674,6 +674,9 @@ fn make_secret_value_from_gql_type(
             ))
         }
         ManagedSecretType::OpenaiApiKey => Ok(ManagedSecretValue::openai_api_key(raw, None)),
+        ManagedSecretType::LlmProviderApiKey => Err(anyhow::anyhow!(
+            "LLM provider API key secrets must be updated through the provider-aware secrets form"
+        )),
         ManagedSecretType::DockerRegistry => {
             // Registry credentials are multi-field and have no CLI creation/update flow yet.
             Err(anyhow::anyhow!(
@@ -1030,6 +1033,7 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::AnthropicBedrockAccessKey => "Anthropic Bedrock Access Key".to_string(),
         ManagedSecretType::AnthropicBedrockApiKey => "Anthropic Bedrock API Key".to_string(),
         ManagedSecretType::OpenaiApiKey => "OpenAI API Key".to_string(),
+        ManagedSecretType::LlmProviderApiKey => "LLM provider API key".to_string(),
         ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
         ManagedSecretType::AwsEcrCredential => "AWS ECR Credential".to_string(),
     }

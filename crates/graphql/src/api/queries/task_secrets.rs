@@ -55,6 +55,7 @@ pub enum ManagedSecretValue {
     ManagedSecretAnthropicBedrockAccessKeyValue(ManagedSecretAnthropicBedrockAccessKeyValue),
     ManagedSecretAnthropicBedrockApiKeyValue(ManagedSecretAnthropicBedrockApiKeyValue),
     ManagedSecretOpenAiApiKeyValue(ManagedSecretOpenAiApiKeyValue),
+    ManagedSecretLlmProviderApiKeyValue(ManagedSecretLlmProviderApiKeyValue),
     #[cynic(fallback)]
     Unknown,
 }
@@ -89,4 +90,18 @@ pub struct ManagedSecretOpenAiApiKeyValue {
     pub api_key: String,
     /// Optional base URL for regional endpoints.
     pub base_url: Option<String>,
+}
+
+#[derive(cynic::QueryFragment)]
+pub struct ManagedSecretLlmProviderApiKeyValue {
+    pub provider_id: String,
+    pub api_key: String,
+    pub base_url: Option<String>,
+}
+
+impl std::fmt::Debug for ManagedSecretLlmProviderApiKeyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedSecretLlmProviderApiKeyValue")
+            .finish_non_exhaustive()
+    }
 }

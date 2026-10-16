@@ -1042,6 +1042,31 @@ fn metadata_secret_collision_rejects_even_an_empty_injected_value() {
 
 #[test]
 #[serial_test::serial]
+fn llm_provider_keys_only_enter_the_environment_for_env_backed_providers() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let secrets = HashMap::from([
+        (
+            "GOOGLE".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("google", "google-key", None),
+        ),
+        (
+            "ANTHROPIC".to_owned(),
+            ManagedSecretValue::llm_provider_api_key("anthropic", "anthropic-key", None),
+        ),
+    ]);
+
+    assert_eq!(
+        build_secret_env_vars(&secrets).unwrap(),
+        HashMap::from([(
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("anthropic-key")
+        )])
+    );
+}
+
+#[test]
+#[serial_test::serial]
 fn raw_value_only_writes_under_secret_name() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("MY_SECRET") };
