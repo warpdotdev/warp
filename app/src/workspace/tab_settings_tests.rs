@@ -93,6 +93,13 @@ fn header_toolbar_chip_selection_default_contains_code_review() {
 }
 
 #[test]
+fn header_toolbar_chip_selection_default_omits_notifications() {
+    let config = HeaderToolbarChipSelection::Default;
+    assert_eq!(config.right_items(), vec![HeaderToolbarItemKind::CodeReview]);
+    assert!(!config.contains_item(&HeaderToolbarItemKind::NotificationsMailbox));
+}
+
+#[test]
 fn header_toolbar_chip_selection_custom_without_code_review_reports_absent() {
     let config = HeaderToolbarChipSelection::Custom {
         left: vec![
