@@ -222,8 +222,7 @@ use crate::ai::agent::{
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
-    conversation_output_status_from_conversation,
+    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::pane_group_id_containing_terminal_view;
@@ -2059,12 +2058,6 @@ pub enum Event {
     /// The pane group swaps visibility instead of cloning the conversation.
     SwapPaneToConversation {
         conversation_id: AIConversationId,
-    },
-    /// Carries the fetched task snapshot so pane construction uses the same
-    /// current-state materialization decision as pill-click restoration.
-    EnsureUnifiedViewerChildPane {
-        conversation_id: AIConversationId,
-        task: Box<AmbientAgentTask>,
     },
     /// A unified-stack child viewer could not join its dedicated live
     /// execution session. The pane group keeps the child passive and

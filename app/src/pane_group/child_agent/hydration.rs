@@ -22,32 +22,6 @@ use crate::terminal::view::{
 };
 
 impl PaneGroup {
-    /// Applies the unified viewer materialization decision to a task snapshot
-    /// supplied by the parent shared-session viewer.
-    pub(in crate::pane_group) fn materialize_viewer_child_pane_from_task(
-        &mut self,
-        child_id: AIConversationId,
-        task: AmbientAgentTask,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Skip when this child already has a live tracked pane.
-        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied()
-            && self.has_pane_id(existing_pane_id)
-        {
-            return;
-        }
-        let Some(child_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_id)
-            .cloned()
-        else {
-            log::warn!(
-                "materialize_viewer_child_pane_from_task: no child conversation {child_id:?}"
-            );
-            return;
-        };
-        self.apply_child_pane_materialization(child_conversation, task, ctx);
-    }
-
     /// Materializes the pane for a placeholder child conversation from its
     /// [`AmbientAgentTask`](crate::ai::ambient_agents::AmbientAgentTask),
     /// leaving a loading pane in place while the task is still being fetched.

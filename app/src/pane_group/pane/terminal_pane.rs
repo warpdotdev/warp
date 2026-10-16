@@ -1382,16 +1382,6 @@ fn handle_terminal_view_event(
                     );
                 }
             }
-            Event::EnsureUnifiedViewerChildPane {
-                conversation_id,
-                task,
-            } => {
-                group.materialize_viewer_child_pane_from_task(
-                    *conversation_id,
-                    task.as_ref().clone(),
-                    ctx,
-                );
-            }
             Event::OrchestrationChildSharedSessionJoinFailed {
                 conversation_id,
                 session_id,
