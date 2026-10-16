@@ -373,7 +373,8 @@ fn install_docs_url(harness: Harness) -> Option<&'static str> {
         Harness::Claude => Some("https://code.claude.com/docs/en/quickstart"),
         Harness::Codex => Some("https://developers.openai.com/codex/cli"),
         Harness::Gemini => Some("https://geminicli.com/"),
-        Harness::Pi | Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
+        Harness::Pi => Some("https://github.com/svkozak/pi-acp#install"),
+        Harness::Oz | Harness::OpenCode | Harness::Unknown => None,
     }
 }
 
