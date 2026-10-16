@@ -22,7 +22,7 @@ fn working_states_map_to_in_progress() {
         AmbientAgentTaskState::InProgress,
     ] {
         assert_eq!(
-            conversation_status_from_state(&state),
+            state.conversation_status(),
             ConversationStatus::InProgress,
             "state={state:?}",
         );
@@ -53,11 +53,7 @@ fn settled_states_map_to_matching_conversation_status() {
         ),
     ];
     for (state, expected) in cases {
-        assert_eq!(
-            conversation_status_from_state(&state),
-            expected,
-            "state={state:?}",
-        );
+        assert_eq!(state.conversation_status(), expected, "state={state:?}",);
     }
 }
 

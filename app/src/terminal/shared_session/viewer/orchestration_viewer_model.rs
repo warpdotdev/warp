@@ -310,7 +310,7 @@ impl OrchestrationViewerModel {
         let task_id = task.task_id;
         let materialization_ready = Self::materialization_is_ready(&task);
         let new_state = task.state.clone();
-        let conversation_status = conversation_status_from_state(&new_state);
+        let conversation_status = new_state.conversation_status();
 
         if let Some(entry) = self.children.get_mut(&task_id) {
             // Existing children can be registered again on streamer reconnect.
@@ -511,30 +511,6 @@ impl OrchestrationViewerModel {
 
     fn entry_needs_materialization_metadata(entry: &ChildAgentEntry) -> bool {
         !entry.materialization_metadata_ready
-    }
-}
-
-/// Maps a server-side run state to the [`ConversationStatus`] used by the
-/// pill bar and the conversation list. Working states (queued/pending/claimed/
-/// in-progress) all collapse to [`ConversationStatus::InProgress`] so the
-/// pill badge stays in the loading spinner until the run terminates.
-fn conversation_status_from_state(state: &AmbientAgentTaskState) -> ConversationStatus {
-    match state {
-        AmbientAgentTaskState::Queued
-        | AmbientAgentTaskState::Pending
-        | AmbientAgentTaskState::Claimed
-        | AmbientAgentTaskState::InProgress => ConversationStatus::InProgress,
-        AmbientAgentTaskState::Succeeded => ConversationStatus::Success,
-        AmbientAgentTaskState::Failed | AmbientAgentTaskState::Error => ConversationStatus::Error,
-        AmbientAgentTaskState::Blocked => ConversationStatus::Blocked {
-            blocked_action: String::new(),
-        },
-        AmbientAgentTaskState::Cancelled => ConversationStatus::Cancelled,
-        // The `Unknown` variant is a forward-compat catch-all for server
-        // states the client doesn't recognize yet. The rest of the codebase
-        // (`is_terminal`, `is_failure_like`, `Display`, `status_icon_and_color`)
-        // consistently treats it as a terminal error, so we follow suit.
-        AmbientAgentTaskState::Unknown => ConversationStatus::Error,
     }
 }
 

@@ -294,8 +294,11 @@ impl PaneGroup {
             let name = child_task.display_name().to_string();
             let fallback_title = child_task.title.trim().to_string();
             let harness = agent_task_harness(&child_task);
+            // Placeholders default to in-progress; the task state is the only status source
+            // until the child's transcript is loaded on navigation.
+            let status = child_task.state.conversation_status();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.ensure_remote_child_conversation(
+                let child_conversation_id = history.ensure_remote_child_conversation(
                     terminal_surface_id,
                     parent_conversation_id,
                     child_run_id.to_string(),
@@ -304,7 +307,13 @@ impl PaneGroup {
                     fallback_title,
                     harness,
                     ctx,
-                )
+                );
+                history.update_conversation_status(
+                    terminal_surface_id,
+                    child_conversation_id,
+                    status,
+                    ctx,
+                );
             });
         }
 
