@@ -352,6 +352,26 @@ impl PaneGroup {
                     group.restore_child_passive_transcript(pane_id, child_id, task_id, merged, ctx);
                 }
             }
+
+            // Restoring the transcript derives status from its last exchange, which can
+            // disagree with the run state (e.g. a run blocked on user input). The run state
+            // is what the badge showed before hydration, so keep it authoritative.
+            if let Some(task) = task.as_ref() {
+                let history_handle = BlocklistAIHistoryModel::handle(ctx);
+                let terminal_surface_id = history_handle
+                    .as_ref(ctx)
+                    .terminal_surface_id_for_conversation(&child_id);
+                if let Some(terminal_surface_id) = terminal_surface_id {
+                    history_handle.update(ctx, |history, ctx| {
+                        history.apply_remote_child_task_snapshot(
+                            terminal_surface_id,
+                            child_id,
+                            task,
+                            ctx,
+                        );
+                    });
+                }
+            }
         });
     }
 

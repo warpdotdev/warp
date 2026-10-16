@@ -432,6 +432,10 @@ pub struct AIConversation {
     /// orchestration pill bar. Persisted via `AgentConversationData.pinned`.
     pinned: bool,
 
+    /// Server-side last-update time of the remote run a remote-child conversation stands in
+    /// for. Lets a placeholder with no exchanges sort by recency alongside hydrated siblings.
+    remote_run_updated_at: Option<DateTime<Local>>,
+
     /// How this conversation's status synchronizes to the server task row. Not persisted: it
     /// only matters for the live process that bootstrapped the conversation, and a restored
     /// conversation resumes ordinary synchronization.
@@ -502,6 +506,7 @@ impl AIConversation {
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
+            remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
             use_warp_credits_instead_of_chatgpt: false,
         }
@@ -760,6 +765,7 @@ impl AIConversation {
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
+            remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
             use_warp_credits_instead_of_chatgpt,
         })
@@ -1380,6 +1386,14 @@ impl AIConversation {
         self.driver = ConversationDriver::RemoteChild;
     }
 
+    pub fn remote_run_updated_at(&self) -> Option<DateTime<Local>> {
+        self.remote_run_updated_at
+    }
+
+    pub fn set_remote_run_updated_at(&mut self, updated_at: DateTime<Local>) {
+        self.remote_run_updated_at = Some(updated_at);
+    }
+
     /// Returns how this conversation's status synchronizes to the server task row.
     pub fn task_sync_mode(&self) -> TaskSyncMode {
         self.task_sync_mode
@@ -1821,10 +1835,14 @@ impl AIConversation {
         self.fallback_display_title = Some(title);
     }
 
-    /// Returns the last time this conversation was modified (i.e., when the latest exchange was started).
+    /// Returns the last time this conversation was modified. For a remote child this is the
+    /// run's server-side update time, so the value doesn't change once the transcript is
+    /// loaded; otherwise it is when the latest exchange finished (or started).
     pub fn last_modified_at(&self) -> Option<DateTime<Local>> {
-        self.latest_exchange()
-            .map(|e| e.finish_time.unwrap_or(e.start_time))
+        self.remote_run_updated_at.or_else(|| {
+            self.latest_exchange()
+                .map(|e| e.finish_time.unwrap_or(e.start_time))
+        })
     }
 
     /// Returns artifacts created during this conversation.

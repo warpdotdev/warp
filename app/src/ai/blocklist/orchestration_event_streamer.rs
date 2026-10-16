@@ -780,7 +780,7 @@ impl OrchestrationEventStreamer {
              child_run_id={child_run_id} name={name:?} parent={parent_conversation_id:?}"
         );
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.ensure_remote_child_conversation(
+            let child_conversation_id = history.ensure_remote_child_conversation(
                 terminal_surface_id,
                 parent_conversation_id,
                 child_run_id.clone(),
@@ -789,7 +789,13 @@ impl OrchestrationEventStreamer {
                 fallback_title,
                 harness,
                 ctx,
-            )
+            );
+            history.apply_remote_child_task_snapshot(
+                terminal_surface_id,
+                child_conversation_id,
+                &task,
+                ctx,
+            );
         });
 
         // If a terminal lifecycle event arrived via SSE before this async fetch

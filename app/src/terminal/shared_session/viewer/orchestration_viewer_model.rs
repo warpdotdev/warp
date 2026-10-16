@@ -310,19 +310,17 @@ impl OrchestrationViewerModel {
         let task_id = task.task_id;
         let materialization_ready = Self::materialization_is_ready(&task);
         let new_state = task.state.clone();
-        let conversation_status = new_state.conversation_status();
 
         if let Some(entry) = self.children.get_mut(&task_id) {
             // Existing children can be registered again on streamer reconnect.
             if entry.last_state != new_state {
                 let conversation_id = entry.conversation_id;
                 let terminal_view_id = self.terminal_view_id;
-                let status_for_update = conversation_status.clone();
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    history.update_conversation_status(
+                    history.apply_remote_child_task_snapshot(
                         terminal_view_id,
                         conversation_id,
-                        status_for_update,
+                        &task,
                         ctx,
                     );
                 });
@@ -356,7 +354,6 @@ impl OrchestrationViewerModel {
             .and_then(|c| c.harness.as_ref())
             .map(|h| h.harness_type);
         let terminal_view_id = self.terminal_view_id;
-        let status_for_initial = conversation_status.clone();
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.ensure_remote_child_conversation(
@@ -369,12 +366,7 @@ impl OrchestrationViewerModel {
                 harness,
                 ctx,
             );
-            history.update_conversation_status(
-                terminal_view_id,
-                conversation_id,
-                status_for_initial,
-                ctx,
-            );
+            history.apply_remote_child_task_snapshot(terminal_view_id, conversation_id, &task, ctx);
             conversation_id
         });
 
