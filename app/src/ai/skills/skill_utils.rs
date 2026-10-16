@@ -34,12 +34,12 @@ fn try_insert_skill(
     dedup_map: &mut HashMap<u64, SkillDescriptor>,
     descriptor: SkillDescriptor,
     dir_path: &LocalOrRemotePath,
-    content: &str,
+    content_hash: u64,
 ) {
     let mut hasher = *CONTENT_HASHER;
     // Hash the directory path and content to create a unique key for deduplication.
     dir_path.hash(&mut hasher);
-    content.hash(&mut hasher);
+    content_hash.hash(&mut hasher);
     let key = hasher.finish();
     match dedup_map.entry(key) {
         Entry::Vacant(e) => {
@@ -69,7 +69,7 @@ impl SkillDeduplicator {
             &mut self.dedup_map,
             SkillDescriptor::from(skill.clone()),
             dir_path,
-            &skill.content,
+            skill.listing_content_hash(),
         );
     }
 

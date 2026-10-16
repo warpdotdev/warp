@@ -248,6 +248,7 @@ impl ParsedSkill {
             path: path_origin.location_for_path(path)?,
             name: descriptor.name,
             description: descriptor.description,
+            content_hash: None,
             content,
             line_range: line_range.cloned(),
             scope,

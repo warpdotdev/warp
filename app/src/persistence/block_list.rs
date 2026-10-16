@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use diesel::connection::DefaultLoadingMode;
 use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::sqlite::SqliteConnection;
@@ -44,9 +45,13 @@ impl TryFrom<AIQuery> for PersistedAIInput {
     type Error = anyhow::Error;
 
     fn try_from(value: AIQuery) -> Result<Self, Self::Error> {
+        let mut inputs: Vec<PersistedAIInputType> = serde_json::from_str(&value.input)?;
+        for input in &mut inputs {
+            input.drop_skill_snapshots();
+        }
         Ok(Self {
             start_ts: Local.from_utc_datetime(&value.start_ts),
-            inputs: serde_json::from_str(&value.input)?,
+            inputs,
             exchange_id: value.exchange_id.try_into()?,
             conversation_id: value.conversation_id.try_into()?,
             output_status: serde_json::from_str(&value.output_status)?,
@@ -102,15 +107,20 @@ const MAX_AI_QUERIES_FOR_NLD: usize = 2000;
 pub(super) fn read_recent_ai_queries(
     conn: &mut SqliteConnection,
 ) -> Result<Vec<PersistedAIInput>, diesel::result::Error> {
-    Ok(schema::ai_queries::table
+    let mut queries = Vec::new();
+    for ai_query in schema::ai_queries::table
         .select(AIQuery::as_select())
         .order_by(schema::ai_queries::columns::start_ts.desc())
         .limit(MAX_AI_QUERIES_READ_LIMIT)
-        .load::<AIQuery>(conn)?
-        .into_iter()
-        .filter_map(|ai_query| PersistedAIInput::try_from(ai_query).ok())
-        .rev()
-        .collect_vec())
+        .load_iter::<AIQuery, DefaultLoadingMode>(conn)?
+    {
+        let ai_query = ai_query?;
+        if let Ok(persisted) = PersistedAIInput::try_from(ai_query) {
+            queries.push(persisted);
+        }
+    }
+    queries.reverse();
+    Ok(queries)
 }
 
 /// Selects the up-arrow prompt-history queries from `recent_ai_queries` (ordered oldest-first):

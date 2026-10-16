@@ -1318,3 +1318,88 @@ fn aggregated_status_prefers_waiting_for_events_over_error() {
         });
     });
 }
+
+#[test]
+fn orchestration_root_fails_closed_when_indexed_parent_record_is_absent() {
+    use chrono::Utc;
+
+    use crate::persistence::model::{
+        AgentConversation, AgentConversationData, AgentConversationRecord,
+    };
+
+    App::test((), |app| async move {
+        let missing_parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let now = Utc::now().naive_utc();
+        let conversations = vec![AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 1,
+                conversation_id: child_id.to_string(),
+                conversation_data: serde_json::to_string(&AgentConversationData {
+                    server_conversation_token: None,
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: None,
+                    agent_name: Some("child".to_string()),
+                    orchestration_harness_type: None,
+                    parent_conversation_id: Some(missing_parent_id.to_string()),
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: None,
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                    use_warp_credits_instead_of_chatgpt: false,
+                })
+                .expect("child conversation data should serialize"),
+                last_modified_at: now,
+                summary: None,
+            },
+            tasks: vec![warp_multi_agent_api::Task {
+                id: format!("task-{child_id}"),
+                messages: vec![warp_multi_agent_api::Message {
+                    fetched_memories: vec![],
+                    id: format!("msg-{child_id}"),
+                    task_id: format!("task-{child_id}"),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::UserQuery(
+                        warp_multi_agent_api::message::UserQuery {
+                            query: "Child query".to_string(),
+                            context: None,
+                            referenced_attachments: Default::default(),
+                            mode: None,
+                            intended_agent: Default::default(),
+                            origin: None,
+                            author: None,
+                            source_message: None,
+                        },
+                    )),
+                    request_id: format!("request-{child_id}"),
+                    timestamp: None,
+                }],
+                dependencies: None,
+                description: "Child query".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+        }];
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.child_conversation_ids_of(&missing_parent_id),
+                &[child_id],
+                "the child is still indexed under the missing parent",
+            );
+            assert_eq!(
+                orchestration_root_conversation_id(history, child_id),
+                None,
+                "a parent that is only an index key is not an orchestration root",
+            );
+        });
+    });
+}

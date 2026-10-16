@@ -205,6 +205,7 @@ fn parsed_skill_at_location(
         path,
         name: name.to_string(),
         description: String::new(),
+        content_hash: None,
         content: String::new(),
         line_range: None,
         provider,

@@ -459,6 +459,7 @@ fn parsed_skill_from_manager_or_disk(
     if let Some(parsed) = skill_manager
         .skill_by_path(&LocalOrRemotePath::Local(skill_path.to_path_buf()))
         .cloned()
+        && !parsed.content.is_empty()
     {
         return Ok(parsed);
     }
