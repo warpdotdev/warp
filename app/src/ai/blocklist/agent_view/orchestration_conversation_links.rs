@@ -37,7 +37,8 @@ pub(crate) fn is_conversation_open_in_other_visible_view(
         return false;
     };
     if owner == self_terminal_view_id
-        || BlocklistAIHistoryModel::as_ref(app).active_conversation_id(owner) != Some(conversation_id)
+        || BlocklistAIHistoryModel::as_ref(app).active_conversation_id(owner)
+            != Some(conversation_id)
     {
         return false;
     }

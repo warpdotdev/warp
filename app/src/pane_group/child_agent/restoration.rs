@@ -50,45 +50,54 @@ pub(in crate::pane_group) fn is_stale_ancestor_list_completion(
 }
 
 impl PaneGroup {
-    /// Restores local in-process child panes and optionally discovers remote child placeholders.
+    /// Discovers a restored or entered parent's remote children and restores its local in-process
+    /// child panes.
     ///
-    /// `seed_remote_children` must be false when applying a seed completion so an empty result
-    /// cannot trigger another ancestor-list fetch indefinitely.
-    pub(in crate::pane_group) fn restore_local_child_agent_panes_for_parent(
+    /// Remote children only get placeholder conversations here (enough for the pill bar); their
+    /// panes materialize on navigation. Local children need their hidden pane to host the child's
+    /// agent controller, so those are restored eagerly.
+    pub(in crate::pane_group) fn restore_child_agents_for_parent(
         &mut self,
         parent_conversation_id: AIConversationId,
         parent_pane_id: PaneId,
-        seed_remote_children: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Local (non-ambient) parents have no other discovery path for remote
+        // children: unlike ambient/viewer restore, nothing else calls
+        // `seed_child_conversations_from_task` for them. Always trigger the
+        // ancestor-list seed, regardless of how many remote children are
+        // already known locally — some may be missing from the local history.
+        // The seed is idempotent (guarded by `pending_parent_child_seeds`) and
+        // a no-op for parents that never spawned any remote children.
+        let parent_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&parent_conversation_id)
+            .and_then(AIConversation::task_id);
+        if let Some(parent_task_id) = parent_task_id
+            && !self
+                .pending_parent_child_seeds
+                .contains_key(&parent_task_id)
+        {
+            self.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+        }
+
+        self.restore_local_child_agent_panes_for_parent(
+            parent_conversation_id,
+            parent_pane_id,
+            ctx,
+        );
+    }
+
+    /// Restores hidden panes for the parent's local in-process children that don't have one yet.
+    /// Never triggers remote-child discovery, so it is safe to call from a seed completion.
+    fn restore_local_child_agent_panes_for_parent(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        parent_pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
         let child_ids = BlocklistAIHistoryModel::as_ref(ctx)
             .child_conversation_ids_of(&parent_conversation_id)
             .to_vec();
-
-        // Local (non-ambient) parents have no other discovery path for remote
-        // children: unlike ambient/viewer restore, nothing else calls
-        // `seed_child_conversations_from_task` for them. Always trigger the
-        // ancestor-list seed when `seed_remote_children` is true, regardless
-        // of how many remote children are already known locally — some may be
-        // missing from the local history. The seed is
-        // idempotent (guarded by `pending_parent_child_seeds`) and a no-op for
-        // parents that never spawned any remote children.
-        if seed_remote_children {
-            let parent_task_id = BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&parent_conversation_id)
-                .and_then(AIConversation::task_id);
-            if let Some(parent_task_id) = parent_task_id
-                && !self
-                    .pending_parent_child_seeds
-                    .contains_key(&parent_task_id)
-            {
-                self.seed_child_conversations_from_task(
-                    parent_conversation_id,
-                    parent_task_id,
-                    ctx,
-                );
-            }
-        }
 
         for child_id in child_ids {
             if self
@@ -310,13 +319,9 @@ impl PaneGroup {
         if let Some(parent_pane_id) =
             self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
         {
-            // `false`: this call is itself the completion of a seed fetch,
-            // so an empty result here must not immediately kick off another
-            // one (that would loop forever for a parent with no children).
             self.restore_local_child_agent_panes_for_parent(
                 parent_conversation_id,
                 parent_pane_id,
-                false,
                 ctx,
             );
         }
@@ -388,10 +393,10 @@ impl PaneGroup {
         }
     }
 
-    /// Restores local child panes if this terminal pane is already showing a
+    /// Restores child agents if this terminal pane is already showing a
     /// fullscreen agent view. This covers restored or replaced panes whose
     /// terminal view entered agent view before pane-group attachment finished.
-    pub(in crate::pane_group) fn restore_local_child_agent_panes_for_terminal_pane_if_needed(
+    pub(in crate::pane_group) fn restore_child_agents_for_terminal_pane_if_needed(
         &mut self,
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
@@ -414,12 +419,7 @@ impl PaneGroup {
             return;
         };
 
-        self.restore_local_child_agent_panes_for_parent(
-            parent_conversation_id,
-            terminal_pane_id.into(),
-            true,
-            ctx,
-        );
+        self.restore_child_agents_for_parent(parent_conversation_id, terminal_pane_id.into(), ctx);
     }
 
     /// Ensures `child_conversation_id` has a hidden child pane if it still
@@ -482,8 +482,9 @@ impl PaneGroup {
             .conversation(&child_conversation_id)
             .cloned()
             .or_else(|| {
-                RestoredAgentConversations::handle(ctx)
-                    .update(ctx, |store, _| store.take_conversation(&child_conversation_id))
+                RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
+                    store.take_conversation(&child_conversation_id)
+                })
             });
         if let Some(child_conversation) = child_conversation {
             self.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);

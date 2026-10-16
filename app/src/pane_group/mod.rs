@@ -5024,10 +5024,7 @@ impl PaneGroup {
                 self.clean_up_pane(original_pane_id, ctx);
                 self.pane_contents.remove(&original_pane_id);
             }
-            self.restore_local_child_agent_panes_for_terminal_pane_if_needed(
-                replacement_pane_id,
-                ctx,
-            );
+            self.restore_child_agents_for_terminal_pane_if_needed(replacement_pane_id, ctx);
 
             // Focus the replacement pane to ensure proper user interaction
             self.focus_pane_by_id(replacement_pane_id, ctx);
@@ -5456,7 +5453,7 @@ impl PaneGroup {
             let new_pane_id = self
                 .find_pane_id_for_terminal_view(terminal_view_id, ctx)
                 .unwrap_or(loading_pane_id);
-            self.restore_local_child_agent_panes_for_terminal_pane_if_needed(new_pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(new_pane_id, ctx);
         }
 
         // Seed after the swap so placeholders can be linked to the parent's terminal surface.
@@ -5626,7 +5623,7 @@ impl PaneGroup {
                 self.cleanup_closed_pane(pane_id, ctx);
                 return false;
             }
-            self.restore_local_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
 
             self.focus_pane_and_record_in_history(pane_id, ctx);
 
@@ -6830,7 +6827,7 @@ impl PaneGroup {
             self.pane_contents.remove(&pane_id);
             return None;
         }
-        self.restore_local_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+        self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
 
         if options.focus_new_pane {
             self.focus_pane_and_record_in_history(pane_id, ctx);
@@ -7829,7 +7826,7 @@ impl PaneGroup {
                 continue;
             };
             self.attach_pane(pane.as_ref(), ctx);
-            self.restore_local_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
         }
     }
 

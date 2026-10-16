@@ -348,10 +348,9 @@ impl PaneContent for TerminalPane {
             } = event
                 && display_mode.is_fullscreen()
             {
-                group.restore_local_child_agent_panes_for_parent(
+                group.restore_child_agents_for_parent(
                     *conversation_id,
                     terminal_pane_id.into(),
-                    true,
                     ctx,
                 );
             }

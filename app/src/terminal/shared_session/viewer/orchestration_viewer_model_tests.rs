@@ -613,9 +613,8 @@ fn does_not_register_streamer_consumer_for_a_child_placeholder() {
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();
         let parent = task_id(PARENT_TASK_ID);
-        let _model = app.add_model(|ctx| {
-            OrchestrationViewerModel::new(parent, terminal_view_id, ctx)
-        });
+        let _model =
+            app.add_model(|ctx| OrchestrationViewerModel::new(parent, terminal_view_id, ctx));
 
         BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
             let parent_conv_id =

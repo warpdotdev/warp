@@ -394,7 +394,6 @@ impl OrchestrationViewerModel {
             self.parent_task_id,
         );
 
-
         // Arm the session_id refetch timer if the child arrived pre-claim.
         self.maybe_schedule_pending_session_id_poll(ctx);
     }

@@ -1621,7 +1621,7 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
         });
 
         // Enter the parent's fullscreen agent view. This is the trigger for
-        // `restore_local_child_agent_panes_for_parent`, which is the
+        // `restore_child_agents_for_parent`, which is the
         // PaneGroup-side of the user-visible restart-loop bug.
         pane_group.update(&mut app, |panes, ctx| {
             enter_agent_view_for_conversation(panes, parent_pane_id, parent_conversation_id, ctx);
@@ -2023,12 +2023,7 @@ fn test_parent_restoration_leaves_remote_children_without_panes() {
                 model.insert_task_for_test(attachable_ambient_agent_task(task_id));
             });
 
-            panes.restore_local_child_agent_panes_for_parent(
-                parent_conversation_id,
-                parent_pane_id,
-                true,
-                ctx,
-            );
+            panes.restore_child_agents_for_parent(parent_conversation_id, parent_pane_id, ctx);
 
             assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
             assert!(panes.pending_child_hydrations.is_empty());
@@ -2469,7 +2464,11 @@ fn test_entering_remote_parent_agent_view_does_not_restore_viewer_hidden_child_p
         });
 
         pane_group.update(&mut app, |panes, ctx| {
-            assert!(!panes.child_agent_panes.contains_key(&remote_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&remote_child_conversation_id)
+            );
             assert!(panes.pending_child_hydrations.is_empty());
             assert_eq!(panes.pane_count(), initial_pane_count);
             assert_eq!(panes.visible_pane_count(), initial_visible_pane_count);
@@ -2719,7 +2718,7 @@ fn test_reveal_remote_child_materializes_only_the_requested_pane() {
             (child_id, task_id)
         });
 
-        pane_group.read(&app, |panes, ctx| {
+        pane_group.update(&mut app, |panes, ctx| {
             assert_eq!(panes.child_agent_panes.len(), 1);
             let child_pane_id = panes.child_agent_panes[&child_id];
             assert_eq!(panes.focused_pane_id(ctx), child_pane_id);
