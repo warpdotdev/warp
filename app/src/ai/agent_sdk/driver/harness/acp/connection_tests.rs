@@ -1,11 +1,13 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
 use futures::{FutureExt as _, StreamExt as _, future, join};
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 use warpui::r#async::executor::Background;
 
@@ -119,6 +121,54 @@ fn connect(
 
 fn rejecting_handler() -> AgentRequestHandler {
     Arc::new(|method, _| future::ready(Err(RpcError::method_not_found(method))).boxed())
+}
+
+/// A handler whose permission answers wait until the test releases them; every other method
+/// is rejected. Each `session/request_permission` parks a sender in `gates`, in arrival order.
+fn gated_permission_handler() -> (AgentRequestHandler, Arc<Mutex<Vec<oneshot::Sender<Value>>>>) {
+    let gates: Arc<Mutex<Vec<oneshot::Sender<Value>>>> = Arc::default();
+    let handler_gates = gates.clone();
+    let handler: AgentRequestHandler = Arc::new(move |method, _| match method {
+        "session/request_permission" => {
+            let (tx, rx) = oneshot::channel();
+            handler_gates.lock().push(tx);
+            async move {
+                rx.await
+                    .map_err(|_| RpcError::internal("permission gate dropped"))
+            }
+            .boxed()
+        }
+        other => future::ready(Err(RpcError::method_not_found(other))).boxed(),
+    });
+    (handler, gates)
+}
+
+fn permission_request(id: Value, tool_call_id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": "sess_1",
+            "toolCall": {"toolCallId": tool_call_id, "title": "Run"},
+            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+        },
+    })
+}
+
+/// Polls until `connection` reports `count` outstanding requests, since dispatch happens on
+/// the read loop's own thread.
+async fn wait_for_pending(connection: &AcpConnection, count: usize) {
+    for _ in 0..200 {
+        if connection.pending_inbound_requests().len() == count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!(
+        "expected {count} pending inbound requests, found {:?}",
+        connection.pending_inbound_requests()
+    );
 }
 
 #[test]
@@ -245,6 +295,97 @@ fn agent_requests_are_answered_through_the_handler() {
         let answer = agent.next_message().await;
         assert_eq!(answer["id"], 7);
         assert_eq!(answer["error"]["code"], -32601);
+    });
+}
+
+#[test]
+fn unanswered_agent_request_does_not_block_notifications_or_responses() {
+    let (handler, gates) = gated_permission_handler();
+    let (connection, notifications, mut agent) = connect(handler);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let prompt = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent_turn = async {
+            let prompt_message = agent.next_message().await;
+            agent.send(permission_request(json!(1), "call-1")).await;
+            wait_for_pending(&connection, 1).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "method": "session/update", "params": {"n": 1}}))
+                .await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": prompt_message["id"], "result": {"stopReason": "end_turn"}}))
+                .await;
+        };
+        let (response, ()) = join!(prompt, agent_turn);
+        assert_eq!(response.unwrap()["stopReason"], "end_turn");
+        assert_eq!(notifications.try_recv().unwrap().params["n"], 1);
+
+        let pending = connection.pending_inbound_requests();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].method, "session/request_permission");
+        assert_eq!(pending[0].session_id.as_deref(), Some("sess_1"));
+        assert_eq!(pending[0].tool_call_id.as_deref(), Some("call-1"));
+
+        let gate = gates.lock().pop().unwrap();
+        gate.send(json!({"outcome": {"outcome": "selected", "optionId": "allow"}}))
+            .unwrap();
+        let answer = agent.next_message().await;
+        assert_eq!(answer["id"], 1);
+        assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
+        wait_for_pending(&connection, 0).await;
+    });
+}
+
+#[test]
+fn cancelling_answers_pending_permission_requests_and_discards_the_handlers_answer() {
+    let (handler, gates) = gated_permission_handler();
+    let (connection, _notifications, mut agent) = connect(handler);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        agent.send(permission_request(json!(1), "call-1")).await;
+        agent.send(permission_request(json!("p-2"), "call-2")).await;
+        agent
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session/request_permission",
+                "params": {"sessionId": "other-session", "toolCall": {"toolCallId": "call-3"}, "options": []},
+            }))
+            .await;
+        wait_for_pending(&connection, 3).await;
+
+        assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 2);
+
+        let mut answered_ids = vec![agent.next_message().await, agent.next_message().await]
+            .into_iter()
+            .map(|answer| {
+                assert_eq!(answer["result"]["outcome"]["outcome"], "cancelled");
+                answer["id"].to_string()
+            })
+            .collect::<Vec<_>>();
+        answered_ids.sort();
+        assert_eq!(answered_ids, vec!["\"p-2\"".to_owned(), "1".to_owned()]);
+
+        let pending = connection.pending_inbound_requests();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].session_id.as_deref(), Some("other-session"));
+
+        // The handler's late answers for the cancelled requests must not reach the agent; the
+        // one for the other session still does.
+        for gate in gates.lock().drain(..) {
+            let _ = gate.send(json!({"outcome": {"outcome": "selected", "optionId": "allow"}}));
+        }
+        let answer = agent.next_message().await;
+        assert_eq!(answer["id"], 3);
+        assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
+        wait_for_pending(&connection, 0).await;
+        assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 0);
     });
 }
 

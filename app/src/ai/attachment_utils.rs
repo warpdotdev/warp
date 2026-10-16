@@ -32,6 +32,7 @@ pub(crate) fn sanitize_filename(raw: &str) -> &str {
 }
 
 /// A downloaded file attachment with its resolved path on disk.
+#[derive(Clone)]
 pub(crate) struct DownloadedAttachment {
     /// The UUID of the attachment.
     pub file_id: String,

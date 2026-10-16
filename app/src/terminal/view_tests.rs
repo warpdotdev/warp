@@ -7652,9 +7652,10 @@ fn shared_session_cancel_action_interrupts_running_agent_command() {
             start_conversation_with_running_agent_command(view, &server_conversation_token, ctx)
         });
 
-        terminal.update(&mut app, |view, ctx| {
-            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+        let cancelled = terminal.update(&mut app, |view, ctx| {
+            view.handle_shared_session_cancel_action(server_conversation_token, ctx)
         });
+        assert!(cancelled);
 
         assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
         terminal.read(&app, |_, ctx| {
@@ -7723,6 +7724,93 @@ fn shared_session_cancel_action_releases_agent_controlled_command_before_interru
     })
 }
 
+/// Binds the pane's AI controller to a harness-driven conversation with a turn in progress and
+/// installs the cancel sink, returning the conversation and the sink's receiver.
+fn start_harness_driven_conversation(
+    view: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) -> (
+    AIConversationId,
+    async_channel::Receiver<crate::ai::blocklist::ExternalHarnessCancel>,
+) {
+    view.model
+        .lock()
+        .simulate_long_running_block("pi --acp", "running");
+    view.ai_controller.update(ctx, |controller, ctx| {
+        let conversation_id = controller.bind_native_prompt_conversation(None, ctx);
+        controller
+            .begin_external_harness_turn(conversation_id, Some("run-1".into()), ctx)
+            .unwrap();
+        let (sink, cancels) = async_channel::unbounded();
+        controller.set_external_harness_cancel_sink(sink);
+        (conversation_id, cancels)
+    })
+}
+
+#[test]
+fn stopping_a_harness_driven_conversation_goes_to_the_harness_not_the_pty() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = capture_pty_writes(&mut app, &terminal);
+        let (conversation_id, cancels) =
+            terminal.update(&mut app, start_harness_driven_conversation);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.stop_local_agent_conversation(conversation_id, ctx);
+        });
+
+        assert!(cancels.try_recv().is_ok());
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "a Ctrl-C would kill the agent instead of interrupting its turn"
+        );
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(
+                conversation.status(),
+                &ConversationStatus::InProgress,
+                "the harness settles the status once its agent answers the cancel"
+            );
+        });
+    })
+}
+
+#[test]
+fn stopping_a_harness_driven_conversation_falls_back_once_the_harness_stopped() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = capture_pty_writes(&mut app, &terminal);
+        let (conversation_id, cancels) =
+            terminal.update(&mut app, start_harness_driven_conversation);
+        // The turn driver owns the receiver; it is gone once the driver's run ended.
+        drop(cancels);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.stop_local_agent_conversation(conversation_id, ctx);
+        });
+
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![vec![C0::ETX]],
+            "with nobody to take the cancel, the block is interrupted as for a native stop"
+        );
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Cancelled);
+        });
+    })
+}
+
 #[test]
 fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
     App::test((), |mut app| async move {
@@ -7738,17 +7826,18 @@ fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
         });
 
         // A token that isn't bound to any conversation on this surface is a no-op.
-        terminal.update(&mut app, |view, ctx| {
+        let cancelled = terminal.update(&mut app, |view, ctx| {
             view.handle_shared_session_cancel_action(
                 SessionSharingServerConversationToken::new(),
                 ctx,
-            );
+            )
         });
+        assert!(!cancelled);
         assert!(pty_writes.borrow().is_empty());
 
         // A cancel that arrives after the conversation already finished must neither interrupt
         // the command nor overwrite the terminal status.
-        terminal.update(&mut app, |view, ctx| {
+        let cancelled = terminal.update(&mut app, |view, ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                 history.update_conversation_status(
                     view.view_id,
@@ -7757,8 +7846,9 @@ fn shared_session_cancel_action_ignores_unknown_and_finished_conversations() {
                     ctx,
                 );
             });
-            view.handle_shared_session_cancel_action(server_conversation_token, ctx);
+            view.handle_shared_session_cancel_action(server_conversation_token, ctx)
         });
+        assert!(!cancelled);
         assert!(pty_writes.borrow().is_empty());
         terminal.read(&app, |_, ctx| {
             let conversation = BlocklistAIHistoryModel::as_ref(ctx)

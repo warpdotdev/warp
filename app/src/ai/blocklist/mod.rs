@@ -96,7 +96,9 @@ pub use context_model::{
 };
 pub use controller::BlocklistAIController;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
-pub(in crate::ai) use controller::external_harness::{ExternalHarnessPrompt, ExternalHarnessTurn};
+pub(in crate::ai) use controller::external_harness::ExternalHarnessPrompt;
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+pub(crate) use controller::external_harness::{ExternalHarnessCancel, ExternalHarnessTurn};
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
@@ -104,7 +106,8 @@ pub use controller::input_context::{
 pub(crate) use controller::response_stream::ResponseStream;
 pub(crate) use controller::response_stream::ResponseStreamId;
 pub(crate) use controller::{
-    BlocklistAIControllerEvent, ClientIdentifiers, SessionContext, SlashCommandRequest,
+    BlocklistAIControllerEvent, CancellationRoute, ClientIdentifiers, SessionContext,
+    SlashCommandRequest,
 };
 pub(crate) use conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,

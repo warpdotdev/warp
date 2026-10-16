@@ -1262,12 +1262,17 @@ impl TerminalManager<TerminalView> {
                     ControlAction::CancelConversation {
                         server_conversation_token,
                     } => {
-                        terminal_view.update(ctx, |view, ctx| {
+                        let cancelled = terminal_view.update(ctx, |view, ctx| {
                             view.handle_shared_session_cancel_action(
                                 *server_conversation_token,
                                 ctx,
-                            );
+                            )
                         });
+                        if !cancelled {
+                            log::info!(
+                                "event=control_action_ignored request_id={request_id:?} reason=no_turn_in_progress"
+                            );
+                        }
                     }
                 }
             }

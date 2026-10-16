@@ -77,8 +77,8 @@ fn count(line: &str, glyph: char) -> usize {
 #[test]
 fn renders_account_usage_summary() {
     let rendered = render_snapshot(snapshot(TuiUsagePayAsYouGo {
-        credits_used: 3500,
-        cost_cents: 3000,
+        credits_used: 3500.0,
+        cost_cents: 3000.0,
         has_kicked_in: true,
     }));
 
@@ -100,10 +100,28 @@ fn renders_account_usage_summary() {
 }
 
 #[test]
+fn pay_as_you_go_preserves_fractional_spend() {
+    let rendered = render_snapshot(snapshot(TuiUsagePayAsYouGo {
+        credits_used: 0.6,
+        cost_cents: 0.6,
+        has_kicked_in: true,
+    }));
+    let usage_row = rendered.iter().find(|line| line.contains("●-")).unwrap();
+
+    assert_eq!(count(usage_row, '●'), 1);
+    assert_eq!(count(usage_row, '-'), 107);
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Spend: 1 credits / $0.01 • ● = 500 credits"))
+    );
+}
+
+#[test]
 fn pay_as_you_go_wraps_large_usage_across_two_rows() {
     let rendered = render_snapshot(snapshot(TuiUsagePayAsYouGo {
-        credits_used: 60_000,
-        cost_cents: 8053,
+        credits_used: 60_000.0,
+        cost_cents: 8053.0,
         has_kicked_in: true,
     }));
     let usage_rows: Vec<_> = rendered
@@ -125,8 +143,8 @@ fn pay_as_you_go_wraps_large_usage_across_two_rows() {
 #[test]
 fn pay_as_you_go_scales_circle_value_at_high_usage() {
     let overflow = render_snapshot(snapshot(TuiUsagePayAsYouGo {
-        credits_used: 841_138,
-        cost_cents: 3_364_552,
+        credits_used: 841_138.0,
+        cost_cents: 3_364_552.0,
         has_kicked_in: true,
     }));
     let overflow_rows: Vec<_> = overflow

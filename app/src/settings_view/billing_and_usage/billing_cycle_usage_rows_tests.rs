@@ -14,6 +14,57 @@ use crate::workspaces::workspace::{
 const VIEWER_UID: &str = "viewer-uid";
 const OTHER_UID: &str = "other-uid";
 
+#[test]
+fn per_member_rows_sort_by_fractional_usage_without_rounding() {
+    let mut viewer = entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        0,
+        0,
+    );
+    viewer.credits_used = 0.2;
+    viewer.cost_cents = 0.1;
+    let mut other = viewer.clone();
+    other.subject_uid = Some(OTHER_UID.to_string());
+    other.credits_used = 0.3;
+
+    let rows = MemberUsageRow::for_each_member(
+        &[viewer, other],
+        &[member(VIEWER_UID), member(OTHER_UID)],
+        SourceFilter::All,
+    );
+
+    assert_eq!(rows[0].subject_uid.as_deref(), Some(OTHER_UID));
+    assert_eq!(rows[0].total_credits, 0.3);
+    assert_eq!(rows[1].total_credits, 0.2);
+    assert_eq!(rows[1].total_cost_cents, 0.1);
+}
+
+#[test]
+fn member_rows_preserve_fractional_cost_without_credits() {
+    let mut cost_only = entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        0,
+        0,
+    );
+    cost_only.cost_type = AiCreditsUsageAndCostType::Payg;
+    cost_only.cost_cents = 0.6;
+
+    let rows = MemberUsageRow::for_each_member(
+        &[cost_only.clone(), cost_only],
+        &[member(VIEWER_UID)],
+        SourceFilter::All,
+    );
+
+    assert_eq!(rows[0].total_credits, 0.0);
+    assert_eq!(rows[0].total_cost_cents, 1.2);
+    assert_eq!(rows[0].segments.len(), 1);
+    assert_eq!(rows[0].segments[0].cost_cents, 1.2);
+}
+
 fn entry(
     subject_type: AiCreditsUsageAndCostSubjectType,
     subject_uid: Option<&str>,
@@ -28,8 +79,8 @@ fn entry(
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,
-        credits_used,
-        cost_cents,
+        credits_used: f64::from(credits_used),
+        cost_cents: f64::from(cost_cents),
         attributed_team_uid: None,
     }
 }
@@ -60,8 +111,8 @@ fn build_own_usage_row_drops_team_subject_entries() {
         "viewer".to_string(),
         SourceFilter::All,
     );
-    assert_eq!(row.total_credits, 10);
-    assert_eq!(row.total_cost_cents, 5);
+    assert_eq!(row.total_credits, 10.0);
+    assert_eq!(row.total_cost_cents, 5.0);
 }
 
 #[test]
@@ -88,8 +139,8 @@ fn build_own_usage_row_drops_other_users_entries() {
         "viewer".to_string(),
         SourceFilter::All,
     );
-    assert_eq!(row.total_credits, 10);
-    assert_eq!(row.total_cost_cents, 0);
+    assert_eq!(row.total_credits, 10.0);
+    assert_eq!(row.total_cost_cents, 0.0);
 }
 
 #[test]
@@ -116,7 +167,7 @@ fn build_own_usage_row_local_filter_drops_cloud_entries() {
         "viewer".to_string(),
         SourceFilter::Local,
     );
-    assert_eq!(row.total_credits, 10);
+    assert_eq!(row.total_credits, 10.0);
 }
 
 fn member(uid: &str) -> WorkspaceMember {
@@ -163,8 +214,8 @@ fn per_member_rows_cover_exactly_the_supplied_roster() {
 
     let named: Vec<_> = rows.iter().map(|r| r.display_name.as_str()).collect();
     assert_eq!(named, vec!["viewer-uid@warp.dev", "other-uid@warp.dev"]);
-    assert_eq!(rows[0].total_credits, 10);
-    assert_eq!(rows[1].total_credits, 0, "zero-usage roster member");
+    assert_eq!(rows[0].total_credits, 10.0);
+    assert_eq!(rows[1].total_credits, 0.0, "zero-usage roster member");
 
     let rows = MemberUsageRow::for_each_member(&entries, &[member(VIEWER_UID)], SourceFilter::All);
     assert_eq!(
@@ -304,5 +355,5 @@ fn build_own_usage_row_cloud_filter_drops_local_entries() {
         "viewer".to_string(),
         SourceFilter::Cloud,
     );
-    assert_eq!(row.total_credits, 20);
+    assert_eq!(row.total_credits, 20.0);
 }

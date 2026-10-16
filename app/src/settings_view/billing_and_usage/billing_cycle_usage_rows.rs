@@ -85,12 +85,12 @@ pub struct MemberUsageRow {
     /// Used to deep-link `ServiceAccount` rows to their Oz agent page.
     pub subject_uid: Option<String>,
     pub display_name: String,
-    pub total_credits: i64,
-    pub total_cost_cents: i64,
-    /// Sorted by cost-type then bucket order; zero-credit entries dropped.
+    pub total_credits: f64,
+    pub total_cost_cents: f64,
+    /// Sorted by cost-type then bucket order; entries with no credit or monetary usage dropped.
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
-    pub bar_max_credits: i64,
+    pub bar_max_credits: f64,
     pub is_current_team_member: bool,
     pub is_disabled: bool,
 }
@@ -139,7 +139,7 @@ impl MemberUsageRow {
             total_credits,
             total_cost_cents,
             segments,
-            bar_max_credits: total_credits.max(1),
+            bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
             is_disabled: false,
         }
@@ -151,14 +151,14 @@ impl MemberUsageRow {
     fn for_viewer_from_total(
         viewer_uid: Option<String>,
         viewer_display_name: String,
-        used: i64,
+        used: f64,
     ) -> Self {
-        let segments = if used > 0 {
+        let segments = if used > 0.0 {
             vec![BarSegment {
                 cost_type: AiCreditsUsageAndCostType::BaseLimit,
                 usage_bucket: AiCreditsUsageBucket::Ai,
                 credits: used,
-                cost_cents: 0,
+                cost_cents: 0.0,
             }]
         } else {
             Vec::new()
@@ -169,9 +169,9 @@ impl MemberUsageRow {
             subject_uid: viewer_uid,
             display_name: viewer_display_name,
             total_credits: used,
-            total_cost_cents: 0,
+            total_cost_cents: 0.0,
             segments,
-            bar_max_credits: used.max(1),
+            bar_max_credits: used.max(1.0),
             is_current_team_member: true,
             is_disabled: false,
         }
@@ -193,7 +193,7 @@ impl MemberUsageRow {
             total_credits,
             total_cost_cents,
             segments,
-            bar_max_credits: total_credits.max(1),
+            bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
             is_disabled: false,
         }
@@ -258,7 +258,7 @@ impl MemberUsageRow {
             let (segments, total_credits, total_cost_cents) =
                 match unmatched_usage_by_subject.remove(&key) {
                     Some(group) => aggregate_segments(group.entries.iter()),
-                    None => (Vec::new(), 0, 0),
+                    None => (Vec::new(), 0.0, 0.0),
                 };
 
             rows.push(Self {
@@ -269,7 +269,7 @@ impl MemberUsageRow {
                 total_credits,
                 total_cost_cents,
                 segments,
-                bar_max_credits: 0,
+                bar_max_credits: 0.0,
                 is_current_team_member: true,
                 is_disabled: member.is_disabled,
             });
@@ -298,7 +298,7 @@ impl MemberUsageRow {
                 total_credits,
                 total_cost_cents,
                 segments,
-                bar_max_credits: 0,
+                bar_max_credits: 0.0,
                 is_current_team_member,
                 is_disabled: false,
             });
@@ -307,7 +307,7 @@ impl MemberUsageRow {
         // Sort by total credits desc, stable by subject_key.
         rows.sort_by(|a, b| {
             b.total_credits
-                .cmp(&a.total_credits)
+                .total_cmp(&a.total_credits)
                 .then_with(|| a.subject_key.cmp(&b.subject_key))
         });
 
@@ -353,12 +353,7 @@ fn build_rows(
         visibility.granularity,
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown
     ) {
-        let top = rows
-            .iter()
-            .map(|r| r.total_credits)
-            .max()
-            .unwrap_or(0)
-            .max(1);
+        let top = rows.iter().map(|r| r.total_credits).fold(1.0, f64::max);
         for row in &mut rows {
             row.bar_max_credits = top;
         }
@@ -376,15 +371,16 @@ pub fn has_cloud_usage(entries: &[BillingCycleUsageEntry]) -> bool {
 
 fn render_stacked_bar(
     segments: &[BarSegment],
-    total_credits: i64,
-    team_max_credits: i64,
+    total_credits: f64,
+    team_max_credits: f64,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let track_bg = theme.surface_overlay_1();
     let corner = Radius::Pixels(BAR_CORNER_RADIUS);
+    let segments = segments.iter().filter(|s| s.credits > 0.0).collect_vec();
 
-    if team_max_credits == 0 || total_credits == 0 || segments.is_empty() {
+    if team_max_credits == 0.0 || total_credits == 0.0 || segments.is_empty() {
         // Empty track, top-rounded on both ends.
         return ConstrainedBox::new(
             Container::new(Empty::new().finish())
@@ -486,7 +482,7 @@ fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Eleme
 /// Renders one row card (stacked bar + name/totals).
 fn render_row_card(
     row: &MemberUsageRow,
-    team_max_credits: i64,
+    team_max_credits: f64,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -688,7 +684,7 @@ fn render_row_card(
 /// Row card wrapped in a Hoverable that opens the breakdown tooltip.
 fn render_member_row(
     row: &MemberUsageRow,
-    team_max_credits: i64,
+    team_max_credits: f64,
     tooltip_mouse_state: MouseStateHandle,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
@@ -827,7 +823,7 @@ pub fn render_own_usage_solo_row(
     let row = MemberUsageRow::for_viewer_from_total(
         viewer_uid,
         display_name,
-        model.requests_used() as i64,
+        model.requests_used() as f64,
     );
     render_member_row_list(std::slice::from_ref(&row), mouse_states, appearance)
 }

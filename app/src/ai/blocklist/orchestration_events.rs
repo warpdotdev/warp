@@ -152,6 +152,26 @@ impl OrchestrationEventService {
         }
     }
 
+    /// Drops any orchestration events still queued for `conversation_id` because an external
+    /// harness drives its turns (see `ConversationDriver::owns_turn_lifecycle`): this client never
+    /// dispatches to Warp's agent loop for it, and the server wakes such runs itself when new
+    /// messages arrive.
+    pub fn drop_pending_events_for_external_harness_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+    ) {
+        if let Some(dropped) = self.pending_events.remove(&conversation_id)
+            && !dropped.is_empty()
+        {
+            log::info!(
+                "[orch-external-harness] Dropping {} queued orchestration event(s) for \
+                 conversation {conversation_id:?}: an external harness drives its turns, so \
+                 they cannot be injected into Warp's agent loop",
+                dropped.len()
+            );
+        }
+    }
+
     /// True once [`ExitCommitHandle::commit`] has been called for `conversation_id`.
     pub fn is_conversation_exiting(&self, conversation_id: AIConversationId) -> bool {
         self.exiting_conversations

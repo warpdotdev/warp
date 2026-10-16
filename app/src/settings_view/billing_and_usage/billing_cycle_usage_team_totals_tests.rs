@@ -16,10 +16,31 @@ fn entry(
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,
-        credits_used,
-        cost_cents,
+        credits_used: f64::from(credits_used),
+        cost_cents: f64::from(cost_cents),
         attributed_team_uid: None,
     }
+}
+
+#[test]
+fn cost_only_team_totals_preserve_fractional_source_costs() {
+    let mut local = entry(AiCreditsUsageSource::Local, 0, 0);
+    local.cost_type = AiCreditsUsageAndCostType::Payg;
+    local.cost_cents = 0.6;
+    let mut cloud = local.clone();
+    cloud.usage_source = AiCreditsUsageSource::Cloud;
+
+    let summaries = build_team_total_card_summaries(
+        &[local, cloud],
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
+    );
+
+    assert_eq!(summaries[0].total_credits, 0.0);
+    assert_eq!(summaries[0].total_cost_cents, 1.2);
+    assert_eq!(summaries[0].segments.len(), 1);
+    assert_eq!(summaries[0].segments[0].cost_cents, 1.2);
+    assert_eq!(summaries[1].total_cost_cents, 0.6);
+    assert_eq!(summaries[2].total_cost_cents, 0.6);
 }
 
 fn visibility(granularity: UsageVisibilityGranularity) -> UsageVisibility {
@@ -87,10 +108,29 @@ fn full_breakdown_visibility_returns_three_cards_with_partitioned_sums() {
     // Overall = Local + Cloud; Local card = only Local entries; Cloud card =
     // only Cloud entries. Distinct credits/cost per source catch any swapped
     // filter.
-    assert_eq!(summaries[0].total_credits, 30 + 70);
-    assert_eq!(summaries[0].total_cost_cents, 10 + 25);
-    assert_eq!(summaries[1].total_credits, 30);
-    assert_eq!(summaries[1].total_cost_cents, 10);
-    assert_eq!(summaries[2].total_credits, 70);
-    assert_eq!(summaries[2].total_cost_cents, 25);
+    assert_eq!(summaries[0].total_credits, 30.0 + 70.0);
+    assert_eq!(summaries[0].total_cost_cents, 10.0 + 25.0);
+    assert_eq!(summaries[1].total_credits, 30.0);
+    assert_eq!(summaries[1].total_cost_cents, 10.0);
+    assert_eq!(summaries[2].total_credits, 70.0);
+    assert_eq!(summaries[2].total_cost_cents, 25.0);
+}
+
+#[test]
+fn fractional_team_totals_preserve_source_partitions() {
+    let mut local = entry(AiCreditsUsageSource::Local, 0, 0);
+    local.credits_used = 0.6;
+    local.cost_cents = 0.4;
+    let mut cloud = local.clone();
+    cloud.usage_source = AiCreditsUsageSource::Cloud;
+
+    let summaries = build_team_total_card_summaries(
+        &[local, cloud],
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
+    );
+
+    assert_eq!(summaries[0].total_credits, 1.2);
+    assert_eq!(summaries[0].total_cost_cents, 0.8);
+    assert_eq!(summaries[1].total_credits, 0.6);
+    assert_eq!(summaries[2].total_credits, 0.6);
 }

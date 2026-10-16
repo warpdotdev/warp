@@ -30,6 +30,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::mcp::JSONMCPServer;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
@@ -193,6 +194,9 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         true
     }
 
+    /// Sets structured initial-prompt files; text-only harnesses ignore them.
+    fn set_initial_attachments(&mut self, _: Vec<DownloadedAttachment>) {}
+
     /// Fetch the harness-specific resume payload for an existing conversation.
     ///
     /// The driver calls this when the user passes `--conversation <id>` and the harness
@@ -263,6 +267,11 @@ pub(crate) enum HarnessKind {
 }
 
 impl HarnessKind {
+    pub(crate) fn set_initial_attachments(&mut self, downloaded: Vec<DownloadedAttachment>) {
+        if let Self::ThirdParty(harness) = self {
+            harness.set_initial_attachments(downloaded);
+        }
+    }
     /// Corresponding [`Harness`] enum value.
     pub(crate) fn harness(&self) -> Harness {
         match self {
@@ -676,6 +685,13 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
     /// Handle a CLI session update such as a prompt submit or completed tool use.
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         Ok(())
+    }
+
+    /// Whether the harness is between a turn it has cut short and the follow-up that caused it,
+    /// or still settling an interrupt. A status change observed in that window is not the run
+    /// settling, so the driver must not schedule its exit on it.
+    fn is_settling_turn(&self) -> bool {
+        false
     }
 
     /// Clean up any harness-owned background state after the harness exits.

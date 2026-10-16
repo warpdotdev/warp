@@ -207,7 +207,9 @@ pub enum BlocklistAIControllerEvent {
 #[derive(Debug)]
 pub struct RequestInput {
     pub conversation_id: AIConversationId,
-    pub input_messages: HashMap<TaskId, Vec<AIAgentInput>>,
+    /// Ordered input batches; a task may appear more than once. Empty batches preserve history
+    /// exchanges for shared-session viewers without adding a wire input.
+    pub input_messages: Vec<(TaskId, Vec<AIAgentInput>)>,
     pub working_directory: Option<String>,
     pub model_id: LLMId,
     pub coding_model_id: LLMId,
@@ -238,7 +240,7 @@ impl RequestInput {
             scope,
             app,
         );
-        me.input_messages.insert(task_id, inputs);
+        me.input_messages.push((task_id, inputs));
         me
     }
 
@@ -262,19 +264,19 @@ impl RequestInput {
             app,
         );
         for result in action_results.into_iter() {
-            me.input_messages
-                .entry(result.task_id.clone())
-                .or_default()
-                .push(AIAgentInput::ActionResult {
+            me.input_messages.push((
+                result.task_id.clone(),
+                vec![AIAgentInput::ActionResult {
                     result,
                     context: context.clone(),
-                });
+                }],
+            ));
         }
         me
     }
 
     pub fn all_inputs(&self) -> impl Iterator<Item = &AIAgentInput> {
-        self.input_messages.values().flatten()
+        self.input_messages.iter().flat_map(|(_, inputs)| inputs)
     }
 
     pub fn with_supported_tools(mut self, tools: Vec<ToolType>) -> Self {
@@ -351,6 +353,10 @@ pub struct BlocklistAIController {
     /// harness driving it instead of being sent to Warp's agent.
     external_harness_prompt_sink:
         Option<async_channel::Sender<external_harness::ExternalHarnessPrompt>>,
+    /// When set, cancellations of the bound native conversation are handed to the external
+    /// harness driving it instead of interrupting the terminal.
+    external_harness_cancel_sink:
+        Option<async_channel::Sender<external_harness::ExternalHarnessCancel>>,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any
@@ -382,6 +388,17 @@ pub struct BlocklistAIController {
             Option<PassiveSuggestionTrigger>,
         )>,
     >,
+}
+
+/// Who cancels a conversation's turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancellationRoute {
+    /// This client: its in-flight request stream, pending actions, and (for the caller) any
+    /// agent-requested command running in the terminal.
+    Local,
+    /// The external harness driving the conversation, which interrupts its agent over its own
+    /// protocol and settles the conversation status afterwards.
+    ExternalHarness,
 }
 
 enum InputQueryType {
@@ -721,6 +738,7 @@ impl BlocklistAIController {
             shared_session_state: shared_session::SharedSessionState::default(),
             native_prompt_conversation_id: None,
             external_harness_prompt_sink: None,
+            external_harness_cancel_sink: None,
             ambient_agent_task_id: None,
             attachments_download_dir: None,
             pending_auto_resume_handles: HashMap::new(),
@@ -2104,9 +2122,10 @@ impl BlocklistAIController {
         let will_trigger_server_subagent = finished_results
             .iter()
             .any(|r| r.result.triggers_server_subagent());
-        let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+        let (has_active_subagent, owns_turn_lifecycle) = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_active_subagent());
+            .map(|c| (c.has_active_subagent(), c.driver().owns_turn_lifecycle()))
+            .unwrap_or((false, true));
 
         let context = input_context_for_request(
             false,
@@ -2136,24 +2155,26 @@ impl BlocklistAIController {
         if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
             request_input
                 .input_messages
-                .entry(root_task_id)
-                .or_default()
-                .push(steered_input);
+                .push((root_task_id, vec![steered_input]));
         }
 
         // Include any pending orchestration events in this follow-up rather
         // than waiting for a separate idle injection turn. Skip when a server
         // subagent is or will be active — events will be delivered via the idle
-        // path once the subagent session ends.
+        // path once the subagent session ends — and when this client does not
+        // author the conversation's turns at all, since the MAA server has no
+        // task of its own to attach the events to.
         let mut has_piggybacked_events = false;
-        if will_trigger_server_subagent || has_active_subagent {
+        if will_trigger_server_subagent || has_active_subagent || !owns_turn_lifecycle {
             log::debug!(
                 "Skipping event piggyback for conversation {conversation_id:?}: \
                  {}",
                 if will_trigger_server_subagent {
                     "results will trigger a server-side subagent"
-                } else {
+                } else if has_active_subagent {
                     "a subagent is currently active"
+                } else {
+                    "the conversation driver does not own the turn lifecycle"
                 }
             );
         } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
@@ -2162,11 +2183,7 @@ impl BlocklistAIController {
             })
         {
             has_piggybacked_events = true;
-            request_input
-                .input_messages
-                .entry(task_id)
-                .or_default()
-                .extend(event_inputs);
+            request_input.input_messages.push((task_id, event_inputs));
         }
 
         let result = self.send_request_input(
@@ -2220,9 +2237,20 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status || is_exiting || is_dispatch_blocked {
+        // Injection is a native MAA request against the conversation's root task. When another
+        // driver authors the turns (e.g. an ACP harness whose client-side mapper owns the task
+        // tree), the server has no task to attach the events to and fails the run instead;
+        // such runs are woken by the server when new messages arrive.
+        let owns_turn_lifecycle = conversation.driver().owns_turn_lifecycle();
+        if !owns
+            || has_active_stream
+            || !is_ready_status
+            || is_exiting
+            || is_dispatch_blocked
+            || !owns_turn_lifecycle
+        {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting} is_dispatch_blocked={is_dispatch_blocked} owns_turn_lifecycle={owns_turn_lifecycle}",
                 conversation.status()
             );
             return false;
@@ -2463,9 +2491,7 @@ impl BlocklistAIController {
         if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
             request_input
                 .input_messages
-                .entry(root_task_id)
-                .or_default()
-                .push(steered_input);
+                .push((root_task_id, vec![steered_input]));
         }
         if self
             .send_request_input(
@@ -3290,6 +3316,19 @@ impl BlocklistAIController {
         reason: CancellationReason,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.cancel_conversation_progress_routed(conversation_id, reason, ctx);
+    }
+
+    /// [`Self::cancel_conversation_progress`], reporting who ended up cancelling the turn. A
+    /// conversation driven by an external harness has its turn interrupted by that harness,
+    /// which settles the conversation status itself. The bookkeeping that is independent of who
+    /// runs the turn happens either way.
+    pub(crate) fn cancel_conversation_progress_routed(
+        &mut self,
+        conversation_id: AIConversationId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) -> CancellationRoute {
         self.commands_interrupted_for_injection
             .remove(&conversation_id);
         // Restore the user's keyboard focus if a background computer-use session is still active
@@ -3313,6 +3352,10 @@ impl BlocklistAIController {
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_pending_lrc_rows(conversation_id, ctx);
         });
+
+        if self.cancel_via_external_harness(conversation_id, ctx) {
+            return CancellationRoute::ExternalHarness;
+        }
 
         if !self
             .in_flight_response_streams
@@ -3351,6 +3394,7 @@ impl BlocklistAIController {
             });
             self.set_input_mode_for_cancellation(ctx);
         }
+        CancellationRoute::Local
     }
 
     /// Finalizes a conversation as a terminal failure because an agent-issued

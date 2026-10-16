@@ -16,7 +16,7 @@ pub(crate) const ENV_VAR_AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
 pub(crate) const ENV_VAR_AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
 pub(crate) const ENV_VAR_OPENAI_API_KEY: &str = "OPENAI_API_KEY";
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum ManagedSecretValue {
     RawValue {

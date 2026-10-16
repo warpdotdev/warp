@@ -26,10 +26,10 @@ use warp_core::telemetry::TelemetryEvent;
 use warp_graphql::ai::AgentTaskState;
 use warpui::{App, SingletonEntity, WindowId};
 
+use super::driver::agent_setup::configured_skills::selected_execution_skills;
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
-    selected_execution_skills,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;

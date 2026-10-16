@@ -1,4 +1,78 @@
+use clap::Parser as _;
+
 use super::*;
+
+fn command_line_launch_mode(arguments: &[&str]) -> LaunchMode {
+    let args =
+        warp_cli::Args::try_parse_from(std::iter::once("oz").chain(arguments.iter().copied()))
+            .expect("arguments should parse");
+    let Some(warp_cli::Command::CommandLine(command)) = args.command() else {
+        panic!("expected a CLI command: {arguments:?}");
+    };
+    LaunchMode::command_line(
+        command.as_ref().clone(),
+        args.global_options().clone(),
+        args.debug(),
+    )
+}
+
+fn computer_use_override(launch_mode: &LaunchMode) -> Option<bool> {
+    let LaunchMode::CommandLine {
+        computer_use_override,
+        ..
+    } = launch_mode
+    else {
+        panic!("expected a CLI launch mode");
+    };
+    *computer_use_override
+}
+
+#[test]
+fn agent_run_without_flags_is_unsandboxed_and_leaves_computer_use_to_defaults() {
+    let launch_mode = command_line_launch_mode(&["agent", "run", "--prompt", "test"]);
+
+    assert!(!launch_mode.is_sandboxed());
+    assert_eq!(computer_use_override(&launch_mode), None);
+}
+
+#[test]
+fn agent_run_preserves_sandboxed_and_enabled_computer_use() {
+    let launch_mode = command_line_launch_mode(&[
+        "agent",
+        "run",
+        "--prompt",
+        "test",
+        "--sandboxed",
+        "--computer-use",
+    ]);
+
+    assert!(launch_mode.is_sandboxed());
+    assert_eq!(computer_use_override(&launch_mode), Some(true));
+}
+
+#[test]
+fn agent_run_preserves_disabled_computer_use() {
+    let launch_mode =
+        command_line_launch_mode(&["agent", "run", "--prompt", "test", "--no-computer-use"]);
+
+    assert!(!launch_mode.is_sandboxed());
+    assert_eq!(computer_use_override(&launch_mode), Some(false));
+}
+
+#[test]
+fn non_agent_command_is_unsandboxed_and_leaves_computer_use_to_defaults() {
+    let launch_mode = command_line_launch_mode(&["whoami"]);
+
+    assert!(!launch_mode.is_sandboxed());
+    assert_eq!(computer_use_override(&launch_mode), None);
+}
+
+#[test]
+fn command_line_launch_runs_in_sdk_execution_mode() {
+    let launch_mode = command_line_launch_mode(&["whoami"]);
+
+    assert_eq!(launch_mode.execution_mode(), ExecutionMode::Sdk);
+}
 
 #[test]
 fn app_api_key_requires_validation() {

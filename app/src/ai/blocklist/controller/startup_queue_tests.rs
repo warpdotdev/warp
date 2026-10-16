@@ -5,8 +5,9 @@ use async_channel::unbounded;
 use uuid::Uuid;
 use warp_core::command::ExitCode;
 use warp_multi_agent_api::request::input::UserQuery as ApiUserQuery;
+use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warp_multi_agent_api::user_query_origin::Variant as UserQueryOriginVariant;
-use warp_multi_agent_api::{AgentType, UserQueryOrigin};
+use warp_multi_agent_api::{AgentType, ResponseEvent, UserQueryOrigin, response_event};
 use warpui::{App, ModelContext};
 
 use super::*;
@@ -620,11 +621,11 @@ fn injection_interrupt_initial_exit_130_continues_with_result_and_prompt() {
                 vec!["initial", "followup"]
             );
             let exchange = conversation.root_task_exchanges().last().unwrap();
-            assert!(exchange.input.iter().any(|input| matches!(input,
-                AIAgentInput::ActionResult { result, .. }
-                    if matches!(&result.result, AIAgentActionResultType::RequestCommandOutput(
+            assert!(matches!(exchange.input.as_slice(),
+                [AIAgentInput::ActionResult { result, .. }, AIAgentInput::UserQuery { query, .. }]
+                    if query == "followup" && matches!(&result.result, AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::Completed { exit_code, output, .. }
-                    ) if exit_code.value() == 130 && output == "partial output"))));
+                    ) if exit_code.value() == 130 && output == "partial output")));
         });
     });
 }
@@ -1184,6 +1185,147 @@ fn orchestration_events_wait_for_the_native_setup_barrier_before_injecting() {
             assert!(
                 service.has_pending_events(id),
                 "the event stays held behind the active initial-turn stream"
+            );
+        });
+    });
+}
+
+/// Binds the controller's native conversation and settles one external-harness turn on it, as
+/// an ACP run does, leaving the native setup barrier held (the harness never releases it).
+fn settled_external_harness_conversation(
+    controller: &mut BlocklistAIController,
+    ctx: &mut ModelContext<BlocklistAIController>,
+) -> AIConversationId {
+    let id = controller.bind_native_prompt_conversation(None, ctx);
+    let turn = controller
+        .begin_external_harness_turn(id, Some("run-1".into()), ctx)
+        .unwrap();
+    controller.apply_external_harness_event(
+        &turn.stream_id,
+        ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        },
+        ctx,
+    );
+    assert_eq!(
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&id)
+            .unwrap()
+            .status(),
+        &ConversationStatus::Success
+    );
+    assert!(QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+    id
+}
+
+fn enqueue_child_message(app: &mut App, id: AIConversationId) {
+    OrchestrationEventService::handle(app).update(app, |service, ctx| {
+        service.enqueue_event_batch(
+            id,
+            vec![PendingEvent {
+                event_id: "event-1".to_string(),
+                source_agent_id: "child".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["parent".to_string()],
+                    subject: "subject".to_string(),
+                    message_body: "body".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+}
+
+fn assert_no_native_request_was_sent(app: &App, id: AIConversationId, settled_exchanges: usize) {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        let conversation = history.conversation(&id).unwrap();
+        assert_eq!(
+            conversation.exchange_count(),
+            settled_exchanges,
+            "no exchange may be opened for an injected event"
+        );
+        assert_eq!(conversation.status(), &ConversationStatus::Success);
+    });
+}
+
+/// Regression for staging run `01a14135-7aca-754d-8abd-6544bd9f336c`: a Pi parent driven over
+/// ACP buffered a child's message, and injecting it as a native MAA request failed the run with
+/// "Tried to add messages to non-existent task (id=)" because the harness's client-side mapper,
+/// not the server, owns the conversation's task tree. The driver gate must hold such events even
+/// once the native setup barrier lifts.
+#[test]
+fn external_harness_conversation_does_not_inject_held_events_when_the_barrier_lifts() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, settled_external_harness_conversation);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+        let settled_exchanges = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            history.conversation(&id).unwrap().exchange_count()
+        });
+
+        enqueue_child_message(&mut app, id);
+        controller.read(&app, |controller, ctx| {
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+        });
+
+        // `DispatchStateChanged` re-checks held events exactly as the barrier lifting on an Oz
+        // run would; only the conversation driver stands between them and a native request.
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.finish_native_setup(id, ctx);
+        });
+        controller.update(&mut app, |controller, ctx| {
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+            controller.handle_pending_events_ready(id, ctx);
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+        });
+        assert_no_native_request_was_sent(&app, id, settled_exchanges);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(id),
+                "the event is held rather than injected"
+            );
+        });
+    });
+}
+
+/// Harness exit unbinds the native conversation, which releases the setup barrier that held
+/// every orchestration event for the run's lifetime; nothing may be injected in that teardown.
+#[test]
+fn unbinding_an_external_harness_conversation_drops_held_events_instead_of_injecting_them() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, settled_external_harness_conversation);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+        let settled_exchanges = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            history.conversation(&id).unwrap().exchange_count()
+        });
+        enqueue_child_message(&mut app, id);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.unbind_native_prompt_conversation(ctx);
+            assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+            assert!(!controller.has_active_stream_for_conversation(id, ctx));
+        });
+        assert_no_native_request_was_sent(&app, id, settled_exchanges);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(id),
+                "events the harness can never receive are dropped at unbind"
             );
         });
     });
