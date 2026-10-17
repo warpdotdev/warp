@@ -468,21 +468,12 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
         MenuItem::Separator,
     ]);
 
-    if FeatureFlag::UIZoom.is_enabled() {
-        items.extend([
-            updateable_custom_item_without_checkmark(CustomAction::IncreaseZoom, ctx),
-            updateable_custom_item_without_checkmark(CustomAction::DecreaseZoom, ctx),
-            updateable_custom_item_without_checkmark(CustomAction::ResetZoom, ctx),
-            MenuItem::Separator,
-        ]);
-    } else {
-        items.extend([
-            updateable_custom_item_without_checkmark(CustomAction::IncreaseFontSize, ctx),
-            updateable_custom_item_without_checkmark(CustomAction::DecreaseFontSize, ctx),
-            updateable_custom_item_without_checkmark(CustomAction::ResetFontSize, ctx),
-            MenuItem::Separator,
-        ]);
-    }
+    items.extend([
+        updateable_custom_item_without_checkmark(CustomAction::IncreaseZoom, ctx),
+        updateable_custom_item_without_checkmark(CustomAction::DecreaseZoom, ctx),
+        updateable_custom_item_without_checkmark(CustomAction::ResetZoom, ctx),
+        MenuItem::Separator,
+    ]);
 
     Menu::new("View", items)
 }
