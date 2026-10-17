@@ -19,7 +19,7 @@ use session_sharing_protocol::common::{
     ParticipantId, Role, RoleRequestId, RoleRequestRejectedReason, RoleRequestResponse, SessionId,
 };
 use settings::Setting as _;
-use tree::DEFAULT_FLEX_VALUE;
+use tree::{DEFAULT_FLEX_VALUE, DividerDragAnchor};
 use typed_path::TypedPath;
 use url::Url;
 use uuid::Uuid;
@@ -783,7 +783,12 @@ pub enum TabBarAxis {
 pub struct DraggedBorder {
     border_id: EntityId,
     direction: SplitDirection,
-    previous_mouse_location: Vector2F,
+    /// Where the mouse was pressed on the divider.
+    start_mouse_location: Vector2F,
+    /// The layout around the divider when the drag started, measured on the first drag event.
+    /// Several drag events can arrive before the panes are laid out again, so every event is
+    /// resolved against this snapshot rather than the (possibly stale) rendered pane sizes.
+    anchor: Option<DividerDragAnchor>,
 }
 
 /// Options that can be set when adding a new local terminal pane.
@@ -5963,15 +5968,23 @@ impl PaneGroup {
 
     fn resize_pane(&mut self, position: Vector2F, ctx: &mut ViewContext<Self>) {
         if let Some(border) = &mut self.dragged_border {
-            let delta = match border.direction {
-                SplitDirection::Horizontal => position.x() - border.previous_mouse_location.x(),
-                SplitDirection::Vertical => position.y() - border.previous_mouse_location.y(),
+            let offset = match border.direction {
+                SplitDirection::Horizontal => position.x() - border.start_mouse_location.x(),
+                SplitDirection::Vertical => position.y() - border.start_mouse_location.y(),
             };
 
-            self.panes.adjust_pane_size(border.border_id, delta, ctx);
-
-            border.previous_mouse_location = position;
-            ctx.notify();
+            if border.anchor.is_none() {
+                border.anchor = self.panes.divider_drag_anchor(border.border_id, ctx);
+            }
+            if let Some(anchor) = border.anchor {
+                self.panes.drag_divider(
+                    border.border_id,
+                    anchor,
+                    offset,
+                    get_minimum_pane_size(ctx),
+                );
+                ctx.notify();
+            }
         }
     }
 
