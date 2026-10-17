@@ -34,9 +34,10 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::ai::orchestration::{
-    OrchestrationConfigState, can_execute_with_auth_secret,
+    OrchestrationConfigState, can_execute_with_auth_secret, is_model_in_filtered_choices,
     populate_default_auth_secret_for_execution,
 };
 use crate::features::FeatureFlag;
@@ -265,6 +266,32 @@ impl RunAgentsExecutor {
         let mut slots: Vec<ChildSlot> = Vec::with_capacity(agent_run_configs.len());
         for cfg in &agent_run_configs {
             let prompt = compose_run_agents_child_prompt(&base_prompt, &cfg.prompt);
+            let effective_model_id = effective_child_model_id(&model_id, cfg);
+            if !effective_model_id.is_empty() {
+                let is_local = !run_execution_mode.is_remote();
+                let compatible = match Harness::parse_orchestration_harness(&harness_type) {
+                    Some(Harness::Oz) | None if is_local => LLMPreferences::as_ref(ctx)
+                        .can_use_agent_mode_model(
+                            team_scope.team_uid(),
+                            &LLMId::from(effective_model_id),
+                            ctx,
+                        ),
+                    Some(Harness::Oz) | None => true,
+                    Some(_) => is_model_in_filtered_choices(
+                        effective_model_id,
+                        &harness_type,
+                        is_local,
+                        ctx,
+                    ),
+                };
+                if !compatible {
+                    slots.push(ChildSlot::Failed(format!(
+                        "Model '{effective_model_id}' is unavailable or not supported by the \
+                         '{harness_type}' harness for this execution mode."
+                    )));
+                    continue;
+                }
+            }
             let mode = match run_agents_to_start_agent_mode(
                 &run_execution_mode,
                 &harness_type,
@@ -363,10 +390,7 @@ impl RunAgentsExecutor {
                     .map(|(cfg, kind)| RunAgentsAgentOutcome {
                         name: cfg.name.clone(),
                         kind,
-                        // resolved_model_id is populated by the server in the
-                        // RunAgentsResult proto; the client fills it as empty here
-                        // and the real value arrives via convert_conversation.
-                        resolved_model_id: String::new(),
+                        resolved_model_id: effective_child_model_id(&run_model_id, cfg).to_string(),
                     })
                     .collect();
                 me.record_launched_agents(parent_conversation_id_for_result, &agents);
@@ -748,6 +772,18 @@ pub fn compose_run_agents_child_prompt(base_prompt: &str, per_agent_prompt: &str
     }
 }
 
+fn effective_child_model_id<'a>(
+    batch_model_id: &'a str,
+    cfg: &'a RunAgentsAgentRunConfig,
+) -> &'a str {
+    let child_model_id = cfg.model_id.trim();
+    if child_model_id.is_empty() {
+        batch_model_id.trim()
+    } else {
+        child_model_id
+    }
+}
+
 /// Translates run-wide config into a per-child
 /// [`StartAgentExecutionMode`]. Returns `Err` for rejected
 /// combinations (e.g. OpenCode+Remote).
@@ -775,12 +811,12 @@ pub fn run_agents_to_start_agent_mode(
                 );
             }
             let trimmed = run_harness_type.trim();
-            // Per-agent model_id overrides the batch-level run_model_id when set.
-            let effective_model_id = if !cfg.model_id.trim().is_empty() {
-                cfg.model_id.trim()
-            } else {
-                run_model_id.trim()
-            };
+            let effective_model_id = effective_child_model_id(run_model_id, cfg);
+            if Harness::parse_local_child_harness(trimmed) == Some(Harness::Codex)
+                && !effective_model_id.is_empty()
+            {
+                return Err("Local Codex child agents do not support model overrides.".to_string());
+            }
             let model_id = (!effective_model_id.is_empty()).then(|| effective_model_id.to_string());
             if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("oz") {
                 Ok(StartAgentExecutionMode::Local {
@@ -811,12 +847,7 @@ pub fn run_agents_to_start_agent_mode(
                     "Remote child agents do not support the opencode harness yet.".to_string(),
                 );
             }
-            // Per-agent model_id overrides the batch-level run_model_id when set.
-            let effective_model_id = if !cfg.model_id.trim().is_empty() {
-                cfg.model_id.clone()
-            } else {
-                run_model_id.to_string()
-            };
+            let effective_model_id = effective_child_model_id(run_model_id, cfg).to_string();
             Ok(StartAgentExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 skill_references: run_skills.to_vec(),

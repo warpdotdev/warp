@@ -24,7 +24,7 @@ pub use providers::{
     resolve_auth_secret_selection_for_harness, resolve_default_host_slug,
 };
 pub(crate) use providers::{
-    can_execute_with_auth_secret, persist_auth_secret_selection,
+    can_execute_with_auth_secret, is_model_in_filtered_choices, persist_auth_secret_selection,
     populate_default_auth_secret_for_execution,
 };
 pub(crate) use remote_child::should_disable_snapshot;
