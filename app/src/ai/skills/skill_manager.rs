@@ -23,6 +23,16 @@ use super::bundled::{
 use super::{ActiveSkillLookupError, SkillDescriptor, SkillManagerEvent, SkillPathQuery};
 use crate::ai::skills::skill_utils::SkillDeduplicator;
 
+/// Bounds total bytes of Home-scope skill content retained across the whole running catalog,
+/// regardless of how many `WARP_SKILL_DIRS` entries, home provider directories, or incremental
+/// file-watcher additions contributed it. Individual reads already cap a single file
+/// (`MAX_SKILL_FILE_BYTES`) and a single directory scan (`MAX_SKILLS_BATCH_BYTES`), but without
+/// a catalog-wide budget, many separately-valid skills arriving from different directories or
+/// incremental updates could still accumulate unbounded total retained content (Sentry
+/// 7259255054). This does not cover bundled skills, which are a small, Warp-curated set that
+/// only needs the per-file cap.
+const MAX_HOME_SKILL_CATALOG_BYTES: u64 = 5 * 1024 * 1024;
+
 pub struct SkillManager {
     /// Maps a directory path to the set of skill file paths defined in that directory.
     ///
@@ -52,6 +62,9 @@ pub struct SkillManager {
     /// environment with configured repos is active, so the agent sees every
     /// skill from every cloned repo.
     is_cloud_environment: bool,
+    /// Running total of content bytes for all currently-retained Home-scope skills, checked
+    /// against `MAX_HOME_SKILL_CATALOG_BYTES` in [`Self::try_reserve_home_skill_bytes`].
+    home_skill_content_bytes: u64,
     #[allow(dead_code)]
     skill_watcher: ModelHandle<SkillWatcher>, // Can't remove this or it'll get cleaned up after new()
 }
@@ -84,6 +97,7 @@ impl SkillManager {
             bundled_skills: BundledSkills::default(),
             remote_home_directories: HashMap::new(),
             is_cloud_environment: false,
+            home_skill_content_bytes: 0,
             skill_watcher,
         }
     }
@@ -514,6 +528,11 @@ impl SkillManager {
         let Some(skill) = self.skills_by_path.remove(skill_path) else {
             return;
         };
+        if skill.scope == SkillScope::Home {
+            self.home_skill_content_bytes = self
+                .home_skill_content_bytes
+                .saturating_sub(skill.content.len() as u64);
+        }
         let remove_name = self
             .skills_by_name
             .get_mut(&skill.name)
@@ -524,6 +543,41 @@ impl SkillManager {
         if remove_name {
             self.skills_by_name.remove(&skill.name);
         }
+    }
+
+    /// Inserts `skill` into `skills_by_path`, keeping `home_skill_content_bytes` correct no
+    /// matter which scope occupied `skill.path` before. Centralizing this here (rather than
+    /// checking scope at each call site) means a Home skill replaced by a non-Home skill always
+    /// releases its reservation, and a non-Home skill replaced by a Home skill is never wrongly
+    /// credited for bytes it never reserved. Returns `false` (leaving any existing entry at
+    /// `skill.path` untouched) if inserting a Home-scope `skill` would exceed the budget.
+    fn try_insert_skill(&mut self, skill: ParsedSkill) -> bool {
+        let previous_home_bytes = self
+            .skills_by_path
+            .get(&skill.path)
+            .filter(|existing| existing.scope == SkillScope::Home)
+            .map_or(0, |existing| existing.content.len() as u64);
+        let released_bytes = self
+            .home_skill_content_bytes
+            .saturating_sub(previous_home_bytes);
+
+        if skill.scope == SkillScope::Home {
+            let projected = released_bytes.saturating_add(skill.content.len() as u64);
+            if projected > MAX_HOME_SKILL_CATALOG_BYTES {
+                log::warn!(
+                    "Skipping home skill {} (home skill catalog budget of \
+                     {MAX_HOME_SKILL_CATALOG_BYTES} bytes reached)",
+                    skill.path.display_path()
+                );
+                return false;
+            }
+            self.home_skill_content_bytes = projected;
+        } else {
+            self.home_skill_content_bytes = released_bytes;
+        }
+
+        self.skills_by_path.insert(skill.path.clone(), skill);
+        true
     }
 
     fn handle_skill_watcher_event(
@@ -559,16 +613,16 @@ impl SkillManager {
         for skill in skills {
             match extract_skill_parent_directory(&skill.path) {
                 Ok(parent_dir) => {
+                    let path = skill.path.clone();
+                    let name = skill.name.clone();
+                    if !self.try_insert_skill(skill) {
+                        continue;
+                    }
                     self.directory_skills
                         .entry(parent_dir)
                         .or_default()
-                        .insert(skill.path.clone());
-
-                    self.skills_by_name
-                        .entry(skill.name.clone())
-                        .or_default()
-                        .insert(skill.path.clone());
-                    self.skills_by_path.insert(skill.path.clone(), skill);
+                        .insert(path.clone());
+                    self.skills_by_name.entry(name).or_default().insert(path);
                 }
                 _ => {
                     log::warn!(
@@ -596,15 +650,16 @@ impl SkillManager {
         };
         let home_dir = LocalOrRemotePath::Local(home_dir);
         for skill in skills {
+            let path = skill.path.clone();
+            let name = skill.name.clone();
+            if !self.try_insert_skill(skill) {
+                continue;
+            }
             self.directory_skills
                 .entry(home_dir.clone())
                 .or_default()
-                .insert(skill.path.clone());
-            self.skills_by_name
-                .entry(skill.name.clone())
-                .or_default()
-                .insert(skill.path.clone());
-            self.skills_by_path.insert(skill.path.clone(), skill);
+                .insert(path.clone());
+            self.skills_by_name.entry(name).or_default().insert(path);
         }
     }
 
