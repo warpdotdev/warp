@@ -53,9 +53,8 @@ pub enum UnrenderableReason {
     /// The diff/patch itself is too large to render performantly (computed
     /// locally from the patch via [`compute_diff_size`]).
     DiffTooLarge,
-    /// The base file content was withheld because it exceeded the per-file wire
-    /// budget ([`MAX_DIFF_SIZE`]). Only produced when serializing a diff for a
-    /// remote subscriber.
+    /// The base file content was withheld because it exceeded either the per-file wire budget
+    /// ([`MAX_DIFF_SIZE`]) or the Code editor's content admission budget.
     FileTooLarge,
 }
 
