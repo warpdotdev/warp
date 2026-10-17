@@ -195,6 +195,33 @@ fn sorted_tail_multiple_exchanges() {
 // ── Edge cases ────────────────────────────────────────────────────────
 
 #[test]
+fn truncating_older_exchanges_does_not_change_retained_anchors() {
+    // A restoration bound (e.g. keeping only the most recent N exchanges) drops older
+    // exchanges from the list before this lookup runs. Anchors are computed per-exchange from
+    // `command_blocks` alone, so dropping exchanges must not shift the anchors of the ones that
+    // remain.
+    let blocks = vec![
+        (bi(0), ts(10)),
+        (bi(1), ts(20)),
+        (bi(2), ts(30)),
+        (bi(3), ts(40)),
+        (bi(4), ts(50)),
+    ];
+    let all_exchanges = vec![ts(1), ts(15), ts(25), ts(35), ts(45)];
+    let anchors_before_truncation =
+        find_block_indices_for_exchange_timestamps(&blocks, &all_exchanges);
+
+    // Simulate truncation: drop the two oldest exchanges.
+    let retained_exchanges = &all_exchanges[2..];
+    let anchors_after_truncation =
+        find_block_indices_for_exchange_timestamps(&blocks, retained_exchanges);
+
+    // Every retained exchange, including the oldest retained one (index 0, where an
+    // off-by-one would show first), keeps the anchor it had before truncation.
+    assert_eq!(anchors_after_truncation, anchors_before_truncation[2..]);
+}
+
+#[test]
 fn empty_blocks_returns_none_for_all_exchanges() {
     let blocks: Vec<(BlockIndex, chrono::DateTime<Local>)> = vec![];
     let exchanges = vec![ts(10), ts(20)];
