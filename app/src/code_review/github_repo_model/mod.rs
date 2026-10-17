@@ -10,9 +10,13 @@ pub use remote::RemoteGitHubRepoModel;
 
 #[cfg(all(test, feature = "local_fs"))]
 use crate::code_review::git_repo_model::GitRepoStatusModel;
-use crate::util::git::{PrInfo, RepositoryInfo};
+use crate::util::git::{PrInfo, PrStackInfo, RepositoryInfo};
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+// All three variants intentionally share the `*InfoChanged` shape; renaming
+// to satisfy the lint would touch every match arm across the codebase for
+// no readability gain.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 pub enum GitHubRepoEvent {
     /// Emitted when `pr_info` changes value (fetch result differs from
@@ -20,6 +24,8 @@ pub enum GitHubRepoEvent {
     PrInfoChanged,
     /// Emitted when `repository_info` changes value.
     RepositoryInfoChanged,
+    /// Emitted when `stack_info` changes value.
+    StackInfoChanged,
 }
 
 // ── Unified GitHubRepoModel (local or remote backend) ───────────────────────
@@ -47,6 +53,7 @@ impl GitHubRepoModel {
             GitHubRepoEvent::RepositoryInfoChanged => {
                 ctx.emit(GitHubRepoEvent::RepositoryInfoChanged)
             }
+            GitHubRepoEvent::StackInfoChanged => ctx.emit(GitHubRepoEvent::StackInfoChanged),
         }
     }
 
@@ -74,6 +81,28 @@ impl GitHubRepoModel {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).is_refreshing_pr_info(),
             Self::Remote(m) => m.as_ref(ctx).is_refreshing_pr_info(),
+        }
+    }
+
+    /// The GitHub-native stack containing the current branch's pull request,
+    /// when it belongs to one with two or more layers. `None` covers "not
+    /// stacked", discovery not yet complete, and a suppressed/unavailable
+    /// discovery result alike — all of these degrade to today's single-PR
+    /// experience per the product spec.
+    pub fn stack_info<'a>(&self, ctx: &'a AppContext) -> Option<&'a PrStackInfo> {
+        match self {
+            #[cfg(feature = "local_fs")]
+            Self::Local(m) => m.as_ref(ctx).stack_info(),
+            Self::Remote(m) => m.as_ref(ctx).stack_info(),
+        }
+    }
+
+    /// Whether a stack discovery fetch is currently in flight.
+    pub fn is_refreshing_stack_info(&self, ctx: &AppContext) -> bool {
+        match self {
+            #[cfg(feature = "local_fs")]
+            Self::Local(m) => m.as_ref(ctx).is_refreshing_stack_info(),
+            Self::Remote(m) => m.as_ref(ctx).is_refreshing_stack_info(),
         }
     }
 
@@ -133,4 +162,10 @@ impl GitHubRepoModel {
             Self::Remote(_) => unreachable!("remote test models are not used"),
         }
     }
+
+    // Add a `set_stack_info_for_test` wrapper here (mirroring the two
+    // methods above) once a `CodeReviewView`-level test needs to stub
+    // `stack_info` through the unified `GitHubRepoModel`, the same way
+    // `LocalGitHubRepoModel::set_stack_info_for_test` already does for
+    // `local_tests.rs`.
 }

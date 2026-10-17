@@ -1576,6 +1576,8 @@ impl CurrentPrompt {
                     me.sync_pr_chip_from_model(ctx);
                 }
                 GitHubRepoEvent::RepositoryInfoChanged => {}
+                // Stack membership doesn't affect the current-branch PR chip.
+                GitHubRepoEvent::StackInfoChanged => {}
             });
 
             // Eagerly populate the PR chip if PR info has already landed.
