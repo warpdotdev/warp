@@ -636,6 +636,17 @@ fn mesa_driver_version_is_below_minimum(info_str: &str, min_version: &Version) -
     version < *min_version
 }
 
+/// Returns whether presentation for this adapter should be capped to the
+/// display's refresh rate (vsync) rather than left uncapped.
+///
+/// Warp re-rasterizes the whole window on every redraw. That's cheap on a
+/// discrete GPU, but bursts of small updates (streaming terminal/agent
+/// output, cursor blink, etc.) can request redraws faster than a weak
+/// integrated GPU can keep up with, pegging it for no visible benefit.
+fn should_vsync_present_for_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+    adapter_info.device_type == DeviceType::IntegratedGpu
+}
+
 /// Creates a device and command queue for the given adapter that is guaranteed
 /// to be able to create a swapchain for the surface.
 async fn initialize_device(
@@ -893,8 +904,13 @@ fn create_surface_config(
 
     // Use a non-vsync presentation mode for reduced input delay.  This could
     // cause visual tearing on present, but we're ok with paying that cost to
-    // improve responsiveness.
-    config.present_mode = PresentMode::AutoNoVsync;
+    // improve responsiveness.  Integrated GPUs are the exception; see
+    // `should_vsync_present_for_adapter`.
+    config.present_mode = if should_vsync_present_for_adapter(&adapter.get_info()) {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    };
 
     // Explicitly request a non-opaque alpha compositing mode, if available.
     // Without this, transparent surfaces don't work on native Wayland.
