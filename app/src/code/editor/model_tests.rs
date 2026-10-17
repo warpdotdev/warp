@@ -71,6 +71,19 @@ async fn layout_model(app: &mut App, model: &ModelHandle<CodeEditorModel>) {
     app.read(|ctx| model.as_ref(ctx).render_state.as_ref(ctx).layout_complete())
         .await;
 }
+#[test]
+fn repeated_content_changes_do_not_advance_pending_diff_delay() {
+    let syntax_version = BufferVersion::new();
+    let first_diff_version = BufferVersion::new();
+    let mut delay_rendering =
+        DelayRendering::new(DelayRenderingTrigger::SyntaxHighlighting(syntax_version));
+    delay_rendering.block_until_diff_update(first_diff_version);
+
+    delay_rendering.block_until_diff_update(BufferVersion::new());
+    delay_rendering.block_until_diff_update(BufferVersion::new());
+    assert!(!delay_rendering.should_render_for_syntax_highlight(syntax_version));
+    assert!(delay_rendering.should_render_for_diff_update(first_diff_version));
+}
 
 #[test]
 fn test_two_editors_sharing_a_buffer_both_lay_out_a_large_content_replace() {
