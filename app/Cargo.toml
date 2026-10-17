@@ -644,7 +644,6 @@ default = [
     "active_conversation_requires_interaction",
     "figma_detection",
     "file_based_mcp",
-    "inline_repo_menu",
     "kitty_keyboard_protocol",
     "inline_menu_headers",
     "github_pr_prompt_chip",
@@ -978,7 +977,6 @@ cloud_mode_image_context = []
 force_classic_completions = []
 agent_view_conversation_list_view = ["agent_view"]
 inline_history_menu = ["agent_view"]
-inline_repo_menu = ["agent_view"]
 summarization_via_message_replacement = []
 lsp_as_a_tool = []
 inline_model_selector = ["agent_view"]

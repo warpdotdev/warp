@@ -844,10 +844,6 @@ impl TerminalView {
         restore_context_state: RestorationDirState,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::InlineRepoMenu.is_enabled() {
-            return;
-        }
-
         let open_repo_hint: MessageItem =
             if let Some(keystroke) = keybinding_name_to_keystroke("/open-repo", ctx) {
                 MessageItem::keystroke(keystroke)
