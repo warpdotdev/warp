@@ -37,8 +37,8 @@ use super::windows::{WindowAttributeErr, get_system_caption_button_bounds, set_w
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
-    self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowBackdrop,
-    WindowFocusBehavior, WindowOptions, WindowStyle,
+    self, AcrylicTintColor, Cursor, FullscreenState, GraphicsBackend, TerminationMode,
+    WindowBackdrop, WindowFocusBehavior, WindowOptions, WindowStyle,
 };
 use crate::rendering::wgpu::{
     Renderer, Resources, adapter_has_rendering_offset_bug, from_wgpu_backend, renderer,
@@ -72,8 +72,35 @@ fn winit_backdrop(backdrop: WindowBackdrop) -> BackdropType {
     match backdrop {
         WindowBackdrop::None => BackdropType::None,
         WindowBackdrop::Mica => BackdropType::MainWindow,
-        WindowBackdrop::Acrylic => BackdropType::TransientWindow,
+        // Acrylic is applied via a custom accent-policy call (see `apply_acrylic_tint`
+        // below and `WindowExt::set_acrylic_tint`) rather than through winit, since
+        // `BackdropType::TransientWindow` has no way to customize the tint color and
+        // defaults to a light underpaint that clashes with dark themes (warpdotdev/warp#11940).
+        WindowBackdrop::Acrylic => BackdropType::None,
         WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,
+    }
+}
+
+/// Applies (or clears) the custom Acrylic tint accent policy for `window` based on the
+/// currently selected `backdrop`. Must be called any time the backdrop type or tint
+/// settings change, so a window switching away from Acrylic never keeps a stale accent
+/// policy applied.
+#[cfg(windows)]
+fn apply_acrylic_tint(
+    window: &winit::window::Window,
+    backdrop: WindowBackdrop,
+    tint_color: AcrylicTintColor,
+    tint_opacity: u8,
+) {
+    use super::windows::WindowExt;
+
+    let result = if backdrop == WindowBackdrop::Acrylic {
+        window.set_acrylic_tint(tint_color, tint_opacity)
+    } else {
+        window.clear_acrylic_tint()
+    };
+    if let Err(e) = result {
+        report_error!(anyhow::Error::new(e).context("Failed to update acrylic tint"));
     }
 }
 
@@ -1455,6 +1482,13 @@ fn create_window(
                 report_error!(anyhow::Error::new(e).context("Failed to mark window as cloaked"));
             };
 
+            apply_acrylic_tint(
+                window,
+                window_options.background_backdrop,
+                window_options.background_backdrop_tint_color,
+                window_options.background_backdrop_tint_opacity,
+            );
+
             if let Some(adjustment) = maybe_adjust_window_vertically(window) {
                 let direction = if adjustment > 0 { "down" } else { "up" };
                 log::info!(
@@ -1589,11 +1623,17 @@ impl crate::platform::Window for Window {
     }
 
     #[cfg_attr(not(windows), allow(unused_variables))]
-    fn set_background_backdrop(&self, backdrop: WindowBackdrop) {
+    fn set_background_backdrop(
+        &self,
+        backdrop: WindowBackdrop,
+        tint_color: AcrylicTintColor,
+        tint_opacity: u8,
+    ) {
         #[cfg(windows)]
         {
             if let Some(inner) = self.inner.borrow().as_ref() {
                 inner.window.set_system_backdrop(winit_backdrop(backdrop));
+                apply_acrylic_tint(&inner.window, backdrop, tint_color, tint_opacity);
             }
         }
     }
