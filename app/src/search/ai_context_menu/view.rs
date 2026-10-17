@@ -469,9 +469,7 @@ impl AIContextMenu {
             {
                 categories.push(AIContextMenuCategory::DiffSet);
             }
-            if FeatureFlag::ConversationsAsContext.is_enabled() {
-                categories.push(AIContextMenuCategory::Conversations);
-            }
+            categories.push(AIContextMenuCategory::Conversations);
             if show_warp_drive {
                 categories.push(AIContextMenuCategory::Rules);
             }
