@@ -23,6 +23,211 @@ use crate::workspaces::workspace::ChargeUnit;
 fn identity_labels(config_key: &str) -> String {
     config_key.to_string()
 }
+fn history_metadata() -> gql::ConversationUsageMetadata {
+    let mut tools = serde_json::json!({
+        "runCommandsExecuted": 3,
+        "applyFileDiffStats": {"count": 2, "linesAdded": 12, "linesRemoved": 4, "filesChanged": 1}
+    });
+    for name in [
+        "runCommandStats",
+        "readFilesStats",
+        "searchCodebaseStats",
+        "grepStats",
+        "fileGlobStats",
+        "callMcpToolStats",
+        "readMcpResourceStats",
+        "suggestPlanStats",
+        "suggestCreatePlanStats",
+        "writeToLongRunningShellCommandStats",
+        "readShellCommandOutputStats",
+        "useComputerStats",
+    ] {
+        tools[name] = serde_json::json!({"count": 1});
+    }
+    serde_json::from_value(serde_json::json!({
+        "contextWindowUsage": 0.5,
+        "contextWindowSegments": [],
+        "creditsSpent": 21,
+        "platformCreditsSpent": 3,
+        "totalBilledCostInCents": 42,
+        "totalPlatformCostInCents": 6,
+        "summarized": false,
+        "tokenUsage": [],
+        "warpTokenUsage": [{
+            "modelId": "Claude Sonnet", "totalTokens": 1800,
+            "tokenUsageByCategory": [{"category": "primary_agent", "tokens": 1800}]
+        }],
+        "byokTokenUsage": [],
+        "toolUsageMetadata": tools,
+        "chargedUsageByCategory": [{
+            "category": "primary_agent", "usageType": "DIRECT_API",
+            "modelId": "internal-sonnet", "displayModelName": "Claude Sonnet",
+            "tokenCount": {"input": 1000, "output": 500, "cacheRead": 200, "cacheWrite": 100},
+            "tokenCost": {"inputCostCents": 2, "outputCostCents": 4, "cacheReadCostCents": 6, "cacheWriteCostCents": 8},
+            "tokenCostInCredits": {"input": 1, "output": 2, "cacheRead": 3, "cacheWrite": 4},
+            "webSearchCount": 3, "webSearchCostInCents": 10, "webSearchCostInCredits": 5,
+            "webFetchPageCount": 4, "webFetchCostInCents": 12, "webFetchCostInCredits": 6
+        }]
+    })).unwrap()
+}
+
+#[test]
+fn history_details_join_public_models_and_preserve_all_charge_buckets() {
+    let mut metadata = history_metadata();
+    let mut customer_paid = metadata.charged_usage_by_category.as_ref().unwrap()[0].clone();
+    customer_paid.usage_type = gql::ChargedUsageType::Byok;
+    customer_paid.token_count = gql::ChargedUsageTokenCount {
+        input: 100,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+    };
+    customer_paid.token_cost = gql::TokenCostBreakdown {
+        input_cost_cents: 0.,
+        output_cost_cents: 0.,
+        cache_read_cost_cents: 0.,
+        cache_write_cost_cents: 0.,
+    };
+    customer_paid.token_cost_in_credits = Some(gql::TokenCreditBreakdown {
+        input: 0.,
+        output: 0.,
+        cache_read: 0.,
+        cache_write: 0.,
+    });
+    customer_paid.web_search_count = 0;
+    customer_paid.web_search_cost_in_cents = 0.;
+    customer_paid.web_search_cost_in_credits = Some(0.);
+    customer_paid.web_fetch_page_count = None;
+    customer_paid.web_fetch_cost_in_cents = None;
+    customer_paid.web_fetch_cost_in_credits = None;
+    metadata
+        .charged_usage_by_category
+        .as_mut()
+        .unwrap()
+        .push(customer_paid.clone());
+    customer_paid.usage_type = gql::ChargedUsageType::CustomEndpoint;
+    customer_paid.model_id = "local-config".into();
+    customer_paid.display_model_name = Some("local-config".into());
+    metadata
+        .charged_usage_by_category
+        .as_mut()
+        .unwrap()
+        .push(customer_paid);
+
+    let data = UsageDetailsData::from_history(&metadata);
+    let rows = model_usage_rows(
+        &data.token_usage,
+        &data.charged_usage_by_key,
+        identity_labels,
+    );
+    assert_eq!(rows.len(), 2);
+    let standard = rows
+        .iter()
+        .find(|row| row.key == ModelRowKey::Standard("Claude Sonnet".into()))
+        .unwrap();
+    assert_eq!(standard.tokens, 1900);
+    assert_eq!(standard.cost, Some(CostValue::new(21., 42.)));
+    let usage = standard.charged_usage.unwrap();
+    assert_eq!(usage.input_tokens, 1100);
+    assert_eq!(usage.output_tokens, 500);
+    assert_eq!(usage.input_cache_read_tokens, 200);
+    assert_eq!(usage.input_cache_write_tokens, 100);
+    assert_eq!(usage.web_search_count, 3);
+    assert_eq!(usage.web_fetch_count, 4);
+    assert_eq!(usage.web_fetch_cost_in_cents, 12.);
+    let custom = rows
+        .iter()
+        .find(|row| row.key == ModelRowKey::CustomEndpoint("local-config".into()))
+        .unwrap();
+    assert_eq!(custom.tokens, 100);
+    assert_eq!(custom.cost, Some(CostValue::new(0., 0.)));
+}
+
+#[test]
+fn history_detail_controls_survive_refresh_independently_and_follow_display_unit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        let metadata = history_metadata();
+        let (_, first) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            HistoryUsageDetailsView::new(&metadata, ctx)
+        });
+        let (_, second) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            HistoryUsageDetailsView::new(&metadata, ctx)
+        });
+        first.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &UsagePopoverAction::ToggleModelExpanded(ModelRowKey::Standard(
+                    "Claude Sonnet".into(),
+                )),
+                ctx,
+            );
+            view.handle_action(&UsagePopoverAction::ToggleToolCallSummarySection, ctx);
+            view.update_metadata(&metadata, ctx);
+        });
+        let text = |view: &ViewHandle<HistoryUsageDetailsView>, app: &App| {
+            view.read(app, |view, ctx| {
+                view.render(ctx).debug_text_content().unwrap()
+            })
+        };
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
+        let first_text = text(&first, &app);
+        assert!(
+            first_text.contains("Cache read tokens")
+                && first_text.contains("Web searches")
+                && first_text.contains("Web fetches")
+        );
+        assert!(
+            first_text.contains("21 credits")
+                && first_text.contains("PLATFORM USAGE")
+                && first_text.contains("3 credits")
+        );
+        assert!(
+            !first_text.contains("Context window") && !first_text.contains("View account usage")
+        );
+        let second_text = text(&second, &app);
+        assert!(!second_text.contains("Input tokens"));
+        assert!(first_text.contains("14 tool calls"));
+        assert!(!first_text.contains("Files changed"));
+        assert!(!first_text.contains("Commands executed"));
+        assert!(!second_text.contains("14 tool calls"));
+        assert!(second_text.contains("Files changed"));
+        assert!(second_text.contains("Commands executed"));
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Dollars);
+        assert!(text(&first, &app).contains("$0.42"));
+        assert!(text(&second, &app).contains("$0.42"));
+    });
+}
+
+#[test]
+fn history_details_do_not_fabricate_missing_credits_or_legacy_breakdowns() {
+    let mut metadata = history_metadata();
+    let entry = &mut metadata.charged_usage_by_category.as_mut().unwrap()[0];
+    entry.token_cost_in_credits = None;
+    entry.web_search_cost_in_credits = None;
+    entry.web_fetch_cost_in_credits = None;
+    let data = UsageDetailsData::from_history(&metadata);
+    let cost = data.charged_usage_by_key[&ModelChargeKey::Standard("Claude Sonnet".into())].cost();
+    assert_eq!(cost.credits, None);
+    assert_eq!(
+        format_tokens_and_cost(None, Some(cost), UsageDisplayUnit::Credits),
+        EM_DASH
+    );
+    assert_eq!(
+        format_tokens_and_cost(None, Some(cost), UsageDisplayUnit::Dollars),
+        "$0.42"
+    );
+    metadata.charged_usage_by_category = None;
+    let legacy = UsageDetailsData::from_history(&metadata);
+    let rows = model_usage_rows(
+        &legacy.token_usage,
+        &legacy.charged_usage_by_key,
+        identity_labels,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tokens, 1800);
+    assert_eq!(rows[0].cost, None);
+}
 
 fn model(id: &str, warp_tokens: u32, category: &str) -> ModelTokenUsage {
     ModelTokenUsage {
@@ -933,6 +1138,7 @@ fn platform_usage_section_is_omitted_when_the_platform_fee_is_zero() {
         let render_platform_section = |app: &mut App, charged_usage: ChargedUsageTotals| {
             popover.read(app, |popover, ctx| {
                 popover
+                    .sections
                     .render_platform_usage_section(
                         Some(&charged_usage),
                         UsageDisplayUnit::Credits,
