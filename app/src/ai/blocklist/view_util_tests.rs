@@ -42,6 +42,12 @@ fn chatgpt_subscription_error_presents_server_copy_and_actions_in_order() {
                     chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
                 ],
                 vec![
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::CopyText {
+                        text: "Request for the workspace admin".to_string(),
+                    }),
+                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
+                ],
+                vec![
                     chatgpt_action(ChatGPTSubscriptionErrorActionKind::OpenUrl {
                         url: "https://chatgpt.com/#settings/Usage".to_string(),
                     }),
@@ -99,6 +105,23 @@ fn chatgpt_subscription_message_with_links_appends_only_url_actions() {
             ],
         ),
         format!("{message}\n\nManage usage: https://chatgpt.com/#settings/Usage")
+    );
+}
+
+#[test]
+fn chatgpt_subscription_message_with_links_preserves_copy_request_for_text_only_surfaces() {
+    let request = "Admin request\nadmin.openai.com -> Workspace -> Usage limits.";
+    assert_eq!(
+        chatgpt_subscription_message_with_links(
+            "Workspace limit reached.",
+            &[ChatGPTSubscriptionErrorAction {
+                label: "Copy request for admin".to_string(),
+                kind: ChatGPTSubscriptionErrorActionKind::CopyText {
+                    text: request.to_string(),
+                },
+            }],
+        ),
+        format!("Workspace limit reached.\n\nCopy request for admin:\n{request}")
     );
 }
 

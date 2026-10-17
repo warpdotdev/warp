@@ -115,6 +115,7 @@ pub async fn generate_multi_agent_output(
             // cannot produce a duplicate turn.
             supports_server_side_agent_message_injection: true,
             supports_chatgpt_subscription_error: true,
+            supports_chatgpt_subscription_copy_text: !cfg!(feature = "tui"),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
         }),
