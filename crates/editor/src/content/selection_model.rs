@@ -4,10 +4,11 @@ use itertools::Itertools;
 use string_offset::CharOffset;
 use vec1::{Vec1, vec1};
 use warp_errors::report_error;
+use warpui_core::text::point::Point;
 use warpui_core::{AppContext, Entity, ModelHandle};
 
 use crate::content::anchor::{Anchor, AnchorSide, AnchorUpdate, Anchors};
-use crate::content::buffer::{Buffer, SelectionOffsets, ToBufferPoint};
+use crate::content::buffer::{Buffer, SelectionOffsets, ToBufferCharOffset, ToBufferPoint};
 use crate::content::selection::{Selection, SelectionSet};
 use crate::content::text::{BlockType, TextStylesWithMetadata};
 
@@ -296,6 +297,20 @@ impl BufferSelectionModel {
         self.selections
             .iter()
             .all(|s| self.selection_is_single_cursor(s))
+    }
+
+    /// The character range of the line holding the primary cursor.
+    ///
+    /// The range runs to the start of the next line, so it carries the trailing
+    /// newline whenever the line has one, and stops at the end of the buffer on
+    /// the last line. It is empty only in a buffer that has no line at all.
+    pub fn primary_cursor_line_range(&self, ctx: &AppContext) -> Range<CharOffset> {
+        let buffer = self.buffer.as_ref(ctx);
+        let cursor = self.selection_head(self.selections.first());
+        let row = cursor.to_buffer_point(buffer).row;
+        let start = Point::new(row, 0).to_buffer_char_offset(buffer);
+        let end = Point::new(row + 1, 0).to_buffer_char_offset(buffer);
+        start..end
     }
 
     pub fn cursors_at_line_start(&self, ctx: &AppContext) -> bool {

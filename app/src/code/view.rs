@@ -406,6 +406,7 @@ impl CodeView {
                                 true,
                             ),
                         )
+                        .with_copy_line_when_selection_is_empty(ctx)
                     })
                 },
                 false,
@@ -450,6 +451,7 @@ impl CodeView {
                     true,
                 ),
             )
+            .with_copy_line_when_selection_is_empty(ctx)
         });
 
         ctx.add_typed_action_view(|ctx| {
