@@ -22,8 +22,13 @@
 //! and measure peak RSS with `/usr/bin/time -l`.
 use cocoa::base::nil;
 use cocoa::foundation::NSAutoreleasePool;
+use objc2::msg_send;
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL};
+use objc2_foundation::{NSArray, NSData, NSString, ns_string};
+use warpui_core::clipboard::ClipboardContent;
 
-use super::pasteboard_type_for_image_mime_type;
+use super::{Clipboard, pasteboard_type_for_image_mime_type};
+use crate::Clipboard as _;
 
 /// Number of outer pool cycles. Each cycle creates an `NSAutoreleasePool`,
 /// runs the inner loop, then drains. On master the retained NSStrings survive
@@ -58,4 +63,63 @@ fn pasteboard_type_for_image_mime_type_memory_behavior() {
             pool.drain();
         }
     }
+}
+
+/// A pasteboard private to the test, so it doesn't touch the user's clipboard.
+fn unique_pasteboard(types: &[&NSString]) -> Clipboard {
+    let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+    unsafe { pasteboard.declareTypes_owner(&NSArray::from_slice(types), None) };
+    Clipboard(pasteboard)
+}
+
+/// Reads the pasteboard, then frees it in the pasteboard server.
+fn read_and_release(mut clipboard: Clipboard) -> ClipboardContent {
+    let content = clipboard.read();
+    let _: () = unsafe { msg_send![&*clipboard.0, releaseGlobally] };
+    content
+}
+
+fn set_tiff(clipboard: &Clipboard) {
+    let tiff = NSData::with_bytes(b"MM\x00\x2a");
+    clipboard
+        .0
+        .setData_forType(Some(&tiff), ns_string!("public.tiff"));
+}
+
+#[test]
+fn finder_copy_reads_paths_not_icon_image() {
+    // Finder puts the file URL and the file's icon (as TIFF) on the pasteboard.
+    let clipboard = unique_pasteboard(&[
+        unsafe { NSPasteboardTypeFileURL },
+        ns_string!("public.tiff"),
+    ]);
+    unsafe {
+        clipboard.0.setString_forType(
+            ns_string!("file:///Users/alice/Projects"),
+            NSPasteboardTypeFileURL,
+        );
+    }
+    set_tiff(&clipboard);
+
+    let content = read_and_release(clipboard);
+
+    assert_eq!(
+        content.paths,
+        Some(vec!["/Users/alice/Projects".to_string()])
+    );
+    assert!(!content.has_image_data());
+}
+
+#[test]
+fn tiff_without_paths_reads_image() {
+    let clipboard = unique_pasteboard(&[ns_string!("public.tiff")]);
+    set_tiff(&clipboard);
+
+    let content = read_and_release(clipboard);
+
+    assert_eq!(content.num_paths(), 0);
+    let images = content
+        .images
+        .expect("TIFF data should be read as an image");
+    assert_eq!(images[0].mime_type, "image/tiff");
 }
