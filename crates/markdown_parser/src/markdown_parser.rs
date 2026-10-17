@@ -1034,6 +1034,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::CodeSpan(text) => {
                 state.push_closed_node(FormattedTextFragment::inline_code(text));
             }
+            InlineToken::KbdSpan(text) => {
+                // Render `<kbd>` keyboard-shortcut tags using the existing inline-code visual
+                // treatment rather than introducing a new style, per maintainer guidance on
+                // https://github.com/warpdotdev/warp/issues/13733.
+                state.push_closed_node(FormattedTextFragment::inline_code(text));
+            }
             InlineToken::Text(text) => {
                 state.push_text(text);
             }
@@ -1564,6 +1570,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     let code_span = map(parse_code_span, InlineToken::CodeSpan);
+    let kbd_span = map(parse_kbd_span, InlineToken::KbdSpan);
     let backslash_escape = map(parse_escape, InlineToken::BackslashEscape);
     let html_entity = map(parse_html_entity, InlineToken::HtmlEntity);
     let comment = value(InlineToken::Comment, parse_html_comment);
@@ -1587,6 +1594,10 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             html_entity,
             // Code spans win over comments, so that `` `<!-- x -->` `` renders literally.
             code_span,
+            // Kbd spans are matched whole (like code spans) before the comment/HTML-ish parsers
+            // so that `<kbd>...</kbd>` is recognized as a unit rather than falling through to
+            // literal text.
+            kbd_span,
             comment,
             parse_inline_token_link_start,
             parse_inline_token_link_end,
@@ -1727,6 +1738,24 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     )(input)
 }
 
+/// Parse an entire `<kbd>…</kbd>` keyboard-shortcut span as a single non-nesting token, the same
+/// way [`parse_code_span`] handles backtick code spans. Tags are matched exact-case, consistent
+/// with the existing `<u>`/`</u>` underline delimiters in this parser. An unterminated `<kbd>`
+/// (no matching `</kbd>`) fails to parse here and falls through to the other token parsers, so it
+/// degrades to literal text.
+fn parse_kbd_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, &'a str, E> {
+    context(
+        "kbd_span",
+        preceded(
+            tag("<kbd>"),
+            // take_until doesn't consume the end tag, so we do here.
+            terminated(take_until("</kbd>"), tag("</kbd>")),
+        ),
+    )(input)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
@@ -1740,6 +1769,10 @@ enum InlineToken<'a> {
     /// An entire code span. Code spans have higher precedence than all other inline constructs,
     /// so we parse them into discrete tokens.
     CodeSpan(&'a str),
+    /// An entire `<kbd>…</kbd>` keyboard-shortcut span, matched the same way as [`CodeSpan`]:
+    /// as a single non-nesting token rather than a delimiter pair. Rendered using the existing
+    /// inline-code visual treatment (see https://github.com/warpdotdev/warp/issues/13733).
+    KbdSpan(&'a str),
     /// An autolink URL. Owned because backslash escapes are processed (e.g., `\.` → `.`),
     /// so the result may differ from the input slice.
     AutoLink(String),
