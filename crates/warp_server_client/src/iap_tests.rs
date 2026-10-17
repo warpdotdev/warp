@@ -29,7 +29,10 @@ fn routing_preference_is_independent_of_cached_credentials() {
     state.set_loaded(cached("fresh-token", Some(Duration::from_secs(60))));
     assert_eq!(state.routing_header(&url), None);
     state.set_routing_opt_in(true);
-    assert_eq!(state.routing_header(&url), Some((http_client::iap::IAP_OPT_IN_HEADER, "1")));
+    assert_eq!(
+        state.routing_header(&url),
+        Some((http_client::iap::IAP_OPT_IN_HEADER, "1"))
+    );
     state.set_routing_opt_in(false);
     assert_eq!(state.routing_header(&url), None);
     assert_eq!(state.get_cached().as_deref(), Some("fresh-token"));

@@ -61,7 +61,9 @@ pub fn is_opt_in_destination(url: &reqwest::Url) -> bool {
                 .and_then(|path| path.strip_suffix("/download"))
                 .is_some_and(|id| !id.is_empty() && !id.contains('/'));
 
-            !public_prefixes.iter().any(|prefix| path.starts_with(prefix))
+            !public_prefixes
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
                 && !public_paths.contains(&path)
                 && !artifact_download
         }

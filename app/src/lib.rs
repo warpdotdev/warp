@@ -1571,9 +1571,12 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     if let Some(state) = iap_state.clone() {
         state.set_routing_opt_in(*settings::IapRoutingSettings::as_ref(ctx).routing_enabled);
-        ctx.subscribe_to_model(&settings::IapRoutingSettings::handle(ctx), move |settings, _, ctx| {
-            state.set_routing_opt_in(*settings.as_ref(ctx).routing_enabled);
-        });
+        ctx.subscribe_to_model(
+            &settings::IapRoutingSettings::handle(ctx),
+            move |settings, _, ctx| {
+                state.set_routing_opt_in(*settings.as_ref(ctx).routing_enabled);
+            },
+        );
     }
 
     let server_api_provider = ctx.add_singleton_model({

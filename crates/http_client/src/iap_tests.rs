@@ -12,7 +12,10 @@ fn only_staging_application_destinations_allow_opt_in() {
         "https://staging.warp.dev/api/v1/agent/artifacts/uid",
         "https://staging.warp.dev/api/v1/oauth/token/other",
     ] {
-        assert!(is_opt_in_destination(&reqwest::Url::parse(url).unwrap()), "{url}");
+        assert!(
+            is_opt_in_destination(&reqwest::Url::parse(url).unwrap()),
+            "{url}"
+        );
     }
     for url in [
         "http://staging.warp.dev/graphql/v2",
@@ -54,7 +57,10 @@ fn only_staging_application_destinations_allow_opt_in() {
         "https://platform.staging.warp.dev/iap/disable",
         "https://platform.staging.warp.dev/static/js/app.js",
     ] {
-        assert!(!is_opt_in_destination(&reqwest::Url::parse(url).unwrap()), "{url}");
+        assert!(
+            !is_opt_in_destination(&reqwest::Url::parse(url).unwrap()),
+            "{url}"
+        );
     }
 }
 

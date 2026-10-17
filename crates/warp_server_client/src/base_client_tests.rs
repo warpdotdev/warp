@@ -89,8 +89,15 @@ fn native_handshake_reads_current_routing_preference() {
     let url = "wss://staging.warp.dev/graphql/v2";
     assert!(client.iap_handshake_headers(url).is_empty());
     state.set_routing_opt_in(true);
-    assert_eq!(client.iap_handshake_headers(url), vec![(http_client::iap::IAP_OPT_IN_HEADER, "1".to_string())]);
-    assert!(client.iap_handshake_headers("wss://rtc.staging.warp.dev/graphql/v2").is_empty());
+    assert_eq!(
+        client.iap_handshake_headers(url),
+        vec![(http_client::iap::IAP_OPT_IN_HEADER, "1".to_string())]
+    );
+    assert!(
+        client
+            .iap_handshake_headers("wss://rtc.staging.warp.dev/graphql/v2")
+            .is_empty()
+    );
     state.set_routing_opt_in(false);
     assert!(client.iap_handshake_headers(url).is_empty());
 }

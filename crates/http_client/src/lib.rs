@@ -233,7 +233,6 @@ impl Client {
         self.after_response_received = Some(hook_fn);
     }
 
-
     fn builder(
         &self,
         wrapped: reqwest::RequestBuilder,
@@ -311,7 +310,9 @@ impl Client {
         if let Some(provider) = &self.iap_token_provider {
             request.headers_mut().remove(iap::IAP_OPT_IN_HEADER);
             if let Some((name, value)) = provider.routing_header(request.url()) {
-                request.headers_mut().insert(name, HeaderValue::from_static(value));
+                request
+                    .headers_mut()
+                    .insert(name, HeaderValue::from_static(value));
             }
         }
         #[cfg(target_family = "wasm")]

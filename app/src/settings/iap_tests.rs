@@ -15,7 +15,9 @@ fn routing_is_default_off_and_device_local() {
 fn routing_choice_survives_reloading_from_storage() {
     warpui::App::test((), |mut app| async move {
         app.update(|ctx| {
-            ctx.add_singleton_model(|_| PrivatePreferences::new(Box::<InMemoryPreferences>::default()));
+            ctx.add_singleton_model(|_| {
+                PrivatePreferences::new(Box::<InMemoryPreferences>::default())
+            });
             ctx.add_singleton_model(|_| SettingsManager::default());
             IapRoutingSettings::register(ctx);
             IapRoutingSettings::handle(ctx).update(ctx, |settings, ctx| {
