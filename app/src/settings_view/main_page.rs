@@ -44,6 +44,7 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
 use crate::server::ids::ServerId;
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
+use crate::settings::IapRoutingSettings;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -66,6 +67,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     let mut toggle_binding_pairs = Vec::new();
     maybe_add_settings_sync_toggle_binding(app, context, builder, &mut toggle_binding_pairs);
+    #[cfg(not(target_family = "wasm"))]
+    if IapManager::as_ref(app).is_enabled() {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "IAP for staging requests",
+            builder(SettingsAction::MainPageToggle(MainPageAction::ToggleIapRouting)),
+            context,
+            flags::IAP_ROUTING_FLAG,
+        ));
+    }
 
     // Add other bindings here in the future.
 
@@ -129,6 +139,8 @@ pub enum MainPageAction {
     OpenUrl(String),
     #[cfg(not(target_family = "wasm"))]
     RefreshIapCredentials,
+    #[cfg(not(target_family = "wasm"))]
+    ToggleIapRouting,
 }
 
 impl MainPageAction {
@@ -244,6 +256,15 @@ impl TypedActionView for MainSettingsPageView {
                 IapManager::handle(ctx).update(ctx, |manager, ctx| manager.start_refresh(ctx));
                 ctx.notify();
             }
+            #[cfg(not(target_family = "wasm"))]
+            MainPageAction::ToggleIapRouting => {
+                if IapManager::as_ref(ctx).is_enabled() {
+                    IapRoutingSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        report_if_error!(settings.routing_enabled.toggle_and_save_value(ctx));
+                    });
+                    ctx.notify();
+                }
+            }
         }
     }
 }
@@ -271,6 +292,9 @@ impl MainSettingsPageView {
         ctx.subscribe_to_model(&CloudPreferencesSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
+        ctx.subscribe_to_model(&IapRoutingSettings::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
 
         let auth_manager_handle = AuthManager::handle(ctx);
         ctx.subscribe_to_model(&auth_manager_handle, |_, _, _, ctx| {
@@ -289,6 +313,7 @@ impl MainSettingsPageView {
         #[cfg(not(target_family = "wasm"))]
         if IapManager::as_ref(ctx).is_enabled() {
             widgets.push(Box::new(IapCredentialsWidget::default()));
+            widgets.push(Box::new(IapRoutingWidget::default()));
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
                 if matches!(e, IapManagerEvent::StateChanged) {
@@ -1191,6 +1216,48 @@ impl SettingsWidget for IapCredentialsWidget {
                 .finish(),
         )
         .with_margin_top(VERTICAL_MARGIN)
+        .finish()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct IapRoutingWidget {
+    switch_state: SwitchStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for IapRoutingWidget {
+    type View = MainSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "iap staging routing opt in identity proxy"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        Container::new(render_body_item::<MainPageAction>(
+            "Use IAP for staging requests".to_string(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*IapRoutingSettings::as_ref(app).routing_enabled)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(MainPageAction::ToggleIapRouting);
+                })
+                .finish(),
+            None,
+        ))
+        .with_margin_top(8.)
         .finish()
     }
 }

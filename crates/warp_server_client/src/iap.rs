@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -116,6 +117,7 @@ pub struct IapState {
     audiences: String,
     service_account_email: String,
     inner: RwLock<IapCredentialsState>,
+    routing_opt_in: AtomicBool,
 }
 
 impl IapState {
@@ -124,6 +126,7 @@ impl IapState {
             audiences: config.audiences.to_string(),
             service_account_email: config.service_account_email.to_string(),
             inner: RwLock::new(IapCredentialsState::Missing),
+            routing_opt_in: AtomicBool::new(false),
         }
     }
 
@@ -141,6 +144,10 @@ impl IapState {
             }
             IapCredentialsState::Missing => None,
         }
+    }
+
+    pub fn set_routing_opt_in(&self, enabled: bool) {
+        self.routing_opt_in.store(enabled, Ordering::Relaxed);
     }
 
     pub fn proxy_auth_header(&self) -> Option<(&'static str, String)> {
@@ -183,6 +190,10 @@ impl IapState {
 impl http_client::iap::IapTokenProvider for IapState {
     fn cached_token(&self) -> Option<String> {
         self.get_cached()
+    }
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        self.routing_opt_in.load(Ordering::Relaxed)
     }
 }
 

@@ -452,12 +452,14 @@ impl ServerApi {
         iap_state: Option<Arc<IapState>>,
         ctx: &mut ModelContext<ServerApiProvider>,
     ) -> Self {
-        let mut client = http_client::Client::new();
+        let iap_token_provider =
+            iap_state.map(|state| state as Arc<dyn http_client::iap::IapTokenProvider>);
+        let mut client = if let Some(provider) = &iap_token_provider {
+            http_client::Client::new_with_iap_token_provider(provider.clone())
+        } else {
+            http_client::Client::new()
+        };
         let mut external_client = http_client::Client::new_external();
-        let iap_token_provider = iap_state.map(|state| {
-            client.set_iap_token_provider(state.clone());
-            state as Arc<dyn http_client::iap::IapTokenProvider>
-        });
         let mut telemetry_api = TelemetryApi::new();
         if ContextFlag::NetworkLogConsole.is_enabled() {
             NetworkLogModel::handle(ctx).update(ctx, |model, model_ctx| {

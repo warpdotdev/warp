@@ -4,6 +4,88 @@ use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct OptInProvider(AtomicBool);
+
+impl IapTokenProvider for OptInProvider {
+    fn cached_token(&self) -> Option<String> {
+        Some("test-iap-token".into())
+    }
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[test]
+fn routing_opt_in_updates_requests_without_replacing_application_auth() {
+    let provider = Arc::new(OptInProvider(AtomicBool::new(false)));
+    let client = Client::new_with_iap_token_provider(provider.clone());
+    let url = "https://staging.warp.dev/graphql/v2";
+
+    let request = client.post(url).bearer_auth("app-token").build().unwrap();
+    assert!(!request.wrapped.headers().contains_key(iap::IAP_OPT_IN_HEADER));
+    provider.0.store(true, Ordering::Relaxed);
+    let mut request = client.post(url).bearer_auth("app-token").build().unwrap();
+    assert_eq!(request.wrapped.headers()[iap::IAP_OPT_IN_HEADER], "1");
+    assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
+
+    provider.0.store(false, Ordering::Relaxed);
+    client.add_iap_routing_header(&mut request.wrapped);
+    assert!(!request.wrapped.headers().contains_key(iap::IAP_OPT_IN_HEADER));
+    assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
+}
+
+#[test]
+fn configured_provider_cannot_send_routing_selector_to_excluded_destinations() {
+    let client = Client::new_with_iap_token_provider(Arc::new(OptInProvider(AtomicBool::new(true))));
+    for url in [
+        "https://app.warp.dev/graphql/v2",
+        "https://third-party.example/graphql/v2",
+        "https://sessions.staging.warp.dev/api/v1/session",
+        "https://rtc.staging.warp.dev/graphql/v2",
+        "https://admin.staging.warp.dev/",
+        "https://staging.warp.dev/shared_sessions/test",
+    ] {
+        let request = client.get(url).header(iap::IAP_OPT_IN_HEADER, "1").build().unwrap();
+        assert!(!request.wrapped.headers().contains_key(iap::IAP_OPT_IN_HEADER), "{url}");
+    }
+}
+#[test]
+fn only_selector_bearing_transport_stops_redirects_outside_application_routes() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/application", server.local_addr().unwrap());
+    let responder = std::thread::spawn(move || {
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: /public\r\nX-Goog-IAP-Generated-Response: true\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let success = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        for response in [redirect, success, redirect] {
+            let (mut connection, _) = server.accept().unwrap();
+            connection.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut buffer = [0; 4096];
+            assert!(connection.read(&mut buffer).unwrap() > 0);
+            connection.write_all(response.as_bytes()).unwrap();
+        }
+    });
+
+    let client = Client::new_with_iap_token_provider(Arc::new(TestIapTokenProvider));
+    futures::executor::block_on(Compat::new(async {
+        let response = client.get(&url).timeout(Duration::from_secs(5)).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let request = client.wrapped.get(&url)
+            .header(iap::IAP_OPT_IN_HEADER, "1")
+            .timeout(Duration::from_secs(5))
+            .build().unwrap();
+        let response = client.transport_for(&request).execute(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert!(iap::is_iap_challenge(response.status(), response.headers()));
+    }));
+    responder.join().unwrap();
+}
 
 struct TestIapTokenProvider;
 
@@ -16,8 +98,7 @@ impl IapTokenProvider for TestIapTokenProvider {
 #[test]
 fn external_client_omits_automatic_headers_and_preserves_signing_headers() {
     with_active_span(|| {
-        let mut client = Client::new();
-        client.set_iap_token_provider(Arc::new(TestIapTokenProvider));
+        let client = Client::new_with_iap_token_provider(Arc::new(TestIapTokenProvider));
         let url = format!(
             "{}/object?X-Amz-Signature=test%2Bsignature&x-id=PutObject",
             ChannelState::server_root_url()

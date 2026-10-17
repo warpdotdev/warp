@@ -23398,6 +23398,9 @@ impl Workspace {
         if *cloud_preferences_settings.settings_sync_enabled.value() {
             context.set.insert(flags::SETTINGS_SYNC_FLAG);
         }
+        if *crate::settings::IapRoutingSettings::as_ref(app).routing_enabled {
+            context.set.insert(flags::IAP_ROUTING_FLAG);
+        }
 
         if *block_list_settings
             .show_jump_to_bottom_of_block_button

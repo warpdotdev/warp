@@ -20,6 +20,21 @@ fn jwt_with_payload(payload_json: &str) -> String {
     format!("{header}.{payload}.signature")
 }
 
+#[test]
+fn routing_preference_is_independent_of_cached_credentials() {
+    use http_client::iap::IapTokenProvider as _;
+
+    let state = test_state();
+    let url = reqwest::Url::parse("https://staging.warp.dev/graphql/v2").unwrap();
+    state.set_loaded(cached("fresh-token", Some(Duration::from_secs(60))));
+    assert_eq!(state.routing_header(&url), None);
+    state.set_routing_opt_in(true);
+    assert_eq!(state.routing_header(&url), Some((http_client::iap::IAP_OPT_IN_HEADER, "1")));
+    state.set_routing_opt_in(false);
+    assert_eq!(state.routing_header(&url), None);
+    assert_eq!(state.get_cached().as_deref(), Some("fresh-token"));
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
