@@ -46,7 +46,7 @@ use warp_util::standardized_path::StandardizedPath;
 use crate::entry::LAZY_LOAD_FILE_LIMIT;
 use crate::entry::{
     BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
-    matches_force_included_path,
+    gitignores_for_path_in_repo, matches_force_included_path,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
@@ -628,6 +628,7 @@ impl LocalRepoMetadataModel {
         for (repo_path, repo_scoped_update) in repo_updates {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(&repo_path) {
                 let repo_path_clone = repo_path.clone();
+                let repo_root = repo_path.to_local_path_lossy();
                 let gitignores_clone = state.gitignores.clone();
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
@@ -639,6 +640,7 @@ impl LocalRepoMetadataModel {
                     async move {
                         let (mutations, standing_results, removed_roots) =
                             Self::compute_file_tree_mutations(
+                                &repo_root,
                                 &repo_scoped_update,
                                 &gitignores_clone,
                                 &force_included_paths,
@@ -1477,10 +1479,14 @@ impl LocalRepoMetadataModel {
         let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(repo_root) else {
             return false;
         };
-        let Some(local) = dir_path.to_local_path() else {
+        let (Some(local_root), Some(local)) = (repo_root.to_local_path(), dir_path.to_local_path())
+        else {
             return false;
         };
-        Self::path_is_ignored(&local, &state.gitignores)
+        Self::path_is_ignored(
+            &local,
+            &gitignores_for_path_in_repo(&local_root, &local, &state.gitignores),
+        )
     }
 
     /// Checks whether the parent directory of `path` is loaded in the given entry.
@@ -1497,11 +1503,16 @@ impl LocalRepoMetadataModel {
     /// gitignore checks) and returns a lightweight list of mutations that can
     /// be applied to the tree on the main thread without cloning it.
     ///
+    /// `gitignores` is the repository's root + global set; `.gitignore` files
+    /// in directories between `repo_root` and each changed path are consulted
+    /// as well.
+    ///
     /// When `lazy_load` is true (lazy non-git roots), newly added directories
     /// are emitted as unloaded placeholders rather than fully-materialized
     /// subtrees, matching the lazy tree model; the directory is materialized
     /// (and watched) on demand when the user expands it via `load_directory`.
     async fn compute_file_tree_mutations(
+        repo_root: &Path,
         update: &RepoUpdate,
         gitignores: &[Arc<Gitignore>],
         force_included_paths: &[PathBuf],
@@ -1536,7 +1547,8 @@ impl LocalRepoMetadataModel {
                 continue;
             }
 
-            let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
+            let gitignores = gitignores_for_path_in_repo(repo_root, path_to_add, gitignores);
+            let is_ignored = Self::path_is_ignored(path_to_add, &gitignores);
 
             if path_to_add.is_dir() {
                 if lazy_load {
@@ -1560,7 +1572,7 @@ impl LocalRepoMetadataModel {
                 }
 
                 let mut files = Vec::new();
-                let mut gitignores = gitignores.to_owned();
+                let mut gitignores = gitignores;
                 let mut file_limit = MAX_FILES_PER_REPO;
                 match Entry::build_tree_with_standing_queries(
                     path_to_add,
@@ -1608,7 +1620,15 @@ impl LocalRepoMetadataModel {
                     }
                 }
             } else {
-                standing_results.record_path(path_to_add, false, standing_query_definitions);
+                let ancestor_is_ignored = path_to_add
+                    .parent()
+                    .is_some_and(|parent| Self::path_is_ignored(parent, &gitignores));
+                standing_results.record_path(
+                    path_to_add,
+                    false,
+                    ancestor_is_ignored,
+                    standing_query_definitions,
+                );
                 let extension = path_to_add
                     .extension()
                     .and_then(|ext| ext.to_str().map(|s| s.to_owned()));
