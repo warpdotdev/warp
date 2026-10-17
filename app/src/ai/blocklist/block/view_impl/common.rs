@@ -1534,9 +1534,7 @@ fn lightbox_image_for_mermaid_diagram(
     diagram: &AgentOutputMermaidDiagram,
     app: &AppContext,
 ) -> Option<ui_components::lightbox::LightboxImage> {
-    if !FeatureFlag::BlocklistMarkdownImages.is_enabled()
-        || !FeatureFlag::MarkdownMermaid.is_enabled()
-    {
+    if !FeatureFlag::BlocklistMarkdownImages.is_enabled() {
         return None;
     }
 
@@ -2174,9 +2172,7 @@ fn render_mermaid_diagram_section<A: Action>(
     lightbox_collection: &VisualMarkdownLightboxCollection,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    if !FeatureFlag::BlocklistMarkdownImages.is_enabled()
-        || !FeatureFlag::MarkdownMermaid.is_enabled()
-    {
+    if !FeatureFlag::BlocklistMarkdownImages.is_enabled() {
         return render_visual_markdown_fallback(&diagram.markdown_source, text_color, app);
     }
 

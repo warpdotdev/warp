@@ -88,6 +88,6 @@ The following invariants apply to notebook code blocks whose language is set to 
 30. Mermaid blocks in the rendered Markdown file view default to Rendered diagrams rather than Mermaid source text.
 31. Users can switch a rendered Markdown file back to Raw from the pane header Markdown toggle; Raw mode opens the file in the code editor. Returning to the rendered Markdown view defaults Mermaid blocks to Rendered again for that view.
 
-**Feature flag**
+**Availability**
 
-32. This behavior is gated by the existing `FeatureFlag::MarkdownMermaid` flag. When the flag is off, Mermaid blocks render as ordinary code blocks with no toggle and no diagram rendering.
+32. Mermaid blocks always support the Raw/Rendered toggle and diagram rendering.

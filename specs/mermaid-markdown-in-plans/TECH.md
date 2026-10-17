@@ -104,13 +104,13 @@ Implementation-wise, this likely means replacing the current inner-source-only l
 Do not change how Mermaid is persisted in the notebook buffer, the markdown export path, or document storage. This feature is strictly about editable rendered behavior and selection semantics.
 
 ### 7. Gate rollout behind a dedicated feature flag
-Add a dedicated editable-Mermaid feature flag so the existing `MarkdownMermaid` flag continues to mean “Mermaid rendering exists” while this feature specifically gates the new editable atomic behavior.
+Add a dedicated editable-Mermaid feature flag that specifically gates the new editable atomic behavior. Non-editable Mermaid rendering is always available.
 
 Concretely:
 * add an `EditableMarkdownMermaid` runtime flag and matching app feature
 * default it on for dogfood builds
 * require the new flag for editable-mode Mermaid rendering, Mermaid boundary hit-testing, whole-block destructive edits, and the fenced-markdown clipboard behavior introduced by this feature
-* leave existing non-editable Mermaid rendering under `MarkdownMermaid`
+* keep existing non-editable Mermaid rendering always available
 
 ## End-to-end flow
 1. A plan loads Mermaid markdown into the notebook editor buffer as a fenced Mermaid code block.
