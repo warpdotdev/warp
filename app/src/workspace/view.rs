@@ -26833,6 +26833,9 @@ impl View for Workspace {
         if *CodeSettings::as_ref(app).show_hidden_files {
             context.set.insert(flags::SHOW_HIDDEN_FILES);
         }
+        if *CodeSettings::as_ref(app).tab_close_button_in_icon_slot {
+            context.set.insert(flags::TAB_CLOSE_BUTTON_IN_ICON_SLOT);
+        }
 
         if self.team_uid(app).is_some() {
             context.set.insert("WarpDrive_BelongsToTeam");
