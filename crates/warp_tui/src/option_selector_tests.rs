@@ -12,6 +12,7 @@ use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
+use warpui_core::event::ModifiersState;
 use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandle};
 
@@ -1338,6 +1339,40 @@ fn key_down(key: &str) -> TuiEvent {
         details: Default::default(),
         is_composing: false,
     }
+}
+
+fn scroll_wheel(rows: isize) -> TuiEvent {
+    TuiEvent::ScrollWheel {
+        position: (1, 3).into(),
+        delta: (0, rows),
+        precise: false,
+        modifiers: ModifiersState::default(),
+    }
+}
+#[test]
+fn wheel_scroll_propagates_when_the_selector_cannot_scroll() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        set_page(&mut app, &selector, snapshot(&["yes", "no"], Some("yes")));
+
+        assert!(!dispatch(&app, &selector, &scroll_wheel(-1)));
+    });
+}
+
+#[test]
+fn wheel_scroll_is_consumed_only_when_the_selector_offset_changes() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let ids: Vec<String> = (0..12).map(|i| format!("row-{i}")).collect();
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        set_page(&mut app, &selector, snapshot(&id_refs, Some("row-0")));
+
+        assert!(!dispatch(&app, &selector, &scroll_wheel(1)));
+        assert!(dispatch(&app, &selector, &scroll_wheel(-1)));
+        act(&mut app, &selector, TuiOptionSelectorAction::ScrollBy(999));
+        assert!(dispatch(&app, &selector, &scroll_wheel(1)));
+        assert!(!dispatch(&app, &selector, &scroll_wheel(-1)));
+    });
 }
 
 #[test]
