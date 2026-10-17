@@ -128,6 +128,37 @@ impl Entry {
         }
     }
 
+    /// Total number of entries (files and directories) in this subtree, including `self`.
+    pub fn count_entries(&self) -> usize {
+        match self {
+            Self::File(_) => 1,
+            Self::Directory(directory) => {
+                1 + directory
+                    .children
+                    .iter()
+                    .map(Entry::count_entries)
+                    .sum::<usize>()
+            }
+        }
+    }
+
+    /// Number of directories in this subtree that will add a key to a
+    /// parent-to-children map when inserted (i.e. directories with at least
+    /// one child; a childless directory contributes no children-set entry).
+    pub fn count_populated_directories(&self) -> usize {
+        match self {
+            Self::File(_) => 0,
+            Self::Directory(directory) => {
+                usize::from(!directory.children.is_empty())
+                    + directory
+                        .children
+                        .iter()
+                        .map(Entry::count_populated_directories)
+                        .sum::<usize>()
+            }
+        }
+    }
+
     /// Builds a tree of entries from a given path, handling gitignored files and directories.
     /// After max_depth is reached, children outside force-included paths are lazy-loaded to
     /// prevent deeply nested trees.
