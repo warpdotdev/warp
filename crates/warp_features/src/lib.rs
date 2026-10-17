@@ -506,9 +506,6 @@ pub enum FeatureFlag {
     /// Enables editable Mermaid diagrams to behave atomically in notebook and plan editors.
     EditableMarkdownMermaid,
 
-    /// Enables rendering markdown tables in notebooks.
-    MarkdownTables,
-
     /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
     /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
     JupyterNotebookRendering,
@@ -1187,9 +1184,6 @@ impl FeatureFlag {
             GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
-            }
-            MarkdownTables => {
-                Some("Enables rendering and interaction support for markdown tables in notebooks.")
             }
             SettingsFile => Some(
                 "Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values.",

@@ -153,7 +153,6 @@ fn test_table_html_serialization() {
 #[test]
 fn test_gfm_table_html_serialization() {
     App::test((), |mut app| async move {
-        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
         let markdown = "\
 | header 1 | header 2 |\n\
 | --- | --- |\n\

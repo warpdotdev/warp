@@ -649,7 +649,6 @@ default = [
     "inline_menu_headers",
     "github_pr_prompt_chip",
     "conversations_as_context",
-    "markdown_tables",
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
@@ -805,7 +804,6 @@ local_fs = [
 ]
 log_expensive_frames_in_sentry = []
 jupyter_notebook_rendering = []
-markdown_tables = []
 markdown_mermaid = []
 mcp_server = []
 mcp_oauth = []

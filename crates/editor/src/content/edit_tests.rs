@@ -774,10 +774,9 @@ fn test_resolve_asset_source_leaves_non_local_markdown_images_unchanged() {
 }
 
 #[test]
-fn test_layout_text_block_uses_rich_table_when_flag_enabled() {
+fn test_layout_text_block_uses_rich_table() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let _flag = FeatureFlag::MarkdownTables.override_enabled(true);
             let text_layout = TextLayout::new(
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
@@ -800,36 +799,6 @@ fn test_layout_text_block_uses_rich_table_when_flag_enabled() {
 
             assert!(matches!(item, BlockItem::Table(_)));
             assert!(!has_trailing_newline);
-        });
-    })
-}
-
-#[test]
-fn test_layout_text_block_uses_plain_text_when_flag_disabled() {
-    App::test((), |app| async move {
-        app.read(|ctx| {
-            let _flag = FeatureFlag::MarkdownTables.override_enabled(false);
-            let text_layout = TextLayout::new(
-                ctx.font_cache().text_layout_system(),
-                &TEST_STYLES,
-                f32::MAX,
-            );
-            let content = "short\tmuch longer\ncell\trow\n";
-            let block = StyledTextBlock {
-                block: vec![StyledBufferRun {
-                    run: content.to_string(),
-                    text_styles: TextStylesWithMetadata::default(),
-                    block_style: BufferBlockStyle::table(Vec::new()),
-                }],
-                style: BufferBlockStyle::table(Vec::new()),
-                content_length: CharOffset::from(content.chars().count()),
-            };
-
-            let (item, _has_trailing_newline) =
-                layout_text_block(&block, &text_layout, BlockLocation::Middle, false)
-                    .expect("table layout should succeed");
-
-            assert!(matches!(item, BlockItem::Paragraph(_)));
         });
     })
 }
