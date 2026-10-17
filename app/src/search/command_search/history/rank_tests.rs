@@ -240,3 +240,60 @@ fn blank_query_ignores_priors_and_yields_a_result() {
          chronological order, not just bypass the score floor"
     );
 }
+
+#[test]
+fn literal_substring_matches_regardless_of_case() {
+    assert!(match_literal_substring("git STATUS", "status").is_some());
+    assert!(match_literal_substring("GIT status", "GIT").is_some());
+}
+
+#[test]
+fn literal_substring_does_not_match_a_subsequence() {
+    assert!(
+        match_literal_substring("list docker containers", "ldc").is_none(),
+        "a fuzzy subsequence match must not count as a literal substring match"
+    );
+}
+
+#[test]
+fn literal_substring_does_not_tokenize_the_query() {
+    assert!(
+        match_literal_substring("cd ~/projects/history_orm", "cd hi orm").is_none(),
+        "unlike the fuzzy path's whitespace-AND tokenization, the literal query must occur \
+         verbatim, not as separately-matched terms"
+    );
+    assert!(match_literal_substring("cd hi orm now", "cd hi orm").is_some());
+}
+
+#[test]
+fn literal_substring_match_indices_span_the_match() {
+    let result = match_literal_substring("git checkout master", "checkout").expect("should match");
+    assert_eq!(result.matched_indices, vec![4, 5, 6, 7, 8, 9, 10, 11]);
+}
+
+#[test]
+fn literal_substring_blank_query_matches_with_no_highlight() {
+    let result = match_literal_substring("anything", "").expect("blank query matches everything");
+    assert!(result.matched_indices.is_empty());
+}
+
+#[test]
+fn literal_match_score_is_half_the_query_matched_against_itself() {
+    let self_match_score = fuzzy_match::match_indices_case_insensitive("git status", "git status")
+        .expect("a string should fuzzy-match itself")
+        .score;
+    assert_eq!(
+        literal_match_score("git status"),
+        OrderedFloat(self_match_score as f64 * 0.5)
+    );
+}
+
+#[test]
+fn literal_match_score_is_identical_for_every_query_length() {
+    assert_eq!(literal_match_score("foo"), literal_match_score("foo"));
+    assert_ne!(
+        literal_match_score("foo"),
+        literal_match_score("foo bar baz"),
+        "a longer query should score higher, since it's matched against itself"
+    );
+}
