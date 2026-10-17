@@ -194,3 +194,32 @@ fmt.Println("Helper function")
     assert_eq!(symbols[4].name, "helperFunction");
     assert_eq!(symbols[4].type_prefix, Some("func".to_owned()));
 }
+
+#[test]
+fn build_outline_uses_repo_metadata_gitignore_rules() {
+    let temp_dir = TempDir::new().unwrap();
+    let gitignore_path = temp_dir.path().join(".gitignore");
+    std::fs::write(&gitignore_path, "ignored.rs\n").unwrap();
+    create_test_file(&temp_dir, "included.rs", "fn included() {}\n");
+
+    let outline = futures::executor::block_on(build_outline(temp_dir.path(), None)).unwrap();
+    assert!(
+        outline
+            .gitignore_rules
+            .matches(&temp_dir.path().join("ignored.rs"), false, false)
+    );
+
+    std::fs::write(&gitignore_path, "changed.rs\n").unwrap();
+    let changed_outline =
+        futures::executor::block_on(build_outline(temp_dir.path(), None)).unwrap();
+    assert!(changed_outline.gitignore_rules.matches(
+        &temp_dir.path().join("changed.rs"),
+        false,
+        false
+    ));
+    assert!(!changed_outline.gitignore_rules.matches(
+        &temp_dir.path().join("ignored.rs"),
+        false,
+        false
+    ));
+}
