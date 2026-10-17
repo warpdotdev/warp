@@ -83,8 +83,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::IntegrationCommand,
         #[cfg(feature = "artifact_command")]
         FeatureFlag::ArtifactCommand,
-        #[cfg(feature = "cloud_environments")]
-        FeatureFlag::CloudEnvironments,
         #[cfg(feature = "cloud_runners")]
         FeatureFlag::CloudRunners,
         #[cfg(feature = "cloud_agent_runners")]
