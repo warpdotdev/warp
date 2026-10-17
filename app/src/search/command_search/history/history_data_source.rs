@@ -19,6 +19,23 @@ use crate::terminal::model::session::SessionId;
 
 const CHUNK_SIZE: usize = 512;
 
+/// `fuzzy_match`'s `element_limit` bounds the O(pattern_len * text_len) score matrix
+/// `fuzzy-matcher` builds, but it still copies the whole choice string into a `Vec<char>`
+/// before applying that bound, so a single pathologically long history entry (e.g. a huge
+/// pasted blob or heredoc) still costs memory proportional to its length on every keystroke of
+/// every search. Matches past this many characters wouldn't be useful in a single-line search
+/// result row anyway, so cap the text considered for matching well above any realistic command.
+const MAX_FUZZY_MATCH_CHARS: usize = 100_000;
+
+/// Returns the longest char-aligned prefix of `text` with at most `max_chars` characters, so
+/// that indices matched within it remain valid indices into the untruncated `text`.
+fn truncate_for_fuzzy_match(text: &str, max_chars: usize) -> &str {
+    match text.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &text[..byte_idx],
+        None => text,
+    }
+}
+
 pub(crate) struct HistorySnapshot {
     commands: Arc<[Arc<HistoryEntry>]>,
     query_text: String,
@@ -121,7 +138,7 @@ fn fuzzy_match_history_legacy(
         for chunk in snapshot.commands.chunks(CHUNK_SIZE) {
             for entry in chunk {
                 let Some(match_result) = fuzzy_match::match_indices_case_insensitive(
-                    entry.command.as_str(),
+                    truncate_for_fuzzy_match(entry.command.as_str(), MAX_FUZZY_MATCH_CHARS),
                     snapshot.query_text.as_str(),
                 ) else {
                     continue;
@@ -143,3 +160,7 @@ fn fuzzy_match_history_legacy(
         Ok(results)
     })
 }
+
+#[cfg(test)]
+#[path = "history_data_source_tests.rs"]
+mod tests;
