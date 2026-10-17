@@ -93,12 +93,8 @@ impl WslCommandExecutor {
             .arg(self.shell_type.name())
             .arg(shell_config_flag)
             .arg("-c")
-            .arg(&*command_with_env)
-            // The purpose of the executor is to produce output. If the child
-            // has been dropped, there's no way to get the output anymore,
-            // so there's no need for the process itself to stick around.
-            .kill_on_drop(true)
-            .output()
+            .arg(&*command_with_env);
+        command::wsl::output_background_command(&mut command_process, &self.distro_name)
             .await
             .map(|output| output.into())
             .map_err(|e| {
@@ -130,6 +126,6 @@ impl CommandExecutor for WslCommandExecutor {
     }
 
     fn supports_parallel_command_execution(&self) -> bool {
-        true
+        false
     }
 }

@@ -6,9 +6,52 @@ use std::ffi::OsStr;
 use std::future::Future;
 use std::path::Path;
 use std::process::{ExitStatus, Output, Stdio};
+use std::time::Duration;
 use std::{fmt, io};
 
+use async_io::Timer;
 use async_process::Child;
+use futures_lite::future;
+
+#[derive(Debug, thiserror::Error)]
+pub enum OutputError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("process {process_id} did not exit within {timeout:?}")]
+    TimedOut { process_id: u32, timeout: Duration },
+}
+
+impl OutputError {
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::TimedOut { .. })
+    }
+
+    pub fn process_id(&self) -> Option<u32> {
+        match self {
+            Self::Io(_) => None,
+            Self::TimedOut { process_id, .. } => Some(*process_id),
+        }
+    }
+}
+
+async fn collect_output_with_timeout(
+    child: Child,
+    timeout: Duration,
+) -> Result<Output, OutputError> {
+    let process_id = child.id();
+    let output = child.output();
+    future::race(
+        async { output.await.map_err(OutputError::from) },
+        async move {
+            Timer::after(timeout).await;
+            Err(OutputError::TimedOut {
+                process_id,
+                timeout,
+            })
+        },
+    )
+    .await
+}
 
 /// Wrapper around a [`async_process::Command`] that ensures any new Command is set with the windows
 /// `CREATE_NO_WINDOW` flag to avoid a console window temporarily popping up.
@@ -97,7 +140,7 @@ impl Command {
 
     #[allow(unused_mut)]
     fn new_internal(mut inner: async_process::Command) -> Command {
-        #[cfg(all(windows, not(feature = "test-util")))]
+        #[cfg(all(windows, not(any(feature = "test-util", test))))]
         {
             use async_process::windows::CommandExt;
             // We need to set the `CREATE_BREAKAWAY_FROM_JOB` flag to avoid assigning
@@ -435,4 +478,27 @@ impl Command {
 
         self.inner.output()
     }
+
+    /// Executes the command and collects its output, terminating and reaping the child if it does
+    /// not exit before `timeout`.
+    pub async fn output_with_timeout(&mut self, timeout: Duration) -> Result<Output, OutputError> {
+        if self.stdin_is_default {
+            self.inner.stdin(Stdio::null());
+        }
+        if self.stdout_is_default {
+            self.inner.stdout(Stdio::piped());
+        }
+        if self.stderr_is_default {
+            self.inner.stderr(Stdio::piped());
+        }
+
+        self.inner.kill_on_drop(true);
+        self.inner.reap_on_drop(true);
+        let child = self.inner.spawn()?;
+        collect_output_with_timeout(child, timeout).await
+    }
 }
+
+#[cfg(test)]
+#[path = "async_tests.rs"]
+mod tests;
