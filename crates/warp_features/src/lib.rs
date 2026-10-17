@@ -691,9 +691,6 @@ pub enum FeatureFlag {
     /// Enables file-based MCP server support via .mcp.json files in repo roots.
     FileBasedMcp,
 
-    /// Enables passing user query arguments to skill invocations ($ARGUMENTS, $N).
-    SkillArguments,
-
     /// When enabled, a conversation is only considered "active" once a new query has been
     /// sent since opening (rather than the moment its agent view is expanded).
     ActiveConversationRequiresInteraction,

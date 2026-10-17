@@ -279,23 +279,19 @@ impl SlashCommandRequest {
                 vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
             SlashCommandRequest::InvokeSkill { skill, user_query } => {
-                let user_query = if FeatureFlag::SkillArguments.is_enabled() {
-                    let query = user_query
-                        .map(|query| query.trim().to_string())
-                        .unwrap_or_default();
-                    (!query.is_empty() || !prompt_files.is_empty()).then(|| {
-                        let mut referenced_attachments =
-                            parse_context_attachments(&query, context_model, app);
-                        add_pending_file_attachments(&mut referenced_attachments, prompt_files);
-                        InvokeSkillUserQuery {
-                            referenced_attachments,
-                            query,
-                            base: None,
-                        }
-                    })
-                } else {
-                    None
-                };
+                let query = user_query
+                    .map(|query| query.trim().to_string())
+                    .unwrap_or_default();
+                let user_query = (!query.is_empty() || !prompt_files.is_empty()).then(|| {
+                    let mut referenced_attachments =
+                        parse_context_attachments(&query, context_model, app);
+                    add_pending_file_attachments(&mut referenced_attachments, prompt_files);
+                    InvokeSkillUserQuery {
+                        referenced_attachments,
+                        query,
+                        base: None,
+                    }
+                });
                 vec![AIAgentInput::InvokeSkill {
                     skill,
                     user_query,
