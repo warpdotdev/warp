@@ -100,24 +100,15 @@ pub fn convert_keyboard_input_event(
         {
             input.key_without_modifiers()
         }
-        // On Windows, non-Latin keyboard layouts (Cyrillic, Greek, Arabic, etc.) translate
-        // the physical key to a non-ASCII character even when Ctrl/Cmd is held. That makes
-        // bindings like `ctrl-c` / `ctrl-v` fail to match. Fall back to the US-QWERTY
-        // position so chord shortcuts work regardless of the active layout — same approach
-        // used by VS Code, JetBrains, and Chromium. Issue #9036.
-        //
-        // Right-Alt is excluded because Windows reports AltGr as Ctrl+Alt; without this
-        // guard, AltGr-produced characters (e.g. `€` on a German layout) would be rewritten
-        // into a spurious chord and the typed character would be swallowed.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         Key::Character(c)
-            if (window_state.modifiers.control_key() || window_state.modifiers.super_key())
-                && !window_state.right_alt_pressed
-                && !c.is_ascii() =>
+            if is_chord_on_non_latin_layout(
+                c,
+                window_state.modifiers,
+                window_state.right_alt_pressed,
+            ) =>
         {
-            us_qwerty_fallback_for_chord(&input.physical_key, shift)
-                .map(|s| Key::Character(s.into()))
-                .unwrap_or_else(|| input.logical_key.clone())
+            chord_key_with_us_qwerty_fallback(&input.logical_key, &input.physical_key, shift)
         }
         _ => input.logical_key,
     };
@@ -271,14 +262,51 @@ fn convert_key(key: Key) -> Option<Cow<'static, str>> {
     Some(Cow::Borrowed(value))
 }
 
-/// Maps a winit `PhysicalKey` to the US-QWERTY character it would produce. Used on Windows
-/// to recover layout-independent chord shortcuts (e.g. `ctrl-c`) when a non-Latin keyboard
+/// Returns the key a chord shortcut should be matched on when a non-Latin layout has translated
+/// it. On non-Latin keyboard layouts (Cyrillic, Greek, Arabic, etc.) the layout turns the physical
+/// key into a non-ASCII character even when Ctrl/Cmd is held, which makes bindings like `ctrl-c` /
+/// `ctrl-v` fail to match. Fall back to the US-QWERTY position of the physical key so chord
+/// shortcuts work regardless of the active OS layout, the same approach used by VS Code, JetBrains,
+/// and Chromium. Issues #9036 (Windows) and #8682. Keys with no US-QWERTY equivalent keep their
+/// logical key.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn chord_key_with_us_qwerty_fallback(
+    logical_key: &Key,
+    physical_key: &winit::keyboard::PhysicalKey,
+    shift: bool,
+) -> Key {
+    us_qwerty_fallback_for_chord(physical_key, shift)
+        .map(|s| Key::Character(s.into()))
+        .unwrap_or_else(|| logical_key.clone())
+}
+
+/// Returns whether `character` is a non-ASCII key produced while a chord modifier (Ctrl or
+/// Super) is held, i.e. a shortcut that a non-Latin layout has translated away from the key the
+/// binding was written for.
+///
+/// Right-Alt is excluded because Windows reports AltGr as Ctrl+Alt; without this guard,
+/// AltGr-produced characters (e.g. `€` on a German layout) would be rewritten into a spurious
+/// chord and the typed character would be swallowed. The guard is kept on Linux, where AltGr is
+/// a separate level-3 modifier, so both platforms share one rule.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn is_chord_on_non_latin_layout(
+    character: &str,
+    modifiers: ModifiersState,
+    right_alt_pressed: bool,
+) -> bool {
+    (modifiers.control_key() || modifiers.super_key())
+        && !right_alt_pressed
+        && !character.is_ascii()
+}
+
+/// Maps a winit `PhysicalKey` to the US-QWERTY character it would produce. Used on Windows and
+/// Linux to recover layout-independent chord shortcuts (e.g. `ctrl-c`) when a non-Latin keyboard
 /// layout has translated the logical key to a non-ASCII character.
 ///
 /// Returns `None` for keys outside the standard letter/digit/punctuation set (function keys,
 /// modifiers, navigation keys, etc.), since those either aren't typically used in chord
 /// bindings as character keys or are already handled via `NamedKey` in `convert_key`.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 fn us_qwerty_fallback_for_chord(
     physical_key: &winit::keyboard::PhysicalKey,
     shift: bool,

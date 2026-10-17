@@ -1,7 +1,10 @@
 use winit::keyboard::Key::Character;
-use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey, SmolStr};
+use winit::keyboard::{KeyCode, ModifiersState, NativeKeyCode, PhysicalKey, SmolStr};
 
-use super::{get_input_key, us_qwerty_fallback_for_chord};
+use super::{
+    chord_key_with_us_qwerty_fallback, convert_key, get_input_key, is_chord_on_non_latin_layout,
+    us_qwerty_fallback_for_chord,
+};
 
 #[test]
 fn test_get_input_key() {
@@ -158,4 +161,139 @@ fn us_qwerty_fallback_returns_none_for_unidentified_physical_key() {
             "unidentified key should not have a chord fallback (shift={shift})",
         );
     }
+}
+
+#[test]
+fn chord_on_non_latin_layout_requires_ctrl_or_super_and_non_ascii() {
+    // Russian "м" on the V key: Ctrl or Super held makes it a chord that needs the fallback.
+    assert!(is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::CONTROL,
+        false
+    ));
+    assert!(is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::SUPER,
+        false
+    ));
+    assert!(is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+        false
+    ));
+    // Typed text (no chord modifier) must stay untouched.
+    assert!(!is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::empty(),
+        false
+    ));
+    assert!(!is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::SHIFT,
+        false
+    ));
+    assert!(!is_chord_on_non_latin_layout(
+        "м",
+        ModifiersState::ALT,
+        false
+    ));
+    // ASCII keys already match their bindings.
+    assert!(!is_chord_on_non_latin_layout(
+        "v",
+        ModifiersState::CONTROL,
+        false
+    ));
+}
+
+#[test]
+fn chord_on_non_latin_layout_ignores_altgr() {
+    // AltGr characters such as "€" must not be rewritten into a Ctrl chord.
+    assert!(!is_chord_on_non_latin_layout(
+        "€",
+        ModifiersState::CONTROL,
+        true
+    ));
+    assert!(!is_chord_on_non_latin_layout(
+        "€",
+        ModifiersState::CONTROL | ModifiersState::ALT,
+        true
+    ));
+}
+
+/// Runs the same steps as `convert_keyboard_input_event` after the layout has produced a logical
+/// key: resolve the chord key, apply the shift casing and render the binding string.
+fn chord_binding(
+    layout_char: &str,
+    physical: KeyCode,
+    modifiers: ModifiersState,
+    right_alt_pressed: bool,
+) -> String {
+    let logical_key = Character(SmolStr::from(layout_char));
+    let shift = modifiers.shift_key();
+    let key = if is_chord_on_non_latin_layout(layout_char, modifiers, right_alt_pressed) {
+        chord_key_with_us_qwerty_fallback(&logical_key, &PhysicalKey::Code(physical), shift)
+    } else {
+        logical_key
+    };
+    convert_key(get_input_key(&key, shift))
+        .expect("character keys always convert")
+        .to_string()
+}
+
+#[test]
+fn russian_layout_chords_resolve_to_the_latin_binding_key() {
+    // Regression test for pasting/copying on a Russian layout: the V and C keys report "м" and
+    // "с", but the bindings are `ctrl-v` / `ctrl-shift-V` / `ctrl-c`.
+    assert_eq!(
+        chord_binding("м", KeyCode::KeyV, ModifiersState::CONTROL, false),
+        "v"
+    );
+    assert_eq!(
+        chord_binding(
+            "м",
+            KeyCode::KeyV,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            false
+        ),
+        "V"
+    );
+    assert_eq!(
+        chord_binding("с", KeyCode::KeyC, ModifiersState::CONTROL, false),
+        "c"
+    );
+    assert_eq!(
+        chord_binding("м", KeyCode::KeyV, ModifiersState::SUPER, false),
+        "v"
+    );
+}
+
+#[test]
+fn non_latin_layout_typed_text_is_not_rewritten() {
+    // Without Ctrl/Super the layout character must reach the input untouched.
+    assert_eq!(
+        chord_binding("м", KeyCode::KeyV, ModifiersState::empty(), false),
+        "м"
+    );
+    assert_eq!(
+        chord_binding("м", KeyCode::KeyV, ModifiersState::SHIFT, false),
+        "М"
+    );
+    // AltGr output must not be turned into a chord.
+    assert_eq!(
+        chord_binding("€", KeyCode::KeyE, ModifiersState::CONTROL, true),
+        "€"
+    );
+}
+
+#[test]
+fn latin_layout_chords_are_unchanged() {
+    // Dvorak puts "j" on the physical C position; ASCII keys keep their logical meaning.
+    assert_eq!(
+        chord_binding("j", KeyCode::KeyC, ModifiersState::CONTROL, false),
+        "j"
+    );
+    assert_eq!(
+        chord_binding("v", KeyCode::KeyV, ModifiersState::CONTROL, false),
+        "v"
+    );
 }
