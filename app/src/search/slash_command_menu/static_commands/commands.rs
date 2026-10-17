@@ -1082,9 +1082,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         commands.push(MOVE_TO_CLOUD.clone());
     }
 
-    if FeatureFlag::InlineProfileSelector.is_enabled() {
-        commands.push(PROFILE.clone());
-    }
+    commands.push(PROFILE.clone());
 
     if FeatureFlag::RevertToCheckpoints.is_enabled() && FeatureFlag::RewindSlashCommand.is_enabled()
     {
