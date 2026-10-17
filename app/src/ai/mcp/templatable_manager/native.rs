@@ -422,13 +422,9 @@ impl TemplatableMCPServerManager {
                 TEMPLATABLE_MCP_CREDENTIALS_KEY,
             );
 
-            if FeatureFlag::FileBasedMcp.is_enabled() {
-                me.file_based_server_credentials = load_credentials_from_secure_storage::<
-                    FileBasedPersistedCredentialsMap,
-                >(
-                    ctx, FILE_BASED_MCP_CREDENTIALS_KEY
-                );
-            }
+            me.file_based_server_credentials = load_credentials_from_secure_storage::<
+                FileBasedPersistedCredentialsMap,
+            >(ctx, FILE_BASED_MCP_CREDENTIALS_KEY);
         }
 
         if AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers() {
@@ -1016,16 +1012,15 @@ impl TemplatableMCPServerManager {
         let use_tui_loopback = settings::settings_mode() == settings::SettingsMode::Tui;
 
         let mut persisted_credentials = self.server_credentials.get(&template_uuid).cloned();
-        if persisted_credentials.is_none() && FeatureFlag::FileBasedMcp.is_enabled() {
+        if persisted_credentials.is_none() {
             persisted_credentials = installation
                 .hash()
                 .and_then(|hash| self.file_based_server_credentials.get(&hash).cloned());
         }
 
-        let is_file_based = FeatureFlag::FileBasedMcp.is_enabled()
-            && FileBasedMCPManager::as_ref(ctx)
-                .get_hash_by_uuid(installation_uuid)
-                .is_some();
+        let is_file_based = FileBasedMCPManager::as_ref(ctx)
+            .get_hash_by_uuid(installation_uuid)
+            .is_some();
 
         let server_name = server.name.clone();
         let description = installation.templatable_mcp_server().description.clone();

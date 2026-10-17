@@ -2410,7 +2410,7 @@ impl AISettings {
     }
 
     pub fn is_file_based_mcp_enabled(&self, app: &warpui::AppContext) -> bool {
-        if !FeatureFlag::FileBasedMcp.is_enabled() || !self.is_any_ai_enabled(app) {
+        if !self.is_any_ai_enabled(app) {
             return false;
         }
         // NOTE: we intentionally do not force-enable this in Cloud Mode. Previously
