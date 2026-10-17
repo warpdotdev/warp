@@ -84,7 +84,7 @@ You can find the API and SDK reference here: https://docs.warp.dev/reference/api
 
 The TypeScript SDK is available via NPM. It is fully async, and works with Node, Bun, and Deno.
 
-* Package link: https://www.npmjs.com/package/oz-agent-sdk
+* Package link: https://www.npmjs.com/package/@warp-dot-dev/warp-platform-sdk
 * Source Code: https://github.com/warpdotdev/oz-sdk-typescript
 * API reference: https://raw.githubusercontent.com/warpdotdev/oz-sdk-typescript/HEAD/api.md
 
@@ -92,7 +92,7 @@ The TypeScript SDK is available via NPM. It is fully async, and works with Node,
 
 The Python SDK is available from PyPi. It can be used synchronously or asynchronously.
 
-* Package link: https://pypi.org/project/oz-agent-sdk/
+* Package link: https://pypi.org/project/warp-platform-sdk/
 * Source Code: https://github.com/warpdotdev/oz-sdk-python
 * API reference: https://raw.githubusercontent.com/warpdotdev/oz-sdk-python/refs/heads/main/api.md
 
