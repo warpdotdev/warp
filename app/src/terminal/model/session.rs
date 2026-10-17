@@ -42,7 +42,7 @@ use crate::features::FeatureFlag;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
 use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
-use crate::terminal::shell::{Shell, ShellType};
+use crate::terminal::shell::{Abbreviation, Shell, ShellType};
 use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
@@ -98,6 +98,17 @@ fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
         }
     }
     OsString::from_wide(&escaped)
+}
+
+/// The plain abbreviations that may expand as the command, for the completer.
+fn command_abbreviations(
+    abbreviations: &HashMap<SmolStr, Abbreviation>,
+) -> HashMap<SmolStr, String> {
+    abbreviations
+        .iter()
+        .filter(|(_, abbreviation)| abbreviation.may_expand_at(None))
+        .map(|(name, abbreviation)| (name.clone(), abbreviation.expansion_and_cursor().0))
+        .collect()
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
@@ -635,7 +646,9 @@ pub struct SessionInfo {
     pub path: Option<String>,
     pub environment_variable_names: HashSet<SmolStr>,
     pub aliases: HashMap<SmolStr, String>,
+    /// The abbreviations that may expand as the command, by name.
     pub abbreviations: HashMap<SmolStr, String>,
+    pub abbreviation_definitions: HashMap<SmolStr, Abbreviation>,
     // A Vec is sufficient here because function_names are guaranteed to be unique.
     pub function_names: HashSet<SmolStr>,
     pub builtins: HashSet<SmolStr>,
@@ -710,6 +723,7 @@ impl SessionInfo {
             histfile: None,
             aliases: Default::default(),
             abbreviations: Default::default(),
+            abbreviation_definitions: Default::default(),
             function_names: Default::default(),
             builtins: Default::default(),
             keywords: Default::default(),
@@ -780,9 +794,10 @@ impl SessionInfo {
             .aliases
             .map(|alias_output| shell_type.aliases(alias_output.as_str()));
 
-        let abbreviations = bootstrapped_value
+        let abbreviation_definitions = bootstrapped_value
             .abbreviations
-            .map(|abbr_output| shell_type.abbreviations(abbr_output.as_str()));
+            .map(|abbr_output| shell_type.abbreviations(abbr_output.as_str()))
+            .unwrap_or_default();
 
         let function_names = bootstrapped_value
             .function_names
@@ -835,7 +850,8 @@ impl SessionInfo {
             path: bootstrapped_value.path,
             environment_variable_names: env_var_names.unwrap_or_default(),
             aliases: aliases.unwrap_or_default(),
-            abbreviations: abbreviations.unwrap_or_default(),
+            abbreviations: command_abbreviations(&abbreviation_definitions),
+            abbreviation_definitions,
             function_names: function_names.unwrap_or_default(),
             builtins: builtins.unwrap_or_default(),
             keywords: keywords.unwrap_or_default(),
@@ -1131,8 +1147,8 @@ impl Session {
         &self.info.abbreviations
     }
 
-    pub fn abbreviation_value(&self, name: &str) -> Option<&str> {
-        self.info.abbreviations.get(name).map(Deref::deref)
+    pub fn abbreviation(&self, name: &str) -> Option<&Abbreviation> {
+        self.info.abbreviation_definitions.get(name)
     }
 
     pub fn functions(&self) -> &HashSet<SmolStr> {
@@ -1742,6 +1758,7 @@ pub mod testing {
                 environment_variable_names: HashSet::new(),
                 aliases: HashMap::new(),
                 abbreviations: HashMap::new(),
+                abbreviation_definitions: HashMap::new(),
                 function_names: HashSet::new(),
                 builtins: HashSet::new(),
                 keywords: Vec::new(),
@@ -1760,7 +1777,18 @@ pub mod testing {
         }
 
         pub fn with_abbreviations(mut self, abbreviations: HashMap<SmolStr, String>) -> Self {
+            self.abbreviation_definitions = abbreviations
+                .iter()
+                .map(|(name, expansion)| (name.clone(), Abbreviation::new(expansion.clone())))
+                .collect();
             self.abbreviations = abbreviations;
+            self
+        }
+
+        /// Sets the abbreviations from fish's `abbr --show` output, as bootstrapping does.
+        pub fn with_fish_abbreviations(mut self, abbr_output: &str) -> Self {
+            self.abbreviation_definitions = ShellType::Fish.abbreviations(abbr_output);
+            self.abbreviations = command_abbreviations(&self.abbreviation_definitions);
             self
         }
 

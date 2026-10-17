@@ -27,6 +27,8 @@ integration_tests! {
     test_block_metadata_received,
     // Test typeahead behavior.
     test_typeahead,
+    // Fish abbreviations expanding on space (fish only).
+    test_fish_abbreviations_expand_on_space,
     // Test input reporting behavior.
     test_input_reporting_posix_shells,
     test_input_reporting_powershell,

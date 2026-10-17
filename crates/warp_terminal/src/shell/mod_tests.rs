@@ -169,14 +169,105 @@ fn test_fish_parse_abbrs() {
     let raw_abbrs = "abbr -a -U -- gco 'git checkout'
 abbr -a -g -- gq 'git commit'
 abbr -a -U -- ehw 'echo \"Hello, world\"'
-abbr -a -- ga 'git add' # imported from a universal variable, see `help abbr`";
+abbr -a -- ga 'git add' # imported from a universal variable, see `help abbr`
+abbr -a -- hh 'echo a # b'
+abbr -a --description='see -- docs' -- dd 'echo dd'";
     let abbrs = ShellType::Fish.abbreviations(raw_abbrs);
 
-    assert_eq!(abbrs.len(), 4);
-    assert_eq!(abbrs.get("gco").unwrap(), "git checkout");
-    assert_eq!(abbrs.get("gq").unwrap(), "git commit");
-    assert_eq!(abbrs.get("ehw").unwrap(), r#"echo "Hello, world""#);
-    assert_eq!(abbrs.get("ga").unwrap(), "git add");
+    assert_eq!(abbrs.len(), 6);
+    assert_eq!(abbrs["gco"].expansion, "git checkout");
+    assert_eq!(abbrs["gq"].expansion, "git commit");
+    assert_eq!(abbrs["ehw"].expansion, r#"echo "Hello, world""#);
+    assert_eq!(abbrs["ga"].expansion, "git add");
+    // A quoted ` #` or ` -- ` is not a comment or the start of the abbreviation.
+    assert_eq!(abbrs["hh"].expansion, "echo a # b");
+    assert_eq!(abbrs["dd"].expansion, "echo dd");
+}
+
+/// The options that decide where an abbreviation expands and where the cursor goes, as printed by
+/// fish 4.9.3's `abbr --show`.
+#[test]
+fn test_fish_parse_abbr_options() {
+    let abbrs = ShellType::Fish.abbreviations(
+        r#"abbr -a --position anywhere --set-cursor=@CURSOR@ --command git -- glc "log @CURSOR@ | head"
+abbr -a --position anywhere --command git --command hub -- co checkout
+abbr -a --position anywhere --command '' -- alone 'only alone'
+abbr -a --position anywhere -- -C --color
+abbr -a --set-cursor='%' -- foobar 'foo % bar'
+abbr -a --description='uses --command git --position anywhere --set-cursor=X' -- ee 'echo ee'
+abbr -a --description="it's --command git" -- ff 'echo ff'
+abbr -a --set-cursor="a'b" -- gg "x a'b y""#,
+    );
+
+    assert_eq!(
+        abbrs["glc"],
+        Abbreviation {
+            expansion: "log @CURSOR@ | head".to_owned(),
+            position: AbbreviationPosition::Anywhere,
+            commands: vec!["git".to_owned()],
+            set_cursor_marker: Some("@CURSOR@".to_owned()),
+        }
+    );
+    assert_eq!(abbrs["co"].commands, ["git", "hub"]);
+    assert_eq!(abbrs["alone"].commands, [""]);
+    assert_eq!(abbrs["-C"].position, AbbreviationPosition::Anywhere);
+    assert_eq!(abbrs["-C"].commands, Vec::<String>::new());
+    assert_eq!(abbrs["foobar"].set_cursor_marker.as_deref(), Some("%"));
+    assert_eq!(abbrs["foobar"].position, AbbreviationPosition::Command);
+    // Options inside a quoted option value are not options.
+    assert_eq!(abbrs["ee"], Abbreviation::new("echo ee".to_owned()));
+    assert_eq!(abbrs["ff"], Abbreviation::new("echo ff".to_owned()));
+    assert_eq!(abbrs["gg"].set_cursor_marker.as_deref(), Some("a'b"));
+    assert_eq!(abbrs["gg"].expansion, "x a'b y");
+}
+
+#[test]
+fn test_fish_abbr_may_expand_at() {
+    let abbrs = ShellType::Fish.abbreviations(
+        "abbr -a -- ll 'ls -l'
+abbr -a --position anywhere --command git -- co checkout
+abbr -a --position anywhere --command '' -- alone 'only alone'
+abbr -a --position anywhere -- -C --color",
+    );
+
+    assert!(abbrs["ll"].may_expand_at(None));
+    assert!(!abbrs["ll"].may_expand_at(Some("git")));
+    assert!(abbrs["co"].may_expand_at(Some("git")));
+    assert!(!abbrs["co"].may_expand_at(Some("ls")));
+    assert!(!abbrs["co"].may_expand_at(None));
+    assert!(abbrs["alone"].may_expand_at(None));
+    assert!(!abbrs["alone"].may_expand_at(Some("git")));
+    assert!(abbrs["-C"].may_expand_at(None));
+    assert!(abbrs["-C"].may_expand_at(Some("ls")));
+}
+
+/// What fish 4.9.3 does with these abbreviations: the first marker is removed and the cursor goes
+/// where it was.
+#[test]
+fn test_fish_abbr_expansion_and_cursor() {
+    let abbrs = ShellType::Fish.abbreviations(
+        "abbr -a --set-cursor='%' -- zz 'A%B%C'
+abbr -a --set-cursor=@C@ -- ww 'X@C@ | cat'
+abbr -a --set-cursor='%' -- nomarker 'no marker'
+abbr -a -- plain 'A%B'",
+    );
+
+    assert_eq!(
+        abbrs["zz"].expansion_and_cursor(),
+        ("AB%C".to_owned(), Some(1))
+    );
+    assert_eq!(
+        abbrs["ww"].expansion_and_cursor(),
+        ("X | cat".to_owned(), Some(1))
+    );
+    assert_eq!(
+        abbrs["nomarker"].expansion_and_cursor(),
+        ("no marker".to_owned(), None)
+    );
+    assert_eq!(
+        abbrs["plain"].expansion_and_cursor(),
+        ("A%B".to_owned(), None)
+    );
 }
 
 #[test]
