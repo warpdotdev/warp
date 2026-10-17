@@ -70,7 +70,8 @@ use self::protocol::{
     RequestPermissionParams, RequestPermissionResponse, WriteTextFileParams,
 };
 use self::turn_driver::{
-    EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, TurnCancellation, TurnDriver, TurnHost, TurnState,
+    EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, STEER_SETTLE_DEADLINE, TurnCancellation,
+    TurnDriver, TurnHost, TurnState,
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
@@ -717,9 +718,11 @@ impl HarnessRunner for AcpHarnessRunner {
             }
             let capabilities = &initialize.agent_capabilities;
             let extra_capabilities = capabilities.extra.keys().cloned().collect::<Vec<_>>();
+            let steering_supported = initialize.supports_steering();
             log::info!(
                 "ACP agent initialized: protocol v{} agent={agent_description} auth_methods={} \
-                 load_session={} prompt_capabilities={:?} other_capabilities={extra_capabilities:?}",
+                 load_session={} prompt_capabilities={:?} steering={steering_supported} \
+                 other_capabilities={extra_capabilities:?}",
                 initialize.protocol_version,
                 initialize.auth_methods.len(),
                 capabilities.load_session,
@@ -752,7 +755,11 @@ impl HarnessRunner for AcpHarnessRunner {
                 | Harness::OpenCode
                 | Harness::Unknown => None,
             };
-            Ok::<_, anyhow::Error>((session.session_id, suppressed_startup_message))
+            Ok::<_, anyhow::Error>((
+                session.session_id,
+                suppressed_startup_message,
+                steering_supported,
+            ))
         }
         .fuse();
         pin_mut!(handshake);
@@ -763,7 +770,7 @@ impl HarnessRunner for AcpHarnessRunner {
                 Err(anyhow!("the agent did not complete its handshake within {HANDSHAKE_TIMEOUT:?}"))
             }
         };
-        let (session_id, suppressed_startup_message) = match session_id {
+        let (session_id, suppressed_startup_message, steering_supported) = match session_id {
             Ok(session) => session,
             Err(error) => {
                 connection.close().await;
@@ -872,6 +879,10 @@ impl HarnessRunner for AcpHarnessRunner {
             save_requests: self.save_request_tx.clone(),
             queued: VecDeque::new(),
             cancel_deadline: STEER_CANCEL_DEADLINE,
+            steer_settle_deadline: STEER_SETTLE_DEADLINE,
+            steering_supported,
+            steering: None,
+            awaiting_steer: VecDeque::new(),
         };
         background
             .spawn(async move { turn_driver.run(&mut mapper).await })

@@ -28,7 +28,7 @@ use warpui::r#async::executor::{Background, BackgroundTask};
 use super::protocol::{METHOD_REQUEST_PERMISSION, PermissionOutcome, RequestPermissionResponse};
 
 const JSON_RPC_VERSION: &str = "2.0";
-const METHOD_NOT_FOUND: i64 = -32601;
+pub(super) const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
 
 /// A JSON-RPC error returned to the agent for a request it made to us.

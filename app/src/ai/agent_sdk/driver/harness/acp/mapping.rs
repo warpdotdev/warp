@@ -342,6 +342,17 @@ impl AcpTurnMapper {
         }))])
     }
 
+    /// Echoes a user prompt that joined the turn in flight. The agent's next chunk is a reply
+    /// to it, so the message open before it must not be extended past it.
+    pub(super) fn steered_user_query_action(
+        &mut self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> ClientAction {
+        self.open_message = None;
+        self.user_query_action(prompt, base)
+    }
+
     pub(super) fn map_update(&mut self, update: SessionUpdate) -> Vec<TurnEvent> {
         match update {
             SessionUpdate::AgentMessageChunk {
