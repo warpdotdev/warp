@@ -969,17 +969,22 @@ impl View for AIBlock {
                         .and_then(|terminal_view| {
                             terminal_view.read(app, |view, app| {
                                 view.shared_session_presence_manager().and_then(move |pm| {
-                                    pm.as_ref(app).get_participant(&participant_id).map(
-                                        |participant| {
+                                    // Use get_participant_info_for_avatar instead of
+                                    // get_participant so that absent participants (viewers
+                                    // who have disconnected) are also resolved. This keeps
+                                    // historical AI-block author colors stable after a
+                                    // participant leaves the shared session (REMOTE-2361).
+                                    pm.as_ref(app)
+                                        .get_participant_info_for_avatar(&participant_id)
+                                        .map(|(info, color)| {
                                             // Get the display info from the participant
                                             // who sent this query.
                                             (
-                                                participant.info.profile_data.display_name.clone(),
-                                                participant.info.profile_data.photo_url.clone(),
-                                                Some(participant.color),
+                                                info.profile_data.display_name.clone(),
+                                                info.profile_data.photo_url.clone(),
+                                                Some(color),
                                             )
-                                        },
-                                    )
+                                        })
                                 })
                             })
                         })
