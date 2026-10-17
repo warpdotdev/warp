@@ -338,7 +338,7 @@ static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
         hint.push_str(&color.to_string().to_ascii_lowercase());
         hint.push('|');
     }
-    hint.push_str("none>");
+    hint.push_str("none|#rrggbb>");
     hint
 });
 

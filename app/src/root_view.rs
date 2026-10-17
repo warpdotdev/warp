@@ -89,13 +89,14 @@ use crate::settings::{
 };
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection, flags};
+use crate::tab::TabColor;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{TerminalAction, cell_size_and_padding};
 use crate::themes::onboarding_theme_picker_themes;
-use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
+use crate::themes::theme::{Blend, Fill, ThemeKind, WarpThemeConfig};
 use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs, url_reports_checkout_success};
 use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates, traffic_light_data};
@@ -1639,7 +1640,7 @@ pub enum NewWorkspaceSource {
     TransferredTab {
         source_window_id: WindowId,
         /// Tab color from the source tab
-        tab_color: Option<AnsiColorIdentifier>,
+        tab_color: Option<TabColor>,
         /// Custom title from the source tab
         custom_title: Option<String>,
         /// Whether the left panel was open in the source tab

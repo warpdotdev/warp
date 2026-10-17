@@ -389,6 +389,7 @@ fn set_tab_color_command_requires_argument() {
         assert!(hint.contains(&lower), "hint should mention `{lower}`");
     }
     assert!(hint.contains("none"), "hint should mention `none`");
+    assert!(hint.contains("#rrggbb"), "hint should mention `#rrggbb`");
 }
 
 #[test]

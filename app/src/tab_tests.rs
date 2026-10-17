@@ -1,15 +1,25 @@
 use std::collections::HashMap;
 
+use pathfinder_color::ColorU;
+use settings_value::SettingsValue as _;
 use warpui::platform::keyboard::KeyCode;
 
 use super::{
     SelectedTabColor, ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES,
-    TAB_ACTIVATE_LAST_BINDING_NAME, TabShortcutModifierState, next_tab_color,
+    TAB_ACTIVATE_LAST_BINDING_NAME, TabColor, TabShortcutModifierState, next_tab_color,
     tab_activate_binding_name, tab_group_menu_entry_flags,
 };
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_settings::DirectoryTabColor;
+
+const ORANGE: TabColor = TabColor::Custom(ColorU {
+    r: 255,
+    g: 136,
+    b: 0,
+    a: 255,
+});
 
 /// Build a `tab_groups` map containing exactly the given group ids.
 fn groups(ids: &[TabGroupId]) -> HashMap<TabGroupId, TabGroup> {
@@ -164,25 +174,78 @@ fn move_to_group_only_shown_when_other_groups_exist() {
 fn next_tab_color_follows_the_canonical_palette_and_clears_after_the_last_color() {
     assert_eq!(
         next_tab_color(None),
-        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
     );
     for adjacent_colors in TAB_COLOR_OPTIONS.windows(2) {
         assert_eq!(
-            next_tab_color(Some(adjacent_colors[0])),
-            SelectedTabColor::Color(adjacent_colors[1])
+            next_tab_color(Some(adjacent_colors[0].into())),
+            SelectedTabColor::Color(adjacent_colors[1].into())
         );
     }
     let last_color = TAB_COLOR_OPTIONS
         .last()
         .copied()
         .expect("the canonical tab color palette should not be empty");
-    assert_eq!(next_tab_color(Some(last_color)), SelectedTabColor::Cleared);
+    assert_eq!(
+        next_tab_color(Some(last_color.into())),
+        SelectedTabColor::Cleared
+    );
     assert_eq!(
         next_tab_color(SelectedTabColor::Cleared.resolve(None)),
-        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
     );
     assert_eq!(
-        next_tab_color(Some(AnsiColorIdentifier::White)),
-        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+        next_tab_color(Some(AnsiColorIdentifier::White.into())),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
     );
+}
+
+#[test]
+fn tab_color_parses_names_and_hex_and_serializes_as_a_string() {
+    let red = TabColor::Ansi(AnsiColorIdentifier::Red);
+    assert_eq!("Red".parse(), Ok(red));
+    assert_eq!("#FF8800".parse(), Ok(ORANGE));
+    assert_eq!(serde_json::to_value(red).unwrap(), "red");
+    assert_eq!(serde_json::to_value(ORANGE).unwrap(), "#ff8800");
+    for invalid in ["#ff88", "#gg0000", "chartreuse", "ff8800", ""] {
+        assert!(
+            invalid.parse::<TabColor>().is_err(),
+            "`{invalid}` should be rejected"
+        );
+    }
+    assert_eq!(
+        next_tab_color(Some(ORANGE)),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0].into())
+    );
+}
+
+#[test]
+fn selected_tab_color_yaml_keeps_the_legacy_format_and_round_trips_custom_colors() {
+    // The sqlite column format written before custom colors existed, for a red tab.
+    let legacy = "---\nColor: red\n";
+    let red = SelectedTabColor::Color(AnsiColorIdentifier::Red.into());
+    assert_eq!(
+        serde_yaml::from_str::<SelectedTabColor>(legacy).unwrap(),
+        red
+    );
+    assert_eq!(serde_yaml::to_string(&red).unwrap(), legacy);
+
+    let custom = SelectedTabColor::Color(ORANGE);
+    let yaml = serde_yaml::to_string(&custom).unwrap();
+    assert_eq!(
+        serde_yaml::from_str::<SelectedTabColor>(&yaml).unwrap(),
+        custom
+    );
+}
+
+#[test]
+fn directory_tab_color_setting_accepts_names_and_hex() {
+    let from =
+        |color: &str| DirectoryTabColor::from_file_value(&serde_json::json!({ "color": color }));
+    assert_eq!(
+        from("red"),
+        Some(DirectoryTabColor::Color(AnsiColorIdentifier::Red.into()))
+    );
+    assert_eq!(from("#ff8800"), Some(DirectoryTabColor::Color(ORANGE)));
+    assert_eq!(from("#ff88"), None);
 }

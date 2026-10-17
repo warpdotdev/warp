@@ -117,7 +117,7 @@ fn assert_tab_color(expected: Option<AnsiColorIdentifier>) -> AssertionCallback 
         workspace.read(app, |workspace, _| {
             async_assert_eq!(
                 workspace.get_tab_color(0),
-                expected,
+                expected.map(Into::into),
                 "active tab color should match the expected cycle state"
             )
         })

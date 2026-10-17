@@ -559,7 +559,7 @@ pub fn test_launch_config_restores_tab_groups() -> Builder {
                 tab_groups: vec![
                     TabGroupTemplate {
                         name: Some("Backend".to_owned()),
-                        color: Some(AnsiColorIdentifier::Blue),
+                        color: Some(AnsiColorIdentifier::Blue.into()),
                         collapsed: false,
                         pinned: false,
                     },
@@ -571,7 +571,7 @@ pub fn test_launch_config_restores_tab_groups() -> Builder {
                     },
                     TabGroupTemplate {
                         name: Some("Orphan".to_owned()),
-                        color: Some(AnsiColorIdentifier::Red),
+                        color: Some(AnsiColorIdentifier::Red.into()),
                         collapsed: false,
                         pinned: false,
                     },
@@ -680,7 +680,7 @@ pub fn test_launch_config_restores_tab_groups_into_active_window() -> Builder {
                 tab_groups: vec![
                     TabGroupTemplate {
                         name: Some("Backend".to_owned()),
-                        color: Some(AnsiColorIdentifier::Blue),
+                        color: Some(AnsiColorIdentifier::Blue.into()),
                         collapsed: false,
                         pinned: false,
                     },
@@ -806,7 +806,7 @@ pub fn test_launch_config_restores_pinned_tab_group_into_pinned_prefix() -> Buil
                 tab_groups: vec![
                     TabGroupTemplate {
                         name: Some("Backend".to_owned()),
-                        color: Some(AnsiColorIdentifier::Blue),
+                        color: Some(AnsiColorIdentifier::Blue.into()),
                         collapsed: false,
                         pinned: true,
                     },
@@ -923,7 +923,7 @@ pub fn test_launch_config_restore_keeps_existing_group_contiguous() -> Builder {
             windows: vec![WindowTemplate {
                 tab_groups: vec![TabGroupTemplate {
                     name: Some("Existing".to_owned()),
-                    color: Some(AnsiColorIdentifier::Green),
+                    color: Some(AnsiColorIdentifier::Green.into()),
                     collapsed: false,
                     pinned: false,
                 }],

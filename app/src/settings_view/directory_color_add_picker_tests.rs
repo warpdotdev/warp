@@ -40,7 +40,7 @@ fn test_filters_out_existing_non_suppressed_entries() {
         ("/nonexistent/unassigned", DirectoryTabColor::Unassigned),
         (
             "/nonexistent/colored",
-            DirectoryTabColor::Color(AnsiColorIdentifier::Red),
+            DirectoryTabColor::Color(AnsiColorIdentifier::Red.into()),
         ),
     ]);
 

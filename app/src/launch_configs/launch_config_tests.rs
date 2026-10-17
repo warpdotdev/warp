@@ -596,7 +596,7 @@ fn group(name: &str, id: TabGroupId) -> TabGroupSnapshot {
     TabGroupSnapshot {
         id,
         name: Some(name.to_string()),
-        color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+        color: SelectedTabColor::Color(AnsiColorIdentifier::Blue.into()),
         collapsed: false,
         pinned: false,
     }
@@ -619,7 +619,10 @@ fn test_config_from_snapshot_preserves_tab_groups() {
 
     assert_eq!(window.tab_groups.len(), 1);
     assert_eq!(window.tab_groups[0].name.as_deref(), Some("backend"));
-    assert_eq!(window.tab_groups[0].color, Some(AnsiColorIdentifier::Blue));
+    assert_eq!(
+        window.tab_groups[0].color,
+        Some(AnsiColorIdentifier::Blue.into())
+    );
 
     // Membership survives, and an ungrouped tab stays ungrouped.
     assert_eq!(window.tabs[0].group, Some(0));
