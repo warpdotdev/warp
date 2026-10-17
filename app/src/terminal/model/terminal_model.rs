@@ -3662,7 +3662,7 @@ impl ansi::Handler for TerminalModel {
                     },
                 }
 
-                match self.handle_completed_kitty_action(action.clone(), &mut HashMap::new()) {
+                match self.handle_completed_kitty_action(action, &mut HashMap::new()) {
                     Some(Ok(_)) => {
                         if let Some(message_id) = message_id
                             && verbosity.send_ok()
