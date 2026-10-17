@@ -638,11 +638,6 @@ pub enum FeatureFlag {
     /// When enabled, profile selection is displayed in an inline view above the Agent input (e.g. via /profile).
     InlineProfileSelector,
 
-    /// Enables sending the server a list of Skills that the client has access to.
-    ///
-    /// If disabled, the server will send None as the SkillsContext.
-    ListSkills,
-
     /// When enabled, we expose LSP as a tool to the agent
     LSPAsATool,
 

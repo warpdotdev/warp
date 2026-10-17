@@ -258,9 +258,7 @@ impl Input {
             .is_conversation_menu()
         {
             column.add_child(ChildView::new(&self.inline_conversation_menu_view).finish());
-        } else if FeatureFlag::ListSkills.is_enabled()
-            && self.suggestions_mode_model.as_ref(app).is_skill_menu()
-        {
+        } else if self.suggestions_mode_model.as_ref(app).is_skill_menu() {
             column.add_child(ChildView::new(&self.inline_skill_selector_view).finish());
         } else if self.suggestions_mode_model.as_ref(app).is_user_query_menu() {
             column.add_child(ChildView::new(&self.user_query_menu_view).finish());
