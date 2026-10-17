@@ -513,7 +513,7 @@ impl GlobalBufferModel {
                 file_id,
                 content_version: new_version,
             });
-        } else if FeatureFlag::IncrementalAutoReload.is_enabled() {
+        } else {
             // Auto-reload: spawn background task for diff computation
             Self::start_background_diff_parse(
                 file_id,
@@ -524,20 +524,6 @@ impl GlobalBufferModel {
                 new_version,
                 ctx,
             );
-        } else {
-            // Fallback: synchronous replace_all (non-incremental)
-            buffer.update(ctx, |buffer, ctx| {
-                buffer.replace_all(content, ctx);
-                buffer.set_version(new_version);
-            });
-
-            state.set_base_content_version(new_version);
-
-            ctx.emit(GlobalBufferModelEvent::BufferUpdatedFromFileEvent {
-                file_id,
-                success: true,
-                content_version: new_version,
-            });
         }
     }
 
