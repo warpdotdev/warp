@@ -86,7 +86,9 @@ impl SkillDeduplicator {
     }
 
     pub(crate) fn into_descriptors(self) -> Vec<SkillDescriptor> {
-        self.dedup_map.into_values().collect()
+        let mut descriptors: Vec<_> = self.dedup_map.into_values().collect();
+        descriptors.sort_by_key(|descriptor| descriptor.reference.to_string());
+        descriptors
     }
 }
 

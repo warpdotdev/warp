@@ -187,3 +187,51 @@ fn test_unique_skills_does_not_dedupe_different_content() {
         "Skills with different content should not be deduped even if same directory and name"
     );
 }
+
+#[test]
+fn test_unique_skills_returns_deterministic_order() {
+    let base_dir = PathBuf::from("/home/user");
+    let z_path = base_dir.join(".agents/skills/z-skill/SKILL.md");
+    let a_path = base_dir.join(".agents/skills/a-skill/SKILL.md");
+
+    let z_skill = ParsedSkill {
+        path: LocalOrRemotePath::Local(z_path.clone()),
+        name: "z-skill".to_string(),
+        description: "Z skill".to_string(),
+        content: "z content".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Home,
+    };
+
+    let a_skill = ParsedSkill {
+        path: LocalOrRemotePath::Local(a_path.clone()),
+        name: "a-skill".to_string(),
+        description: "A skill".to_string(),
+        content: "a content".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Home,
+    };
+
+    let mut skills_by_path = HashMap::new();
+    skills_by_path.insert(LocalOrRemotePath::Local(z_path.clone()), z_skill);
+    skills_by_path.insert(LocalOrRemotePath::Local(a_path.clone()), a_skill);
+
+    let skill_paths = vec![
+        (
+            LocalOrRemotePath::Local(base_dir.clone()),
+            LocalOrRemotePath::Local(z_path),
+        ),
+        (
+            LocalOrRemotePath::Local(base_dir),
+            LocalOrRemotePath::Local(a_path),
+        ),
+    ];
+
+    let result = unique_skills(&skill_paths, &skills_by_path);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].name, "a-skill");
+    assert_eq!(result[1].name, "z-skill");
+}
