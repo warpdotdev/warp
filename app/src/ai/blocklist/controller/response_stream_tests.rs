@@ -318,3 +318,30 @@ fn geap_refresh_does_not_add_credentials_to_a_keyless_request() {
 
     assert!(params.api_keys.is_none());
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn request_context_label_reports_a_hosted_request_without_user_credentials() {
+    let stream = ResponseStream::new_for_test(ResponseStreamId::new_for_test());
+
+    assert_eq!(
+        stream.request_context_label(),
+        "model=test-model user_api_keys=false custom_model_providers=false"
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn request_context_label_reports_attached_credentials_without_leaking_them() {
+    let mut stream = ResponseStream::new_for_test(ResponseStreamId::new_for_test());
+    stream.params = params_with_geap_token("super-secret-token");
+    stream.params.custom_model_providers = Some(Default::default());
+
+    let label = stream.request_context_label();
+
+    assert_eq!(
+        label,
+        "model=test-model user_api_keys=true custom_model_providers=true"
+    );
+    assert!(!label.contains("super-secret-token"));
+}
