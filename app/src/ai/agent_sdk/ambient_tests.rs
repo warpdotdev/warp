@@ -542,6 +542,25 @@ fn write_conversation_cli_output_writes_raw_transcript_bytes_exactly() {
     assert_eq!(non_utf8, vec![0xff, 0xfe, 0x00, b'x']);
 }
 
+#[test]
+fn write_tasks_table_returns_broken_pipe_error() {
+    struct BrokenPipeWriter;
+
+    impl std::io::Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let err = AmbientAgentRunner::write_tasks_table(&[], BrokenPipeWriter).unwrap_err();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
 #[tokio::test]
 async fn load_run_conversation_returns_normalized_json_for_native_runs() {
     let conversation = native_conversation();
