@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,7 +44,10 @@ use super::view_impl::common::{
     render_failed_output, render_informational_footer, render_text_sections,
 };
 use super::view_impl::output::are_all_text_sections_empty;
-use super::{EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles};
+use super::{
+    CodeSectionUpdate, EmbeddedCodeEditorView, SecretRedactionState, TableSectionHandles,
+    code_section_update,
+};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
@@ -760,16 +762,20 @@ impl CLISubagentView {
                     // received the ``` end marker.
                     // Ex: Iteration 57: "a += 12\n``"
                     // Ex: Iteration 58: "a += 12"
-                    match code.len().cmp(&embedded_view.length) {
-                        Ordering::Greater => {
-                            view.append_at_end(&code[embedded_view.length..], ctx);
+                    match code_section_update(code, embedded_view.length) {
+                        CodeSectionUpdate::Append(suffix) => {
+                            view.append_at_end(suffix, ctx);
                             ctx.notify();
                         }
-                        Ordering::Less => {
-                            view.truncate(code.len(), ctx);
+                        CodeSectionUpdate::Truncate(length) => {
+                            view.truncate(length, ctx);
                             ctx.notify();
                         }
-                        Ordering::Equal => {}
+                        CodeSectionUpdate::Reset(code) => {
+                            view.reset(InitialBufferState::plain_text(code), ctx);
+                            ctx.notify();
+                        }
+                        CodeSectionUpdate::Unchanged => {}
                     }
                     embedded_view.length = code.len();
                 });
