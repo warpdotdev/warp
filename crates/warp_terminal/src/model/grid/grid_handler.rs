@@ -2363,7 +2363,7 @@ impl GridHandler {
     /// Reset keyboard mode state to defaults.
     pub fn reset_keyboard_mode_state(&mut self) {
         self.ansi_handler_state.keyboard_mode_stack =
-            BoundedVecDeque::new(KEYBOARD_MODE_STACK_MAX_DEPTH);
+            BoundedVecDeque::with_capacity(0, KEYBOARD_MODE_STACK_MAX_DEPTH);
         self.set_keyboard_mode(KeyboardModes::NO_MODE, KeyboardModesApplyBehavior::Replace);
     }
 
