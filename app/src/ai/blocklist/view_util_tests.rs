@@ -42,12 +42,6 @@ fn chatgpt_subscription_error_presents_server_copy_and_actions_in_order() {
                     chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
                 ],
                 vec![
-                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::CopyText {
-                        text: "Request for the workspace admin".to_string(),
-                    }),
-                    chatgpt_action(ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits),
-                ],
-                vec![
                     chatgpt_action(ChatGPTSubscriptionErrorActionKind::OpenUrl {
                         url: "https://chatgpt.com/#settings/Usage".to_string(),
                     }),
