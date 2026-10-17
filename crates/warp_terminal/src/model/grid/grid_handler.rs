@@ -1152,6 +1152,13 @@ impl GridHandler {
                     .get(row_length - 1)
                     .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE)))
         {
+            // A row that ends in a real line break carries the spaces a program wrote to fill it
+            // out to the window width. Drop them so they do not follow the text into the
+            // clipboard. A row that soft-wraps into the next one keeps its spaces, since they
+            // sit between words, and so does the last row of a selection that stops early.
+            if !include_esc_sequences {
+                text.truncate(text.trim_end_matches([' ', '\t']).len());
+            }
             // We need to include a carriage return specifically if we're encoding escape
             // sequences in addition to '\n' which is interpreted as a linefeed in the parser.
             // In most places (e.g. in any editor, OSX pasteboard, etc) this is unnecessary because
