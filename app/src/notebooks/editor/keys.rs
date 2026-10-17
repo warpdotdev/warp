@@ -44,11 +44,12 @@ impl NotebookKeybindings {
         event: &KeybindingChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        let KeybindingChangedEvent::BindingChanged {
+        if let KeybindingChangedEvent::BindingChanged {
             binding_name,
             new_trigger,
-        } = event;
-        if binding_name == RUN_COMMANDS_KEYBINDING_NAME {
+        } = event
+            && binding_name == RUN_COMMANDS_KEYBINDING_NAME
+        {
             self.run_commands_keybinding = new_trigger.as_ref().map(|key| key.displayed());
             ctx.notify();
         }

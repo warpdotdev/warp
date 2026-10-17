@@ -1820,6 +1820,18 @@ impl AppContext {
         self.keystroke_matcher.register_editable_bindings(actions);
     }
 
+    /// Removes every editable binding whose name starts with `prefix`, then registers
+    /// `bindings` in their place. Used for bindings derived from user-editable state (e.g.
+    /// saved launch configurations) that are re-registered whenever that state reloads.
+    pub fn replace_editable_bindings_with_prefix<A: IntoIterator<Item = EditableBinding>>(
+        &mut self,
+        prefix: &str,
+        bindings: A,
+    ) {
+        self.keystroke_matcher
+            .replace_editable_bindings_with_prefix(prefix, bindings);
+    }
+
     /// Set a custom trigger for a given editable binding name
     ///
     /// This will override the default trigger for that action
