@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
+use axum::body::{Body, Bytes};
 use axum::response::IntoResponse;
 use axum::routing::post;
+use futures::StreamExt as _;
 use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
 
 use super::{
@@ -428,6 +432,152 @@ async fn serve_401(
     });
 
     (url, requests, server)
+}
+
+async fn serve_initialize_with_session(
+    delete_status: axum::http::StatusCode,
+) -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake MCP server should bind");
+    let url = format!(
+        "http://{}/mcp",
+        listener
+            .local_addr()
+            .expect("fake MCP address should resolve")
+    );
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let methods_for_post = methods.clone();
+    let methods_for_delete = methods.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |body: Bytes| {
+            let methods = methods_for_post.clone();
+            async move {
+                let request: serde_json::Value =
+                    serde_json::from_slice(&body).expect("valid JSON-RPC body");
+                methods
+                    .lock()
+                    .expect("methods lock")
+                    .push(request["method"].as_str().expect("method").to_string());
+                (
+                    [("Mcp-Session-Id", "preflight-session")],
+                    axum::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": request["id"],
+                        "result": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {},
+                            "serverInfo": { "name": "test", "version": "1" }
+                        }
+                    })),
+                )
+                    .into_response()
+            }
+        })
+        .delete(move |headers: axum::http::HeaderMap| {
+            let methods = methods_for_delete.clone();
+            async move {
+                let session_id = headers
+                    .get("Mcp-Session-Id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default();
+                let protocol_version = headers
+                    .get("MCP-Protocol-Version")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default();
+                methods
+                    .lock()
+                    .expect("methods lock")
+                    .push(format!("DELETE:{session_id}:{protocol_version}"));
+                delete_status
+            }
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    (url, methods, server)
+}
+
+#[tokio::test]
+async fn successful_preflight_closes_its_session() {
+    let (url, methods, server) = serve_initialize_with_session(axum::http::StatusCode::OK).await;
+
+    determine_transport("srv".to_string(), &url, &headers(&[]), None)
+        .await
+        .expect("transport should be detected");
+
+    assert_eq!(
+        methods.lock().expect("methods lock").as_slice(),
+        &["initialize", "DELETE:preflight-session:2025-11-25",]
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn successful_preflight_accepts_already_closed_session() {
+    let (url, methods, server) =
+        serve_initialize_with_session(axum::http::StatusCode::NOT_FOUND).await;
+
+    determine_transport("srv".to_string(), &url, &headers(&[]), None)
+        .await
+        .expect("an already closed session should not block transport detection");
+    assert_eq!(
+        methods.lock().expect("methods lock").as_slice(),
+        &["initialize", "DELETE:preflight-session:2025-11-25",]
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn successful_sse_preflight_does_not_wait_for_stream_close() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake MCP server should bind");
+    let url = format!(
+        "http://{}/mcp",
+        listener
+            .local_addr()
+            .expect("fake MCP address should resolve")
+    );
+    let app = Router::new().route(
+        "/mcp",
+        post(|| async {
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "result": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "serverInfo": { "name": "test", "version": "1" }
+                }
+            });
+            let event = format!("data: {response}\n\n");
+            let stream = futures::stream::iter([Ok::<_, Infallible>(Bytes::from(event))])
+                .chain(futures::stream::pending());
+            (
+                [
+                    ("content-type", "Text/Event-Stream; charset=utf-8"),
+                    ("Mcp-Session-Id", "preflight-session"),
+                ],
+                Body::from_stream(stream),
+            )
+        }),
+    );
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        determine_transport("srv".to_string(), &url, &headers(&[]), None),
+    )
+    .await
+    .expect("preflight should stop after the initialize response event")
+    .expect("transport should be detected");
+    server.abort();
 }
 
 /// `Transport` owns a live HTTP client and is deliberately not `Debug`, so
