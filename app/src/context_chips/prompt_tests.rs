@@ -67,6 +67,19 @@ fn test_prompt_config_after_nomalization() {
 }
 
 #[test]
+fn test_operating_system_chips_are_optional_only() {
+    let default_prompt = PromptConfiguration::default_prompt();
+    let default_chips = default_prompt.chip_kinds();
+
+    assert!(!default_chips.contains(&ContextChipKind::OperatingSystem));
+    assert!(!default_chips.contains(&ContextChipKind::OperatingSystemLogo));
+
+    let available_chips = crate::context_chips::available_chips();
+    assert!(available_chips.contains(&ContextChipKind::OperatingSystem));
+    assert!(available_chips.contains(&ContextChipKind::OperatingSystemLogo));
+}
+
+#[test]
 fn test_prompt_settings() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
