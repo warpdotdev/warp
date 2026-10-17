@@ -40,14 +40,6 @@ impl OfferVariant {
         }
     }
 
-    pub(crate) fn primary_badge_label(self, pricing_promotion_message: Option<&str>) -> &str {
-        match self {
-            OfferVariant::HeadStart | OfferVariant::ChooseHowToStart => {
-                pricing_promotion_message.unwrap_or("Recommended")
-            }
-        }
-    }
-
     pub(crate) fn subtitle(self) -> Option<&'static str> {
         match self {
             OfferVariant::HeadStart => {
@@ -197,31 +189,19 @@ impl OfferSlide {
         self.onboarding_state.as_ref(app).offer_variant()
     }
 
-    fn primary_badge_label(&self, variant: OfferVariant, app: &AppContext) -> String {
-        let state = self.onboarding_state.as_ref(app);
-        variant
-            .primary_badge_label(state.pricing_promotion_message())
-            .to_owned()
-    }
-
     /// The selectable options, top to bottom. Also the order the arrow keys
     /// move through.
     fn choices(&self) -> [OfferChoice; 2] {
         [OfferChoice::Primary, OfferChoice::SetUpLater]
     }
 
-    fn render_content(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_content(&self, appearance: &Appearance, variant: OfferVariant) -> Box<dyn Element> {
         slide_content::onboarding_slide_content(
             vec![
                 Align::new(Self::render_header(appearance, variant))
                     .left()
                     .finish(),
-                self.render_options(appearance, variant, app),
+                self.render_options(appearance, variant),
             ],
             self.render_bottom_nav(appearance),
             self.scroll_state.clone(),
@@ -298,18 +278,13 @@ impl OfferSlide {
         header.finish()
     }
 
-    fn render_options(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_options(&self, appearance: &Appearance, variant: OfferVariant) -> Box<dyn Element> {
         let primary = Self::render_option_card(
             appearance,
             variant.primary_label(),
             variant.primary_description(),
             self.selected_choice == OfferChoice::Primary,
-            Some(self.primary_badge_label(variant, app)),
+            Some("Recommended".to_owned()),
             self.primary_mouse_state.clone(),
             OfferSlideAction::SelectPrimary,
         );
@@ -548,7 +523,7 @@ impl View for OfferSlide {
         };
         let appearance = Appearance::as_ref(app);
         let slide = layout::static_left(
-            || self.render_content(appearance, variant, app),
+            || self.render_content(appearance, variant),
             || self.render_visual(),
         );
         if !self.show_auth_prompt_bar {
