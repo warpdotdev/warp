@@ -657,7 +657,6 @@ default = [
     "pr_comments_skill",
     "revert_to_checkpoints",
     "rewind_slash_command",
-    "hoa_code_review",
     "warpify_footer",
     "agent_toolbar_editor",
     "configurable_toolbar",
@@ -1000,7 +999,6 @@ queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
 directory_tab_colors = []
-hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []

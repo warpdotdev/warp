@@ -5267,7 +5267,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ObjectLinkCopied => EnablementState::Always,
             Self::FileTreeToggled => EnablementState::Flag(FeatureFlag::FileTree),
             Self::FileTreeItemAttachedAsContext => EnablementState::Flag(FeatureFlag::FileTree),
-            Self::CodeSelectionAddedAsContext => EnablementState::Flag(FeatureFlag::HoaCodeReview),
+            Self::CodeSelectionAddedAsContext => EnablementState::Always,
             Self::FileTreeItemCreated => EnablementState::Flag(FeatureFlag::FileTree),
             Self::ConversationListViewOpened
             | Self::ConversationListItemOpened
