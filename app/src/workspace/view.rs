@@ -26101,12 +26101,7 @@ impl TypedActionView for Workspace {
                     }
                 });
                 let new_value = *AISettings::as_ref(ctx).did_check_to_trigger_oz_launch_modal;
-                log::info!(
-                    "Oz launch modal state: old={}, new={}, feature_flag_enabled={}",
-                    old_value,
-                    new_value,
-                    FeatureFlag::OzLaunchModal.is_enabled()
-                );
+                log::info!("Oz launch modal state: old={old_value}, new={new_value}");
             }
             #[cfg(debug_assertions)]
             OpenOpenWarpLaunchModal => {
