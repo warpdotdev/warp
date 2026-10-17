@@ -777,6 +777,8 @@ pub enum ChatGPTSubscriptionErrorActionKind {
     ContinueWithWarpCredits,
     /// Open an external page in the browser without changing the conversation.
     OpenUrl { url: String },
+    /// Copy server-authored text without retrying or changing conversation funding.
+    CopyText { text: String },
 }
 
 impl From<warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind>
@@ -790,6 +792,7 @@ impl From<warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscr
             Kind::Retry(_) => Self::Retry,
             Kind::ContinueWithWarpCredits(_) => Self::ContinueWithWarpCredits,
             Kind::OpenUrl(open_url) => Self::OpenUrl { url: open_url.url },
+            Kind::CopyText(copy_text) => Self::CopyText { text: copy_text.text },
         }
     }
 }
@@ -1019,8 +1022,15 @@ impl Display for RenderableAIError {
             } => {
                 write!(f, "{title}\n\n{message}")?;
                 for action in actions {
-                    if let ChatGPTSubscriptionErrorActionKind::OpenUrl { url } = &action.kind {
-                        write!(f, "\n\n{}: {url}", action.label)?;
+                    match &action.kind {
+                        ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
+                            write!(f, "\n\n{}: {url}", action.label)?;
+                        }
+                        ChatGPTSubscriptionErrorActionKind::CopyText { text } => {
+                            write!(f, "\n\n{}:\n{text}", action.label)?;
+                        }
+                        ChatGPTSubscriptionErrorActionKind::Retry
+                        | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => {}
                     }
                 }
                 Ok(())
