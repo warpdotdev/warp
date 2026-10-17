@@ -1275,13 +1275,14 @@ impl PaneBranch {
             SplitDirection::Horizontal => (leading_size.x(), trailing_size.x()),
             SplitDirection::Vertical => (leading_size.y(), trailing_size.y()),
         };
-        let total_size = leading_size + trailing_size;
 
         // Panes that haven't been laid out yet report a zero size; don't anchor the drag to
-        // that, so the next drag event can measure again.
-        (total_size > 0.).then_some(DividerDragAnchor {
+        // that, so the next drag event can measure again. Both sides must be measured: with
+        // only one, the drag would treat that pane as the whole span and squeeze the other
+        // to nothing.
+        (leading_size > 0. && trailing_size > 0.).then_some(DividerDragAnchor {
             leading_size,
-            total_size,
+            total_size: leading_size + trailing_size,
         })
     }
 
