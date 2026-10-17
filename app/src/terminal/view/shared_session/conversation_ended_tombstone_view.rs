@@ -172,6 +172,7 @@ impl ConversationEndedTombstoneView {
         terminal_view_id: EntityId,
         task_id: Option<AmbientAgentTaskId>,
         tombstone_cta: Option<TombstoneCta>,
+        startup_error_message: Option<String>,
     ) -> Self {
         let conversation_id = BlocklistAIHistoryModel::handle(ctx)
             .as_ref(ctx)
@@ -189,7 +190,16 @@ impl ConversationEndedTombstoneView {
                 )
             })
             .unwrap_or_default();
-        if display_data.is_error && task_id.is_none() && !display_data.conversation_is_transcript {
+        if display_data.error_message.is_none()
+            && let Some(message) = startup_error_message
+        {
+            display_data.is_error = true;
+            display_data.error_message = Some(message);
+        }
+        if display_data.is_error
+            && (task_id.is_none() || conversation_id.is_none())
+            && !display_data.conversation_is_transcript
+        {
             display_data.title = Some("Cloud agent failed to start".to_string());
             display_data.credits = None;
         }

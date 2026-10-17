@@ -1,9 +1,13 @@
 use url::Url;
 use warpui::App;
+use warpui::platform::WindowStyle;
 
 use super::*;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
+use crate::terminal::TerminalView;
+use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
@@ -25,6 +29,56 @@ fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
     app.add_model(|ctx| {
         AmbientAgentViewModel::new(terminal_view_id, terminal_view.downgrade(), ctx)
     })
+}
+
+#[test]
+fn startup_failure_without_conversation_shows_registry_error() {
+    for task_id in [
+        None,
+        Some(
+            "550e8400-e29b-41d4-a716-000000005000"
+                .parse::<AmbientAgentTaskId>()
+                .unwrap(),
+        ),
+    ] {
+        App::test((), |mut app| async move {
+            let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+            let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+            let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let tips_model = app.add_model(|_| Default::default());
+            let (window_id, terminal) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+                TerminalView::new_for_test_with_cloud_mode(tips_model, None, true, ctx)
+            });
+            let model = terminal.read(&app, |view, ctx| {
+                assert!(
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .all_live_conversations_for_terminal_surface(view.id())
+                        .next()
+                        .is_none()
+                );
+                view.ambient_agent_view_model().unwrap().clone()
+            });
+            let message = "Registry ghcr.io rejected the configured credential for Docker image \
+                           ghcr.io/example/private:latest. Verify the credential is valid and \
+                           grants pull access to the image.";
+
+            model.update(&mut app, |model, ctx| {
+                model.task_id = task_id;
+                model.handle_spawn_error(message.to_string(), ctx);
+            });
+
+            let tombstones = app
+                .views_of_type::<ConversationEndedTombstoneView>(window_id)
+                .expect("cloud startup failure should insert a tombstone");
+            let tombstone = tombstones.last().expect("failure card should exist");
+            tombstone.read(&app, |view, _| {
+                assert_eq!(view.error_message_for_test(), Some(message));
+                assert_eq!(view.title_for_test(), Some("Cloud agent failed to start"));
+                assert_eq!(view.credits_for_test(), None);
+            });
+        });
+    }
 }
 
 #[test]
