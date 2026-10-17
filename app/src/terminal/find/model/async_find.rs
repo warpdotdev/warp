@@ -57,21 +57,15 @@ impl std::fmt::Display for AsyncFindStatus {
 /// Message streamed from background find task to main thread.
 #[derive(Debug)]
 pub enum FindTaskMessage {
-    /// Matches found in a terminal block's grid.
+    /// Matches found in one scanned chunk of a terminal block's grid, from either a full-block
+    /// or a dirty-range scan.
     BlockGridMatches {
         block_index: BlockIndex,
         grid_type: GridType,
-        matches: Vec<AbsoluteMatch>,
-    },
-    /// Matches found in a dirty range within a terminal block's grid.
-    ///
-    /// Unlike `BlockGridMatches` (which extends results), these matches are
-    /// merged into existing results using `update_dirty_matches`.
-    DirtyRangeMatches {
-        block_index: BlockIndex,
-        grid_type: GridType,
-        /// The dirty range in absolute row coordinates, used for merging.
-        dirty_range: RangeInclusive<u64>,
+        /// The scanned rows in absolute row coordinates. Existing matches in these rows are
+        /// replaced, because results already in flight for this block (e.g. dirty-range results
+        /// that land after a full rescan cleared the block) may have repopulated them.
+        row_range: RangeInclusive<u64>,
         matches: Vec<AbsoluteMatch>,
     },
     /// Request to scan an AI block on the main thread.
@@ -347,6 +341,22 @@ impl BlockFindResults {
         self.terminal_matches
             .retain(|(idx, _), _| *idx != block_index);
         self.terminal_total_indices.remove(&block_index);
+    }
+
+    /// Returns whether any stored match for the block grid overlaps `rows`.
+    fn has_matches_in_rows(
+        &self,
+        block_index: BlockIndex,
+        grid_type: GridType,
+        rows: &RangeInclusive<u64>,
+    ) -> bool {
+        self.terminal_matches
+            .get(&(block_index, grid_type))
+            .is_some_and(|matches| {
+                matches
+                    .iter()
+                    .any(|m| m.start_row() <= *rows.end() && m.end_row() >= *rows.start())
+            })
     }
 
     /// Updates matches for a dirty range within a specific block grid.
@@ -867,15 +877,36 @@ impl AsyncFindController {
             FindTaskMessage::BlockGridMatches {
                 block_index,
                 grid_type,
+                row_range,
                 matches,
             } => {
-                if !matches.is_empty() {
+                let has_matches = !matches.is_empty();
+                if !has_matches
+                    && !self
+                        .block_results
+                        .has_matches_in_rows(block_index, grid_type, &row_range)
+                {
+                    // The chunk adds and clears nothing, so skip the follow-up work, which locks
+                    // the terminal model and rebuilds the focus order; empty chunks are common
+                    // for rare queries. New output may still have truncated older stored matches
+                    // from scrollback, so those are pruned first.
+                    let has_stored_matches = self
+                        .block_results
+                        .terminal_matches
+                        .get(&(block_index, grid_type))
+                        .is_some_and(|matches| !matches.is_empty());
+                    if !has_stored_matches || !self.prune_truncated_matches(block_index, grid_type)
+                    {
+                        return;
+                    }
+                } else {
                     // Store TotalIndex for this block if not already known
                     // (e.g. the block was added after the initial scan).
-                    if !self
-                        .block_results
-                        .terminal_total_indices
-                        .contains_key(&block_index)
+                    if has_matches
+                        && !self
+                            .block_results
+                            .terminal_total_indices
+                            .contains_key(&block_index)
                     {
                         let total_index = {
                             let model = self.terminal_model.lock();
@@ -886,41 +917,26 @@ impl AsyncFindController {
                             .insert(block_index, total_index);
                     }
 
-                    self.block_results
-                        .terminal_matches
-                        .entry((block_index, grid_type))
-                        .or_default()
-                        .extend(matches);
+                    self.block_results.update_dirty_matches(
+                        block_index,
+                        grid_type,
+                        row_range,
+                        matches,
+                    );
+
+                    // Prune matches that have been truncated from scrollback, which can happen
+                    // whenever the block receives new output.
+                    self.prune_truncated_matches(block_index, grid_type);
 
                     // Auto-select the first match when results first arrive.
-                    if self.focused_match_index.is_none() {
+                    if has_matches && self.focused_match_index.is_none() {
                         self.focused_match_index = Some(0);
                     }
-
-                    // Mark any of the newly-arrived output matches that fall in
-                    // filter-hidden rows so they're excluded from the count,
-                    // focus, and highlights (also re-clamps focus).
-                    self.recompute_filtered_for_block(block_index);
                 }
-            }
-            FindTaskMessage::DirtyRangeMatches {
-                block_index,
-                grid_type,
-                dirty_range,
-                matches,
-            } => {
-                self.block_results.update_dirty_matches(
-                    block_index,
-                    grid_type,
-                    dirty_range,
-                    matches,
-                );
-                // Prune matches that have been truncated from scrollback.
-                // Dirty range messages arrive when the active block receives
-                // new output, which is exactly when truncation can occur.
-                self.prune_truncated_matches(block_index, grid_type);
-                // Recompute filter-hidden state for the (possibly updated)
-                // output matches; also re-clamps the focused index.
+
+                // Mark any of the newly-arrived output matches that fall in
+                // filter-hidden rows so they're excluded from the count,
+                // focus, and highlights (also re-clamps focus).
                 self.recompute_filtered_for_block(block_index);
             }
             FindTaskMessage::ScanAIBlock {
@@ -1012,12 +1028,12 @@ impl AsyncFindController {
     ///
     /// # Arguments
     /// * `block_index` - The index of the block that changed.
-    /// * `dirty_info` - If provided, a `(row_range, grid_type, num_lines_truncated)`
-    ///   tuple describing the dirty region. If `None`, a full block rescan is enqueued.
+    /// * `dirty_info` - If provided, a `(row_range, grid_type)` tuple describing the dirty
+    ///   region in absolute rows. If `None`, a full block rescan is enqueued.
     pub fn invalidate_block(
         &mut self,
         block_index: BlockIndex,
-        dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
+        dirty_info: Option<(RangeInclusive<u64>, GridType)>,
     ) {
         if self.current_config.is_none() {
             return;
@@ -1037,7 +1053,7 @@ impl AsyncFindController {
         log::trace!(
             "[async_find] invalidate_block: enqueuing work for block {:?}, dirty={:?}",
             block_index,
-            dirty_info.as_ref().map(|(r, _, _)| r),
+            dirty_info.as_ref().map(|(r, _)| r),
         );
 
         queue.invalidate_block(block_index, dirty_info);
@@ -1068,12 +1084,12 @@ impl AsyncFindController {
     /// Prunes truncated matches for a specific block and grid type.
     ///
     /// This removes matches whose start row has been truncated from scrollback,
-    /// keeping the match count and focused index accurate.
-    fn prune_truncated_matches(&mut self, block_index: BlockIndex, grid_type: GridType) {
+    /// keeping the match count and focused index accurate. Returns whether any match was removed.
+    fn prune_truncated_matches(&mut self, block_index: BlockIndex, grid_type: GridType) -> bool {
         let num_lines_truncated = {
             let model = self.terminal_model.lock();
             let Some(block) = model.block_list().block_at(block_index) else {
-                return;
+                return false;
             };
             match grid_type {
                 GridType::Output => block.output_grid().grid_handler().num_lines_truncated(),
@@ -1081,21 +1097,24 @@ impl AsyncFindController {
                     .prompt_and_command_grid()
                     .grid_handler()
                     .num_lines_truncated(),
-                _ => return,
+                _ => return false,
             }
         };
 
         if num_lines_truncated == 0 {
-            return;
+            return false;
         }
 
-        if let Some(matches) = self
+        let Some(matches) = self
             .block_results
             .terminal_matches
             .get_mut(&(block_index, grid_type))
-        {
-            matches.retain(|m| !m.is_truncated(num_lines_truncated));
-        }
+        else {
+            return false;
+        };
+        let num_matches = matches.len();
+        matches.retain(|m| !m.is_truncated(num_lines_truncated));
+        matches.len() < num_matches
     }
 
     /// Recomputes `is_filtered` for the Output-grid matches of `block_index`,

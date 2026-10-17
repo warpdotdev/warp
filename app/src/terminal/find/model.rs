@@ -480,15 +480,13 @@ impl TerminalFindModel {
                     .grid_of_type_mut(GridType::Output)
                     .and_then(|grid| {
                         let dirty = grid.grid_handler_mut().take_find_dirty_rows_range()?;
-                        let truncated = grid.grid_handler().num_lines_truncated();
-                        Some((dirty, GridType::Output, truncated))
+                        Some((dirty, GridType::Output))
                     });
             let command_dirty_info = active_block
                 .grid_of_type_mut(GridType::PromptAndCommand)
                 .and_then(|grid| {
                     let dirty = grid.grid_handler_mut().take_find_dirty_rows_range()?;
-                    let truncated = grid.grid_handler().num_lines_truncated();
-                    Some((dirty, GridType::PromptAndCommand, truncated))
+                    Some((dirty, GridType::PromptAndCommand))
                 });
 
             // Drop the model lock before emitting events.
@@ -650,13 +648,13 @@ impl TerminalFindModel {
     ///
     /// # Arguments
     /// * `block_index` - The index of the block that changed.
-    /// * `dirty_info` - If provided, a `(row_range, grid_type, num_lines_truncated)`
-    ///   tuple describing the dirty region. If `None`, a full block rescan is enqueued.
+    /// * `dirty_info` - If provided, a `(row_range, grid_type)` tuple describing the dirty
+    ///   region in absolute rows. If `None`, a full block rescan is enqueued.
     /// * `ctx` - The model context.
     pub fn invalidate_async_find_block(
         &mut self,
         block_index: BlockIndex,
-        dirty_info: Option<(RangeInclusive<usize>, GridType, u64)>,
+        dirty_info: Option<(RangeInclusive<u64>, GridType)>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(controller) = self.async_find_controller.as_mut() {
@@ -699,22 +697,17 @@ impl TerminalFindModel {
 
         // Get the dirty range from the completed block's output grid.
         // We need mutable access to consume the dirty range.
-        let (dirty_range, num_lines_truncated) = {
+        let dirty_range = {
             let mut model = self.terminal_model.lock();
             model
                 .block_list_mut()
                 .block_at_mut(block_index)
                 .and_then(|block| block.grid_of_type_mut(GridType::Output))
-                .map(|output_grid| {
-                    let dirty_range = output_grid.grid_handler_mut().take_find_dirty_rows_range();
-                    let num_lines_truncated = output_grid.grid_handler().num_lines_truncated();
-                    (dirty_range, num_lines_truncated)
-                })
-                .unwrap_or((None, 0))
+                .and_then(|output_grid| output_grid.grid_handler_mut().take_find_dirty_rows_range())
         };
 
         // Use invalidate_async_find_block which handles the dirty range properly.
-        let dirty_info = dirty_range.map(|range| (range, GridType::Output, num_lines_truncated));
+        let dirty_info = dirty_range.map(|range| (range, GridType::Output));
         self.invalidate_async_find_block(block_index, dirty_info, ctx);
     }
 

@@ -1,11 +1,13 @@
 //! Tests for async find functionality.
 
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::{App, EntityId};
+use warpui::{App, EntityId, ModelHandle};
 
+use super::work_queue::FindWorkQueue;
 use super::{
     AbsoluteMatch, AsyncFindConfig, AsyncFindController, AsyncFindStatus, BlockFindResults,
     FindTaskMessage, is_query_refinement,
@@ -278,6 +280,7 @@ fn test_message_processing_updates_state() {
                     FindTaskMessage::BlockGridMatches {
                         block_index: BlockIndex(1),
                         grid_type: GridType::Output,
+                        row_range: 0..=1,
                         matches: vec![make_match_at(0, 0, 2), make_match_at(1, 0, 2)],
                     },
                     ctx,
@@ -943,4 +946,295 @@ fn test_focused_match_index_walks_across_terminal_and_ai_blocks() {
         .expect("Index 1 should resolve to terminal match.");
     assert_eq!(focused_terminal.block_index, BlockIndex(0));
     assert_eq!(focused_terminal.grid_type, GridType::Output);
+}
+
+/// Creates a find model whose controller has an active find and work queue, but no background
+/// task, so tests can deliver `FindTaskMessage`s in an exact order.
+fn add_find_model_with_active_find(app: &mut App) -> ModelHandle<TerminalFindModel> {
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    add_find_model_with_active_find_on(app, terminal_model)
+}
+
+fn add_find_model_with_active_find_on(
+    app: &mut App,
+    terminal_model: Arc<FairMutex<TerminalModel>>,
+) -> ModelHandle<TerminalFindModel> {
+    app.add_model(|ctx| {
+        let mut model = TerminalFindModel::new(terminal_model.clone(), ctx);
+        let mut controller = AsyncFindController::new(terminal_model);
+        controller.current_config = AsyncFindConfig::from_options(
+            &FindOptions {
+                query: Some("foo".to_owned().into()),
+                ..Default::default()
+            },
+            BlockSortDirection::MostRecentLast,
+        );
+        controller.work_queue = Some(FindWorkQueue::new());
+        controller.set_test_status(AsyncFindStatus::Scanning);
+        model.async_find_controller = Some(controller);
+        model
+    })
+}
+
+fn process_messages(
+    app: &mut App,
+    find_model: &ModelHandle<TerminalFindModel>,
+    messages: Vec<FindTaskMessage>,
+) {
+    find_model.update(app, |model, ctx| {
+        let controller = model.async_find_controller.as_mut().unwrap();
+        for message in messages {
+            controller.process_message(message, ctx);
+        }
+    });
+}
+
+fn grid_matches(rows: RangeInclusive<u64>, match_rows: &[u64]) -> FindTaskMessage {
+    FindTaskMessage::BlockGridMatches {
+        block_index: BlockIndex(0),
+        grid_type: GridType::Output,
+        row_range: rows,
+        matches: match_rows.iter().copied().map(make_match).collect(),
+    }
+}
+
+fn stored_match_rows(app: &mut App, find_model: &ModelHandle<TerminalFindModel>) -> Vec<u64> {
+    find_model.update(app, |model, _ctx| {
+        model
+            .async_find_controller
+            .as_ref()
+            .unwrap()
+            .matches_for_block_grid(BlockIndex(0), GridType::Output)
+            .map(|matches| matches.iter().map(AbsoluteMatch::start_row).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// Regression test for warpdotdev/warp#14231: dirty-range results that were already in flight when
+/// a full rescan was requested land after the block's results are cleared, followed by the full
+/// rescan's chunks starting at row 0.
+#[test]
+fn test_full_rescan_racing_in_flight_dirty_results_keeps_matches_sorted_and_unique() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let find_model = add_find_model_with_active_find(&mut app);
+
+        process_messages(
+            &mut app,
+            &find_model,
+            vec![
+                grid_matches(0..=49, &[0, 10, 20, 30, 40]),
+                grid_matches(50..=99, &[50, 60, 70, 80, 90]),
+            ],
+        );
+
+        find_model.update(&mut app, |model, _ctx| {
+            model
+                .async_find_controller
+                .as_mut()
+                .unwrap()
+                .invalidate_block(BlockIndex(0), None);
+        });
+        assert!(stored_match_rows(&mut app, &find_model).is_empty());
+
+        process_messages(
+            &mut app,
+            &find_model,
+            vec![
+                // Dirty-range results that were in flight before the invalidation.
+                grid_matches(70..=84, &[70, 80]),
+                grid_matches(85..=99, &[90]),
+                // The full rescan's chunks.
+                grid_matches(0..=49, &[0, 10, 20, 30, 40]),
+                grid_matches(50..=99, &[50, 60, 70, 80, 90]),
+                grid_matches(100..=105, &[100]),
+                // A later dirty-range result.
+                grid_matches(100..=120, &[100, 110, 120]),
+            ],
+        );
+
+        let expected_rows = (0..=120).step_by(10).collect::<Vec<u64>>();
+        assert_eq!(stored_match_rows(&mut app, &find_model), expected_rows);
+        let (match_count, focused_match_index) = find_model.update(&mut app, |model, _ctx| {
+            let controller = model.async_find_controller.as_ref().unwrap();
+            (controller.match_count(), controller.focused_match_index())
+        });
+        assert_eq!(match_count, expected_rows.len());
+        assert_eq!(focused_match_index, Some(0));
+    });
+}
+
+#[test]
+fn test_empty_full_block_chunk_clears_stale_matches_in_its_rows() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let find_model = add_find_model_with_active_find(&mut app);
+
+        process_messages(
+            &mut app,
+            &find_model,
+            vec![
+                // Dirty-range results that landed after the block was cleared.
+                grid_matches(70..=84, &[70, 80]),
+                grid_matches(150..=160, &[150]),
+                // An empty full-rescan chunk.
+                grid_matches(0..=99, &[]),
+            ],
+        );
+
+        assert_eq!(stored_match_rows(&mut app, &find_model), vec![150]);
+        let match_count = find_model.update(&mut app, |model, _ctx| {
+            model.async_find_controller.as_ref().unwrap().match_count()
+        });
+        assert_eq!(match_count, 1);
+        assert_eq!(
+            focused_match_row(&mut app, &find_model),
+            Some((BlockIndex(0), 150))
+        );
+    });
+}
+
+fn focused_match_row(
+    app: &mut App,
+    find_model: &ModelHandle<TerminalFindModel>,
+) -> Option<(BlockIndex, u64)> {
+    find_model.update(app, |model, _ctx| {
+        model
+            .async_find_controller
+            .as_ref()
+            .unwrap()
+            .focused_terminal_match()
+            .map(|focused| (focused.block_index, focused.range.start_row()))
+    })
+}
+
+#[test]
+fn test_matches_delivered_only_by_dirty_ranges_are_focusable() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let find_model = add_find_model_with_active_find(&mut app);
+
+        process_messages(&mut app, &find_model, vec![grid_matches(0..=9, &[3, 7])]);
+
+        let match_count = find_model.update(&mut app, |model, _ctx| {
+            model.async_find_controller.as_ref().unwrap().match_count()
+        });
+        assert_eq!(match_count, 2);
+        // MostRecentLast focuses the bottom-most match first.
+        assert_eq!(
+            focused_match_row(&mut app, &find_model),
+            Some((BlockIndex(0), 7))
+        );
+
+        find_model.update(&mut app, |model, _ctx| {
+            model
+                .async_find_controller
+                .as_mut()
+                .unwrap()
+                .focus_next_match(FindDirection::Up);
+        });
+        assert_eq!(
+            focused_match_row(&mut app, &find_model),
+            Some((BlockIndex(0), 3))
+        );
+    });
+}
+
+#[test]
+fn test_empty_full_block_chunk_for_block_without_matches_leaves_results_untouched() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let find_model = add_find_model_with_active_find(&mut app);
+
+        process_messages(&mut app, &find_model, vec![grid_matches(0..=999, &[])]);
+
+        let (block_grid_matches, focused_match_index) =
+            find_model.update(&mut app, |model, _ctx| {
+                let controller = model.async_find_controller.as_ref().unwrap();
+                (
+                    controller
+                        .matches_for_block_grid(BlockIndex(0), GridType::Output)
+                        .cloned(),
+                    controller.focused_match_index(),
+                )
+            });
+        assert_eq!(block_grid_matches, None);
+        assert_eq!(focused_match_index, None);
+    });
+}
+
+/// Scrollback truncation can remove stored matches while every new chunk is empty and overlaps
+/// none of them, e.g. when a long run of non-matching output follows an early match.
+#[test]
+fn test_empty_non_overlapping_chunk_prunes_matches_truncated_from_scrollback() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let max_block_scroll_limit = 20;
+        let terminal_model = Arc::new(FairMutex::new(
+            TerminalModel::mock_with_max_block_scroll_limit(max_block_scroll_limit),
+        ));
+        let block_index = {
+            let mut model = terminal_model.lock();
+            model.simulate_long_running_block("cmd", "foo\r\n");
+            model.block_list().active_block_index()
+        };
+        let find_model = add_find_model_with_active_find_on(&mut app, terminal_model.clone());
+        let grid_matches_for_block =
+            |rows: RangeInclusive<u64>, match_rows: &[u64]| FindTaskMessage::BlockGridMatches {
+                block_index,
+                grid_type: GridType::Output,
+                row_range: rows,
+                matches: match_rows.iter().copied().map(make_match).collect(),
+            };
+        process_messages(
+            &mut app,
+            &find_model,
+            vec![grid_matches_for_block(0..=0, &[0])],
+        );
+        let focused_match_index = find_model.update(&mut app, |model, _ctx| {
+            model
+                .async_find_controller
+                .as_ref()
+                .unwrap()
+                .focused_match_index()
+        });
+        assert_eq!(focused_match_index, Some(0));
+
+        let num_lines_truncated = {
+            let mut model = terminal_model.lock();
+            model.process_bytes("x\r\n".repeat(3 * max_block_scroll_limit).as_str());
+            model
+                .block_list()
+                .active_block()
+                .output_grid()
+                .grid_handler()
+                .num_lines_truncated()
+        };
+        assert!(num_lines_truncated > 0);
+
+        process_messages(
+            &mut app,
+            &find_model,
+            vec![grid_matches_for_block(
+                num_lines_truncated + 10..=num_lines_truncated + 15,
+                &[],
+            )],
+        );
+
+        let (stored_matches, match_count, focused_match_index) =
+            find_model.update(&mut app, |model, _ctx| {
+                let controller = model.async_find_controller.as_ref().unwrap();
+                (
+                    controller
+                        .matches_for_block_grid(block_index, GridType::Output)
+                        .cloned()
+                        .unwrap_or_default(),
+                    controller.match_count(),
+                    controller.focused_match_index(),
+                )
+            });
+        assert_eq!(stored_matches, vec![]);
+        assert_eq!(match_count, 0);
+        assert_eq!(focused_match_index, None);
+    });
 }
