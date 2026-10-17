@@ -1,4 +1,5 @@
 //! Hit-testing implementation for the rendering model.
+use std::rc::Rc;
 
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
@@ -120,7 +121,16 @@ impl RenderState {
             };
         };
 
-        block.coordinates_to_location(x, y, options)
+        let materialized = self.materialized_blocks.borrow();
+        let block_index = block_cursor.start().item_count;
+        let item = materialized
+            .get(&super::BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
+            .map(Rc::as_ref)
+            .unwrap_or(block.item);
+        Positioned { item, ..block }.coordinates_to_location(x, y, options)
     }
 
     /// Performs hit-testing on coordinates relative to the viewport origin.
@@ -234,15 +244,13 @@ impl<'a> Positioned<'a, BlockItem> {
         y: Pixels,
         paragraph_block: Positioned<'a, ParagraphBlock>,
     ) -> Location {
-        for paragraph in paragraph_block.paragraphs() {
-            if paragraph.end_y_offset() > y {
-                let mut location = paragraph.coordinate_to_location(self.unpad_x(x), y);
-                // Adjust the paragraph-relative start offset to be the start of this block.
-                if let Location::Text { block_start, .. } = &mut location {
-                    *block_start = self.start_char_offset;
-                }
-                return location;
+        if let Some(paragraph) = paragraph_block.paragraph_at_y(y) {
+            let mut location = paragraph.coordinate_to_location(self.unpad_x(x), y);
+            // Adjust the paragraph-relative start offset to be the start of this block.
+            if let Location::Text { block_start, .. } = &mut location {
+                *block_start = self.start_char_offset;
             }
+            return location;
         }
 
         Location::Text {
