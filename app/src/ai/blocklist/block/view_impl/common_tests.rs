@@ -4,12 +4,18 @@ use std::sync::Arc;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use itertools::Itertools;
+use pathfinder_geometry::vector::vec2f;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{Empty, MouseStateHandle};
-use warpui::{App, Element};
+use warpui::elements::{
+    ConstrainedBox, Empty, Flex, MainAxisSize, MouseStateHandle, ParentElement, Rect, Shrinkable,
+};
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, AppContext, Element, Entity, Presenter, TypedActionView, View, WindowInvalidation,
+};
 
 use super::{
     CollapsibleElementState, CollapsibleExpansionState, LOAD_OUTPUT_MESSAGE,
@@ -17,8 +23,8 @@ use super::{
     VisualMarkdownLightboxCollection, collect_visual_markdown_lightbox_collection,
     compute_visual_section_width, image_tooltip_handles_for_group, inline_image_source_label,
     is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
-    render_scrollable_collapsible_content, status_message_naming_model, text_sections_with_indices,
-    warping_footer_height,
+    render_scrollable_collapsible_content, stack_submit_button_below, status_message_naming_model,
+    text_sections_with_indices, warping_footer_height,
 };
 #[cfg(feature = "local_fs")]
 use super::{ResolvedBlocklistImageSources, blocklist_image_asset_source};
@@ -396,4 +402,64 @@ fn names_the_model_after_a_status_message_without_an_ellipsis() {
         status_message_naming_model("Generating plan", "Claude Sonnet 4.5"),
         "Generating plan with Claude Sonnet 4.5"
     );
+}
+
+/// Lays out the stacked debug footer as a non-flexible child of a column, which gives it an
+/// unbounded height just like the narrow feedback layout does.
+struct StackedDebugFooterTestView;
+
+impl Entity for StackedDebugFooterTestView {
+    type Event = ();
+}
+
+impl View for StackedDebugFooterTestView {
+    fn ui_name() -> &'static str {
+        "StackedDebugFooterTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        let button = || {
+            ConstrainedBox::new(Rect::new().finish())
+                .with_width(40.)
+                .with_height(10.)
+                .finish()
+        };
+        let debug_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(Shrinkable::new(1., button()).finish())
+            .with_child(button())
+            .finish();
+        Flex::column()
+            .with_child(stack_submit_button_below(debug_row, button()))
+            .finish()
+    }
+}
+
+impl TypedActionView for StackedDebugFooterTestView {
+    type Action = ();
+}
+
+/// Regression test: the stacked footer used to hold an `Expanded` child in a column, which
+/// panicked flex layout when the column was laid out with an unbounded height.
+#[test]
+fn stacked_debug_footer_lays_out_under_an_unbounded_height() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (window_id, _view) =
+            app.add_window(WindowStyle::NotStealFocus, |_| StackedDebugFooterTestView);
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(300., 400.), 1., None, ctx);
+        });
+    });
 }
