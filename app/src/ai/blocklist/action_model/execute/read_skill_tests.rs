@@ -411,6 +411,52 @@ fn test_read_skill_executor_rejects_tui_only_skill_in_gui() {
     });
 }
 #[test]
+fn test_read_skill_executor_falls_back_to_path_skill_when_name_sent_as_bundled_id() {
+    let temp_dir = TempDir::new().unwrap();
+    let skill_path = create_test_skill_file(&temp_dir, "pr-walkthrough", "A project skill");
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let parsed_skill = parse_skill(&skill_path).expect("Failed to parse test skill");
+        SkillManager::handle(&app).update(&mut app, |manager, _ctx| {
+            manager.add_skill_for_testing(parsed_skill);
+        });
+
+        let executor_handle = add_test_read_skill_executor(&mut app);
+
+        // An agent that retries `read_skill{bundled_skill_id: "pr-walkthrough"}` for a
+        // project skill (instead of `skill_path`) should still get the skill's content.
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("test-action-id".to_string()),
+            action: AIAgentActionType::ReadSkill(ReadSkillRequest {
+                skill: SkillReference::BundledSkillId("pr-walkthrough".to_string()),
+            }),
+            task_id: TaskId::new("test-task-id".to_string()),
+            requires_result: false,
+        };
+
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id: AIConversationId::new(),
+        };
+
+        executor_handle.update(&mut app, |executor, ctx| {
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+
+            match result {
+                AnyActionExecution::Sync(AIAgentActionResultType::ReadSkill(
+                    ReadSkillResult::Success { content },
+                )) => {
+                    assert_eq!(content.file_name, skill_path.to_string_lossy().to_string());
+                }
+                _ => panic!("Expected fallback name resolution to succeed"),
+            }
+        });
+    });
+}
+
+#[test]
 fn test_read_skill_executor_file_not_found() {
     let temp_dir = TempDir::new().unwrap();
     // Don't create the SKILL.md file
