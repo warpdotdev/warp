@@ -28,16 +28,8 @@ impl AskUserQuestionExecutor {
         }
     }
 
-    pub(super) fn should_autoexecute(
-        &self,
-        input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        !BlocklistAIPermissions::as_ref(ctx).can_ask_user_question(
-            &input.conversation_id,
-            Some(self.terminal_view_id),
-            ctx,
-        )
+    pub(super) fn should_autoexecute(&self, ctx: &mut ModelContext<Self>) -> bool {
+        !BlocklistAIPermissions::as_ref(ctx).can_ask_user_question(Some(self.terminal_view_id), ctx)
     }
 
     pub(super) fn execute(
@@ -52,7 +44,7 @@ impl AskUserQuestionExecutor {
             }
         };
 
-        if self.should_autoexecute(input, ctx) {
+        if self.should_autoexecute(ctx) {
             let question_ids = questions
                 .iter()
                 .map(|question| question.question_id.clone())

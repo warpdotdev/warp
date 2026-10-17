@@ -328,8 +328,6 @@ impl From<FileWriteToPtyPermission> for WriteToPtyPermission {
 enum FileAskUserQuestionPermission {
     #[schemars(description = "The agent may not ask the user questions.")]
     Never,
-    #[schemars(description = "Questions are suppressed only during auto-approval.")]
-    AskExceptInAutoApprove,
     #[schemars(description = "Questions are always available to the agent.")]
     #[default]
     AlwaysAsk,
@@ -339,7 +337,6 @@ impl From<AskUserQuestionPermission> for FileAskUserQuestionPermission {
     fn from(value: AskUserQuestionPermission) -> Self {
         match value {
             AskUserQuestionPermission::Never => Self::Never,
-            AskUserQuestionPermission::AskExceptInAutoApprove => Self::AskExceptInAutoApprove,
             AskUserQuestionPermission::AlwaysAsk | AskUserQuestionPermission::Unknown => {
                 Self::AlwaysAsk
             }
@@ -351,7 +348,6 @@ impl From<FileAskUserQuestionPermission> for AskUserQuestionPermission {
     fn from(value: FileAskUserQuestionPermission) -> Self {
         match value {
             FileAskUserQuestionPermission::Never => Self::Never,
-            FileAskUserQuestionPermission::AskExceptInAutoApprove => Self::AskExceptInAutoApprove,
             FileAskUserQuestionPermission::AlwaysAsk => Self::AlwaysAsk,
         }
     }

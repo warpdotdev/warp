@@ -320,7 +320,6 @@ impl AskUserQuestionView {
             dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
             let permissions = [
                 AskUserQuestionPermission::Never,
-                AskUserQuestionPermission::AskExceptInAutoApprove,
                 AskUserQuestionPermission::AlwaysAsk,
             ];
             dropdown.set_items(
@@ -846,7 +845,7 @@ impl AskUserQuestionView {
             ),
             AskUserQuestionResult::SkippedByAutoApprove { .. } => (
                 None,
-                "Questions skipped due to auto-approve".to_string(),
+                "Questions skipped".to_string(),
                 inline_action_icons::reverted_icon(appearance),
             ),
         };

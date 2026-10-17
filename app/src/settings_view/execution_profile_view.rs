@@ -760,10 +760,7 @@ fn render_ask_user_question_permission_line_with_icon(
 ) -> Box<dyn Element> {
     let permission_text = match permission {
         AskUserQuestionPermission::Never => "Never ask",
-        AskUserQuestionPermission::AskExceptInAutoApprove | AskUserQuestionPermission::Unknown => {
-            "Ask unless auto-approve"
-        }
-        AskUserQuestionPermission::AlwaysAsk => "Always ask",
+        AskUserQuestionPermission::AlwaysAsk | AskUserQuestionPermission::Unknown => "Always ask",
     };
     render_permission_line_with_icon(icon, label, permission_text, appearance, is_ai_enabled)
 }

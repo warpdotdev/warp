@@ -512,7 +512,7 @@ impl TuiAskQuestionView {
         match result {
             AskUserQuestionResult::Success { answers } => self.render_answers(answers, app),
             AskUserQuestionResult::SkippedByAutoApprove { .. } => {
-                self.render_summary("Questions skipped due to auto-approve", false, app)
+                self.render_summary("Questions skipped", false, app)
             }
             AskUserQuestionResult::Error(_) | AskUserQuestionResult::Cancelled => {
                 self.render_summary("Questions skipped", false, app)

@@ -40,15 +40,11 @@ fn build_action(action_id: &str) -> AIAgentAction {
 }
 
 #[test]
-fn should_autoexecute_returns_false_when_autoapprove_is_enabled_and_profile_always_blocks() {
+fn should_autoexecute_returns_false_when_autoapprove_is_enabled_and_questions_are_allowed() {
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
-        let (history, profiles) = initialize_ask_user_question_test(&mut app, terminal_view_id);
+        let (_, profiles) = initialize_ask_user_question_test(&mut app, terminal_view_id);
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
-        let action = build_action("ask-user-question");
-        let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, true, false, false, ctx)
-        });
 
         profiles.update(&mut app, |profiles, ctx| {
             let profile_id = profiles
@@ -58,13 +54,7 @@ fn should_autoexecute_returns_false_when_autoapprove_is_enabled_and_profile_alwa
             profiles.set_ask_user_question(&profile_id, AskUserQuestionPermission::AlwaysAsk, ctx);
         });
 
-        let result = executor.update(&mut app, |executor, ctx| {
-            let input = ExecuteActionInput {
-                action: &action,
-                conversation_id,
-            };
-            executor.should_autoexecute(input, ctx)
-        });
+        let result = executor.update(&mut app, |executor, ctx| executor.should_autoexecute(ctx));
 
         assert!(!result);
     });
@@ -95,11 +85,7 @@ fn initialize_ask_user_question_test(
     // defaults (e.g. agent_mode_evals overrides ask_user_question to Never).
     profiles.update(app, |profiles, ctx| {
         if let Some(profile_id) = profiles.create_profile(ctx) {
-            profiles.set_ask_user_question(
-                &profile_id,
-                AskUserQuestionPermission::AskExceptInAutoApprove,
-                ctx,
-            );
+            profiles.set_ask_user_question(&profile_id, AskUserQuestionPermission::Unknown, ctx);
             profiles.set_active_profile(terminal_view_id, profile_id, ctx);
         }
     });
@@ -112,43 +98,26 @@ fn should_autoexecute_returns_false_when_questions_are_allowed() {
         let terminal_view_id = EntityId::new();
         initialize_ask_user_question_test(&mut app, terminal_view_id);
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
-        let action = build_action("ask-user-question");
-        let result = executor.update(&mut app, |executor, ctx| {
-            let input = ExecuteActionInput {
-                action: &action,
-                conversation_id: AIConversationId::new(),
-            };
-            executor.should_autoexecute(input, ctx)
-        });
+        let result = executor.update(&mut app, |executor, ctx| executor.should_autoexecute(ctx));
 
         assert!(!result);
     });
 }
 
 #[test]
-fn should_autoexecute_returns_true_when_autoapprove_is_enabled_and_profile_allows_override() {
+fn should_autoexecute_returns_false_when_autoapprove_is_enabled_and_permission_is_unknown() {
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
-        let (history, _) = initialize_ask_user_question_test(&mut app, terminal_view_id);
+        initialize_ask_user_question_test(&mut app, terminal_view_id);
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
-        let action = build_action("ask-user-question");
-        let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, true, false, false, ctx)
-        });
-        let result = executor.update(&mut app, |executor, ctx| {
-            let input = ExecuteActionInput {
-                action: &action,
-                conversation_id,
-            };
-            executor.should_autoexecute(input, ctx)
-        });
+        let result = executor.update(&mut app, |executor, ctx| executor.should_autoexecute(ctx));
 
-        assert!(result);
+        assert!(!result);
     });
 }
 
 #[test]
-fn execute_returns_sync_skipped_question_ids_when_autoapprove_is_enabled() {
+fn execute_waits_for_user_answer_when_autoapprove_is_enabled() {
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
         let (history, _) = initialize_ask_user_question_test(&mut app, terminal_view_id);
@@ -167,11 +136,28 @@ fn execute_returns_sync_skipped_question_ids_when_autoapprove_is_enabled() {
             result
         });
 
+        let AnyActionExecution::Async {
+            execute_future,
+            on_complete,
+        } = execution
+        else {
+            panic!("expected auto-approve to preserve the user question");
+        };
+
+        let answers = vec![AskUserQuestionAnswerItem::Answered {
+            question_id: "q1".to_string(),
+            selected_options: vec!["Option A".to_string()],
+            other_text: String::new(),
+        }];
+        executor.update(&mut app, |executor, _| executor.complete(answers.clone()));
+
+        let async_result = execute_future.await;
+        let result = app.update(|ctx| on_complete(async_result, ctx));
         assert!(matches!(
-            execution,
-            AnyActionExecution::Sync(AIAgentActionResultType::AskUserQuestion(
-                AskUserQuestionResult::SkippedByAutoApprove { question_ids }
-            )) if question_ids == vec!["q1".to_string()]
+            result,
+            AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Success {
+                answers: actual
+            }) if actual == answers
         ));
     });
 }
@@ -259,15 +245,11 @@ fn cancel_resolves_as_cancelled() {
 }
 
 #[test]
-fn should_autoexecute_uses_active_terminal_profile_permission() {
+fn never_permission_suppresses_questions_while_autoapprove_is_enabled() {
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
-        let (history, profiles) = initialize_ask_user_question_test(&mut app, terminal_view_id);
+        let (_, profiles) = initialize_ask_user_question_test(&mut app, terminal_view_id);
         let executor = app.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
-        let action = build_action("ask-user-question");
-        let conversation_id = history.update(&mut app, |history, ctx| {
-            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
-        });
 
         profiles.update(&mut app, |profiles, ctx| {
             let profile_id = profiles
@@ -277,13 +259,7 @@ fn should_autoexecute_uses_active_terminal_profile_permission() {
             profiles.set_active_profile(terminal_view_id, profile_id, ctx);
         });
 
-        let result = executor.update(&mut app, |executor, ctx| {
-            let input = ExecuteActionInput {
-                action: &action,
-                conversation_id,
-            };
-            executor.should_autoexecute(input, ctx)
-        });
+        let result = executor.update(&mut app, |executor, ctx| executor.should_autoexecute(ctx));
 
         assert!(result);
     });
