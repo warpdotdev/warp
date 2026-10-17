@@ -463,7 +463,12 @@ impl CLIAgent {
             return false;
         };
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        self.command_prefixes().contains(&basename)
+        if !self.command_prefixes().contains(&basename) {
+            return false;
+        }
+        // The agent driver runs ACP agents through this same executable's `acp-bridge`
+        // subcommand; that block hosts a third-party agent, not the TUI.
+        !(matches!(self, CLIAgent::WarpTui) && is_acp_bridge_invocation(command))
     }
 
     /// Detects the CLI agent from a command string.
@@ -526,6 +531,16 @@ impl CLIAgent {
             .flat_map(|workspace| workspace.teams.iter())
             .any(|team| team.uid.uid() == UBER_TEAM_UID)
     }
+}
+
+/// Whether `command` is the agent driver's ACP bridge launch, which always names the subcommand
+/// and its launch file as two consecutive bare tokens after the executable.
+fn is_acp_bridge_invocation(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair == ["acp-bridge", "--launch-file"])
 }
 
 /// Builds a prompt string from a batch of code review comments suitable for

@@ -663,6 +663,20 @@ fn test_warp_tui_does_not_match_other_commands() {
 }
 
 #[test]
+fn test_warp_tui_does_not_match_acp_bridge_launch() {
+    assert!(!CLIAgent::WarpTui.matches_command(
+        "/Applications/WarpDev.app/Contents/MacOS/warp-dev acp-bridge --launch-file /tmp/oz-acp-x/launch.json",
+        None,
+    ));
+    assert!(!CLIAgent::WarpTui.matches_command(
+        "'/Users/me/Warp Local.app/Contents/MacOS/warp' acp-bridge --launch-file '/tmp/oz-acp-x/launch.json'",
+        Some(EscapeChar::Backslash),
+    ));
+    // The subcommand only counts as the bridge together with its launch file.
+    assert!(CLIAgent::WarpTui.matches_command("warp --resume acp-bridge", None));
+}
+
+#[test]
 fn test_warp_tui_variant_properties() {
     assert!(CLIAgent::Claude.supports_cli_agent_footer());
     assert_eq!(CLIAgent::WarpTui.command_prefix(), "warp");
