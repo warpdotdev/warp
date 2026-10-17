@@ -493,8 +493,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GitOperationsInCodeReview,
         #[cfg(feature = "hoa_remote_control")]
         FeatureFlag::HOARemoteControl,
-        #[cfg(feature = "codex_notifications")]
-        FeatureFlag::CodexNotifications,
         #[cfg(feature = "codex_plugin")]
         FeatureFlag::CodexPlugin,
         #[cfg(feature = "trim_trailing_blank_lines")]
