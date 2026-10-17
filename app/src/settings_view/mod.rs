@@ -2457,6 +2457,21 @@ impl SettingsView {
     pub fn search_query(&self, app: &AppContext) -> String {
         self.search_editor.as_ref(app).buffer_text(app)
     }
+    pub fn input_mode_widget_id() -> &'static str {
+        AppearanceSettingsPageView::input_mode_widget_id()
+    }
+
+    pub fn input_mode_dropdown_position_id(&self, app: &AppContext) -> String {
+        self.settings_pages
+            .iter()
+            .find_map(|page| match &page.view_handle {
+                SettingsPageViewHandle::Appearance(view) => {
+                    Some(view.as_ref(app).input_mode_dropdown_position_id(app))
+                }
+                _ => None,
+            })
+            .expect("Appearance settings page should exist")
+    }
 }
 
 impl Entity for SettingsView {
