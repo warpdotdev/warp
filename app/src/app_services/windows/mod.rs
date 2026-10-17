@@ -9,6 +9,7 @@ use {
     warp_core::channel::ChannelState,
 };
 
+pub(crate) mod jump_list;
 mod registry;
 #[cfg(feature = "release_bundle")]
 mod service_impl;
