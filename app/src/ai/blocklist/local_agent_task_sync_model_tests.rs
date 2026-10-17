@@ -1,12 +1,13 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use chrono::Local;
 use session_sharing_protocol::common::SessionId;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::r#async::FutureExt as _;
-use warpui::{App, EntityId, SingletonEntity};
+use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{
@@ -17,10 +18,11 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, TaskSyncMode,
 };
 use crate::ai::agent::{
-    AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput,
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
     RenderableAIError, TransientNetworkErrorKind,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::{RequestInput, ResponseStreamId};
 use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
 use crate::terminal::CLIAgent;
@@ -655,6 +657,185 @@ fn emit_cli_status(
             session_context: Box::default(),
         });
     });
+}
+
+#[test]
+fn native_prompt_submit_restores_externally_changed_task_state() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        register_cli_agent_sessions_model(&mut app);
+        let server_state = Arc::new(Mutex::new(AgentTaskState::InProgress));
+        let server_state_for_mock = server_state.clone();
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .returning(move |_, task_state, _, _, _, _, _| {
+                if let Some(state) = task_state {
+                    *server_state_for_mock.lock().unwrap() = state;
+                }
+                Ok(())
+            });
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+        let task_id = fixed_task_id();
+        let terminal_view_id = EntityId::new();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_task_id(task_id);
+        conversation.set_server_conversation_token("server-conversation-id".to_owned());
+        let conversation_id = conversation.id();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            history.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+        model
+            .update(&mut app, |model, _| model.wait_for_idle(task_id))
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("initial progress update must finish");
+
+        *server_state.lock().unwrap() = AgentTaskState::Cancelled;
+        submit_native_input(
+            &mut app,
+            &history_model,
+            conversation_id,
+            terminal_view_id,
+            AIAgentInput::ResumeConversation {
+                context: Default::default(),
+            },
+        );
+        model
+            .update(&mut app, |model, _| model.wait_for_idle(task_id))
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("continuation update must finish");
+        assert_eq!(*server_state.lock().unwrap(), AgentTaskState::Cancelled);
+
+        for state in [AgentTaskState::Cancelled, AgentTaskState::Succeeded] {
+            *server_state.lock().unwrap() = state;
+            submit_native_input(
+                &mut app,
+                &history_model,
+                conversation_id,
+                terminal_view_id,
+                native_user_query(),
+            );
+            model
+                .update(&mut app, |model, _| model.wait_for_idle(task_id))
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("follow-up progress update must finish");
+            assert_eq!(
+                *server_state.lock().unwrap(),
+                AgentTaskState::InProgress,
+                "native follow-up must reopen a task changed externally to {state:?}"
+            );
+        }
+    });
+}
+
+fn native_user_query() -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: "resume".to_owned(),
+        context: Default::default(),
+        static_query_type: None,
+        referenced_attachments: Default::default(),
+        user_query_mode: Default::default(),
+        running_command: None,
+        intended_agent: None,
+        base: None,
+    }
+}
+
+fn submit_native_input(
+    app: &mut App,
+    history_model: &ModelHandle<BlocklistAIHistoryModel>,
+    conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
+    input: AIAgentInput,
+) {
+    history_model.update(app, |history, ctx| {
+        let root_task_id = history
+            .conversation(&conversation_id)
+            .unwrap()
+            .get_root_task_id()
+            .clone();
+        history
+            .update_conversation_for_new_request_input(
+                RequestInput {
+                    conversation_id,
+                    input_messages: [(root_task_id, vec![input])].into(),
+                    working_directory: None,
+                    model_id: LLMId::from("test-model"),
+                    coding_model_id: LLMId::from("test-model"),
+                    cli_agent_model_id: LLMId::from("test-model"),
+                    computer_use_model_id: LLMId::from("test-model"),
+                    shared_session_response_initiator: None,
+                    request_start_ts: Local::now(),
+                    supported_tools_override: None,
+                },
+                ResponseStreamId::new_for_test(),
+                terminal_view_id,
+                ctx,
+            )
+            .unwrap();
+        history.update_conversation_status(
+            terminal_view_id,
+            conversation_id,
+            ConversationStatus::InProgress,
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn native_prompt_submit_skips_unowned_and_retained_failure_conversations() {
+    for (viewer, remote_child, retained_failure, has_task_id) in [
+        (true, false, false, true),
+        (false, true, false, true),
+        (false, false, true, true),
+        (false, false, false, false),
+    ] {
+        App::test((), move |mut app| async move {
+            let history_model =
+                app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+            let mut conversation = AIConversation::new(viewer, false);
+            if has_task_id {
+                conversation.set_task_id(fixed_task_id());
+            }
+            if remote_child {
+                conversation.mark_as_remote_child();
+            }
+            if retained_failure {
+                conversation.set_task_sync_mode(TaskSyncMode::PreserveTerminalSetupFailure);
+            }
+            let conversation_id = conversation.id();
+            let terminal_view_id = EntityId::new();
+            history_model.update(&mut app, |history, ctx| {
+                history.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            });
+            let (model, counter) = install_model_with_call_counter(&mut app);
+            submit_native_input(
+                &mut app,
+                &history_model,
+                conversation_id,
+                terminal_view_id,
+                native_user_query(),
+            );
+            model
+                .update(&mut app, |model, _| model.wait_for_idle(fixed_task_id()))
+                .with_timeout(Duration::from_secs(5))
+                .await
+                .expect("ignored prompt must leave the update queue idle");
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+        });
+    }
 }
 
 #[test]
