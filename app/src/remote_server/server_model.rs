@@ -510,6 +510,7 @@ impl ServerModel {
                             .as_ref(ctx)
                             .sync_clock_for_server_local(*file_id)
                             .map(|c| c.server_version.as_u64());
+                        let opened_as_new_file = gbm.as_ref(ctx).opened_as_new_file(*file_id);
 
                         for req in pending {
                             let message = match (&content, server_version) {
@@ -518,6 +519,7 @@ impl ServerModel {
                                         result: Some(remote_server::proto::open_buffer_response::Result::Success(OpenBufferSuccess {
                                              content: content.clone(),
                                             server_version: sv,
+                                            opened_as_new_file,
                                         }))
                                     })
                                 }
@@ -2569,6 +2571,7 @@ impl ServerModel {
                         OpenBufferSuccess {
                             content,
                             server_version,
+                            opened_as_new_file: gbm.as_ref(ctx).opened_as_new_file(file_id),
                         },
                     )),
                 },
