@@ -42,7 +42,6 @@ use async_channel::Sender;
 use base64::Engine as _;
 #[cfg(feature = "local_fs")]
 use diesel::SqliteConnection;
-use futures::FutureExt as _;
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -12840,59 +12839,25 @@ impl Input {
             return;
         }
 
-        let dispatch_native_up_front = comp_sources == CompletionSources::NativeOnly;
-        let native_results_fut = if dispatch_native_up_front {
-            // If we're using native shell completions, construct a future that
-            // will be resolved with any completions data provided by the shell.
-            let (results_tx, results_rx) = async_channel::unbounded();
-            ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
-                buffer_text: buffer_text[0..cursor_position].to_owned(),
-                results_tx,
-            });
-            async move { results_rx.recv().await.ok() }.boxed()
-        } else {
-            // If not, we can immediately say that there are no completion
-            // results from the shell.
-            futures::future::ready(None).boxed()
-        };
+        if comp_sources == CompletionSources::NativeOnly {
+            self.dispatch_native_shell_completions(
+                buffer_text,
+                cursor_position,
+                matcher,
+                completion_context,
+                session_env_vars,
+                completions_trigger,
+                editor_snapshot,
+                ctx,
+            );
+            return;
+        }
 
         let completion_session = completion_context.session.clone();
 
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
-                    if comp_sources == CompletionSources::NativeOnly {
-                        let native_suggestions =
-                            native_results_fut
-                                .await
-                                .map(|(results, shell_replacement_span)| {
-                                    native_shell_suggestion_results(
-                                        results,
-                                        shell_replacement_span,
-                                        &buffer_text,
-                                        cursor_position,
-                                    )
-                                });
-                        let suggestions = match native_suggestions {
-                            Some(suggestions) if suggestions.suggestions.is_empty() => {
-                                completer::suggestions(
-                                    before_cursor_text.as_str(),
-                                    cursor_position,
-                                    session_env_vars.as_ref(),
-                                    CompleterOptions {
-                                        match_strategy: matcher,
-                                        fallback_strategy: CompletionsFallbackStrategy::FilePaths,
-                                        suggest_file_path_completions_only: true,
-                                        parse_quotes_as_literals: false,
-                                    },
-                                    &completion_context,
-                                )
-                                .await
-                            }
-                            suggestions => suggestions,
-                        };
-                        return (suggestions, completions_trigger, editor_snapshot);
-                    }
                     let suggestions = completer::suggestions(
                         before_cursor_text.as_str(),
                         cursor_position,
@@ -12905,21 +12870,8 @@ impl Input {
                         },
                         &completion_context,
                     )
-                    .await;
-
-                    let suggestions = match suggestions {
-                        Some(s) if !s.suggestions.is_empty() => Some(s),
-                        _ => native_results_fut
-                            .await
-                            .map(|(results, shell_replacement_span)| {
-                                native_shell_suggestion_results(
-                                    results,
-                                    shell_replacement_span,
-                                    &buffer_text,
-                                    cursor_position,
-                                )
-                            }),
-                    };
+                    .await
+                    .filter(|suggestions| !suggestions.suggestions.is_empty());
 
                     (suggestions, completions_trigger, editor_snapshot)
                 },
