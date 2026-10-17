@@ -1085,20 +1085,16 @@ impl TypedActionView for CodeEditorView {
                 }
             }
             NewCommentOnLine { line: line_info } => {
-                if FeatureFlag::InlineCodeReview.is_enabled() {
-                    self.model.update(ctx, |model: &mut CodeEditorModel, ctx| {
-                        model.open_comment_line(line_info, ctx);
-                    });
-                    ctx.emit(CodeEditorEvent::CommentEditorOpened);
+                self.model.update(ctx, |model: &mut CodeEditorModel, ctx| {
+                    model.open_comment_line(line_info, ctx);
+                });
+                ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
-                    ctx.focus(&self.active_comment_editor);
-                    ctx.notify();
-                }
+                ctx.focus(&self.active_comment_editor);
+                ctx.notify();
             }
             RequestOpenSavedComment { uuid } => {
-                if FeatureFlag::InlineCodeReview.is_enabled() {
-                    ctx.emit(CodeEditorEvent::RequestOpenComment(*uuid))
-                }
+                ctx.emit(CodeEditorEvent::RequestOpenComment(*uuid))
             }
             MouseHovered {
                 offset,
