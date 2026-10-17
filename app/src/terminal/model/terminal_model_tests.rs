@@ -1568,6 +1568,75 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
 }
 
 #[test]
+fn in_band_command_finished_inherits_session_context_before_real_precmd_arrives() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let session_id = 42u64;
+    normal_command_finished_and_precmd(
+        &mut terminal,
+        PromptMetadata {
+            pwd: Some("/remote/home".to_owned()),
+            session_id: Some(session_id),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        terminal.block_list().active_block().session_id(),
+        Some(session_id.into())
+    );
+    assert!(terminal.block_list().active_block().has_received_precmd());
+
+    assert_eq!(
+        terminal.start_in_band_command_execution(),
+        StartCommandOutcome::Accepted
+    );
+    terminal.preexec(PreexecValue {
+        command: "Warp-Run-GeneratorCommand ls".to_owned(),
+        session_id: Some(session_id),
+    });
+    assert!(
+        terminal
+            .block_list()
+            .active_block()
+            .is_in_band_command_block()
+    );
+
+    let next_block_id = BlockId::new();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: next_block_id.clone(),
+        },
+        session_id: Some(session_id),
+    });
+
+    // Session/cwd are available for can_execute_command, but PrecmdState must stay
+    // BeforePrecmd so the lifecycle coordinator can still accept the shell's real Precmd
+    // (which activates LineEditorStatus for Tab / in-band writes).
+    assert_eq!(terminal.active_block_id(), &next_block_id);
+    assert!(!terminal.block_list().active_block().has_received_precmd());
+    assert_eq!(
+        terminal.block_list().active_block().session_id(),
+        Some(session_id.into())
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/remote/home")
+    );
+
+    terminal.prompt_only_precmd(PromptMetadata {
+        pwd: Some("/remote/home".to_owned()),
+        session_id: Some(session_id),
+        is_after_in_band_command: true,
+        ..Default::default()
+    });
+    assert!(terminal.block_list().active_block().has_received_precmd());
+}
+
+#[test]
 fn empty_and_syntax_error_commands_without_preexec_complete_as_execution() {
     for (command, exit_code) in [("", ExitCode::from(0)), ("if then", ExitCode::from(2))] {
         let mut terminal = TerminalModel::mock(None, None);

@@ -326,6 +326,19 @@ fn lifecycle_phase_reconciliation_requires_compatible_live_evidence() {
         reconcile_phase(AwaitingPrecmd, &before_execution),
         AwaitingPrecmd
     );
+    // Applying Precmd-like metadata while still AwaitingPrecmd (without advancing the
+    // coordinator) leaves received_precmd true and forces Unknown — the shell's real
+    // Precmd is then ignored as UnsupportedPromptOnlyPrecmd.
+    assert_eq!(
+        reconcile_phase(
+            AwaitingPrecmd,
+            &LifecycleSnapshot {
+                received_precmd: true,
+                ..before_execution.clone()
+            }
+        ),
+        Unknown
+    );
     assert_eq!(
         reconcile_phase(
             AtPrompt,
