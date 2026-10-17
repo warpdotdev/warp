@@ -521,9 +521,6 @@ pub enum FeatureFlag {
     /// Enables the /fork-from slash command.
     ForkFromCommand,
 
-    /// Enables v2 of the context window usage UI.
-    ContextWindowUsageV2,
-
     /// Enables the expandable per-segment context window usage breakdown in
     /// the conversation usage card.
     ContextWindowUsageBreakdown,
