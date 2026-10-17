@@ -14,7 +14,9 @@ use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
+use super::diff_application::{
+    DiffApplicationError, FileReadResult, MAX_DIFF_READ_BYTES, apply_edits, read_local_file,
+};
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::AuthStateProvider;
@@ -85,7 +87,7 @@ impl ApplyDiffModel {
                     background_executor,
                     auth_state,
                     passive_diff,
-                    |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+                    |path| async move { read_local_file(&path).await },
                 )
                 .await
             }
@@ -99,11 +101,6 @@ impl ApplyDiffModel {
         }
     }
 }
-
-// ── Remote file reading ──────────────────────────────────────────────────────────
-
-/// Per-file byte limit for remote diff application (10 MB).
-const MAX_DIFF_READ_BYTES: u32 = 10_000_000;
 
 async fn read_remote_file(
     handle: &remote_server::manager::HostRequestHandle,
@@ -126,8 +123,8 @@ async fn read_remote_file(
                 // applying the diff to partial content.
                 if fc.line_range_start.is_some() || fc.line_range_end.is_some() {
                     return FileReadResult::ReadError(format!(
-                        "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for remote diff \
-                         application and was truncated. The diff cannot be applied safely."
+                        "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for diff application \
+                         and was truncated. The diff cannot be applied safely."
                     ));
                 }
                 match fc.content {
