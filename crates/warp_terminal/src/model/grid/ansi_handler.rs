@@ -1441,30 +1441,18 @@ impl ansi::Handler for GridHandler {
         mode: KeyboardModes,
         apply: KeyboardModesApplyBehavior,
     ) {
-        if !FeatureFlag::KittyKeyboardProtocol.is_enabled() {
-            return;
-        }
         self.set_keyboard_mode(mode, apply);
     }
 
     fn push_keyboard_enhancement_flags(&mut self, mode: KeyboardModes) {
-        if !FeatureFlag::KittyKeyboardProtocol.is_enabled() {
-            return;
-        }
         self.push_keyboard_mode(mode);
     }
 
     fn pop_keyboard_enhancement_flags(&mut self, count: u16) {
-        if !FeatureFlag::KittyKeyboardProtocol.is_enabled() {
-            return;
-        }
         self.pop_keyboard_modes(count);
     }
 
     fn query_keyboard_enhancement_flags<W: io::Write>(&mut self, writer: &mut W) {
-        if !FeatureFlag::KittyKeyboardProtocol.is_enabled() {
-            return;
-        }
         // Respond with CSI ? flags u
         let mode = self.ansi_handler_state.keyboard_mode;
         let response = format!("\x1b[?{}u", mode.bits());

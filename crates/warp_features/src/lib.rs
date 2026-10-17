@@ -737,9 +737,6 @@ pub enum FeatureFlag {
     /// user.
     TransferControlTool,
 
-    /// Enables Kitty keyboard protocol support (CSI u encoding, progressive enhancement).
-    KittyKeyboardProtocol,
-
     /// Detects the word "figma" in the terminal input in real-time and shows a
     /// contextual button above the input.
     FigmaDetection,
