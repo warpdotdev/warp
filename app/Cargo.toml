@@ -646,7 +646,6 @@ default = [
     "file_based_mcp",
     "inline_repo_menu",
     "kitty_keyboard_protocol",
-    "inline_menu_headers",
     "github_pr_prompt_chip",
     "conversations_as_context",
     "markdown_tables",
@@ -998,7 +997,6 @@ incremental_auto_reload = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
-inline_menu_headers = []
 directory_tab_colors = []
 hoa_code_review = []
 vertical_tabs = []

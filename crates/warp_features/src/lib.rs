@@ -744,8 +744,6 @@ pub enum FeatureFlag {
     /// contextual button above the input.
     FigmaDetection,
 
-    /// Enables header rows on all inline menus (label, tabs, resize handle).
-    InlineMenuHeaders,
     /// Clears the current prompt when opening the inline model selector from the
     /// model chip, then restores that prompt when the selector closes.
     RestorePromptOnInlineModelSelectorSearch,

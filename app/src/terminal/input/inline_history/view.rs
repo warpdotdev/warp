@@ -10,7 +10,6 @@ use warpui::{AppContext, Element, Entity, EntityId, ModelHandle, View, ViewConte
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
-use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
 use crate::settings_view::SettingsSection;
@@ -260,7 +259,7 @@ impl InlineHistoryMenuView {
             mixer
         });
 
-        let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
+        let menu_view = {
             let configure_button = ctx.add_view(|_| {
                 ActionButton::new("Configure", ConfigureButtonTheme)
                     .with_icon(Icon::Settings)
@@ -289,18 +288,6 @@ impl InlineHistoryMenuView {
                     ctx,
                 )
                 .with_header_config(header_config)
-            })
-        } else {
-            ctx.add_typed_action_view(|ctx| {
-                InlineMenuView::new_with_tabs(
-                    mixer.clone(),
-                    positioner.clone(),
-                    input_suggestions_model,
-                    agent_view_controller.clone(),
-                    tab_configs,
-                    None,
-                    ctx,
-                )
             })
         };
         let model = menu_view.as_ref(ctx).model().clone();

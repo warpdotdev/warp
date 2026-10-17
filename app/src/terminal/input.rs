@@ -14388,9 +14388,7 @@ impl Input {
                 let editor_model = self.editor.read(ctx, |view, ctx| view.snapshot_model(ctx));
                 self.get_enum_suggestions_async(command.clone(), editor_model, ctx);
             }
-            InputSuggestionsMode::ModelSelector
-                if FeatureFlag::InlineMenuHeaders.is_enabled() =>
-            {
+            InputSuggestionsMode::ModelSelector => {
                 self.inline_model_selector_view
                     .update(ctx, |view, ctx| view.accept_selected_item(true, ctx));
             }

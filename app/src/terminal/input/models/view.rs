@@ -16,7 +16,6 @@ use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
-use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
 use crate::settings_view::SettingsSection;
@@ -76,19 +75,18 @@ pub enum InlineModelSelectorEvent {
 
 static TAB_CONFIGS: LazyLock<Vec<InlineMenuTabConfig<InlineModelSelectorTab>>> =
     LazyLock::new(|| {
-        let mut configs = vec![InlineMenuTabConfig {
-            id: InlineModelSelectorTab::BaseAgent,
-            label: "Base".to_string(),
-            filters: HashSet::from([QueryFilter::BaseModels]),
-        }];
-        if FeatureFlag::InlineMenuHeaders.is_enabled() {
-            configs.push(InlineMenuTabConfig {
+        vec![
+            InlineMenuTabConfig {
+                id: InlineModelSelectorTab::BaseAgent,
+                label: "Base".to_string(),
+                filters: HashSet::from([QueryFilter::BaseModels]),
+            },
+            InlineMenuTabConfig {
                 id: InlineModelSelectorTab::FullTerminalUse,
                 label: "Full Terminal Use".to_string(),
                 filters: HashSet::from([QueryFilter::FullTerminalUseModels]),
-            });
-        }
-        configs
+            },
+        ]
     });
 
 struct TabSwitchSelection {
@@ -158,7 +156,7 @@ impl InlineModelSelectorView {
             mixer
         });
 
-        let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
+        let menu_view = {
             let manage_defaults_button = ctx.add_view(|_| {
                 ActionButton::new("Manage defaults", ManageDefaultsTheme)
                     .with_icon(Icon::Settings)
@@ -222,18 +220,6 @@ impl InlineModelSelectorView {
                         )
                     })
                 })
-            })
-        } else {
-            ctx.add_typed_action_view(|ctx| {
-                InlineMenuView::new_with_tabs(
-                    mixer.clone(),
-                    positioner.clone(),
-                    &suggestions_mode_model,
-                    agent_view_controller,
-                    tab_configs,
-                    None,
-                    ctx,
-                )
             })
         };
 
