@@ -563,9 +563,6 @@ pub enum FeatureFlag {
     /// Enables cloud mode functionality for ambient agents.
     CloudMode,
 
-    /// Enables starting cloud mode from a local session.
-    CloudModeFromLocalSession,
-
     /// Enables host selection in cloud mode.
     CloudModeHostSelector,
 
