@@ -1,6 +1,7 @@
 pub mod iap;
 
 use std::future::Future;
+use std::io::Write as _;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +11,8 @@ use std::{fmt, future};
 use async_compat::{Compat, CompatExt};
 use async_stream::stream;
 use bytes::Bytes;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use futures::{Stream, StreamExt};
 use http::HeaderValue;
 pub use http::header::AUTHORIZATION;
@@ -29,6 +32,8 @@ use crate::iap::{IapTokenProvider, proxy_auth_header};
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
     pub const CLIENT_RELEASE_VERSION_HEADER_KEY: &str = "X-Warp-Client-Version";
+    /// The original body size before request compression, used for early server size rejection.
+    pub const UNCOMPRESSED_CONTENT_LENGTH: &str = "X-Warp-Uncompressed-Content-Length";
 
     /// Custom Warp header indicating the OS category the request was sent from.
     pub(crate) const WARP_OS_CATEGORY: &str = "X-Warp-OS-Category";
@@ -501,7 +506,32 @@ impl<'a> RequestBuilder<'a> {
     }
 
     pub fn proto<T: prost::Message>(self, proto: &T) -> RequestBuilder<'a> {
+        self.proto_body(proto.encode_to_vec())
+    }
+
+    /// Encodes protobuf with gzip when it reduces the body size. The server must accept gzip bodies.
+    pub fn proto_gzip<T: prost::Message>(self, proto: &T) -> std::io::Result<RequestBuilder<'a>> {
         let bytes = proto.encode_to_vec();
+        if bytes.len() < 1024 {
+            return Ok(self.proto_body(bytes));
+        }
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&bytes)?;
+        let compressed = encoder.finish()?;
+        if compressed.len() >= bytes.len() {
+            return Ok(self.proto_body(bytes));
+        }
+
+        let length = bytes.len();
+        Ok(self
+            .proto_body(bytes)
+            .header(http::header::CONTENT_ENCODING, "gzip")
+            .header(headers::UNCOMPRESSED_CONTENT_LENGTH, length)
+            .body(compressed))
+    }
+
+    fn proto_body(self, bytes: Vec<u8>) -> RequestBuilder<'a> {
         let serialized = String::from_utf8(bytes.clone());
 
         Self {

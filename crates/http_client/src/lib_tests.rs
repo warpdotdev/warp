@@ -1,9 +1,117 @@
 use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
+use prost::Message as _;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use super::*;
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct TestProtobuf {
+    #[prost(bytes, tag = "1")]
+    context: Vec<u8>,
+}
+
+#[test]
+fn gzip_protobuf_preserves_wire_contract() {
+    use std::io::Read as _;
+
+    let expected = TestProtobuf {
+        context: b"source context and conversation history\n".repeat(1024),
+    };
+    let client = Client::new();
+    let request = client
+        .post("http://localhost/ai/multi-agent")
+        .proto_gzip(&expected)
+        .unwrap()
+        .build()
+        .unwrap()
+        .wrapped;
+
+    assert_eq!(
+        request.headers()[http::header::CONTENT_TYPE],
+        "application/x-protobuf"
+    );
+    assert_eq!(request.headers()[http::header::CONTENT_ENCODING], "gzip");
+    assert_eq!(
+        request.headers()[headers::UNCOMPRESSED_CONTENT_LENGTH],
+        expected.encoded_len().to_string()
+    );
+    let clone = request.try_clone().unwrap();
+    let compressed = clone.body().unwrap().as_bytes().unwrap();
+    assert!(compressed.len() < expected.encoded_len());
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(compressed)
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(TestProtobuf::decode(decoded.as_slice()).unwrap(), expected);
+}
+
+#[test]
+fn small_protobuf_stays_uncompressed() {
+    let expected = TestProtobuf {
+        context: b"hello".to_vec(),
+    };
+    let client = Client::new();
+    let request = client
+        .post("http://localhost/ai/multi-agent")
+        .proto_gzip(&expected)
+        .unwrap()
+        .build()
+        .unwrap()
+        .wrapped;
+
+    assert!(
+        !request
+            .headers()
+            .contains_key(http::header::CONTENT_ENCODING)
+    );
+    assert!(
+        !request
+            .headers()
+            .contains_key(headers::UNCOMPRESSED_CONTENT_LENGTH)
+    );
+    assert_eq!(
+        request.body().unwrap().as_bytes().unwrap(),
+        expected.encode_to_vec()
+    );
+}
+
+#[test]
+fn incompressible_protobuf_stays_uncompressed() {
+    let mut context = vec![0; 4096];
+    let mut state = 0x1234_5678_u32;
+    for byte in &mut context {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        *byte = state as u8;
+    }
+    let expected = TestProtobuf { context };
+    let client = Client::new();
+    let request = client
+        .post("http://localhost/ai/multi-agent")
+        .proto_gzip(&expected)
+        .unwrap()
+        .build()
+        .unwrap()
+        .wrapped;
+
+    assert!(
+        !request
+            .headers()
+            .contains_key(http::header::CONTENT_ENCODING)
+    );
+    assert!(
+        !request
+            .headers()
+            .contains_key(headers::UNCOMPRESSED_CONTENT_LENGTH)
+    );
+    assert_eq!(
+        request.body().unwrap().as_bytes().unwrap(),
+        expected.encode_to_vec()
+    );
+}
 
 struct TestIapTokenProvider;
 

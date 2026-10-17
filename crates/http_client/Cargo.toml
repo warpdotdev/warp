@@ -14,6 +14,7 @@ async-compat.workspace = true
 async-stream.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
+flate2.workspace = true
 futures.workspace = true
 http.workspace = true
 log.workspace = true
