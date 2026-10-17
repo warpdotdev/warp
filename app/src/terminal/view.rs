@@ -5291,8 +5291,7 @@ impl TerminalView {
 
     fn should_retry_default_pr_chip_validation(ctx: &AppContext) -> bool {
         let settings = SessionSettings::as_ref(ctx);
-        FeatureFlag::GithubPrPromptChip.is_enabled()
-            && settings.github_pr_chip_default_validation.is_suppressed()
+        settings.github_pr_chip_default_validation.is_suppressed()
             && matches!(*settings.saved_prompt, PromptSelection::Default)
     }
 
@@ -13117,51 +13116,45 @@ impl TerminalView {
                     // If the completed command was a `gh` or `gt` invocation, eagerly refresh PR
                     // info since these don't touch .git/ and won't be caught by the filesystem watcher.
                     #[cfg(feature = "local_fs")]
-                    if (FeatureFlag::GitOperationsInCodeReview.is_enabled()
-                        || FeatureFlag::GithubPrPromptChip.is_enabled())
-                        && match &block_type {
-                            BlockType::User(user_block_completed) => {
-                                let command = user_block_completed.command.get_with(|compute| {
+                    if match &block_type {
+                        BlockType::User(user_block_completed) => {
+                            let command = user_block_completed.command.get_with(|compute| {
+                                let model = self.model.lock();
+                                compute(model.block_list())
+                            });
+                            let top_level = user_block_completed
+                                .serialized_block
+                                .get_with(|compute| {
                                     let model = self.model.lock();
                                     compute(model.block_list())
-                                });
-                                let top_level = user_block_completed
-                                    .serialized_block
-                                    .get_with(|compute| {
-                                        let model = self.model.lock();
-                                        compute(model.block_list())
-                                    })
-                                    .session_id
-                                    .and_then(|session_id| {
-                                        self.sessions.as_ref(ctx).get(session_id)
-                                    })
-                                    .and_then(|session| {
-                                        let escape_char = session.shell_family().escape_char();
-                                        let cmd =
+                                })
+                                .session_id
+                                .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+                                .and_then(|session| {
+                                    let escape_char = session.shell_family().escape_char();
+                                    let cmd = warp_completer::parsers::simple::top_level_command(
+                                        command,
+                                        escape_char,
+                                    )?;
+                                    let cmd = session
+                                        .alias_value(cmd.as_str())
+                                        .and_then(|alias| {
                                             warp_completer::parsers::simple::top_level_command(
-                                                command,
+                                                alias,
                                                 escape_char,
-                                            )?;
-                                        let cmd = session
-                                            .alias_value(cmd.as_str())
-                                            .and_then(|alias| {
-                                                warp_completer::parsers::simple::top_level_command(
-                                                    alias,
-                                                    escape_char,
-                                                )
-                                            })
-                                            .unwrap_or(cmd);
-                                        Some(cmd)
-                                    })
-                                    .or_else(|| {
-                                        command.split_whitespace().next().map(|cmd| cmd.to_owned())
-                                    });
+                                            )
+                                        })
+                                        .unwrap_or(cmd);
+                                    Some(cmd)
+                                })
+                                .or_else(|| {
+                                    command.split_whitespace().next().map(|cmd| cmd.to_owned())
+                                });
 
-                                matches!(top_level.as_deref(), Some("gh" | "gt"))
-                            }
-                            _ => false,
+                            matches!(top_level.as_deref(), Some("gh" | "gt"))
                         }
-                    {
+                        _ => false,
+                    } {
                         self.refresh_pr_info_after_gh_or_gt_command(ctx);
                     }
                 }
