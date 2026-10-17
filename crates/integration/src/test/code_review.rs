@@ -5,10 +5,12 @@ use std::time::Duration;
 use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
-    ScrollRegion, assert_code_review_anchor, assert_code_review_line_text,
+    ScrollRegion, assert_code_review_anchor, assert_code_review_editor_version_conflict,
+    assert_code_review_has_unsaved_changes, assert_code_review_line_text,
     assert_code_review_loaded, assert_code_review_scroll_region, assert_min_hidden_sections,
-    expand_first_hidden_section_and_assert_full_reveal, scroll_code_review_to_deleted_range,
-    scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
+    discard_code_review_editor_changes, expand_first_hidden_section_and_assert_full_reveal,
+    focus_code_review_editor, scroll_code_review_to_deleted_range, scroll_code_review_to_footer,
+    scroll_code_review_to_header, scroll_code_review_to_line,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
@@ -707,4 +709,122 @@ pub fn test_code_review_double_click_fully_expands_hidden_section() -> Builder {
         .with_step(expand_first_hidden_section_and_assert_full_reveal(
             TEST_FILE_NAME,
         ))
+}
+
+// When the buffer behind a code review editor has unsaved edits, an external rewrite of the file
+// (e.g. by a CLI agent) cannot be applied to it. The editor must surface that conflict instead of
+// silently showing stale content that a later save would write back over the rewrite.
+
+/// An unmodified line, so that rewriting it changes the file's diff.
+const REWRITTEN_LINE_NUMBER: usize = 100;
+const REWRITTEN_LINE_TEXT: &str = "rewritten externally";
+
+fn externally_rewritten_contents() -> String {
+    initial_diff_contents().replacen(
+        &format!("{}\n", base_line_text(REWRITTEN_LINE_NUMBER)),
+        &format!("{REWRITTEN_LINE_TEXT}\n"),
+        1,
+    )
+}
+
+fn test_file_path(app: &App, window_id: WindowId) -> PathBuf {
+    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+    let cwd = terminal_view
+        .read(app, |terminal_view, _ctx| terminal_view.pwd())
+        .expect("terminal should expose current working directory");
+    PathBuf::from(cwd).join(TEST_FILE_NAME)
+}
+
+/// Rewrites the test file the way most external tools do: write a temporary file and rename it
+/// over the original.
+fn rewrite_test_file_externally() -> TestStep {
+    TestStep::new("Rewrite the test file externally").with_action(|app, window_id, _| {
+        let path = test_file_path(app, window_id);
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, externally_rewritten_contents()).expect("should write temp file");
+        fs::rename(&temp_path, &path).expect("should replace test file");
+    })
+}
+
+fn assert_test_file_has_external_rewrite() -> AssertionCallback {
+    Box::new(|app, window_id| {
+        let contents =
+            fs::read_to_string(test_file_path(app, window_id)).expect("should read test file");
+        async_assert!(
+            contents == externally_rewritten_contents(),
+            "expected the test file on disk to keep the external rewrite"
+        )
+    })
+}
+
+pub fn test_code_review_surfaces_external_rewrite_over_unsaved_edits() -> Builder {
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_setup(|utils| {
+            let test_dir = utils.test_dir();
+            let repo_dir = test_dir.join("repo");
+            fs::create_dir_all(&repo_dir).expect("should create repo subdirectory");
+            let repo_dir_string = repo_dir
+                .to_str()
+                .expect("repo directory should be valid utf-8");
+
+            write_all_rc_files_for_test(&test_dir, format!("cd {repo_dir_string}"));
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_committed_contents())
+                .expect("should write initial committed contents");
+            run_git(&repo_dir, &["init", "-b", "main"]);
+            run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
+            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["add", TEST_FILE_NAME]);
+            run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_diff_contents())
+                .expect("should write initial diff contents");
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Wait for the terminal to detect the git repository")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_repo_detected()),
+        )
+        .with_step(
+            TestStep::new("Open the code review panel")
+                .with_action(|app, window_id, _| open_code_review_panel(app, window_id)),
+        )
+        .with_step(
+            TestStep::new("Wait for the code review panel to load file diffs")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_loaded()),
+        )
+        .with_step(focus_code_review_editor(TEST_FILE_NAME))
+        .with_step(
+            TestStep::new("Type into the code review editor")
+                .with_typed_characters(&["x"])
+                .add_assertion(assert_code_review_has_unsaved_changes()),
+        )
+        .with_step(rewrite_test_file_externally())
+        .with_step(
+            TestStep::new("Wait for the code review editor to surface the external rewrite")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_editor_version_conflict(
+                    TEST_FILE_NAME,
+                    true,
+                ))
+                .add_assertion(assert_test_file_has_external_rewrite()),
+        )
+        .with_step(discard_code_review_editor_changes(TEST_FILE_NAME))
+        .with_step(
+            TestStep::new("Wait for code review to show the external rewrite")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_editor_version_conflict(
+                    TEST_FILE_NAME,
+                    false,
+                ))
+                .add_assertion(assert_code_review_line_text(
+                    TEST_FILE_NAME,
+                    REWRITTEN_LINE_NUMBER,
+                    REWRITTEN_LINE_TEXT,
+                ))
+                .add_assertion(assert_test_file_has_external_rewrite()),
+        )
 }

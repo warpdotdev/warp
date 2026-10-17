@@ -364,7 +364,8 @@ impl<'a> UnsavedStateSummary<'a> {
     /// flushes all saveable unsaved code editors in scope (silently, so no
     /// "File saved." toast) and returns whether a warning is still warranted for
     /// things auto-save can't handle: running processes, shared sessions, or
-    /// unsaved changes with no backing file (e.g. untitled buffers).
+    /// unsaved changes auto-save must not write (e.g. untitled buffers, or files
+    /// that changed on disk since they were loaded).
     pub fn save_unsaved_code_and_should_warn(&self, ctx: &mut AppContext) -> bool {
         if !*CodeSettings::as_ref(ctx).auto_save {
             return self.should_display_warning(ctx);
@@ -376,7 +377,9 @@ impl<'a> UnsavedStateSummary<'a> {
                 code_view.update(ctx, |view, ctx| view.auto_save_all_unsaved_tabs(ctx));
         }
         for review_view in self.scope.code_review_view_handles(ctx) {
-            review_view.update(ctx, |view, ctx| view.auto_save_all_unsaved_files(ctx));
+            unsaveable_changes_remain |= review_view.update(ctx, |view, ctx| {
+                !view.auto_save_all_unsaved_files(ctx).is_empty()
+            });
         }
 
         *GeneralSettings::as_ref(ctx).show_warning_before_quitting
