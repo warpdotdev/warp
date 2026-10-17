@@ -5,6 +5,23 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, Window
 use super::SettingsView;
 use crate::PaneViewLocator;
 use crate::pane_group::{PaneContent, PaneId, SettingsPane};
+
+pub enum SettingsPaneManagerEvent {
+    ViewAdopted {
+        window_id: WindowId,
+        view: ViewHandle<SettingsView>,
+    },
+    ViewDeparted {
+        window_id: WindowId,
+        view: ViewHandle<SettingsView>,
+        retain_live_source: bool,
+    },
+    PaneCollision {
+        window_id: WindowId,
+        keep: PaneViewLocator,
+        discard: PaneViewLocator,
+    },
+}
 struct SettingsPaneData {
     locator: Option<PaneViewLocator>,
     settings_view: ViewHandle<SettingsView>,
@@ -50,20 +67,56 @@ impl SettingsPaneManager {
         self.panes.get(&window_id).and_then(|data| data.locator)
     }
 
+    pub fn release_transferred_view(
+        &mut self,
+        window_id: WindowId,
+        locator: PaneViewLocator,
+        view: ViewHandle<SettingsView>,
+        retain_live_source: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.deregister_pane(&window_id, locator.pane_group_id, locator.pane_id, ctx);
+        if self.settings_view(window_id) == view {
+            ctx.emit(SettingsPaneManagerEvent::ViewDeparted {
+                window_id,
+                view,
+                retain_live_source,
+            });
+        }
+    }
+
     pub fn register_pane(
         &mut self,
         pane: &SettingsPane,
         pane_group_id: EntityId,
         window_id: WindowId,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(data) = self.panes.get_mut(&window_id) {
-            data.locator = Some(PaneViewLocator {
-                pane_group_id,
-                pane_id: pane.id(),
+        let locator = PaneViewLocator {
+            pane_group_id,
+            pane_id: pane.id(),
+        };
+        if let Some(keep) = self
+            .find_pane(window_id)
+            .filter(|existing| *existing != locator)
+        {
+            ctx.emit(SettingsPaneManagerEvent::PaneCollision {
+                window_id,
+                keep,
+                discard: locator,
             });
-        } else {
-            log::warn!("Settings view should already exist for settings pane");
+            return;
+        }
+        let view = pane.settings_view(ctx);
+        let data = self
+            .panes
+            .get_mut(&window_id)
+            .expect("Window should have corresponding settings view");
+        let changed = data.settings_view != view;
+        data.settings_view = view.clone();
+        data.locator = Some(locator);
+        if changed {
+            ctx.emit(SettingsPaneManagerEvent::ViewAdopted { window_id, view });
         }
     }
 
@@ -87,7 +140,7 @@ impl SettingsPaneManager {
 }
 
 impl Entity for SettingsPaneManager {
-    type Event = ();
+    type Event = SettingsPaneManagerEvent;
 }
 
 /// Mark SettingsPaneManager as global application state.
