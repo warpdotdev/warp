@@ -5,14 +5,10 @@ use warpui_extras::user_preferences::in_memory::InMemoryPreferences;
 use super::*;
 
 #[test]
-fn routing_is_default_off_and_device_local() {
+fn routing_is_default_off_device_local_and_persisted() {
     assert!(!*IapRoutingEnabled::new(None));
     assert!(IapRoutingEnabled::is_private());
     assert_eq!(IapRoutingEnabled::sync_to_cloud(), SyncToCloud::Never);
-}
-
-#[test]
-fn routing_choice_survives_reloading_from_storage() {
     warpui::App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| {

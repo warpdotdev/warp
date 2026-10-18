@@ -80,8 +80,6 @@ pub struct Client {
     /// headers on outbound requests to the Warp staging server. Wired in by
     /// the app layer on IAP-enabled builds (staging).
     iap_token_provider: Option<Arc<dyn IapTokenProvider>>,
-    #[cfg(not(target_family = "wasm"))]
-    iap_transport: Option<reqwest::Client>,
 }
 
 /// Type for 'hook' functions to be executed prior to sending a request. A reference to the
@@ -142,11 +140,6 @@ impl Default for Client {
 
 impl Client {
     pub fn new() -> Self {
-        Self::from_client_builder(Self::default_client_builder())
-            .expect("should not fail to create client")
-    }
-
-    fn default_client_builder() -> reqwest::ClientBuilder {
         #[cfg_attr(target_family = "wasm", expect(unused_mut))]
         let mut builder = reqwest::Client::builder();
 
@@ -162,30 +155,7 @@ impl Client {
                 .http2_keep_alive_while_idle(true);
         }
 
-        builder
-    }
-
-    pub fn new_with_iap_token_provider(provider: Arc<dyn IapTokenProvider>) -> Self {
-        let mut client = Self::new();
-        client.iap_token_provider = Some(provider);
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // Reqwest forwards custom headers on redirects, even to another origin.
-            let policy = reqwest::redirect::Policy::custom(|attempt| {
-                if iap::is_opt_in_destination(attempt.url()) {
-                    reqwest::redirect::Policy::default().redirect(attempt)
-                } else {
-                    attempt.stop()
-                }
-            });
-            client.iap_transport = Some(
-                Self::default_client_builder()
-                    .redirect(policy)
-                    .build()
-                    .expect("should not fail to create IAP client"),
-            );
-        }
-        client
+        Self::from_client_builder(builder).expect("should not fail to create client")
     }
 
     /// Creates a pooled client without automatic Warp headers, IAP tokens, or browser credentials.
@@ -220,8 +190,6 @@ impl Client {
             before_request_sent: None,
             after_response_received: None,
             iap_token_provider: None,
-            #[cfg(not(target_family = "wasm"))]
-            iap_transport: None,
         })
     }
 
@@ -231,6 +199,10 @@ impl Client {
 
     pub fn set_after_response_fn(&mut self, hook_fn: ResponseHookFn) {
         self.after_response_received = Some(hook_fn);
+    }
+
+    pub fn set_iap_token_provider(&mut self, provider: Arc<dyn IapTokenProvider>) {
+        self.iap_token_provider = Some(provider);
     }
 
     fn builder(
@@ -317,18 +289,6 @@ impl Client {
         }
         #[cfg(target_family = "wasm")]
         let _ = request;
-    }
-
-    fn transport_for(&self, request: &reqwest::Request) -> &reqwest::Client {
-        #[cfg(not(target_family = "wasm"))]
-        if request.headers().contains_key(iap::IAP_OPT_IN_HEADER)
-            && let Some(transport) = &self.iap_transport
-        {
-            return transport;
-        }
-        #[cfg(target_family = "wasm")]
-        let _ = request;
-        &self.wrapped
     }
 
     /// Helper method to determine if the request should include warp-specific headers. The only case
@@ -457,17 +417,16 @@ impl Client {
         }
 
         let _guard = prevent_sleep_reason.map(prevent_sleep::prevent_sleep);
-        let transport = self.transport_for(&request);
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
-                let result = transport.execute(request).await?;
+                let result = self.wrapped.execute(request).await?;
             } else {
                 // Explicitly await the future before converting from tokio -> futures. This is because
                 // certain calls to tokio (such as tokio::time::sleep) will panic upon creation if they
                 // are not in a tokio runtime. Wrapping the call in an async block first makes sure that it
                 // is lazily evaluated, ensuring that it is created within a tokio runtime.
-                let result = Compat::new(async { transport.execute(request).await }).await?;
+                let result = Compat::new(async { self.wrapped.execute(request).await }).await?;
             }
         }
 
@@ -582,8 +541,7 @@ impl<'a> RequestBuilder<'a> {
         let (client, request) = self.build_split();
         let request = request.expect("Request type for SSE endpoint must be buildable.");
         let prevent_sleep_reason = request.prevent_sleep_reason;
-        let transport = client.transport_for(&request.wrapped).clone();
-        let wrapped = reqwest::RequestBuilder::from_parts(transport, request.wrapped);
+        let wrapped = reqwest::RequestBuilder::from_parts(client.wrapped.clone(), request.wrapped);
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 let mut stream = wrapped
