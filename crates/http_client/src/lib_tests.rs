@@ -35,7 +35,7 @@ fn routing_opt_in_updates_requests_without_replacing_application_auth() {
     );
     provider.0.store(true, Ordering::Relaxed);
     let mut request = client.post(url).bearer_auth("app-token").build().unwrap();
-    assert_eq!(request.wrapped.headers()[iap::IAP_OPT_IN_HEADER], "1");
+    assert_eq!(request.wrapped.headers()["x-warp-enable-iap"], "1");
     assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
 
     provider.0.store(false, Ordering::Relaxed);

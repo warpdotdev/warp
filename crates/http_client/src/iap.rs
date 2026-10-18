@@ -3,7 +3,7 @@ pub const IAP_GENERATED_RESPONSE_HEADER: &str = "x-goog-iap-generated-response";
 
 /// HTTP header used to attach the IAP bearer token to outbound requests.
 pub const IAP_PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
-pub const IAP_OPT_IN_HEADER: &str = "x-warp-iap-opt-in";
+pub const IAP_OPT_IN_HEADER: &str = "x-warp-enable-iap";
 
 pub fn is_opt_in_destination(url: &reqwest::Url) -> bool {
     if !matches!(url.scheme(), "https" | "wss")
