@@ -2851,7 +2851,6 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   sandboxId: ID!
-  workloadToken: String!
 }
 
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
@@ -2859,14 +2858,14 @@ union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingE
 type PrewarmedSandboxConfiguration {
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
-  generation: String!
+  fingerprint: String!
   gitCredentials: [TaskGitCredential!]!
   managedSecrets: [TaskSecretEntry!]!
-  preparation: PrewarmedSandboxPreparation!
   sandboxId: ID!
+  spec: PrewarmedSandboxSpec!
 }
 
-type PrewarmedSandboxPreparation {
+type PrewarmedSandboxSpec {
   computerUseEnabled: Boolean!
   deferredRepositories: [SourceRepo!]!
   factorySkillDirs: [String!]!

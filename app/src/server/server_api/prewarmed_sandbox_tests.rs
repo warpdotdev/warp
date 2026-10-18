@@ -120,12 +120,12 @@ fn deserializes_a_server_configuration() {
 #[test]
 fn converts_empty_configuration_lists() {
     let mut config = wire_configuration();
-    config.preparation.repositories.clear();
-    config.preparation.deferred_repositories.clear();
-    config.preparation.setup_commands.clear();
-    config.preparation.mcp_servers_json = "{}".into();
-    config.preparation.skills.clear();
-    config.preparation.factory_skill_dirs.clear();
+    config.spec.repositories.clear();
+    config.spec.deferred_repositories.clear();
+    config.spec.setup_commands.clear();
+    config.spec.mcp_servers_json = "{}".into();
+    config.spec.skills.clear();
+    config.spec.factory_skill_dirs.clear();
     config.environment_variables.clear();
     config.git_credentials.clear();
     config.managed_secrets.clear();
@@ -158,7 +158,7 @@ fn unknown_managed_secret_types_fail_conversion() {
 fn invalid_mcp_json_errors_do_not_include_configuration_values() {
     for json in ["invalid-secret-json", "\"secret-value\"", "[]", "null"] {
         let mut config = wire_configuration();
-        config.preparation.mcp_servers_json = json.into();
+        config.spec.mcp_servers_json = json.into();
         let error = PrewarmedSandboxConfiguration::try_from(config).unwrap_err();
         assert_eq!(
             format!("{error:#}"),
@@ -187,8 +187,8 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         let payload: serde_json::Value = serde_json::from_str(payload.as_deref().unwrap()).unwrap();
         assert!(payload["variables"]["requestContext"].is_object());
         assert_eq!(
-            payload["variables"]["input"]["workloadToken"],
-            "test-workload-token"
+            payload["variables"]["input"],
+            serde_json::json!({"sandboxId": "sandbox"})
         );
     }));
     let api = authenticated_client_with_http(http_client);
@@ -300,29 +300,29 @@ fn configuration_debug_redacts_credentials_and_raw_preparation_values() {
 }
 
 #[test]
-fn ready_status_sends_the_generation_as_the_manifest_hash() {
+fn ready_status_sends_the_fingerprint_as_the_manifest_hash() {
     let ready = PrewarmedSandboxStatusInput {
-        generation: "abc123".to_string(),
+        fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Ready.as_wire_value(),
         manifest_hash: Some("abc123".to_string()),
     };
     assert_eq!(
         serde_json::to_value(&ready).unwrap(),
         serde_json::json!({
-            "generation": "abc123",
+            "fingerprint": "abc123",
             "state": "ready",
             "manifest_hash": "abc123",
         })
     );
 
     let failed = PrewarmedSandboxStatusInput {
-        generation: "abc123".to_string(),
+        fingerprint: "abc123".to_string(),
         state: PrewarmedSandboxState::Failed.as_wire_value(),
         manifest_hash: None,
     };
     assert_eq!(
         serde_json::to_value(&failed).unwrap(),
-        serde_json::json!({ "generation": "abc123", "state": "failed" })
+        serde_json::json!({ "fingerprint": "abc123", "state": "failed" })
     );
 }
 
@@ -390,7 +390,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         .match_header("authorization", "Bearer test-access-token")
         .match_body(Matcher::PartialJson(serde_json::json!({
             "variables": {
-                "input": { "sandboxId": "sandbox", "workloadToken": "test-workload-token" }
+                "input": { "sandboxId": "sandbox" }
             }
         })))
         .with_status(200)
@@ -404,7 +404,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
             "test-workload-token",
         )
         .match_body(Matcher::Json(serde_json::json!({
-            "generation": "abc123", "state": "ready", "manifest_hash": "abc123",
+            "fingerprint": "abc123", "state": "ready", "manifest_hash": "abc123",
         })))
         .with_status(204)
         .create();
@@ -415,7 +415,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
             PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER,
             "test-workload-token",
         )
-        .match_body(Matcher::Json(serde_json::json!({"generation": "abc123"})))
+        .match_body(Matcher::Json(serde_json::json!({"fingerprint": "abc123"})))
         .with_status(204)
         .create();
     drop(server);

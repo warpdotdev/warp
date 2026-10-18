@@ -20,6 +20,7 @@ use warp_cli::{Args, Command};
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
+use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, SingletonEntity};
@@ -109,11 +110,11 @@ fn verify_standby_bootstrap() {
     let configuration = server
         .mock("POST", "/graphql/v2?op=PrewarmedSandboxConfig")
         .match_header("authorization", "Bearer wk-standby-test-key")
+        .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
         .match_body(Matcher::PartialJson(json!({
             "variables": {
                 "input": {
-                    "sandboxId": "bootstrap-test",
-                    "workloadToken": "test-workload-token"
+                    "sandboxId": "bootstrap-test"
                 }
             }
         })))
@@ -124,8 +125,8 @@ fn verify_standby_bootstrap() {
                     "prewarmedSandboxConfig": {
                         "__typename": "PrewarmedSandboxConfiguration",
                         "sandboxId": "bootstrap-test",
-                        "generation": "bootstrap-generation",
-                        "preparation": {
+                        "fingerprint": "bootstrap-generation",
+                        "spec": {
                             "harness": "oz",
                             "repositories": [],
                             "deferredRepositories": [],
@@ -170,7 +171,7 @@ fn verify_standby_bootstrap() {
             "test-workload-token",
         )
         .match_body(Matcher::Json(json!({
-            "generation": "bootstrap-generation",
+            "fingerprint": "bootstrap-generation",
             "state": "ready",
             "manifest_hash": "bootstrap-generation"
         })))

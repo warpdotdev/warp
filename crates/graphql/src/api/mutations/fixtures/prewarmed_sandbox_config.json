@@ -3,8 +3,8 @@
     "prewarmedSandboxConfig": {
       "__typename": "PrewarmedSandboxConfiguration",
       "sandboxId": "11111111-2222-3333-4444-555555555555",
-      "generation": "abc123",
-      "preparation": {
+      "fingerprint": "abc123",
+      "spec": {
         "harness": "oz",
         "repositories": [
           {

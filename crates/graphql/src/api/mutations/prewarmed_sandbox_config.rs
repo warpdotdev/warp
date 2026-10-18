@@ -15,7 +15,6 @@ pub struct PrewarmedSandboxConfigVariables {
 #[derive(cynic::InputObject)]
 pub struct PrewarmedSandboxConfigInput {
     pub sandbox_id: cynic::Id,
-    pub workload_token: String,
 }
 
 #[derive(cynic::QueryFragment)]
@@ -43,8 +42,8 @@ pub enum PrewarmedSandboxConfigResult {
 #[derive(cynic::QueryFragment)]
 pub struct PrewarmedSandboxConfiguration {
     pub sandbox_id: cynic::Id,
-    pub generation: String,
-    pub preparation: PrewarmedSandboxPreparation,
+    pub fingerprint: String,
+    pub spec: PrewarmedSandboxSpec,
     pub environment_variables: Vec<PrewarmedSandboxVariable>,
     pub git_credentials: Vec<TaskGitCredential>,
     pub managed_secrets: Vec<TaskSecretEntry>,
@@ -52,7 +51,7 @@ pub struct PrewarmedSandboxConfiguration {
 }
 
 #[derive(cynic::QueryFragment)]
-pub struct PrewarmedSandboxPreparation {
+pub struct PrewarmedSandboxSpec {
     pub harness: String,
     pub repositories: Vec<ExecutionRepository>,
     pub deferred_repositories: Vec<SourceRepo>,

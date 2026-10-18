@@ -8,11 +8,10 @@ use crate::queries::task_secrets::ManagedSecretValue;
 use crate::request_context::{ClientContext, OsContext};
 
 #[test]
-fn serializes_configuration_mutation_and_workload_token() {
+fn serializes_configuration_mutation_without_workload_token_input() {
     let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
         input: PrewarmedSandboxConfigInput {
             sandbox_id: "sandbox".into(),
-            workload_token: "workload-token".into(),
         },
         request_context: RequestContext {
             client_context: ClientContext { version: None },
@@ -42,8 +41,8 @@ fn serializes_configuration_mutation_and_workload_token() {
     assert!(operation.query.contains("... on UserFacingError"));
     for field in [
         "sandboxId",
-        "generation",
-        "preparation",
+        "fingerprint",
+        "spec",
         "harness",
         "repositories",
         "forge",
@@ -80,7 +79,7 @@ fn serializes_configuration_mutation_and_workload_token() {
     let request = serde_json::to_value(operation).unwrap();
     assert_eq!(
         request["variables"]["input"],
-        json!({"sandboxId": "sandbox", "workloadToken": "workload-token"})
+        json!({"sandboxId": "sandbox"})
     );
     assert!(request["variables"]["requestContext"].is_object());
 }
@@ -99,8 +98,8 @@ fn deserializes_configuration_response_with_shared_repository_types() {
         config.sandbox_id.inner(),
         "11111111-2222-3333-4444-555555555555"
     );
-    assert_eq!(config.generation, "abc123");
-    let repository = &config.preparation.repositories[0];
+    assert_eq!(config.fingerprint, "abc123");
+    let repository = &config.spec.repositories[0];
     assert_eq!(repository.forge, CodeForge::GitHub);
     assert_eq!(
         repository.ref_.as_ref().unwrap().type_,
@@ -109,13 +108,8 @@ fn deserializes_configuration_response_with_shared_repository_types() {
     assert_eq!(repository.ref_.as_ref().unwrap().value, "main");
     assert_eq!(repository.clone_from.as_ref().unwrap().repo, "warp-fork");
     assert!(repository.preserve_origin);
-    assert_eq!(
-        config.preparation.deferred_repositories[0].repo,
-        "warp-server"
-    );
-    assert!(
-        serde_json::from_str::<serde_json::Value>(&config.preparation.mcp_servers_json).is_ok()
-    );
+    assert_eq!(config.spec.deferred_repositories[0].repo, "warp-server");
+    assert!(serde_json::from_str::<serde_json::Value>(&config.spec.mcp_servers_json).is_ok());
     assert_eq!(
         config.environment_variables[0].name,
         "WARP_FACTORY_REPO_DIR"
@@ -175,7 +169,6 @@ fn rejects_invalid_workload_token_headers() {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: "sandbox".into(),
-                workload_token: "workload-token".into(),
             },
             request_context: get_request_context(),
         });
