@@ -46,6 +46,12 @@ pub enum ManagedSecretValue {
         #[serde(skip_serializing_if = "Option::is_none")]
         base_url: Option<String>,
     },
+    LlmProviderApiKey {
+        provider_id: String,
+        api_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+    },
     DockerRegistry {
         registry_host: String,
         username: String,
@@ -97,6 +103,18 @@ impl ManagedSecretValue {
     /// Construct an OpenAI API key secret value with an optional base URL.
     pub fn openai_api_key(api_key: impl Into<String>, base_url: Option<String>) -> Self {
         Self::OpenaiApiKey {
+            api_key: api_key.into(),
+            base_url,
+        }
+    }
+
+    pub fn llm_provider_api_key(
+        provider_id: impl Into<String>,
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+    ) -> Self {
+        Self::LlmProviderApiKey {
+            provider_id: provider_id.into(),
             api_key: api_key.into(),
             base_url,
         }
@@ -178,6 +196,16 @@ impl ManagedSecretValue {
                 // base_url goes to a config file, not an env var argument.
                 check(ENV_VAR_OPENAI_API_KEY, api_key)
             }
+            ManagedSecretValue::LlmProviderApiKey {
+                provider_id,
+                api_key,
+                ..
+            } => match provider_id.as_str() {
+                "anthropic" => check(ENV_VAR_ANTHROPIC_API_KEY, api_key),
+                "openai" => check(ENV_VAR_OPENAI_API_KEY, api_key),
+                // Other providers' keys are written to a credentials file, not the environment.
+                _ => Ok(()),
+            },
             ManagedSecretValue::DockerRegistry { .. } => {
                 // Never injected as an environment variable - it authenticates an image
                 // pull, not the agent process - so the MAX_ARG_STRLEN concern this
@@ -203,6 +231,7 @@ impl ManagedSecretValue {
                 ManagedSecretType::AnthropicBedrockApiKey
             }
             ManagedSecretValue::OpenaiApiKey { .. } => ManagedSecretType::OpenaiApiKey,
+            ManagedSecretValue::LlmProviderApiKey { .. } => ManagedSecretType::LlmProviderApiKey,
             ManagedSecretValue::DockerRegistry { .. } => ManagedSecretType::DockerRegistry,
             ManagedSecretValue::AwsEcrCredential { .. } => ManagedSecretType::AwsEcrCredential,
         }
@@ -226,6 +255,9 @@ impl fmt::Debug for ManagedSecretValue {
                 .finish_non_exhaustive(),
             ManagedSecretValue::OpenaiApiKey { .. } => f
                 .debug_struct("ManagedSecret::OpenaiApiKey")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::LlmProviderApiKey { .. } => f
+                .debug_struct("ManagedSecret::LlmProviderApiKey")
                 .finish_non_exhaustive(),
             ManagedSecretValue::DockerRegistry { .. } => f
                 .debug_struct("ManagedSecret::DockerRegistry")
