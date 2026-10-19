@@ -12,10 +12,12 @@ Cursor hooks are user-supplied scripts that Cursor runs at fixed points in its a
 
 Headline coverage. Of the 21 hooks:
 
-- 8 are **Full**: Warp can honor every documented input and output with client-only work.
-- 10 are **Partial**: `sessionStart`, `sessionEnd`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `subagentStop`, `beforeShellExecution`, `beforeReadFile`, `workspaceOpen`. Some field, output, or firing moment cannot be matched with client-only work. Five of these are Partial only because one output needs a proto or server change: `additional_context` for `sessionStart`, `postToolUse`, and `postToolUseFailure` (new `hook_context` fields plus server rendering), and the model-visible deny reason (`agent_message`) for `preToolUse` and `beforeShellExecution` on shell commands, because the shell result proto has no free-text denial slot.
+- 9 are **Full**: Warp can honor every documented input and output with client-only work.
+- 9 are **Partial**: `sessionStart`, `sessionEnd`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `subagentStop`, `beforeShellExecution`, `workspaceOpen`. Some field, output, or firing moment cannot be matched with client-only work. Five of these are Partial only because one output needs a proto or server change: `additional_context` for `sessionStart`, `postToolUse`, and `postToolUseFailure` (new `hook_context` fields plus server rendering), and the model-visible deny reason (`agent_message`) for `preToolUse` and `beforeShellExecution` on shell commands, because the shell result proto has no free-text denial slot.
 - 1 is **Blocked on server work**: `preCompact`. Automatic compaction is triggered inside warp-server and the client cannot see it before it happens.
 - 2 are **Not applicable**: `beforeTabFileRead`, `afterTabFileEdit`. Warp has no AI inline-completion surface in its editor.
+
+Counting only the 18 hooks Cursor lists under "Agent hooks" (excluding the two Tab hooks and `workspaceOpen`): 9 Full, 8 Partial, 1 Blocked on server work. All 18 can fire with client-only work, and every gate among them can block with client-only work.
 
 warp-server work is needed for: `preCompact` (blocked); `additional_context` on the allow path for `sessionStart`, `postToolUse`, and `postToolUseFailure` (new `hook_context` fields on the request and tool-result protos, rendered by the server); a reason field on the shell `PermissionDenied` result (and on the empty-result tools) so a hook denial of a shell command can tell the model why; `subagentStart` and `subagentStop` for Warp's server-side subagents; and prompt-based hooks for every event (a new "evaluate prompt" endpoint). Blocking itself is client work on every gate; only the model-visible reason depends on the wire, and only for shell and the empty-result tools.
 
@@ -437,7 +439,14 @@ Also available but not in Cursor's schema: `is_read_only`, `is_risky`, `uses_pag
 
 **Purpose and timing.** Fires before the agent reads a file; the payload includes the file contents. Cursor positions it as access control for sensitive files. (Report 01 §3.12.)
 
-**Warp moment.** `ReadFilesExecutor::execute` (`execute/read_files.rs`) reads the files and owns the `ReadFilesResult` in `on_complete` before it becomes the action result. This matches Cursor's contract: the read happens, then the hook decides whether the model sees it. Other paths that put file content in front of the model (report 03 §3f): `SearchCodebase` and `get_files` (both use `read_local_file_context`), `ReadSkill`, `Grep` lines, project rules content in `AIAgentContext::ProjectRules`, and passive-suggestion `relevant_files`. Each needs its own hook call for complete coverage.
+**Warp moment.** The hook fires after Warp has read content locally and before that content is placed in a tool result for the model. This matches Cursor's contract: the read happens, then the hook decides whether the model sees it. Warp's scope follows Cursor's "before the agent reads a file" semantics as closely as its tool set allows, which means the agent-invoked tools that read specific files:
+
+- `ReadFiles` (`ReadFilesExecutor::execute`, `execute/read_files.rs`): the `ReadFilesResult` is owned in `on_complete` before it becomes the action result. One hook call per file.
+- `ReadSkill` (`execute/read_skill.rs`): an agent-invoked read of a specific `SKILL.md`. One call per skill file. Cursor's docs do not say whether loading a skill fires `beforeReadFile` in Cursor; the hook's matcher target is the `Read` tool name, and nothing in the hooks or skills pages mentions skills. Warp fires it deliberately, since there is no skill-specific hook.
+- `GetFiles` (`execute/get_files.rs`): the agent asks for relevant files and Warp reads them through `read_local_file_context`. One call per file returned.
+- `SearchCodebase` (`execute/search_codebase.rs`): the search runs first, then one call per surfaced file with the content that would be shown. A denied file is removed from the results before they reach the model.
+
+Out of scope by design: project rules content (`AIAgentContext::ProjectRules`) is not gated; as in Cursor, rule files appear in the `attachments` array with `type: "rule"`. Passive-suggestion `relevant_files` are not part of the agent loop. `Grep` match lines are not gated, which matches Cursor, whose `Grep` tool is not covered by `beforeReadFile` (report 01 §1.4).
 
 A correction to report 03: user-attached files are sent as path references (`AIAgentAttachment::FilePathReference`, `app/src/ai/agent/mod.rs`; built in `add_pending_file_attachments`, `controller.rs`), not as content. The type's doc comment says the server presents the path to the model as an inline reference, so the content reaches the model only through a later `read_files` call, which is hookable. The server side of this was not verified.
 
@@ -460,7 +469,7 @@ A correction to report 03: user-attached files are sent as path references (`AIA
 
 **Surface notes.** Shared across GUI, TUI, and Oz. Remote (SSH) sessions read through `RemoteServerManager`; under the section 4.1 proposal, hooks do not run for SSH or WSL sessions at first, so those reads are not gated.
 
-**Verdict: Partial.** The `read_files` tool path is fully coverable. Matching Cursor's "every file the model sees" semantics requires hook calls on at least four other client paths; that is client work, not server work.
+**Verdict: Full.** Every input and output is client-only. The work is four executor call sites rather than one, and `SearchCodebase` needs the search-then-gate ordering above.
 
 ### 3.13 `afterFileEdit`
 
@@ -837,7 +846,7 @@ Three places where the hypothesis needs qualification:
 | `afterShellExecution` | Agent | Full | None significant |
 | `beforeMCPExecution` | Agent | Full | Transport lookup for `url`/`command` |
 | `afterMCPExecution` | Agent | Full | None significant |
-| `beforeReadFile` | Agent | Partial | Four other content paths need their own hook call |
+| `beforeReadFile` | Agent | Full | Hook calls on four executors (`ReadFiles`, `ReadSkill`, `GetFiles`, `SearchCodebase` after the search runs); client work |
 | `afterFileEdit` | Agent | Full | Edit-string derivation when the user edited the diff |
 | `beforeSubmitPrompt` | Agent | Full | `send_query` sync-to-async split; an Oz run's initial prompt is resolved server-side and cannot be seen without a server change |
 | `preCompact` | Agent | Blocked on server | Server must signal automatic compaction |
@@ -863,7 +872,7 @@ Three places where the hypothesis needs qualification:
 | `afterShellExecution` | Yes (on real exit) | Output | `action_result_for_requested_command` |
 | `beforeMCPExecution` | Yes | Arguments; rewrites in a later phase | `CallMCPToolExecutor::execute` |
 | `afterMCPExecution` | Yes | Result | `CallMCPToolExecutor` `on_complete` |
-| `beforeReadFile` | Yes | Content (redact) | `ReadFilesExecutor` `on_complete` |
+| `beforeReadFile` | Yes | Content (redact) | `ReadFilesExecutor`, `ReadSkillExecutor`, `GetFilesExecutor` `on_complete`; `SearchCodebase` results after the search |
 | `afterFileEdit` | Yes | Pre-write only | `RequestFileEditsExecutor::execute` / `accept_and_save` |
 | `beforeSubmitPrompt` | With work | Query string | `BlocklistAIController::send_query` |
 | `preCompact` | No | No | `/compact` only: `slash_command.rs` |
@@ -899,7 +908,7 @@ Sizes: small is days, medium is one to three weeks, large is more. "Client" mean
 | G15. Transcript export to a file for `transcript_path` | Medium | Client | Envelope completeness; optional |
 | G16. Server-emitted pre-compaction event with usage metrics; client fires the hook on receipt | Small (client) + server | Server | `preCompact` |
 | G17. Server-emitted lifecycle events for server-side subagents (start with type/task/model, stop with status/summary) | Server + small client | Server | `subagentStart`, `subagentStop` to Full |
-| G18. Hook calls on the other file-content paths (`SearchCodebase`, `get_files`, `ReadSkill`, `ProjectRules`, passive `relevant_files`) | Small to medium | Client | `beforeReadFile` to Full |
+| G18. Hook calls on the other agent-invoked file-content executors: `ReadSkill`, `GetFiles`, and `SearchCodebase` (after the search runs, once per surfaced file). Project rules, passive `relevant_files`, and `Grep` match lines are out of scope by design (section 3.12) | Small to medium | Client | `beforeReadFile` beyond `ReadFiles` |
 | G19. Prompt-hook evaluation endpoint and client `PromptHookExecutor` | Medium (server) + small (client) | Server + client | Prompt hooks on every event |
 | G20. Oz run config for hooks (env var or `AgentConfigSnapshotFile` key) and local-child scope rules | Small | Client | Oz and child surfaces |
 | G21. Observability: logs, diagnostics, telemetry event, optional settings page | Small to medium | Client | All |
@@ -924,3 +933,4 @@ Sizes: small is days, medium is one to three weeks, large is more. "Client" mean
 13. Is a per-exchange `transcript_path` export worth building, or should the field stay null?
 14. Should Warp add a transcript-visible "system note" output type for `user_message`, or are toasts and hints enough?
 15. `hook_context` protos: should the server render hook context as a system-style note, as part of the tool result, or as a separate message type? This decides what `additional_context` looks like to the model.
+16. Does Cursor fire `beforeReadFile` when it loads a skill? The docs do not say. Worth checking empirically with an audit hook, so Warp knows whether firing on `ReadSkill` is parity or a superset.
