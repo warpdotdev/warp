@@ -134,6 +134,11 @@ pub(crate) enum TerminalDriverEvent {
     SharedSessionViewerInput,
 }
 
+struct WaitingCommand {
+    exit_tx: oneshot::Sender<Result<ExitCode, AgentDriverError>>,
+    started_block_id: Option<BlockId>,
+}
+
 /// Manages the terminal session lifecycle for the agent driver.
 ///
 /// Responsibilities:
@@ -162,7 +167,7 @@ pub(crate) struct TerminalDriver {
     /// command's block completes, or
     /// `Err(AgentDriverError::SetupCommandExitedShell)` if the shell process
     /// exits while the command is still running.
-    waiting_command: Option<oneshot::Sender<Result<ExitCode, AgentDriverError>>>,
+    waiting_command: Option<WaitingCommand>,
 
     /// State for the pending command we're expecting to start executing.
     /// The `String` is the expected command text, and the sender is used
@@ -618,7 +623,10 @@ impl TerminalDriver {
         redact_secrets(&mut redacted_command);
         self.last_command = Some(redacted_command);
         self.terminal_view.update(ctx, |terminal, ctx| {
-            self.waiting_command = Some(exit_tx);
+            self.waiting_command = Some(WaitingCommand {
+                exit_tx,
+                started_block_id: None,
+            });
             self.pending_command_start = Some((command_string, start_tx));
             terminal.execute_command_or_set_pending(command, ctx);
         });
@@ -939,8 +947,8 @@ impl TerminalDriver {
                 if let Some((_, sender)) = self.pending_command_start.take() {
                     let _ = sender.send(Err(self.shell_exited_error()));
                 }
-                if let Some(sender) = self.waiting_command.take() {
-                    let _ = sender.send(Err(self.shell_exited_error()));
+                if let Some(command) = self.waiting_command.take() {
+                    let _ = command.exit_tx.send(Err(self.shell_exited_error()));
                 }
             }
             crate::terminal::view::Event::SlowBootstrap => {
@@ -982,26 +990,25 @@ impl TerminalDriver {
                     let block_id = self.terminal_view.read(ctx, |terminal, _| {
                         terminal.model.lock().block_list().active_block_id().clone()
                     });
+                    if let Some(command) = self.waiting_command.as_mut() {
+                        command.started_block_id = Some(block_id.clone());
+                    }
                     let _ = sender.send(Ok(block_id));
                 }
             }
             crate::terminal::view::Event::BlockCompleted { block, .. } => {
-                if let Some(sender) = self.waiting_command.take_if(|_| {
-                    let bootstrapping_done = self.terminal_view.read(ctx, |terminal, _| {
-                        terminal
-                            .model
-                            .lock()
-                            .block_list()
-                            .is_bootstrapping_precmd_done()
-                    });
-                    // This was originally checking `bootstrapping_done && block.did_execute`.
-                    // Oddly, we've seen cases where we missed the preexec hook, so
-                    // `block.did_execute` is false even though the command actually did run.
-                    // To hedge against this while we're still figuring out the root cause,
-                    // we instead simply make sure it was not a background block.
-                    bootstrapping_done && !block.is_background
-                }) {
-                    let _ = sender.send(Ok(block.exit_code));
+                // Missing preexec hooks leave did_execute false even for commands that ran.
+                if let Some(command) = self
+                    .waiting_command
+                    .take_if(|command| command.started_block_id.as_ref() == Some(&block.id))
+                {
+                    let _ = command.exit_tx.send(Ok(block.exit_code));
+                } else if let Some(command) = self.waiting_command.as_ref() {
+                    log::info!(
+                        "Ignoring terminal block completion while waiting for command: completed_block_id={:?} started_block_id={:?}",
+                        block.id,
+                        command.started_block_id
+                    );
                 }
             }
             _ => (),
