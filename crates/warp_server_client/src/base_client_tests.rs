@@ -15,7 +15,8 @@ use warp_server_auth::auth_state::AuthState;
 use super::{
     AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_DURATION, AMBIENT_WORKLOAD_TOKEN_HEADER,
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER,
-    GraphqlRoutingConfig, HeaderOverride, TEAM_UID_HEADER,
+    GraphqlRoutingConfig, HeaderOverride, PREWARMED_SANDBOX_ID_HEADER,
+    PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER, TEAM_UID_HEADER,
 };
 use crate::auth::{AuthClient, AuthClientImpl};
 
@@ -25,6 +26,55 @@ impl http_client::iap::IapTokenProvider for StaticIapTokenProvider {
     fn cached_token(&self) -> Option<String> {
         Some("iap-token".to_string())
     }
+}
+
+#[test]
+fn graphql_identity_transitions_between_standby_and_run() {
+    let client = client();
+    client.set_ambient_workload_token_for_test("proof".to_string(), None);
+    client.set_ambient_agent_task_id(Some("previous-run".to_string()));
+    client.set_prewarmed_sandbox_id("sandbox".to_string());
+    let standby = block_on(client.graphql_request_options(None)).unwrap();
+    assert_eq!(
+        standby
+            .headers
+            .get(PREWARMED_SANDBOX_ID_HEADER)
+            .map(String::as_str),
+        Some("sandbox")
+    );
+    assert_eq!(
+        standby
+            .headers
+            .get(PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER)
+            .map(String::as_str),
+        Some("proof")
+    );
+    assert!(!standby.headers.contains_key(AMBIENT_WORKLOAD_TOKEN_HEADER));
+    assert!(!standby.headers.contains_key(CLOUD_AGENT_ID_HEADER));
+    assert!(
+        client
+            .graphql_request_options_with_token(Some("bootstrap".to_string()))
+            .headers
+            .is_empty()
+    );
+
+    client.set_ambient_agent_task_id(Some("claimed-run".to_string()));
+    let run = block_on(client.graphql_request_options(None)).unwrap();
+    assert_eq!(
+        run.headers.get(CLOUD_AGENT_ID_HEADER).map(String::as_str),
+        Some("claimed-run")
+    );
+    assert_eq!(
+        run.headers
+            .get(AMBIENT_WORKLOAD_TOKEN_HEADER)
+            .map(String::as_str),
+        Some("proof")
+    );
+    assert!(!run.headers.contains_key(PREWARMED_SANDBOX_ID_HEADER));
+    assert!(
+        !run.headers
+            .contains_key(PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER)
+    );
 }
 
 fn client() -> BaseClient {
@@ -297,6 +347,14 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
         "malicious".to_string(),
     );
     headers.insert("x-eval-user-id".to_string(), "1234".to_string());
+    headers.insert(
+        PREWARMED_SANDBOX_ID_HEADER.to_ascii_lowercase(),
+        "malicious".to_string(),
+    );
+    headers.insert(
+        PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER.to_ascii_lowercase(),
+        "malicious".to_string(),
+    );
     let client = BaseClient::new(
         Arc::new(http_client::Client::new()),
         Arc::new(http_client::Client::new_external()),
@@ -326,6 +384,16 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
     assert_eq!(
         options.headers.get("x-eval-user-id").map(String::as_str),
         Some("1234")
+    );
+    assert!(
+        !options
+            .headers
+            .contains_key(&PREWARMED_SANDBOX_ID_HEADER.to_ascii_lowercase())
+    );
+    assert!(
+        !options
+            .headers
+            .contains_key(&PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER.to_ascii_lowercase())
     );
 }
 

@@ -24,14 +24,13 @@ use warp_graphql::mutations::prewarmed_sandbox_config::{
 };
 use warp_graphql::queries::execution_config::{ExecutionRepository, SourceRepo};
 use warp_managed_secrets::{ManagedSecretValue, convert_task_secrets};
+pub use warp_server_client::base_client::PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER;
 use warpui::r#async::FutureExt as _;
 
 use super::ServerApi;
 use super::ai::{GitCredential, into_git_credential};
 use crate::ChannelState;
 
-/// Carries the Namespace instance identity in addition to the normal bearer credential.
-pub const PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER: &str = "X-Warp-Prewarmed-Sandbox-Workload-Token";
 /// Bounds each complete request, including credential lookup and response decoding.
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 

@@ -1597,6 +1597,14 @@ pub(crate) fn initialize_app(
     }
     #[cfg(not(target_family = "wasm"))]
     server_api.set_ambient_agent_task_id(ambient_agent_task_id);
+    #[cfg(not(target_family = "wasm"))]
+    if let LaunchMode::CommandLine {
+        command: CliCommand::Agent(AgentCommand::RunCloudStandby(args)),
+        ..
+    } = launch_mode
+    {
+        server_api.set_prewarmed_sandbox_id(args.standby_id.clone());
+    }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]
     // Refresh starts only after the authenticated server client exists; tracing initialization
