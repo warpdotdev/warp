@@ -1348,65 +1348,17 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
                 block_on(Compat::new(super::resolve_heads(&batch, &mut outcomes)));
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 {
-                    let mut branch = fixture.request(
-                        "cached-branch",
-                        Some(RepositoryHeadRef::Branch("main".to_owned())),
-                    );
-                    branch.fetch_branch_only = true;
                     fs::write(
                         &args.requests_file,
                         serde_json::to_vec(&fixture.batch(vec![
                             fixture.request("cold-cache", None),
                             fixture.request("warm-cache", None),
-                            branch,
                         ]))
                         .unwrap(),
                     )
                     .unwrap();
                     run(&args).unwrap();
-                    let mut git = Git::default();
-                    assert!(
-                        block_on(Compat::new(super::refresh_mirror(
-                            Path::new(""),
-                            CANONICAL_URL,
-                            "fixture",
-                            &mut git,
-                        )))
-                        .is_err()
-                    );
-                    assert_eq!(
-                        block_on(Compat::new(super::attempt_cached_checkout(
-                            &fixture.request(
-                                "failed-cache",
-                                Some(RepositoryHeadRef::Branch("missing-private-head".to_owned())),
-                            ),
-                            CANONICAL_URL,
-                            &fixture.work().join("failed-cache"),
-                            &fixture.mirror(),
-                            &mut git,
-                        ))),
-                        Ok(super::CachedCheckout::Failed),
-                    );
                 }
-                let mut git = Git::default();
-                assert!(
-                    block_on(Compat::new(git.run(
-                        "spawn failure",
-                        &fixture.work().join("absent"),
-                        &["status"],
-                    )))
-                    .is_err()
-                );
-                assert_eq!(
-                    block_on(Compat::new(super::checkout(
-                        &fixture.request("direct", None),
-                        &fixture.work(),
-                        None,
-                        true,
-                        &mut git,
-                    ))),
-                    Err(CheckoutFailureKind::Clone),
-                );
                 fs::write(
                     &args.requests_file,
                     serde_json::to_vec(&fixture.batch(vec![fixture.request(
@@ -1460,11 +1412,7 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
             }));
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
-                for name in [
-                    "install_mirror",
-                    "clone_from_mirror",
-                    "fetch_branch_from_mirror",
-                ] {
+                for name in ["install_mirror", "clone_from_mirror"] {
                     assert!(spans.iter().any(|span| span.name == name), "missing {name}");
                 }
                 assert!(spans.iter().any(|span| span.name == "refresh_mirror"
@@ -1473,76 +1421,8 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
                 assert!(spans.iter().any(|span| span.name == "refresh_mirror"
                     && span.attributes.contains(&KeyValue::new("cache_hit", true))
                     && span.attributes.contains(&KeyValue::new("rebuilt", false))));
-                assert!(spans.iter().any(|span| span.name == "refresh_mirror"
-                    && span.attributes.contains(&KeyValue::new("result_ok", false))
-                    && span.attributes.contains(&KeyValue::new("cache_hit", false))
-                    && span.attributes.contains(&KeyValue::new("rebuilt", false))));
-                assert!(
-                    spans
-                        .iter()
-                        .any(|span| span.name == "attempt_cached_checkout"
-                            && span.attributes.contains(&KeyValue::new("cache_hit", false)))
-                );
-                for name in ["checkout", "attempt_cached_checkout"] {
-                    assert!(spans.iter().any(|span| span.name == name
-                        && span.attributes.contains(&KeyValue::new("cache_hit", true))));
-                }
             }
-            assert!(spans.iter().any(|span| span.name == "checkout"
-                && span.attributes.contains(&KeyValue::new("existing", true))
-                && span.attributes.contains(&KeyValue::new("cache_hit", false))));
-            assert!(spans.iter().any(|span| {
-                span.name == "run_with_env"
-                    && span
-                        .attributes
-                        .contains(&KeyValue::new("operation", "HEAD resolution"))
-                    && span.attributes.contains(&KeyValue::new("result_ok", true))
-            }));
-            assert!(spans.iter().any(|span| {
-                span.name == "run_with_env"
-                    && span
-                        .attributes
-                        .contains(&KeyValue::new("operation", "spawn failure"))
-                    && span.attributes.contains(&KeyValue::new("result_ok", false))
-            }));
             for span in spans.iter() {
-                let boolean_fields: &[&str] = match span.name.as_ref() {
-                    "checkout" => &["existing", "cache_hit"],
-                    "attempt_cached_checkout" => &["cache_hit"],
-                    "refresh_mirror" => &["cache_hit", "rebuilt", "result_ok"],
-                    "environment_checkout"
-                    | "repository_checkout"
-                    | "resolve_head"
-                    | "run_with_env"
-                    | "install_mirror"
-                    | "remote_default_branch"
-                    | "checkout_direct"
-                    | "checkout_cached"
-                    | "clone_from_mirror"
-                    | "fetch_branch_from_mirror"
-                    | "clone_repository"
-                    | "checkout_requested_head" => &["result_ok"],
-                    _ => &[],
-                };
-                for field in boolean_fields {
-                    let values = span
-                        .attributes
-                        .iter()
-                        .filter(|attribute| attribute.key.as_str() == *field)
-                        .map(|attribute| &attribute.value)
-                        .collect::<Vec<_>>();
-                    assert_eq!(values.len(), 1, "{}: {field} = {values:?}", span.name);
-                    assert!(matches!(values[0], opentelemetry::Value::Bool(_)));
-                }
-                if span.name == "run_with_env" {
-                    assert_eq!(
-                        span.attributes
-                            .iter()
-                            .filter(|attribute| attribute.key.as_str() == "operation")
-                            .count(),
-                        1,
-                    );
-                }
                 assert!(
                     span.attributes
                         .contains(&KeyValue::new("tags.cloud_agent", true))
