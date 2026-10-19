@@ -203,6 +203,7 @@ impl BaseClient {
             http::header::CONTENT_TYPE.as_str(),
             http::header::CONTENT_LENGTH.as_str(),
             http_client::iap::IAP_PROXY_AUTH_HEADER,
+            http_client::iap::IAP_OPT_IN_HEADER,
             AMBIENT_WORKLOAD_TOKEN_HEADER,
             CLOUD_AGENT_ID_HEADER,
             AGENT_SOURCE_HEADER,
@@ -524,6 +525,25 @@ impl BaseClient {
             .as_ref()?
             .cached_token()
             .map(|token| http_client::iap::proxy_auth_header(&token))
+    }
+
+    pub fn iap_handshake_headers(&self, server_url: &str) -> Vec<(&'static str, String)> {
+        let headers = self.iap_proxy_auth_header().into_iter();
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let routing_header = self.iap_token_provider.as_ref().and_then(|provider| {
+                let url = reqwest::Url::parse(server_url).ok()?;
+                provider
+                    .routing_header(&url)
+                    .map(|(name, value)| (name, value.to_string()))
+            });
+            headers.chain(routing_header).collect()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = server_url;
+            headers.collect()
+        }
     }
 }
 

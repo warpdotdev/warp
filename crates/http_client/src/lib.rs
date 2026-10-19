@@ -277,6 +277,20 @@ impl Client {
         provider.cached_token()
     }
 
+    fn add_iap_routing_header(&self, request: &mut reqwest::Request) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(provider) = &self.iap_token_provider {
+            request.headers_mut().remove(iap::IAP_OPT_IN_HEADER);
+            if let Some((name, value)) = provider.routing_header(request.url()) {
+                request
+                    .headers_mut()
+                    .insert(name, HeaderValue::from_static(value));
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        let _ = request;
+    }
+
     /// Helper method to determine if the request should include warp-specific headers. The only case
     /// where we should include custom headers is if the request is same-origin and is targetted to our server.
     /// For example, app.warp.dev --> app.warp.dev.
@@ -392,10 +406,11 @@ impl Client {
     /// Core request execution logic shared by all platforms.
     async fn execute_inner(&self, request: Request) -> reqwest::Result<Response> {
         let Request {
-            wrapped: request,
+            wrapped: mut request,
             serialized_payload,
             prevent_sleep_reason,
         } = request;
+        self.add_iap_routing_header(&mut request);
 
         if let Some(before_response_send_fn) = &self.before_request_sent {
             before_response_send_fn(&request, &serialized_payload);
@@ -471,10 +486,13 @@ impl<'a> RequestBuilder<'a> {
     }
 
     pub fn build_split(self) -> (&'a Client, reqwest::Result<Request>) {
-        let request = self.wrapped.build().map(|request| Request {
-            wrapped: request,
-            serialized_payload: self.serialized_payload,
-            prevent_sleep_reason: self.prevent_sleep_reason,
+        let request = self.wrapped.build().map(|mut request| {
+            self.client.add_iap_routing_header(&mut request);
+            Request {
+                wrapped: request,
+                serialized_payload: self.serialized_payload,
+                prevent_sleep_reason: self.prevent_sleep_reason,
+            }
         });
         (self.client, request)
     }
@@ -520,10 +538,13 @@ impl<'a> RequestBuilder<'a> {
     /// Sends the request to the endpoint, which is assumed to be a streaming server-sent-events
     /// endpoint, and returns a corresponding `EventSource`.
     pub fn eventsource(self) -> EventSourceStream {
+        let (client, request) = self.build_split();
+        let request = request.expect("Request type for SSE endpoint must be buildable.");
+        let prevent_sleep_reason = request.prevent_sleep_reason;
+        let wrapped = reqwest::RequestBuilder::from_parts(client.wrapped.clone(), request.wrapped);
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
-                let mut stream = self
-                    .wrapped
+                let mut stream = wrapped
                     .eventsource()
                     .expect("Request type for SSE endpoint must be cloneable.");
 
@@ -543,8 +564,7 @@ impl<'a> RequestBuilder<'a> {
                     }
                 };
             } else {
-                let mut stream = self
-                    .wrapped
+                let mut stream = wrapped
                     .eventsource()
                     .expect("Request type for SSE endpoint must be cloneable.");
 
@@ -576,7 +596,7 @@ impl<'a> RequestBuilder<'a> {
         // Wrap the stream in one that holds onto a prevent_sleep guard, if one is required here.
         let stream = prevent_sleep::Stream::wrap(
             stream,
-            self.prevent_sleep_reason.map(prevent_sleep::prevent_sleep),
+            prevent_sleep_reason.map(prevent_sleep::prevent_sleep),
         );
 
         cfg_if::cfg_if! {

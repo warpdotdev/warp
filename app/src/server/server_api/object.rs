@@ -699,7 +699,7 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
-            self.iap_proxy_auth_header().into_iter().collect(),
+            self.iap_handshake_headers(&ChannelState::ws_server_url()),
         )
         .await;
 

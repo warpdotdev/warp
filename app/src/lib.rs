@@ -1568,6 +1568,16 @@ pub(crate) fn initialize_app(
     let iap_state = ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)));
     #[cfg(target_family = "wasm")]
     let iap_state: Option<Arc<IapState>> = None;
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(state) = iap_state.clone() {
+        state.set_routing_opt_in(*settings::IapRoutingSettings::as_ref(ctx).routing_enabled);
+        ctx.subscribe_to_model(
+            &settings::IapRoutingSettings::handle(ctx),
+            move |settings, _, ctx| {
+                state.set_routing_opt_in(*settings.as_ref(ctx).routing_enabled);
+            },
+        );
+    }
 
     let server_api_provider = ctx.add_singleton_model({
         let auth_state = auth_state.clone();

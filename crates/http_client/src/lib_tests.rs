@@ -1,9 +1,65 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use super::*;
+
+struct OptInProvider(AtomicBool);
+
+impl IapTokenProvider for OptInProvider {
+    fn cached_token(&self) -> Option<String> {
+        Some("test-iap-token".into())
+    }
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[test]
+fn routing_opt_in_updates_requests_without_replacing_application_auth() {
+    let provider = Arc::new(OptInProvider(AtomicBool::new(false)));
+    let mut client = Client::new();
+    client.set_iap_token_provider(provider.clone());
+    let url = "https://staging.warp.dev/graphql/v2";
+
+    let request = client.post(url).bearer_auth("app-token").build().unwrap();
+    assert!(
+        !request
+            .wrapped
+            .headers()
+            .contains_key(iap::IAP_OPT_IN_HEADER)
+    );
+    provider.0.store(true, Ordering::Relaxed);
+    let mut request = client.post(url).bearer_auth("app-token").build().unwrap();
+    assert_eq!(request.wrapped.headers()["x-warp-enable-iap"], "1");
+    assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
+
+    provider.0.store(false, Ordering::Relaxed);
+    client.add_iap_routing_header(&mut request.wrapped);
+    assert!(
+        !request
+            .wrapped
+            .headers()
+            .contains_key(iap::IAP_OPT_IN_HEADER)
+    );
+    assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
+    provider.0.store(true, Ordering::Relaxed);
+    let request = client
+        .get("https://app.warp.dev/graphql/v2")
+        .header(iap::IAP_OPT_IN_HEADER, "1")
+        .build()
+        .unwrap();
+    assert!(
+        !request
+            .wrapped
+            .headers()
+            .contains_key(iap::IAP_OPT_IN_HEADER)
+    );
+}
 
 struct TestIapTokenProvider;
 

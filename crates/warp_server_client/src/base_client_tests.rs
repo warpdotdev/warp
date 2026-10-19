@@ -27,6 +27,31 @@ impl http_client::iap::IapTokenProvider for StaticIapTokenProvider {
     }
 }
 
+#[test]
+fn native_handshake_reads_current_routing_preference() {
+    let state = Arc::new(crate::iap::IapState::new(&warp_core::channel::IapConfig {
+        audiences: "test-audience".into(),
+        service_account_email: "test@example.com".into(),
+    }));
+    let mut client = client();
+    client.iap_token_provider = Some(state.clone());
+
+    let url = "wss://staging.warp.dev/graphql/v2";
+    assert!(client.iap_handshake_headers(url).is_empty());
+    state.set_routing_opt_in(true);
+    assert_eq!(
+        client.iap_handshake_headers(url),
+        vec![(http_client::iap::IAP_OPT_IN_HEADER, "1".to_string())]
+    );
+    assert!(
+        client
+            .iap_handshake_headers("wss://rtc.staging.warp.dev/graphql/v2")
+            .is_empty()
+    );
+    state.set_routing_opt_in(false);
+    assert!(client.iap_handshake_headers(url).is_empty());
+}
+
 fn client() -> BaseClient {
     let (event_sender, _) = async_channel::unbounded();
     let mut authenticated_headers = HashMap::new();

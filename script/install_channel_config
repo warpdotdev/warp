@@ -11,7 +11,7 @@
 #   ./script/install_channel_config --force  # force reinstall
 
 REPO="ssh://git@github.com/warpdotdev/warp-channel-config.git"
-REVISION="c387350116ab341f0d36918bf80bc312f6d8d731"
+REVISION="2322e5b3c3f6edf7ba8613942300e637fb5ed2b4"
 BIN_NAME="warp-channel-config"
 
 # Check for repo access before attempting to `cargo install` the binary.
