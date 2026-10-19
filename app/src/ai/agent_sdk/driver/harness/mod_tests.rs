@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,12 +12,13 @@ use warpui::{App, ModelSpawner, SingletonEntity as _};
 
 use super::{
     HARNESS_FAILURE_OUTPUT_TRUNCATION_MARKER, HarnessKind, HarnessPersistence, HarnessRunner,
-    PersistenceOutcome, SavePoint, auth_check_command_for, harness_kind,
+    PersistenceOutcome, SavePoint, auth_check_command_for, harness_env_vars, harness_kind,
     prepare_harness_failure_output, validate_cli_installed,
 };
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
 use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
@@ -100,6 +102,50 @@ fn acp_transport_does_not_affect_the_oz_harness() {
         harness_kind(Harness::Oz, HarnessTransport::Acp),
         Ok(HarnessKind::Oz)
     ));
+}
+
+#[test]
+fn claude_model_env_vars_depend_on_transport() {
+    let config = HarnessModelConfig {
+        model_id: "claude-fable-5-1".to_string(),
+        reasoning_level: None,
+    };
+
+    let pty = harness_env_vars(Harness::Claude, HarnessTransport::Pty, Some(&config)).unwrap();
+    assert_eq!(
+        pty.get(OsStr::new("ANTHROPIC_MODEL")).map(|v| v.to_str()),
+        Some(Some("claude-fable-5-1"))
+    );
+    assert!(!pty.contains_key(OsStr::new("ANTHROPIC_CUSTOM_MODEL_OPTION")));
+
+    let acp = harness_env_vars(Harness::Claude, HarnessTransport::Acp, Some(&config)).unwrap();
+    assert_eq!(
+        acp.get(OsStr::new("ANTHROPIC_MODEL")).map(|v| v.to_str()),
+        Some(Some("claude-fable-5-1"))
+    );
+    assert_eq!(
+        acp.get(OsStr::new("ANTHROPIC_CUSTOM_MODEL_OPTION"))
+            .map(|v| v.to_str()),
+        Some(Some("claude-fable-5-1"))
+    );
+
+    let default_config = HarnessModelConfig {
+        model_id: "default".to_string(),
+        reasoning_level: None,
+    };
+    let acp_default = harness_env_vars(
+        Harness::Claude,
+        HarnessTransport::Acp,
+        Some(&default_config),
+    )
+    .unwrap();
+    assert!(!acp_default.contains_key(OsStr::new("ANTHROPIC_CUSTOM_MODEL_OPTION")));
+
+    assert!(
+        harness_env_vars(Harness::Claude, HarnessTransport::Acp, None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
