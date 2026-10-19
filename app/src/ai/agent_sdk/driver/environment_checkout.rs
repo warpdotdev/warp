@@ -37,6 +37,29 @@ const MIRRORS_DIRECTORY: &str = "git-mirrors";
 const IDENTITY_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 const HEAD_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
+// Some exporters retain the first attribute with a given name, so defer recording until drop.
+struct SpanBool {
+    span: tracing::Span,
+    field: &'static str,
+    value: bool,
+}
+
+impl SpanBool {
+    fn new(field: &'static str) -> Self {
+        Self {
+            span: tracing::Span::current(),
+            field,
+            value: false,
+        }
+    }
+}
+
+impl Drop for SpanBool {
+    fn drop(&mut self) {
+        self.span.record(self.field, self.value);
+    }
+}
+
 /// Runs the environment checkout command to completion.
 pub(crate) fn run(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -182,10 +205,11 @@ async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) 
                     "resolve_head",
                     tags.cloud_agent = true,
                     repo = %repository_label(request),
-                    result_ok = false,
+                    result_ok = tracing::field::Empty,
                     err = tracing::field::Empty,
                 );
                 async move {
+                    let mut result_ok = SpanBool::new("result_ok");
                     let mut git = Git::default();
                     let head = tokio::time::timeout(
                         HEAD_CAPTURE_TIMEOUT,
@@ -206,7 +230,7 @@ async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) 
                     };
                     outcome.resolved_head =
                         head.ok().and_then(|head| parse_resolved_head_sha(&head));
-                    tracing::Span::current().record("result_ok", outcome.resolved_head.is_some());
+                    result_ok.value = outcome.resolved_head.is_some();
                     if outcome.resolved_head.is_none() {
                         tracing::Span::current().record("err", "could not resolve HEAD");
                     }
@@ -528,8 +552,8 @@ impl Git {
     /// Like [`Git::run`], with additional environment variables set for the process.
     #[tracing::instrument(skip_all, fields(
         tags.cloud_agent = true,
-        operation,
-        result_ok = false,
+        operation = operation,
+        result_ok = tracing::field::Empty,
     ))]
     async fn run_with_env(
         &mut self,
@@ -538,6 +562,7 @@ impl Git {
         args: &[&str],
         env: &[(&str, &OsStr)],
     ) -> Result<String, ()> {
+        let mut result_ok = SpanBool::new("result_ok");
         let child = Command::new("git")
             .current_dir(cwd)
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -579,7 +604,7 @@ impl Git {
             return Err(());
         };
         if status.success() && !truncated {
-            tracing::Span::current().record("result_ok", true);
+            result_ok.value = true;
             Ok(stdout)
         } else {
             self.record(&stdout);
@@ -646,8 +671,8 @@ async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool
 /// New checkouts use the mirror when available, falling back to the network if that fails.
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
-    existing = false,
-    cache_hit = false,
+    existing = tracing::field::Empty,
+    cache_hit = tracing::field::Empty,
 ))]
 async fn checkout(
     request: &CheckoutRequest,
@@ -656,8 +681,12 @@ async fn checkout(
     fail_if_target_exists: bool,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut existing_field = SpanBool::new("existing");
+    let mut cache_hit = SpanBool::new("cache_hit");
     let target = working_dir.join(&request.checkout_name);
-    let existing = match fs::symlink_metadata(&target).await {
+    let metadata = fs::symlink_metadata(&target).await;
+    existing_field.value = metadata.is_ok();
+    let existing = match metadata {
         Ok(_) if fail_if_target_exists => {
             git.record("checkout target already exists; choose an unused checkout name");
             return Err(CheckoutFailureKind::Clone);
@@ -673,7 +702,6 @@ async fn checkout(
             return Err(CheckoutFailureKind::Clone);
         }
     };
-    tracing::Span::current().record("existing", existing);
     let url = source_repo(request).https_clone_url();
     if existing {
         return checkout_existing(request, &url, &target, git).await;
@@ -683,7 +711,7 @@ async fn checkout(
         if attempt_cached_checkout(request, &url, &target, &mirror, git).await?
             == CachedCheckout::Built
         {
-            tracing::Span::current().record("cache_hit", true);
+            cache_hit.value = true;
             return Ok(());
         }
         let label = repository_label(request);
@@ -714,7 +742,7 @@ enum CachedCheckout {
 /// Refreshes the mirror and builds the checkout at `target` from it. Only a checkout that this
 /// attempt created is removed when it fails, so a `target` that already exists is never touched.
 /// Fails outright if a failed checkout cannot be removed, since the target is then unusable.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, cache_hit = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, cache_hit = tracing::field::Empty))]
 async fn attempt_cached_checkout(
     request: &CheckoutRequest,
     url: &str,
@@ -722,6 +750,7 @@ async fn attempt_cached_checkout(
     mirror: &Path,
     git: &mut Git,
 ) -> Result<CachedCheckout, CheckoutFailureKind> {
+    let mut cache_hit = SpanBool::new("cache_hit");
     let label = repository_label(request);
     let Ok(default) = refresh_mirror(mirror, url, &label, git).await else {
         return Ok(CachedCheckout::Failed);
@@ -734,7 +763,7 @@ async fn attempt_cached_checkout(
         .await
         .is_ok()
     {
-        tracing::Span::current().record("cache_hit", true);
+        cache_hit.value = true;
         return Ok(CachedCheckout::Built);
     }
     fs::remove_dir_all(target).await.map_err(|error| {
@@ -754,9 +783,9 @@ async fn attempt_cached_checkout(
 /// unrelated settings, is trusted.
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
-    cache_hit = false,
-    rebuilt = false,
-    result_ok = false,
+    cache_hit = tracing::field::Empty,
+    rebuilt = tracing::field::Empty,
+    result_ok = tracing::field::Empty,
 ))]
 async fn refresh_mirror(
     mirror: &Path,
@@ -764,6 +793,9 @@ async fn refresh_mirror(
     label: &str,
     git: &mut Git,
 ) -> Result<String, ()> {
+    let mut cache_hit = SpanBool::new("cache_hit");
+    let mut rebuilt = SpanBool::new("rebuilt");
+    let mut result_ok = SpanBool::new("result_ok");
     let parent = mirror
         .parent()
         .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
@@ -818,7 +850,7 @@ async fn refresh_mirror(
     }
     let mut cloned = false;
     if valid {
-        tracing::Span::current().record("cache_hit", true);
+        cache_hit.value = true;
         log::info!("Repository {label}: found valid cache");
     } else {
         match &existing {
@@ -832,7 +864,7 @@ async fn refresh_mirror(
             }
         }
         install_mirror(mirror, url, git).await?;
-        tracing::Span::current().record("rebuilt", true);
+        rebuilt.value = true;
         cloned = true;
     }
     if !cloned {
@@ -861,7 +893,7 @@ async fn refresh_mirror(
             // filesystem.
             log::info!("Repository {label}: cache refresh failed; rebuilding");
             install_mirror(mirror, url, git).await?;
-            tracing::Span::current().record("rebuilt", true);
+            rebuilt.value = true;
         }
     }
     // Fetching never moves the mirror's `HEAD`, so follow the remote's default branch explicitly.
@@ -872,7 +904,7 @@ async fn refresh_mirror(
         &["symbolic-ref", "HEAD", &format!("refs/heads/{head}")],
     )
     .await?;
-    tracing::Span::current().record("result_ok", true);
+    result_ok.value = true;
     Ok(head)
 }
 
@@ -885,8 +917,9 @@ async fn refresh_mirror(
 /// and prune every ref, not only branches. A clone also records every ref in `packed-refs` in
 /// one step, so unlike a fetch it succeeds for branches that differ only in case on a
 /// case-insensitive filesystem.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), ()> {
+    let mut result_ok = SpanBool::new("result_ok");
     let parent = mirror
         .parent()
         .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
@@ -923,13 +956,14 @@ async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), (
         .await
         .map_err(|error| git.record_error("could not move cache mirror into place", error))
         .inspect(|()| {
-            tracing::Span::current().record("result_ok", true);
+            result_ok.value = true;
         })
 }
 
 /// Returns the validated name of the branch that the `origin` remote's `HEAD` points to.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, ()> {
+    let mut result_ok = SpanBool::new("result_ok");
     let output = git
         .run(
             "default branch lookup",
@@ -950,7 +984,7 @@ async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, (
         &["check-ref-format", "--branch", branch],
     )
     .await?;
-    tracing::Span::current().record("result_ok", true);
+    result_ok.value = true;
     Ok(branch.to_owned())
 }
 
@@ -987,13 +1021,14 @@ async fn checkout_existing(
 }
 
 /// Builds the checkout for `request` directly from the remote, without a mirror.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn checkout_direct(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     // Branch-only and pinned-commit requests start from an empty repository because a clone would
     // also download the default branch's history, which they do not want.
     if request.fetch_branch_only || matches!(request.head, Some(RepositoryHeadRef::CommitSha(_))) {
@@ -1013,7 +1048,7 @@ async fn checkout_direct(
     checkout_requested_head(request, target, git)
         .await
         .inspect(|()| {
-            tracing::Span::current().record("result_ok", true);
+            result_ok.value = true;
         })
 }
 
@@ -1022,7 +1057,7 @@ async fn checkout_direct(
 ///
 /// A branch-only request fetches just that branch from the remote, and every other request is
 /// cloned from the mirror.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn checkout_cached(
     request: &CheckoutRequest,
     url: &str,
@@ -1031,6 +1066,7 @@ async fn checkout_cached(
     default: &str,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     match (&request.head, request.fetch_branch_only) {
         (Some(RepositoryHeadRef::Branch(branch)), true) => {
             fetch_branch_from_mirror(branch, url, target, mirror, default, git).await
@@ -1042,7 +1078,7 @@ async fn checkout_cached(
         (head, false) => clone_from_mirror(head.as_ref(), url, target, mirror, git).await,
     }
     .inspect(|()| {
-        tracing::Span::current().record("result_ok", true);
+        result_ok.value = true;
     })
 }
 
@@ -1058,7 +1094,7 @@ async fn checkout_cached(
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
     head_kind = head_kind(head),
-    result_ok = false,
+    result_ok = tracing::field::Empty,
 ))]
 async fn clone_from_mirror(
     head: Option<&RepositoryHeadRef>,
@@ -1067,6 +1103,7 @@ async fn clone_from_mirror(
     mirror: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     let clone_error = CheckoutFailureKind::Clone;
     let checkout_error = CheckoutFailureKind::Checkout;
     let parent = target.parent().ok_or_else(|| {
@@ -1140,7 +1177,7 @@ async fn clone_from_mirror(
         .map(|_| ())
         .map_err(|_| checkout_error)
         .inspect(|()| {
-            tracing::Span::current().record("result_ok", true);
+            result_ok.value = true;
         })
 }
 
@@ -1150,7 +1187,7 @@ async fn clone_from_mirror(
 /// The mirror's objects are borrowed through `GIT_ALTERNATE_OBJECT_DIRECTORIES`, an environment
 /// variable so that no `objects/info/alternates` file is left behind, and `repack` then copies
 /// them into the checkout.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn fetch_branch_from_mirror(
     branch: &str,
     url: &str,
@@ -1159,6 +1196,7 @@ async fn fetch_branch_from_mirror(
     default: &str,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     let clone_error = CheckoutFailureKind::Clone;
     let checkout_error = CheckoutFailureKind::Checkout;
     git.run(
@@ -1219,7 +1257,7 @@ async fn fetch_branch_from_mirror(
     )
     .await
     .map_err(|_| clone_error)?;
-    tracing::Span::current().record("result_ok", true);
+    result_ok.value = true;
     Ok(())
 }
 
@@ -1230,13 +1268,14 @@ async fn fetch_branch_from_mirror(
 /// The clone is blobless (`--filter=blob:none`) so history is available without downloading every
 /// file version up front. A requested head makes the clone skip its own checkout
 /// (`--no-checkout`), because the default branch it would check out is not wanted.
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = false))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn clone_repository(
     request: &CheckoutRequest,
     url: &str,
     target: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     let mut args = vec!["clone", "--filter=blob:none"];
     if request.head.is_some() {
         args.push("--no-checkout");
@@ -1272,7 +1311,7 @@ async fn clone_repository(
     git.run("clone", parent, &args)
         .await
         .map_err(|_| CheckoutFailureKind::Clone)?;
-    tracing::Span::current().record("result_ok", true);
+    result_ok.value = true;
     Ok(())
 }
 
@@ -1288,16 +1327,17 @@ async fn clone_repository(
     tags.cloud_agent = true,
     head_kind = head_kind(request.head.as_ref()),
     fetch_branch_only = request.fetch_branch_only,
-    result_ok = false,
+    result_ok = tracing::field::Empty,
 ))]
 async fn checkout_requested_head(
     request: &CheckoutRequest,
     target: &Path,
     git: &mut Git,
 ) -> Result<(), CheckoutFailureKind> {
+    let mut result_ok = SpanBool::new("result_ok");
     let checkout_error = CheckoutFailureKind::Checkout;
     let Some(head) = &request.head else {
-        tracing::Span::current().record("result_ok", true);
+        result_ok.value = true;
         return Ok(());
     };
     if request.fetch_branch_only {
@@ -1357,7 +1397,7 @@ async fn checkout_requested_head(
         .await
         .map_err(|_| checkout_error)?;
     }
-    tracing::Span::current().record("result_ok", true);
+    result_ok.value = true;
     Ok(())
 }
 
