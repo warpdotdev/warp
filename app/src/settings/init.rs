@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use settings::{Setting as _, SettingsManager};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_if_error;
@@ -87,7 +88,9 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
     CloudPreferencesSettings::register(ctx);
-    super::IapRoutingSettings::register(ctx);
+    if ChannelState::iap_config().is_some() {
+        super::IapRoutingSettings::register(ctx);
+    }
     WarpDrivePrivacySettings::register(ctx);
     UserAppInstallDetectionSettings::register(ctx);
     AppIconSettings::register(ctx);

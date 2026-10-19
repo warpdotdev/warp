@@ -43,6 +43,7 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
 use crate::server::ids::ServerId;
+#[cfg(not(target_family = "wasm"))]
 use crate::settings::IapRoutingSettings;
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::workspace::WorkspaceAction;
@@ -67,17 +68,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     let mut toggle_binding_pairs = Vec::new();
     maybe_add_settings_sync_toggle_binding(app, context, builder, &mut toggle_binding_pairs);
-    #[cfg(not(target_family = "wasm"))]
-    if IapManager::as_ref(app).is_enabled() {
-        toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "IAP for staging requests",
-            builder(SettingsAction::MainPageToggle(
-                MainPageAction::ToggleIapRouting,
-            )),
-            context,
-            flags::IAP_ROUTING_FLAG,
-        ));
-    }
 
     // Add other bindings here in the future.
 
@@ -294,9 +284,6 @@ impl MainSettingsPageView {
         ctx.subscribe_to_model(&CloudPreferencesSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&IapRoutingSettings::handle(ctx), |_, _, _, ctx| {
-            ctx.notify();
-        });
 
         let auth_manager_handle = AuthManager::handle(ctx);
         ctx.subscribe_to_model(&auth_manager_handle, |_, _, _, ctx| {
@@ -316,6 +303,9 @@ impl MainSettingsPageView {
         if IapManager::as_ref(ctx).is_enabled() {
             widgets.push(Box::new(IapCredentialsWidget::default()));
             widgets.push(Box::new(IapRoutingWidget::default()));
+            ctx.subscribe_to_model(&IapRoutingSettings::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
                 if matches!(e, IapManagerEvent::StateChanged) {
