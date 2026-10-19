@@ -2087,6 +2087,14 @@ impl AgentConversationsModel {
         request_team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
+        if !AppExecutionMode::as_ref(ctx).can_fetch_agent_runs_for_management() {
+            return;
+        }
+        if filters.owners == OwnerFilter::PersonalOnly
+            && AuthStateProvider::as_ref(ctx).get().is_service_account()
+        {
+            return;
+        }
         let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
         let task_filter = self.build_task_list_filter(filters, current_user_uid);
         let current_user_uid = current_user_uid.to_string();

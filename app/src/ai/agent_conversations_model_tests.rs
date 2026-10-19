@@ -7,6 +7,7 @@ use instant::Instant;
 use parking_lot::Mutex;
 use persistence::model::{AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
@@ -39,10 +40,12 @@ use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
 use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::AuthStateProvider;
+use crate::auth::user::{PrincipalType, User};
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
+use crate::server::team_scope::RequestTeamScope;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
@@ -747,6 +750,57 @@ fn create_test_model() -> AgentConversationsModel {
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
     }
+}
+
+#[test]
+fn filter_fetch_skips_sdk_runs() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, false, ctx));
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let model = app.add_singleton_model(|_| create_test_model());
+
+        // No ServerApiProvider is installed, so trying to create a request would panic.
+        model.update(&mut app, |model, ctx| {
+            model.fetch_tasks_for_filters(
+                &AgentManagementFilters {
+                    owners: OwnerFilter::All,
+                    ..Default::default()
+                },
+                "user-a",
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                ctx,
+            );
+        });
+    });
+}
+
+#[test]
+fn filter_fetch_skips_personal_runs_for_service_accounts() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
+        app.add_singleton_model(|_| {
+            let provider = AuthStateProvider::new_for_test();
+            provider.get().set_user(Some(User {
+                local_id: UserUid::new("serviceAccount:test-account"),
+                principal_type: PrincipalType::ServiceAccount,
+                ..User::test()
+            }));
+            provider
+        });
+        let model = app.add_singleton_model(|_| create_test_model());
+
+        // No ServerApiProvider is installed, so trying to create a request would panic.
+        model.update(&mut app, |model, ctx| {
+            model.fetch_tasks_for_filters(
+                &AgentManagementFilters::default(),
+                "serviceAccount:test-account",
+                RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
+                    ServerId::from(1),
+                )),
+                ctx,
+            );
+        });
+    });
 }
 
 #[test]
