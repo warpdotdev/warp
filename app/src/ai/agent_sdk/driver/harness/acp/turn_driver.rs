@@ -16,7 +16,8 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use event_listener::Event;
 use futures::future::FusedFuture;
-use futures::{FutureExt, future, pin_mut, select, select_biased};
+use futures::stream::FuturesOrdered;
+use futures::{FutureExt, StreamExt, future, pin_mut, select, select_biased};
 use parking_lot::Mutex;
 use session_sharing_protocol::common::ParticipantId;
 use warp_multi_agent_api::ClientAction;
@@ -39,6 +40,10 @@ use crate::ai::blocklist::{
 
 /// Follow-up cancellation grace period, and the hard bound for an explicit interrupt.
 pub(super) const STEER_CANCEL_DEADLINE: Duration = Duration::from_secs(15);
+
+/// Maximum follow-up cancellation attempts, including the initial attempt.
+const MAX_FOLLOW_UP_CANCEL_ATTEMPTS: usize = 3;
+const FOLLOW_UP_CANCEL_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
 
 /// How long a shutdown waits for the agent to answer the `session/cancel` sent on exit before
 /// closing the connection. Shorter than [`STEER_CANCEL_DEADLINE`]: the driver's exit ladder
@@ -180,7 +185,7 @@ fn no_deadline() -> Deadline {
 }
 
 pub(super) fn cancel_deadline(after: Duration) -> Deadline {
-    Box::pin(Timer::after(after).map(|_| ()).fuse())
+    Box::pin(FutureExt::map(Timer::after(after), |_| ()).fuse())
 }
 
 /// Receives from `receiver`, or never resolves once it has been closed and dropped.
@@ -239,8 +244,7 @@ impl TurnDriver {
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
-            self.drain_ready_follow_ups();
-            if !self.queued.is_empty() {
+            if !self.pending_follow_ups().is_empty() {
                 let interrupted = matches!(turn_result, Ok(TurnOutcome::Cancelled));
                 turn_result = self.run_follow_ups(mapper, interrupted).await;
                 continue;
@@ -294,9 +298,8 @@ impl TurnDriver {
         mapper: &mut AcpTurnMapper,
         interrupted: bool,
     ) -> Result<TurnOutcome> {
-        self.drain_ready_follow_ups();
         let initiator = self
-            .queued
+            .pending_follow_ups()
             .front()
             .map(|follow_up| follow_up.prompt.participant_id.clone());
         let next = match self.host.begin_turn(initiator).await {
@@ -315,7 +318,7 @@ impl TurnDriver {
             .await
     }
 
-    fn drain_ready_follow_ups(&mut self) {
+    fn pending_follow_ups(&mut self) -> &mut VecDeque<QueuedFollowUp> {
         if let Some(receiver) = &self.follow_ups {
             for _ in 0..receiver.len() {
                 match receiver.try_recv() {
@@ -323,6 +326,17 @@ impl TurnDriver {
                     Err(_) => break,
                 }
             }
+        }
+        &mut self.queued
+    }
+
+    fn next_batch_follow_up(&mut self, prepared: usize) -> Option<QueuedFollowUp> {
+        // Collect before checking the cap so ready overflow waits for the next batch.
+        let pending = self.pending_follow_ups();
+        if prepared < MAX_BATCHED_FOLLOW_UPS {
+            pending.pop_front()
+        } else {
+            None
         }
     }
 
@@ -344,11 +358,9 @@ impl TurnDriver {
             ),
             PromptInput::FollowUps { interrupted } => (Vec::new(), interrupted),
         };
-        for _ in 0..MAX_BATCHED_FOLLOW_UPS {
-            self.drain_ready_follow_ups();
-            let Some(QueuedFollowUp { prompt, row }) = self.queued.pop_front() else {
-                return Ok(content);
-            };
+        let mut prepared = 0;
+        while let Some(QueuedFollowUp { prompt, row }) = self.next_batch_follow_up(prepared) {
+            prepared += 1;
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
             }
@@ -367,7 +379,6 @@ impl TurnDriver {
                     .await,
             );
         }
-        self.drain_ready_follow_ups();
         Ok(content)
     }
 
@@ -404,15 +415,15 @@ impl TurnDriver {
         }
         // The settling flag must be accurate before the status change that ends the turn is
         // emitted, since that is what gates the driver's idle exit.
-        self.drain_ready_follow_ups();
-        self.state.set_settling(!self.queued.is_empty());
+        let has_follow_ups = !self.pending_follow_ups().is_empty();
+        self.state.set_settling(has_follow_ups);
         let stream_id = self.turn.stream_id.clone();
         match &turn_result {
             Ok(TurnOutcome::Cancelled) => {
-                let by = if self.queued.is_empty() {
-                    TurnCancellation::Interrupt
-                } else {
+                let by = if has_follow_ups {
                     TurnCancellation::FollowUp
+                } else {
+                    TurnCancellation::Interrupt
                 };
                 self.host.cancel_turn(stream_id, by).await;
             }
@@ -465,6 +476,18 @@ impl TurnDriver {
         }
     }
 
+    fn follow_up_cancel_retries(&self) -> FuturesOrdered<Deadline> {
+        let mut after = Duration::ZERO;
+        let mut delay = FOLLOW_UP_CANCEL_RETRY_BASE_DELAY;
+        (1..MAX_FOLLOW_UP_CANCEL_ATTEMPTS)
+            .map(|_| {
+                after = after.saturating_add(delay);
+                delay = delay.saturating_mul(2);
+                (self.timer_factory)(after)
+            })
+            .collect()
+    }
+
     /// Sends the prompt and applies updates until its response arrives.
     async fn prompt(
         &mut self,
@@ -486,15 +509,17 @@ impl TurnDriver {
         pin_mut!(prompt_fut);
         let mut cancellation = None;
         let mut deadline = no_deadline();
-        let mut first_retry = no_deadline();
-        let mut second_retry = no_deadline();
+        let mut retries = FuturesOrdered::new();
         loop {
             let wake = select_biased! {
                 response = prompt_fut => Wake::Response(response),
                 interrupt = recv_or_pending(self.cancels.as_ref()).fuse() => Wake::Cancel(interrupt),
                 _ = deadline => Wake::Deadline,
-                _ = first_retry => Wake::Retry,
-                _ = second_retry => Wake::Retry,
+                _ = async {
+                    if retries.next().await.is_none() {
+                        future::pending::<()>().await;
+                    }
+                }.fuse() => Wake::Retry,
                 input = async {
                     select! {
                         follow_up = recv_or_pending(self.follow_ups.as_ref()).fuse() => {
@@ -523,8 +548,7 @@ impl TurnDriver {
                     if cancellation.is_none() {
                         cancellation = Some(TurnCancellation::FollowUp);
                         deadline = (self.timer_factory)(self.cancel_deadline);
-                        first_retry = (self.timer_factory)(Duration::from_secs(1));
-                        second_retry = (self.timer_factory)(Duration::from_secs(3));
+                        retries = self.follow_up_cancel_retries();
                         self.start_cancel().await?;
                     }
                 }
@@ -533,8 +557,7 @@ impl TurnDriver {
                     if cancellation != Some(TurnCancellation::Interrupt) {
                         cancellation = Some(TurnCancellation::Interrupt);
                         deadline = (self.timer_factory)(self.cancel_deadline);
-                        first_retry = no_deadline();
-                        second_retry = no_deadline();
+                        retries = FuturesOrdered::new();
                         self.start_cancel().await?;
                     }
                 }
@@ -546,8 +569,7 @@ impl TurnDriver {
                             "ACP follow-up cancellation grace expired; waiting for the turn to finish"
                         );
                         deadline = no_deadline();
-                        first_retry = no_deadline();
-                        second_retry = no_deadline();
+                        retries = FuturesOrdered::new();
                     }
                     None => unreachable!(),
                 },

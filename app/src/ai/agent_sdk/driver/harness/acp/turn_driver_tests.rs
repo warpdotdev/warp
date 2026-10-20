@@ -869,6 +869,11 @@ fn exhausted_soft_cancels_retain_fifo_rows_and_drain_updates_until_a_natural_fin
             .await;
         timers.take(Duration::from_secs(3)).await.send(()).unwrap();
         fixture.agent.expect_cancel().await;
+        fixture.agent.send_chunk("A after retries").await;
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A after retries".to_owned()))
+        )).await;
+        assert_eq!(timers.requested().len(), MAX_FOLLOW_UP_CANCEL_ATTEMPTS);
         grace.send(()).unwrap();
         timers.wait_fired(STEER_CANCEL_DEADLINE).await;
         fixture.agent.send_chunk("A after grace").await;
@@ -921,7 +926,10 @@ fn exhausted_soft_cancels_retain_fifo_rows_and_drain_updates_until_a_natural_fin
     let ((author, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
     let streams = host.streams();
     assert_eq!(streams.len(), 2, "{:?}", host.events());
-    assert_eq!(host.texts_on(&streams[0]), vec!["A after grace"]);
+    assert_eq!(
+        host.texts_on(&streams[0]),
+        vec!["A after retries", "A after grace"]
+    );
     assert_eq!(host.texts_on(&streams[1]), vec!["B", "C"]);
     assert!(host.events().contains(&HostEvent::BeginTurn {
         stream: streams[1].clone(),
