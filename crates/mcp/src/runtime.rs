@@ -12,7 +12,7 @@ use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
 use rmcp::ServiceExt as _;
-use rmcp::model::{ClientConfig, Implementation};
+use rmcp::model::{ClientConfig, Implementation, ProtocolVersion};
 use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
@@ -590,6 +590,7 @@ async fn send_initialize_request(
 ///
 /// This tells the MCP server who we are and what capabilities we have.
 fn make_client_info() -> ClientConfig {
+    // The 2026 lifecycle removes initialize; keep this client on an initialize-compatible revision.
     ClientConfig::new(
         Default::default(),
         Implementation::new(
@@ -599,6 +600,7 @@ fn make_client_info() -> ClientConfig {
                 .unwrap_or_default(),
         ),
     )
+    .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
 }
 
 /// Whether to query `resources/list` for a server with the given capabilities.

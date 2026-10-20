@@ -1,16 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use axum::Router;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
+use axum::{Json, Router};
+use rmcp::ServiceExt as _;
 use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
+use rmcp::transport::StreamableHttpClientTransport;
+use serde_json::{Value, json};
 
 use super::{
     challenge_parameter_names, determine_transport, has_caller_supplied_credential,
-    is_oauth_challenge, query_resources_for, query_tools_for, should_query_resources,
-    should_query_tools,
+    is_oauth_challenge, make_client_info, query_resources_for, query_tools_for,
+    should_query_resources, should_query_tools,
 };
 
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
@@ -387,6 +392,109 @@ fn caller_supplied_credential_detects_configured_auth_headers() {
         "Authorization",
         "   "
     )])));
+}
+
+async fn serve_initialize_only_server() -> (String, tokio::task::JoinHandle<()>) {
+    async fn handle(headers: HeaderMap, Json(request): Json<Value>) -> axum::response::Response {
+        let result = match request["method"].as_str() {
+            Some("initialize") => {
+                if request["params"]["protocolVersion"] != "2025-11-25" {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "error": {
+                                "code": -32602,
+                                "message": "Unsupported protocol version",
+                                "data": {
+                                    "supported": ["2025-11-25"],
+                                    "requested": request["params"]["protocolVersion"],
+                                },
+                            },
+                        })),
+                    )
+                        .into_response();
+                }
+                json!({
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "initialize-only", "version": "1.0" },
+                })
+            }
+            Some("notifications/initialized") => return StatusCode::ACCEPTED.into_response(),
+            Some("tools/list") => {
+                if headers
+                    .get("mcp-protocol-version")
+                    .and_then(|v| v.to_str().ok())
+                    != Some("2025-11-25")
+                {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                json!({ "tools": [test_tool("query_metrics")] })
+            }
+            _ => return StatusCode::BAD_REQUEST.into_response(),
+        };
+        Json(json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": result,
+        }))
+        .into_response()
+    }
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake MCP server should bind");
+    let url = format!(
+        "http://{}/mcp",
+        listener
+            .local_addr()
+            .expect("fake MCP address should resolve")
+    );
+    let app = Router::new().route("/mcp", post(handle));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("fake MCP server should run");
+    });
+    (url, server)
+}
+
+#[tokio::test]
+async fn http_preflight_accepts_initialize_only_server() {
+    let (url, server) = serve_initialize_only_server().await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        determine_transport("initialize-only".to_string(), &url, &HashMap::new(), None),
+    )
+    .await;
+    server.abort();
+
+    assert!(matches!(result, Ok(Ok(super::Transport::Http(None)))));
+}
+
+#[tokio::test]
+async fn sdk_client_connects_to_initialize_only_server() {
+    let (url, server) = serve_initialize_only_server().await;
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let service = make_client_info()
+            .into_dyn()
+            .serve(StreamableHttpClientTransport::from_uri(url))
+            .await?;
+        let tools = service.list_all_tools().await;
+        service.cancel().await?;
+        Ok::<_, anyhow::Error>(tools?)
+    })
+    .await;
+    server.abort();
+
+    assert_eq!(
+        result
+            .expect("SDK connection should complete")
+            .expect("SDK connection should succeed"),
+        vec![test_tool("query_metrics")],
+    );
 }
 
 /// Serves a single `401` with the requested `WWW-Authenticate` values and
