@@ -57,6 +57,68 @@ fn missing_capabilities_default_to_a_baseline_agent() {
 }
 
 #[test]
+fn steering_is_read_from_the_initialize_meta() {
+    let advertised: InitializeResponse = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "agentCapabilities": {},
+        "_meta": { "steering": { "supported": true } },
+    }))
+    .unwrap();
+    assert!(advertised.supports_steering());
+
+    let declined: InitializeResponse = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "_meta": { "steering": { "supported": false } },
+    }))
+    .unwrap();
+    assert!(!declined.supports_steering());
+
+    let silent: InitializeResponse =
+        serde_json::from_value(json!({ "protocolVersion": 1 })).unwrap();
+    assert!(!silent.supports_steering());
+
+    // Inside `agentCapabilities` is not where the adapters put it.
+    let misplaced: InitializeResponse = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "agentCapabilities": { "_meta": { "steering": { "supported": true } } },
+    }))
+    .unwrap();
+    assert!(!misplaced.supports_steering());
+}
+
+#[test]
+fn steering_outcomes_parse_with_a_fallback_for_unknown_ones() {
+    let parse = |outcome: &str| {
+        serde_json::from_value::<SteeringResponse>(json!({ "outcome": outcome }))
+            .unwrap()
+            .outcome
+    };
+    assert_eq!(parse("injected"), SteeringOutcome::Injected);
+    assert_eq!(parse("startedNewTurn"), SteeringOutcome::StartedNewTurn);
+    assert_eq!(parse("promptRequired"), SteeringOutcome::PromptRequired);
+    assert_eq!(parse("failed"), SteeringOutcome::Failed);
+    assert_eq!(parse("queued"), SteeringOutcome::Unknown);
+
+    let params = serde_json::to_value(SteeringParams {
+        session_id: "sess".to_owned(),
+        prompt: vec![ContentBlock::Text {
+            text: "hi".to_owned(),
+        }],
+        meta: SteeringMeta {
+            steering: SteeringOptions {
+                idle_behavior: SteeringIdleBehavior::PromptRequired,
+            },
+        },
+    })
+    .unwrap();
+    assert_eq!(params["sessionId"], "sess");
+    assert_eq!(
+        params["_meta"]["steering"]["idleBehavior"],
+        "promptRequired"
+    );
+}
+
+#[test]
 fn embedded_resource_round_trips_in_wire_shape() {
     let block: ContentBlock = serde_json::from_value(json!({
         "type": "resource",

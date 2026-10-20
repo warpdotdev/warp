@@ -1,13 +1,16 @@
 //! The prompt turns of an ACP session: sending `session/prompt`, applying what the agent streams
-//! to the native conversation, and cutting a turn short when a follow-up or an interrupt arrives.
+//! to the native conversation, and delivering follow-ups and interrupts that arrive mid-turn.
 //!
-//! ACP cannot add to a turn in flight, so a follow-up that lands mid-turn steers the agent the
-//! way Zed does: `session/cancel`, keep applying what the agent still streams to the turn it
-//! belongs to until that turn's response arrives, then prompt again with a note that the previous
-//! turn was interrupted. Follow-ups that pile up while that one cancel is pending go out together
-//! in the next prompt, in order. An interrupt is the same without the prompt. Unlike Zed, the
-//! wait for the cancelled response is bounded: an agent that never answers is interrupted in its
-//! terminal and the turn is failed.
+//! A follow-up that lands mid-turn is added to the turn in flight when the agent supports the
+//! `_session/steering` extension: the agent takes it at its next step without discarding the
+//! work under way, and the running `session/prompt` keeps owning the output. Steers go out one
+//! at a time, in arrival order. Without the extension, or when a steer does not take, the
+//! follow-up steers the agent the way Zed does: `session/cancel`, keep applying what the agent
+//! still streams to the turn it belongs to until that turn's response arrives, then prompt again
+//! with a note that the previous turn was interrupted. Follow-ups that pile up while that one
+//! cancel is pending go out together in the next prompt, in order. An interrupt is the same
+//! without the prompt. Unlike Zed, the wait for the cancelled response is bounded: an agent that
+//! never answers is interrupted in its terminal and the turn is failed.
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,7 +21,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use event_listener::Event;
 use futures::future::FusedFuture;
-use futures::{FutureExt, future, pin_mut, select};
+use futures::{FutureExt, future, pin_mut, select, select_biased};
 use parking_lot::Mutex;
 use session_sharing_protocol::common::ParticipantId;
 use warp_multi_agent_api::ClientAction;
@@ -27,11 +30,12 @@ use warpui::r#async::Timer;
 
 use super::super::SavePoint;
 use super::attachments::AttachmentResolver;
-use super::connection::{AcpConnection, InboundNotification, RpcError};
+use super::connection::{AcpConnection, InboundNotification, METHOD_NOT_FOUND, RpcError};
 use super::mapping::{AcpTurnMapper, TurnEvent};
 use super::protocol::{
     self, CancelParams, ContentBlock, PromptParams, PromptResponse, SessionUpdate,
-    SessionUpdateParams, StopReason,
+    SessionUpdateParams, SteeringIdleBehavior, SteeringMeta, SteeringOptions, SteeringOutcome,
+    SteeringParams, SteeringResponse, StopReason,
 };
 use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::blocklist::{
@@ -50,6 +54,11 @@ pub(super) const STEER_CANCEL_DEADLINE: Duration = Duration::from_secs(15);
 /// seconds is enough for an agent to abort its model call and persist the turn (Pi writes its
 /// session JSONL when the cancelled response goes out) without doubling the ladder.
 pub(super) const EXIT_CANCEL_DEADLINE: Duration = Duration::from_secs(3);
+
+/// How long a turn whose response has arrived waits for the answer to a `_session/steering`
+/// still outstanding, which decides whether that prompt was taken or must be sent as a turn of
+/// its own. Past it the prompt is sent again.
+pub(super) const STEER_SETTLE_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Prefixed to a follow-up that cut the previous turn short, so the agent knows why its work
 /// stopped where it did.
@@ -154,10 +163,20 @@ pub(super) enum TurnCancellation {
     Interrupt,
 }
 
-/// A follow-up taken while a turn was still running, waiting for that turn to be cancelled.
+/// A follow-up taken while a turn was still running, waiting to be steered into it or for it to
+/// be cancelled.
 pub(super) struct QueuedFollowUp {
     prompt: ExternalHarnessPrompt,
     row: Option<QueuedQueryId>,
+}
+
+/// What became of a steer once the agent answered.
+enum SteerSettled {
+    /// The agent took the prompt into the running turn.
+    Injected,
+    /// The prompt was not taken and is held for a turn of its own. `detached_turn` means the
+    /// agent instead started a turn no `session/prompt` owns, which must be stopped.
+    Held { detached_turn: bool },
 }
 
 enum Wake<T> {
@@ -165,6 +184,7 @@ enum Wake<T> {
     FollowUp(Result<ExternalHarnessPrompt, async_channel::RecvError>),
     Cancel(Result<ExternalHarnessCancel, async_channel::RecvError>),
     Response(T),
+    Steer(Result<SteeringResponse>),
     Deadline,
 }
 
@@ -176,6 +196,12 @@ fn no_deadline() -> Deadline {
 
 fn cancel_deadline(after: Duration) -> Deadline {
     Box::pin(Timer::after(after).map(|_| ()).fuse())
+}
+
+type SteerFuture = Pin<Box<dyn FusedFuture<Output = Result<SteeringResponse>> + Send>>;
+
+fn no_steer() -> SteerFuture {
+    Box::pin(future::pending().fuse())
 }
 
 /// Receives from `receiver`, or never resolves once it has been closed and dropped.
@@ -218,11 +244,21 @@ pub(super) struct TurnDriver {
     pub attachments: Arc<AttachmentResolver>,
     pub boundary_snapshot: Arc<Mutex<Option<Vec<u8>>>>,
     pub save_requests: async_channel::Sender<SavePoint>,
-    /// Follow-ups taken mid-turn, sent together once the turn they interrupted has been
-    /// cancelled.
+    /// Follow-ups taken mid-turn that will go out together in a turn of their own once the
+    /// current one has ended.
     pub queued: VecDeque<QueuedFollowUp>,
     /// How long a `session/cancel` may go unanswered; [`STEER_CANCEL_DEADLINE`] outside tests.
     pub cancel_deadline: Duration,
+    /// How long an ended turn waits for an outstanding steer's answer; [`STEER_SETTLE_DEADLINE`]
+    /// outside tests.
+    pub steer_settle_deadline: Duration,
+    /// Whether the agent accepts `_session/steering`, as it announced at `initialize`. Cleared
+    /// if the agent then rejects the method.
+    pub steering_supported: bool,
+    /// The follow-up whose `_session/steering` is outstanding.
+    pub steering: Option<QueuedFollowUp>,
+    /// Follow-ups to steer, in order, once the outstanding steer has been answered.
+    pub awaiting_steer: VecDeque<QueuedFollowUp>,
 }
 
 impl TurnDriver {
@@ -244,11 +280,15 @@ impl TurnDriver {
         loop {
             if !self.queued.is_empty() {
                 let held: Vec<QueuedFollowUp> = self.queued.drain(..).collect();
+                // Held prompts arrive here after a turn they cut short, or after one that ended
+                // on its own while they waited to be steered; only the former was an
+                // interruption from the agent's point of view.
+                let interrupted = matches!(turn_result, Ok(TurnOutcome::Cancelled));
                 log::info!(
-                    "Running ACP follow-up turn for {} prompt(s) that interrupted the previous one",
+                    "Running ACP follow-up turn for {} held prompt(s) (interrupted={interrupted})",
                     held.len()
                 );
-                turn_result = self.run_follow_ups(mapper, held, true).await;
+                turn_result = self.run_follow_ups(mapper, held, interrupted).await;
                 continue;
             }
             let wake = select! {
@@ -277,7 +317,7 @@ impl TurnDriver {
                 ),
                 // The agent closed its side, typically because the driver closed ours.
                 Wake::Notification(Err(_)) => break,
-                Wake::Response(()) | Wake::Deadline => unreachable!(),
+                Wake::Response(()) | Wake::Steer(_) | Wake::Deadline => unreachable!(),
             }
         }
         self.fail_queued("the harness exited before the follow-up could be sent")
@@ -417,8 +457,9 @@ impl TurnDriver {
     }
 
     /// Sends the prompt and applies every update the agent streams before responding. A
-    /// follow-up or interrupt arriving meanwhile cancels the turn; its response is still awaited
-    /// (bounded by [`STEER_CANCEL_DEADLINE`]) so late updates land in this turn.
+    /// follow-up arriving meanwhile is steered into the turn when the agent supports it;
+    /// otherwise it, like an interrupt, cancels the turn. A cancelled turn's response is still
+    /// awaited (bounded by [`STEER_CANCEL_DEADLINE`]) so late updates land in this turn.
     async fn prompt(
         &mut self,
         mapper: &mut AcpTurnMapper,
@@ -437,14 +478,19 @@ impl TurnDriver {
         pin_mut!(prompt_fut);
         let mut cancel_pending = false;
         let mut deadline = no_deadline();
+        let mut steer_fut = no_steer();
         loop {
-            let wake = select! {
+            // Biased so that wire order wins when several arms are ready: a response that
+            // arrived before a steer's answer must settle the turn before the answer is read,
+            // or a prompt the agent left for us would cancel a turn that has already ended.
+            let wake = select_biased! {
                 notification = self.notifications.recv().fuse() => Wake::Notification(notification),
                 response = prompt_fut => Wake::Response(response),
                 follow_up = recv_or_pending(self.follow_ups.as_ref()).fuse() => {
                     Wake::FollowUp(follow_up)
                 }
                 interrupt = recv_or_pending(self.cancels.as_ref()).fuse() => Wake::Cancel(interrupt),
+                result = steer_fut => Wake::Steer(result),
                 _ = deadline => Wake::Deadline,
             };
             match wake {
@@ -452,19 +498,36 @@ impl TurnDriver {
                     self.handle_notification(mapper, notification).await?;
                 }
                 // The agent closed its stdout; the pending prompt resolves with the error.
-                Wake::Notification(Err(_)) => break,
+                Wake::Notification(Err(_)) => {
+                    self.hold_steers();
+                    break;
+                }
                 Wake::Response(response) => {
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
+                    if self.steering.is_some() {
+                        self.settle_steer_after_turn(mapper, steer_fut).await;
+                    }
                     return self.settle_response(response, cancel_pending);
                 }
                 Wake::FollowUp(Ok(prompt)) => {
-                    self.hold_follow_up(prompt).await;
-                    if !cancel_pending {
-                        self.start_cancel().await?;
-                        cancel_pending = true;
-                        deadline = cancel_deadline(self.cancel_deadline);
+                    if cancel_pending || !self.steering_supported {
+                        self.hold_follow_up(prompt).await;
+                        if !cancel_pending {
+                            self.start_cancel().await?;
+                            cancel_pending = true;
+                            deadline = cancel_deadline(self.cancel_deadline);
+                        }
+                    } else {
+                        let row = self.host.show_queued_prompt(&prompt).await;
+                        let follow_up = QueuedFollowUp { prompt, row };
+                        if self.steering.is_some() {
+                            self.awaiting_steer.push_back(follow_up);
+                        } else {
+                            steer_fut = self.start_steer(&follow_up.prompt);
+                            self.steering = Some(follow_up);
+                        }
                     }
                 }
                 Wake::FollowUp(Err(_)) => self.follow_ups = None,
@@ -476,6 +539,30 @@ impl TurnDriver {
                     }
                 }
                 Wake::Cancel(Err(_)) => self.cancels = None,
+                Wake::Steer(result) => {
+                    steer_fut = no_steer();
+                    let Some(steer) = self.steering.take() else {
+                        continue;
+                    };
+                    match self.settle_steer(mapper, steer, result).await? {
+                        SteerSettled::Injected => {
+                            if let Some(next) = self.awaiting_steer.pop_front() {
+                                steer_fut = self.start_steer(&next.prompt);
+                                self.steering = Some(next);
+                            }
+                        }
+                        SteerSettled::Held { detached_turn } => {
+                            self.hold_steers();
+                            // A detached turn began after any cancel already sent, so it
+                            // needs one of its own.
+                            if detached_turn || !cancel_pending {
+                                self.start_cancel().await?;
+                                cancel_pending = true;
+                                deadline = cancel_deadline(self.cancel_deadline);
+                            }
+                        }
+                    }
+                }
                 Wake::Deadline => return self.cancel_timed_out().await,
             }
         }
@@ -488,6 +575,157 @@ impl TurnDriver {
     async fn hold_follow_up(&mut self, prompt: ExternalHarnessPrompt) {
         let row = self.host.show_queued_prompt(&prompt).await;
         self.queued.push_back(QueuedFollowUp { prompt, row });
+    }
+
+    /// Moves every follow-up still waiting to be steered to the held prompts, which go out in a
+    /// turn of their own.
+    fn hold_steers(&mut self) {
+        self.queued.extend(self.steering.take());
+        self.queued.extend(self.awaiting_steer.drain(..));
+    }
+
+    /// Asks the agent to add `prompt` to the turn in flight. The request runs to completion on
+    /// its own so the turn's updates keep flowing meanwhile.
+    fn start_steer(&self, prompt: &ExternalHarnessPrompt) -> SteerFuture {
+        log::info!("Steering the current ACP turn with a follow-up");
+        let connection = self.connection.clone();
+        let attachments = self.attachments.clone();
+        let session_id = self.session_id.clone();
+        let text = prompt.text.clone();
+        let prompt_attachments = prompt.attachments.clone();
+        Box::pin(
+            async move {
+                let prompt = attachments.prompt_content(text, prompt_attachments).await;
+                connection
+                    .request::<_, SteeringResponse>(
+                        protocol::METHOD_SESSION_STEERING,
+                        SteeringParams {
+                            session_id,
+                            prompt,
+                            meta: SteeringMeta {
+                                steering: SteeringOptions {
+                                    idle_behavior: SteeringIdleBehavior::PromptRequired,
+                                },
+                            },
+                        },
+                    )
+                    .await
+            }
+            .fuse(),
+        )
+    }
+
+    /// Applies the agent's answer to a steer. A prompt the agent took is echoed into the turn;
+    /// one it did not take is held for a turn of its own.
+    async fn settle_steer(
+        &mut self,
+        mapper: &mut AcpTurnMapper,
+        steer: QueuedFollowUp,
+        result: Result<SteeringResponse>,
+    ) -> Result<SteerSettled> {
+        let outcome = match result {
+            Ok(response) => response.outcome,
+            Err(error) => {
+                if error
+                    .downcast_ref::<RpcError>()
+                    .is_some_and(|error| error.code == METHOD_NOT_FOUND)
+                {
+                    log::warn!(
+                        "The ACP agent advertised steering but rejects {}; follow-ups will \
+                         cancel the turn instead",
+                        protocol::METHOD_SESSION_STEERING
+                    );
+                    self.steering_supported = false;
+                } else {
+                    log::warn!("ACP steer failed; the follow-up will cancel the turn: {error:#}");
+                }
+                self.queued.push_back(steer);
+                return Ok(SteerSettled::Held {
+                    detached_turn: false,
+                });
+            }
+        };
+        match outcome {
+            SteeringOutcome::Injected => {
+                log::info!("ACP steer injected into the running turn");
+                if let Some(row) = steer.row {
+                    self.host.hide_queued_prompt(row).await;
+                }
+                let echo = mapper
+                    .steered_user_query_action(&steer.prompt.text, steer.prompt.base.as_ref());
+                self.apply_events(mapper, vec![TurnEvent::Actions(vec![echo])])
+                    .await?;
+                Ok(SteerSettled::Injected)
+            }
+            SteeringOutcome::StartedNewTurn => {
+                log::warn!(
+                    "ACP steer found no running turn and the agent started one of its own; \
+                     stopping it so the prompt can be sent as a turn"
+                );
+                self.queued.push_back(steer);
+                Ok(SteerSettled::Held {
+                    detached_turn: true,
+                })
+            }
+            SteeringOutcome::PromptRequired => {
+                log::info!("ACP steer found no running turn; the prompt will be sent as a turn");
+                self.queued.push_back(steer);
+                Ok(SteerSettled::Held {
+                    detached_turn: false,
+                })
+            }
+            SteeringOutcome::Failed | SteeringOutcome::Unknown => {
+                log::warn!(
+                    "ACP steer was not taken ({outcome:?}); the follow-up will cancel the turn"
+                );
+                self.queued.push_back(steer);
+                Ok(SteerSettled::Held {
+                    detached_turn: false,
+                })
+            }
+        }
+    }
+
+    /// The turn's response arrived while a steer was outstanding. Its answer, awaited for at
+    /// most the settle deadline, decides whether that prompt still has to be sent; an
+    /// unanswered steer is sent again rather than risk losing it. Follow-ups waiting behind it
+    /// have no turn left to join and are held with it.
+    async fn settle_steer_after_turn(
+        &mut self,
+        mapper: &mut AcpTurnMapper,
+        steer_fut: SteerFuture,
+    ) {
+        let settle = Timer::after(self.steer_settle_deadline).fuse();
+        pin_mut!(settle, steer_fut);
+        let result = select! {
+            result = steer_fut => Some(result),
+            _ = settle => None,
+        };
+        let Some(steer) = self.steering.take() else {
+            return;
+        };
+        match result {
+            Some(result) => match self.settle_steer(mapper, steer, result).await {
+                Ok(SteerSettled::Held {
+                    detached_turn: true,
+                }) => {
+                    if let Err(error) = self.start_cancel().await {
+                        log::warn!("Failed to cancel the agent's detached ACP turn: {error:#}");
+                    }
+                }
+                Ok(SteerSettled::Injected | SteerSettled::Held { .. }) => {}
+                Err(error) => log::warn!("Failed to settle an ACP steer: {error:#}"),
+            },
+            None => {
+                log::warn!(
+                    "The ACP agent did not answer a steer within {:?} of the turn ending; \
+                     sending the prompt as a turn",
+                    self.steer_settle_deadline
+                );
+                self.queued.push_back(steer);
+            }
+        }
+        self.hold_steers();
     }
 
     /// Asks the agent to end the current turn. Permission requests it is waiting on are answered
@@ -553,6 +791,7 @@ impl TurnDriver {
     /// Drops every held follow-up; `reason` is why they will not be sent.
     async fn fail_queued(&mut self, reason: &str) {
         self.state.set_settling(false);
+        self.hold_steers();
         if !self.queued.is_empty() {
             log::warn!(
                 "Dropping {} held ACP follow-up(s): {reason}",
