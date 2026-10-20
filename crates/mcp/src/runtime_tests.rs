@@ -1,16 +1,20 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use axum::Router;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
-use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
+use axum::{Json, Router};
+use cloud_object_models::{ServerSentEvents, StaticHeader, TransportType};
+use rmcp::model::{DiscoverResult, ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
+use serde_json::{Value, json};
 
 use super::{
     challenge_parameter_names, determine_transport, has_caller_supplied_credential,
     is_oauth_challenge, query_resources_for, query_tools_for, should_query_resources,
-    should_query_tools,
+    should_query_tools, spawn_server,
 };
 
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
@@ -387,6 +391,425 @@ fn caller_supplied_credential_detects_configured_auth_headers() {
         "Authorization",
         "   "
     )])));
+}
+
+async fn serve_http_router(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake MCP server should bind");
+    let url = format!(
+        "http://{}/mcp",
+        listener
+            .local_addr()
+            .expect("fake MCP address should resolve")
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("fake MCP server should run");
+    });
+    (url, server)
+}
+
+#[derive(Clone, Copy)]
+enum FixtureProtocol {
+    Discover,
+    InitializeCounteroffer,
+    InitializeVersionError,
+}
+
+fn rpc_error(request: &Value, code: ErrorCode, data: Option<Value>) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "error": { "code": code, "message": "Request rejected", "data": data },
+    })
+}
+
+async fn start_http_server(
+    url: String,
+    headers: Vec<StaticHeader>,
+) -> Result<super::TemplatableMCPServerInfo, rmcp::RmcpError> {
+    let mut logs = simple_logger::manager::LogManager::new();
+    logs.register_namespace("mcp-tests", false);
+    let logger = logs
+        .register(
+            "mcp-tests",
+            std::env::temp_dir().join(format!("mcp-{}.log", uuid::Uuid::new_v4())),
+            Arc::new(warpui::r#async::executor::Background::default()),
+        )
+        .expect("test logger");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        spawn_server(
+            "test-server".to_string(),
+            None,
+            uuid::Uuid::new_v4(),
+            None,
+            TransportType::ServerSentEvents(ServerSentEvents { url, headers }),
+            logger,
+            None,
+        ),
+    )
+    .await
+    .expect("Warp startup should complete")
+}
+
+async fn assert_http_startup(
+    protocol: FixtureProtocol,
+    version: &'static str,
+    sse_responses: bool,
+    static_credential: bool,
+) -> Vec<Value> {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = requests.clone();
+    let app = Router::new().route("/mcp", post(move |headers: HeaderMap, Json(request): Json<Value>| {
+        captured.lock().expect("request capture").push(request.clone());
+        async move {
+            if static_credential && headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some("test-key") {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            let method = request["method"].as_str().expect("request method");
+            let result = match method {
+                "server/discover" => {
+                    let requested = &request["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"];
+                    if matches!(protocol, FixtureProtocol::InitializeCounteroffer) {
+                        rpc_error(&request, ErrorCode::METHOD_NOT_FOUND, None)
+                    } else if requested != version {
+                        rpc_error(&request, ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                            Some(json!({ "requested": requested, "supported": [version] })))
+                    } else if matches!(protocol, FixtureProtocol::Discover) {
+                        let result = DiscoverResult::new(
+                            vec![serde_json::from_value(json!(version)).expect("fixture version")],
+                            caps(true, false),
+                        );
+                        json!({ "jsonrpc": "2.0", "id": request["id"], "result": result })
+                    } else {
+                        rpc_error(&request, ErrorCode::METHOD_NOT_FOUND, None)
+                    }
+                }
+                "initialize" => {
+                    if matches!(protocol, FixtureProtocol::Discover) {
+                        return StatusCode::BAD_REQUEST.into_response();
+                    }
+                    if matches!(protocol, FixtureProtocol::InitializeVersionError)
+                        && request["params"]["protocolVersion"] != version {
+                        rpc_error(&request, ErrorCode::INVALID_PARAMS, Some(json!({ "supported": [version] })))
+                    } else {
+                        json!({
+                            "jsonrpc": "2.0", "id": request["id"],
+                            "result": {
+                                "protocolVersion": version, "capabilities": { "tools": {} },
+                                "serverInfo": { "name": "legacy", "version": "1.0" },
+                            },
+                        })
+                    }
+                }
+                "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+                "tools/list" => {
+                    if headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) != Some(version) {
+                        return StatusCode::BAD_REQUEST.into_response();
+                    }
+                    if matches!(protocol, FixtureProtocol::Discover)
+                        && (request["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] != version
+                            || !request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object()
+                            || (version == "2026-07-28" && headers.get("mcp-method").and_then(|v| v.to_str().ok()) != Some("tools/list")))
+                    {
+                        return StatusCode::BAD_REQUEST.into_response();
+                    }
+                    json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "tools": [test_tool("query_metrics")] } })
+                }
+                _ => return StatusCode::BAD_REQUEST.into_response(),
+            };
+            if sse_responses {
+                (
+                    [(http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!(": keepalive\n\nevent: message\ndata: {result}\n\n"),
+                ).into_response()
+            } else {
+                Json(result).into_response()
+            }
+        }
+    }));
+    let (url, server) = serve_http_router(app).await;
+    let headers = if static_credential {
+        vec![StaticHeader {
+            name: "X-Api-Key".to_string(),
+            value: "test-key".to_string(),
+        }]
+    } else {
+        Vec::new()
+    };
+    let info = start_http_server(url, headers).await;
+    server.abort();
+    let info = info.expect("Warp startup should succeed");
+    assert_eq!(info.tools, vec![test_tool("query_metrics")]);
+    assert_eq!(
+        info.service
+            .peer_info()
+            .expect("server info")
+            .protocol_version
+            .as_str(),
+        version
+    );
+    info.service.cancel().await.expect("cancel service");
+    requests.lock().expect("captured requests").clone()
+}
+
+#[tokio::test]
+async fn http_startup_uses_modern_discovery_and_request_metadata() {
+    let requests = assert_http_startup(FixtureProtocol::Discover, "2026-07-28", false, false).await;
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r["method"] == "initialize" || r["method"] == "notifications/initialized")
+    );
+}
+
+#[tokio::test]
+async fn http_startup_retries_discovery_at_server_supported_revision_without_initializing() {
+    let requests = assert_http_startup(FixtureProtocol::Discover, "2025-11-25", false, false).await;
+    assert!(!requests.iter().any(|r| r["method"] == "initialize"));
+    assert_eq!(
+        requests[0]["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
+        "2026-07-28"
+    );
+    assert_eq!(
+        requests[1]["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
+        "2025-11-25"
+    );
+}
+
+#[tokio::test]
+async fn http_startup_falls_back_and_propagates_sse_version_error_selection_with_static_headers() {
+    let requests = assert_http_startup(
+        FixtureProtocol::InitializeVersionError,
+        "2025-06-18",
+        true,
+        true,
+    )
+    .await;
+    let initialize = requests
+        .iter()
+        .filter(|r| r["method"] == "initialize")
+        .collect::<Vec<_>>();
+    assert_eq!(initialize.len(), 3);
+    assert_eq!(initialize[0]["params"]["protocolVersion"], "2025-11-25");
+    assert_eq!(initialize[1]["params"]["protocolVersion"], "2025-06-18");
+    assert_eq!(initialize[2]["params"]["protocolVersion"], "2025-06-18");
+}
+
+#[tokio::test]
+async fn http_startup_passes_legacy_counteroffer_to_real_sdk_connection() {
+    let requests = assert_http_startup(
+        FixtureProtocol::InitializeCounteroffer,
+        "2025-03-26",
+        false,
+        false,
+    )
+    .await;
+    let initialize = requests
+        .iter()
+        .filter(|r| r["method"] == "initialize")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        initialize
+            .iter()
+            .map(|r| r["params"]["protocolVersion"]
+                .as_str()
+                .expect("protocol version"))
+            .collect::<Vec<_>>(),
+        vec!["2025-11-25", "2025-03-26"],
+    );
+}
+
+#[tokio::test]
+async fn preflight_preserves_modern_rejections_and_http_auth_or_server_errors() {
+    for (status, code) in [
+        (
+            StatusCode::FORBIDDEN,
+            ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+        ),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+        ),
+        (StatusCode::BAD_REQUEST, ErrorCode::HEADER_MISMATCH),
+        (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY,
+        ),
+    ] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let captured = requests.clone();
+        let app = Router::new().route(
+            "/mcp",
+            post(move |Json(request): Json<Value>| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                async move { (status, Json(rpc_error(&request, code, None))) }
+            }),
+        );
+        let (url, server) = serve_http_router(app).await;
+        let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+        server.abort();
+        assert!(result.is_err(), "status {status}, code {code:?}");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "must not try initialize or another version"
+        );
+    }
+}
+
+#[tokio::test]
+async fn preflight_rejects_unknown_or_exhausted_supported_versions_without_initializing() {
+    for (supported, expected_requests) in [
+        (json!(["2099-01-01"]), 1),
+        (json!(["2025-11-25", "2026-07-28"]), 2),
+    ] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let captured = requests.clone();
+        let app = Router::new().route(
+            "/mcp",
+            post(move |Json(request): Json<Value>| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                let supported = supported.clone();
+                async move {
+                    assert_eq!(request["method"], "server/discover");
+                    Json(rpc_error(
+                        &request,
+                        ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                        Some(json!({ "supported": supported })),
+                    ))
+                }
+            }),
+        );
+        let (url, server) = serve_http_router(app).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            determine_transport("test".to_string(), &url, &HashMap::new(), None),
+        )
+        .await
+        .expect("negotiation should terminate");
+        server.abort();
+        assert!(matches!(
+            result,
+            Err(rmcp::RmcpError::ClientInitialize(
+                rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion { .. }
+            ))
+        ));
+        assert_eq!(requests.load(Ordering::SeqCst), expected_requests);
+    }
+}
+
+#[tokio::test]
+async fn preflight_rejects_unknown_legacy_counteroffer_before_real_startup() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let captured = requests.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |Json(request): Json<Value>| {
+            captured.fetch_add(1, Ordering::SeqCst);
+            async move {
+                let reply = if request["method"] == "server/discover" {
+                    rpc_error(&request, ErrorCode::METHOD_NOT_FOUND, None)
+                } else {
+                    assert_eq!(request["method"], "initialize");
+                    json!({ "jsonrpc": "2.0", "id": request["id"], "result": {
+                    "protocolVersion": "2099-01-01", "capabilities": {},
+                    "serverInfo": { "name": "unknown-version", "version": "1" },
+                } })
+                };
+                Json(reply)
+            }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+    let result = start_http_server(url, Vec::new()).await;
+    server.abort();
+    assert!(matches!(
+        result,
+        Err(rmcp::RmcpError::ClientInitialize(
+            rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion { .. }
+        ))
+    ));
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn preflight_rejects_uncorrelated_version_errors_without_retrying() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let captured = requests.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move || {
+            captured.fetch_add(1, Ordering::SeqCst);
+            async {
+                Json(rpc_error(
+                    &json!({ "id": 99 }),
+                    ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                    Some(json!({ "supported": ["2025-11-25"] })),
+                ))
+            }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    server.abort();
+    assert!(matches!(
+        result,
+        Err(rmcp::RmcpError::ClientInitialize(
+            rmcp::service::ClientInitializeError::UncorrelatedErrorResponse { .. }
+        ))
+    ));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn preflight_routes_legacy_endpoint_not_found_to_deprecated_sse() {
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let captured = methods.clone();
+    let app = Router::new().route(
+        "/mcp",
+        post(move |Json(request): Json<Value>| {
+            captured
+                .lock()
+                .expect("request capture")
+                .push(request["method"].clone());
+            async move {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(rpc_error(&request, ErrorCode::METHOD_NOT_FOUND, None)),
+                )
+            }
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    server.abort();
+    assert!(matches!(result, Ok(super::Transport::Sse(None))));
+    assert_eq!(
+        *methods.lock().expect("captured requests"),
+        vec![json!("server/discover"), json!("initialize")]
+    );
+}
+
+#[tokio::test]
+async fn preflight_bounds_sse_body_before_complete_event_arrives() {
+    let app = Router::new().route(
+        "/mcp",
+        post(|| async {
+            (
+                [(http::header::CONTENT_TYPE, "text/event-stream")],
+                format!("data: {}", "x".repeat(1024 * 1024)),
+            )
+        }),
+    );
+    let (url, server) = serve_http_router(app).await;
+    let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+    server.abort();
+    let message = transport_error_message(result, "oversized response must be rejected");
+    assert!(message.contains("exceeds 1 MiB"), "{message}");
 }
 
 /// Serves a single `401` with the requested `WWW-Authenticate` values and
