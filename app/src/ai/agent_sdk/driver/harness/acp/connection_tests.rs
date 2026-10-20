@@ -1,7 +1,7 @@
+use std::future::Future as _;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
@@ -24,8 +24,104 @@ fn pipe() -> (PipeWriter, PipeReader) {
         },
     )
 }
+#[test]
+fn send_request_finishes_only_after_flush_and_does_not_wait_for_the_response() {
+    let (client_writer, agent_reader) = pipe();
+    let (agent_writer, client_reader) = pipe();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let executor = Arc::new(Background::new(1, |_| "acp-send-request-test".to_owned()));
+    let (connection, _notifications) = AcpConnection::new(
+        client_reader,
+        FlushGatedWriter {
+            writer: client_writer,
+            started: Some(started_tx),
+            release: Some(release_rx),
+        },
+        rejecting_handler(),
+        &executor,
+    );
+    let mut agent = FakeAgent {
+        from_client: BufReader::new(agent_reader),
+        to_client: agent_writer,
+        _executor: executor,
+    };
+
+    block_on(async {
+        let send = connection.send_request::<_, Value>("session/prompt", json!({}));
+        futures::pin_mut!(send);
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        started_rx.await.unwrap();
+        let prompt = agent.next_message().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        release_tx.send(()).unwrap();
+        let response = send.await.unwrap();
+        futures::pin_mut!(response);
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        agent
+            .send(json!({"jsonrpc": "2.0", "id": prompt["id"], "result": {"done": true}}))
+            .await;
+        assert_eq!(response.await.unwrap(), json!({"done": true}));
+    });
+}
+
+#[test]
+fn a_flushed_request_is_sent_before_a_subsequent_cancel_without_polling_its_response() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let response = connection
+            .send_request::<_, Value>("session/prompt", json!({}))
+            .await
+            .unwrap();
+        connection
+            .notify("session/cancel", json!({"sessionId": "sess_1"}))
+            .await
+            .unwrap();
+        let prompt = agent.next_message().await;
+        let cancel = agent.next_message().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        assert_eq!(cancel["method"], "session/cancel");
+        agent
+            .send(json!({"jsonrpc": "2.0", "id": prompt["id"], "result": {"stopReason": "cancelled"}}))
+            .await;
+        assert_eq!(response.await.unwrap()["stopReason"], "cancelled");
+    });
+}
 
 struct PipeWriter(mpsc::UnboundedSender<Vec<u8>>);
+struct FlushGatedWriter {
+    writer: PipeWriter,
+    started: Option<oneshot::Sender<()>>,
+    release: Option<oneshot::Receiver<()>>,
+}
+
+impl AsyncWrite for FlushGatedWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if let Some(started) = self.started.take() {
+            started.send(()).unwrap();
+        }
+        if let Some(release) = self.release.as_mut() {
+            if Pin::new(release).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            self.release = None;
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.writer).poll_close(cx)
+    }
+}
 
 impl AsyncWrite for PipeWriter {
     fn poll_write(
@@ -83,6 +179,15 @@ struct FakeAgent {
 }
 
 impl FakeAgent {
+    async fn read_barrier(&mut self) {
+        self.send(json!({
+            "jsonrpc": "2.0", "id": "read-barrier", "method": "test/read_barrier", "params": {}
+        }))
+        .await;
+        let answer = self.next_message().await;
+        assert_eq!(answer["id"], "read-barrier", "{answer}");
+        assert_eq!(answer["error"]["code"], -32601);
+    }
     async fn next_message(&mut self) -> Value {
         let mut line = String::new();
         self.from_client.read_line(&mut line).await.unwrap();
@@ -154,21 +259,6 @@ fn permission_request(id: Value, tool_call_id: &str) -> Value {
             "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
         },
     })
-}
-
-/// Polls until `connection` reports `count` outstanding requests, since dispatch happens on
-/// the read loop's own thread.
-async fn wait_for_pending(connection: &AcpConnection, count: usize) {
-    for _ in 0..200 {
-        if connection.pending_inbound_requests().len() == count {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!(
-        "expected {count} pending inbound requests, found {:?}",
-        connection.pending_inbound_requests()
-    );
 }
 
 #[test]
@@ -311,7 +401,8 @@ fn unanswered_agent_request_does_not_block_notifications_or_responses() {
         let agent_turn = async {
             let prompt_message = agent.next_message().await;
             agent.send(permission_request(json!(1), "call-1")).await;
-            wait_for_pending(&connection, 1).await;
+            agent.read_barrier().await;
+            assert_eq!(connection.pending_inbound_requests().len(), 1);
             agent
                 .send(json!({"jsonrpc": "2.0", "method": "session/update", "params": {"n": 1}}))
                 .await;
@@ -335,7 +426,8 @@ fn unanswered_agent_request_does_not_block_notifications_or_responses() {
         let answer = agent.next_message().await;
         assert_eq!(answer["id"], 1);
         assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
-        wait_for_pending(&connection, 0).await;
+        agent.read_barrier().await;
+        assert!(connection.pending_inbound_requests().is_empty());
     });
 }
 
@@ -358,7 +450,8 @@ fn cancelling_answers_pending_permission_requests_and_discards_the_handlers_answ
                 "params": {"sessionId": "other-session", "toolCall": {"toolCallId": "call-3"}, "options": []},
             }))
             .await;
-        wait_for_pending(&connection, 3).await;
+        agent.read_barrier().await;
+        assert_eq!(connection.pending_inbound_requests().len(), 3);
 
         assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 2);
 
@@ -384,7 +477,8 @@ fn cancelling_answers_pending_permission_requests_and_discards_the_handlers_answ
         let answer = agent.next_message().await;
         assert_eq!(answer["id"], 3);
         assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
-        wait_for_pending(&connection, 0).await;
+        agent.read_barrier().await;
+        assert!(connection.pending_inbound_requests().is_empty());
         assert_eq!(connection.cancel_pending_permission_requests("sess_1").await, 0);
     });
 }

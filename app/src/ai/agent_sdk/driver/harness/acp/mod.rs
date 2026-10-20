@@ -71,6 +71,7 @@ use self::protocol::{
 };
 use self::turn_driver::{
     EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, TurnCancellation, TurnDriver, TurnHost, TurnState,
+    cancel_deadline,
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
@@ -872,6 +873,7 @@ impl HarnessRunner for AcpHarnessRunner {
             save_requests: self.save_request_tx.clone(),
             queued: VecDeque::new(),
             cancel_deadline: STEER_CANCEL_DEADLINE,
+            timer_factory: Arc::new(cancel_deadline),
         };
         background
             .spawn(async move { turn_driver.run(&mut mapper).await })

@@ -3,11 +3,9 @@
 //!
 //! ACP cannot add to a turn in flight, so a follow-up that lands mid-turn steers the agent the
 //! way Zed does: `session/cancel`, keep applying what the agent still streams to the turn it
-//! belongs to until that turn's response arrives, then prompt again with a note that the previous
-//! turn was interrupted. Follow-ups that pile up while that one cancel is pending go out together
-//! in the next prompt, in order. An interrupt is the same without the prompt. Unlike Zed, the
-//! wait for the cancelled response is bounded: an agent that never answers is interrupted in its
-//! terminal and the turn is failed.
+//! belongs to until that turn's response arrives, then prompt again. Ready follow-ups go out
+//! together in order. If cancellation is ignored, they wait for the original turn to finish;
+//! only an explicit interrupt imposes a deadline that interrupts the agent's terminal.
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,7 +16,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use event_listener::Event;
 use futures::future::FusedFuture;
-use futures::{FutureExt, future, pin_mut, select};
+use futures::{FutureExt, future, pin_mut, select, select_biased};
 use parking_lot::Mutex;
 use session_sharing_protocol::common::ParticipantId;
 use warp_multi_agent_api::ClientAction;
@@ -39,8 +37,7 @@ use crate::ai::blocklist::{
     ResponseStreamId,
 };
 
-/// Bound on the agent answering `session/cancel` with the cancelled turn's response. Past it the
-/// agent is interrupted in its terminal instead, and the turn is failed.
+/// Follow-up cancellation grace period, and the hard bound for an explicit interrupt.
 pub(super) const STEER_CANCEL_DEADLINE: Duration = Duration::from_secs(15);
 
 /// How long a shutdown waits for the agent to answer the `session/cancel` sent on exit before
@@ -55,6 +52,9 @@ pub(super) const EXIT_CANCEL_DEADLINE: Duration = Duration::from_secs(3);
 /// stopped where it did.
 pub(super) const STEER_INTERRUPTION_NOTE: &str =
     "[The user interrupted your previous turn with this message.]";
+
+/// Keeps continuous arrivals from indefinitely postponing prompt submission.
+pub(super) const MAX_BATCHED_FOLLOW_UPS: usize = 32;
 
 /// The driver-side effects of a turn: the native conversation the agent's updates land in and
 /// the terminal the agent runs in. The turn state machine only sees this, so it can be driven
@@ -84,7 +84,7 @@ pub(super) trait TurnHost: Send + Sync {
     /// Interrupts the agent's block in the terminal.
     async fn interrupt_terminal(&self);
     /// Shows `prompt` as queued on the conversation while it waits for the active turn to be
-    /// cancelled. Returns the row to hide once it is sent.
+    /// settled. Returns the row to hide once it is sent.
     async fn show_queued_prompt(&self, prompt: &ExternalHarnessPrompt) -> Option<QueuedQueryId>;
     async fn hide_queued_prompt(&self, query_id: QueuedQueryId);
     /// The turn driver has stopped taking prompts and cancellations; whatever routed them here
@@ -95,8 +95,7 @@ pub(super) trait TurnHost: Send + Sync {
 /// Turn activity shared with the harness runner, which reads it off the turn driver's task.
 #[derive(Default)]
 pub(super) struct TurnState {
-    /// A turn has been cancelled and the status changes that follow are transitional: a
-    /// follow-up is about to open a new turn, or the cancellation is still being settled.
+    /// A turn cancellation is settling, or queued follow-ups are about to open a new turn.
     settling: AtomicBool,
     /// A `session/prompt` is outstanding.
     in_turn: AtomicBool,
@@ -154,10 +153,15 @@ pub(super) enum TurnCancellation {
     Interrupt,
 }
 
-/// A follow-up taken while a turn was still running, waiting for that turn to be cancelled.
+/// An unsent follow-up and its queued conversation row, if already shown.
 pub(super) struct QueuedFollowUp {
     prompt: ExternalHarnessPrompt,
     row: Option<QueuedQueryId>,
+}
+
+enum PromptInput {
+    Initial,
+    FollowUps { interrupted: bool },
 }
 
 enum Wake<T> {
@@ -166,15 +170,16 @@ enum Wake<T> {
     Cancel(Result<ExternalHarnessCancel, async_channel::RecvError>),
     Response(T),
     Deadline,
+    Retry,
 }
 
-type Deadline = Pin<Box<dyn FusedFuture<Output = ()> + Send>>;
+pub(super) type Deadline = Pin<Box<dyn FusedFuture<Output = ()> + Send>>;
 
 fn no_deadline() -> Deadline {
     Box::pin(future::pending().fuse())
 }
 
-fn cancel_deadline(after: Duration) -> Deadline {
+pub(super) fn cancel_deadline(after: Duration) -> Deadline {
     Box::pin(Timer::after(after).map(|_| ()).fuse())
 }
 
@@ -218,11 +223,11 @@ pub(super) struct TurnDriver {
     pub attachments: Arc<AttachmentResolver>,
     pub boundary_snapshot: Arc<Mutex<Option<Vec<u8>>>>,
     pub save_requests: async_channel::Sender<SavePoint>,
-    /// Follow-ups taken mid-turn, sent together once the turn they interrupted has been
-    /// cancelled.
+    /// Unsent follow-ups, sent together after the current turn settles.
     pub queued: VecDeque<QueuedFollowUp>,
-    /// How long a `session/cancel` may go unanswered; [`STEER_CANCEL_DEADLINE`] outside tests.
+    /// Cancellation grace period; [`STEER_CANCEL_DEADLINE`] outside tests.
     pub cancel_deadline: Duration,
+    pub timer_factory: Arc<dyn Fn(Duration) -> Deadline + Send + Sync>,
 }
 
 impl TurnDriver {
@@ -230,25 +235,14 @@ impl TurnDriver {
     /// an internal error), which is what the task status follows; the block's exit code remains
     /// the agent's own.
     pub(super) async fn run(mut self, mapper: &mut AcpTurnMapper) {
-        let initial = self
-            .attachments
-            .prompt_content_for_files(
-                self.prompt_text.clone(),
-                Vec::new(),
-                &self.initial_attachments,
-            )
-            .await;
-        let mut turn_result = self.run_turn(mapper, initial).await;
+        let mut turn_result = self.run_turn(mapper, PromptInput::Initial).await;
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
+            self.drain_ready_follow_ups();
             if !self.queued.is_empty() {
-                let held: Vec<QueuedFollowUp> = self.queued.drain(..).collect();
-                log::info!(
-                    "Running ACP follow-up turn for {} prompt(s) that interrupted the previous one",
-                    held.len()
-                );
-                turn_result = self.run_follow_ups(mapper, held, true).await;
+                let interrupted = matches!(turn_result, Ok(TurnOutcome::Cancelled));
+                turn_result = self.run_follow_ups(mapper, interrupted).await;
                 continue;
             }
             let wake = select! {
@@ -261,8 +255,8 @@ impl TurnDriver {
             match wake {
                 Wake::FollowUp(Ok(prompt)) => {
                     log::info!("Running ACP follow-up turn");
-                    let follow_up = QueuedFollowUp { prompt, row: None };
-                    turn_result = self.run_follow_ups(mapper, vec![follow_up], false).await;
+                    self.queued.push_back(QueuedFollowUp { prompt, row: None });
+                    turn_result = self.run_follow_ups(mapper, false).await;
                 }
                 // The controller unbound the conversation; nothing more can be routed here.
                 Wake::FollowUp(Err(_)) => break,
@@ -277,7 +271,7 @@ impl TurnDriver {
                 ),
                 // The agent closed its side, typically because the driver closed ours.
                 Wake::Notification(Err(_)) => break,
-                Wake::Response(()) | Wake::Deadline => unreachable!(),
+                Wake::Response(()) | Wake::Deadline | Wake::Retry => unreachable!(),
             }
         }
         self.fail_queued("the harness exited before the follow-up could be sent")
@@ -298,21 +292,18 @@ impl TurnDriver {
     async fn run_follow_ups(
         &mut self,
         mapper: &mut AcpTurnMapper,
-        follow_ups: Vec<QueuedFollowUp>,
         interrupted: bool,
     ) -> Result<TurnOutcome> {
-        let mut prompts = Vec::with_capacity(follow_ups.len());
-        for QueuedFollowUp { prompt, row } in follow_ups {
-            if let Some(row) = row {
-                self.host.hide_queued_prompt(row).await;
-            }
-            prompts.push(prompt);
-        }
-        let initiator = prompts.first().map(|prompt| prompt.participant_id.clone());
+        self.drain_ready_follow_ups();
+        let initiator = self
+            .queued
+            .front()
+            .map(|follow_up| follow_up.prompt.participant_id.clone());
         let next = match self.host.begin_turn(initiator).await {
             Ok(next) => next,
             Err(error) => {
-                self.state.set_settling(false);
+                self.fail_queued("the follow-up turn could not be opened")
+                    .await;
                 return Err(error);
             }
         };
@@ -320,42 +311,100 @@ impl TurnDriver {
         self.turn = next;
         // The new turn is under way; its `InProgress` status cancels any pending idle exit.
         self.state.set_settling(false);
-        let echo = prompts
-            .iter()
-            .map(|prompt| mapper.user_query_action(&prompt.text, prompt.base.as_ref()))
-            .collect();
-        self.apply_events(mapper, vec![TurnEvent::Actions(echo)])
-            .await?;
-        let mut content = Vec::new();
-        for (index, prompt) in prompts.into_iter().enumerate() {
-            let text = if interrupted && index == 0 {
+        self.run_turn(mapper, PromptInput::FollowUps { interrupted })
+            .await
+    }
+
+    fn drain_ready_follow_ups(&mut self) {
+        if let Some(receiver) = &self.follow_ups {
+            for _ in 0..receiver.len() {
+                match receiver.try_recv() {
+                    Ok(prompt) => self.queued.push_back(QueuedFollowUp { prompt, row: None }),
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    async fn prepare_prompt(
+        &mut self,
+        mapper: &mut AcpTurnMapper,
+        input: PromptInput,
+    ) -> Result<Vec<ContentBlock>> {
+        let (mut content, mut interrupted) = match input {
+            PromptInput::Initial => (
+                self.attachments
+                    .prompt_content_for_files(
+                        self.prompt_text.clone(),
+                        Vec::new(),
+                        &self.initial_attachments,
+                    )
+                    .await,
+                false,
+            ),
+            PromptInput::FollowUps { interrupted } => (Vec::new(), interrupted),
+        };
+        for _ in 0..MAX_BATCHED_FOLLOW_UPS {
+            self.drain_ready_follow_ups();
+            let Some(QueuedFollowUp { prompt, row }) = self.queued.pop_front() else {
+                return Ok(content);
+            };
+            if let Some(row) = row {
+                self.host.hide_queued_prompt(row).await;
+            }
+            let echo = mapper.user_query_action(&prompt.text, prompt.base.as_ref());
+            self.apply_events(mapper, vec![TurnEvent::Actions(vec![echo])])
+                .await?;
+            let text = if interrupted {
                 format!("{STEER_INTERRUPTION_NOTE}\n\n{}", prompt.text)
             } else {
                 prompt.text
             };
+            interrupted = false;
             content.extend(
                 self.attachments
                     .prompt_content(text, prompt.attachments)
                     .await,
             );
         }
-        self.run_turn(mapper, content).await
+        self.drain_ready_follow_ups();
+        Ok(content)
     }
 
     /// Runs one prompt turn to completion and finishes its last request stream.
     async fn run_turn(
         &mut self,
         mapper: &mut AcpTurnMapper,
-        prompt: Vec<ContentBlock>,
+        input: PromptInput,
     ) -> Result<TurnOutcome> {
         self.state.set_in_turn(true);
-        let turn_result = self.prompt(mapper, prompt).await;
+        let cancels = self.cancels.clone();
+        let prepared = {
+            let prepare = self.prepare_prompt(mapper, input).fuse();
+            let interrupt = async {
+                if recv_or_pending(cancels.as_ref()).await.is_err() {
+                    future::pending::<()>().await;
+                }
+            }
+            .fuse();
+            pin_mut!(prepare, interrupt);
+            select_biased! {
+                _ = interrupt => Ok(None),
+                result = prepare => result.map(Some),
+            }
+        };
+        let turn_result = match prepared {
+            Ok(Some(prompt)) => self.prompt(mapper, prompt).await,
+            Ok(None) => Ok(TurnOutcome::Cancelled),
+            Err(error) => Err(error),
+        };
         let finish_events = mapper.finish_events();
         if let Err(error) = self.apply_events(mapper, finish_events).await {
             log::warn!("Failed to settle ACP tool calls: {error}");
         }
         // The settling flag must be accurate before the status change that ends the turn is
         // emitted, since that is what gates the driver's idle exit.
+        self.drain_ready_follow_ups();
         self.state.set_settling(!self.queued.is_empty());
         let stream_id = self.turn.stream_id.clone();
         match &turn_result {
@@ -416,36 +465,46 @@ impl TurnDriver {
         }
     }
 
-    /// Sends the prompt and applies every update the agent streams before responding. A
-    /// follow-up or interrupt arriving meanwhile cancels the turn; its response is still awaited
-    /// (bounded by [`STEER_CANCEL_DEADLINE`]) so late updates land in this turn.
+    /// Sends the prompt and applies updates until its response arrives.
     async fn prompt(
         &mut self,
         mapper: &mut AcpTurnMapper,
         prompt: Vec<ContentBlock>,
     ) -> Result<TurnOutcome> {
         let connection = self.connection.clone();
+        // Flushing orders our cancel after the prompt, but ACP has no registration acknowledgement.
         let prompt_fut = connection
-            .request::<_, PromptResponse>(
+            .send_request::<_, PromptResponse>(
                 protocol::METHOD_SESSION_PROMPT,
                 PromptParams {
                     session_id: self.session_id.clone(),
                     prompt,
                 },
             )
+            .await?
             .fuse();
         pin_mut!(prompt_fut);
-        let mut cancel_pending = false;
+        let mut cancellation = None;
         let mut deadline = no_deadline();
+        let mut first_retry = no_deadline();
+        let mut second_retry = no_deadline();
         loop {
-            let wake = select! {
-                notification = self.notifications.recv().fuse() => Wake::Notification(notification),
+            let wake = select_biased! {
                 response = prompt_fut => Wake::Response(response),
-                follow_up = recv_or_pending(self.follow_ups.as_ref()).fuse() => {
-                    Wake::FollowUp(follow_up)
-                }
                 interrupt = recv_or_pending(self.cancels.as_ref()).fuse() => Wake::Cancel(interrupt),
                 _ = deadline => Wake::Deadline,
+                _ = first_retry => Wake::Retry,
+                _ = second_retry => Wake::Retry,
+                input = async {
+                    select! {
+                        follow_up = recv_or_pending(self.follow_ups.as_ref()).fuse() => {
+                            Wake::FollowUp(follow_up)
+                        }
+                        notification = self.notifications.recv().fuse() => {
+                            Wake::Notification(notification)
+                        }
+                    }
+                }.fuse() => input,
             };
             match wake {
                 Wake::Notification(Ok(notification)) => {
@@ -457,34 +516,49 @@ impl TurnDriver {
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
-                    return self.settle_response(response, cancel_pending);
+                    return self.settle_response(response, cancellation.is_some());
                 }
                 Wake::FollowUp(Ok(prompt)) => {
                     self.hold_follow_up(prompt).await;
-                    if !cancel_pending {
+                    if cancellation.is_none() {
+                        cancellation = Some(TurnCancellation::FollowUp);
+                        deadline = (self.timer_factory)(self.cancel_deadline);
+                        first_retry = (self.timer_factory)(Duration::from_secs(1));
+                        second_retry = (self.timer_factory)(Duration::from_secs(3));
                         self.start_cancel().await?;
-                        cancel_pending = true;
-                        deadline = cancel_deadline(self.cancel_deadline);
                     }
                 }
                 Wake::FollowUp(Err(_)) => self.follow_ups = None,
                 Wake::Cancel(Ok(ExternalHarnessCancel)) => {
-                    if !cancel_pending {
+                    if cancellation != Some(TurnCancellation::Interrupt) {
+                        cancellation = Some(TurnCancellation::Interrupt);
+                        deadline = (self.timer_factory)(self.cancel_deadline);
+                        first_retry = no_deadline();
+                        second_retry = no_deadline();
                         self.start_cancel().await?;
-                        cancel_pending = true;
-                        deadline = cancel_deadline(self.cancel_deadline);
                     }
                 }
                 Wake::Cancel(Err(_)) => self.cancels = None,
-                Wake::Deadline => return self.cancel_timed_out().await,
+                Wake::Deadline => match cancellation {
+                    Some(TurnCancellation::Interrupt) => return self.cancel_timed_out().await,
+                    Some(TurnCancellation::FollowUp) => {
+                        log::info!(
+                            "ACP follow-up cancellation grace expired; waiting for the turn to finish"
+                        );
+                        deadline = no_deadline();
+                        first_retry = no_deadline();
+                        second_retry = no_deadline();
+                    }
+                    None => unreachable!(),
+                },
+                Wake::Retry => self.start_cancel().await?,
             }
         }
         let response = prompt_fut.await;
-        self.settle_response(response, cancel_pending)
+        self.settle_response(response, cancellation.is_some())
     }
 
-    /// Takes a follow-up that arrived mid-turn: it is shown as queued and runs once the turn
-    /// has been cancelled.
+    /// Shows a follow-up as queued until the active prompt settles.
     async fn hold_follow_up(&mut self, prompt: ExternalHarnessPrompt) {
         let row = self.host.show_queued_prompt(&prompt).await;
         self.queued.push_back(QueuedFollowUp { prompt, row });

@@ -158,11 +158,20 @@ impl AcpConnection {
     /// must keep draining notifications while the request is in flight (a `session/prompt`
     /// whose `session/update`s stream before the response) races this future against the
     /// notification receiver rather than awaiting it alone.
-    pub(super) async fn request<P: Serialize, R: DeserializeOwned>(
+    pub(super) async fn request<P: Serialize, R: DeserializeOwned + 'static>(
         &self,
         method: &str,
         params: P,
     ) -> Result<R> {
+        self.send_request(method, params).await?.await
+    }
+
+    /// Flushes a request and returns a future for its response, deserialized as `R`.
+    pub(super) async fn send_request<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<BoxFuture<'static, Result<R>>> {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -176,11 +185,14 @@ impl AcpConnection {
             self.pending.lock().await.remove(&id);
             return Err(error.context(format!("Failed to send ACP request {method}")));
         }
-        let value = rx
-            .await
-            .map_err(|_| anyhow!("ACP agent closed before responding to {method}"))??;
-        serde_json::from_value(value)
-            .with_context(|| format!("Failed to parse ACP response to {method}"))
+        let method = method.to_owned();
+        Ok(Box::pin(async move {
+            let value = rx
+                .await
+                .map_err(|_| anyhow!("ACP agent closed before responding to {method}"))??;
+            serde_json::from_value(value)
+                .with_context(|| format!("Failed to parse ACP response to {method}"))
+        }))
     }
 
     pub(super) async fn notify<P: Serialize>(&self, method: &str, params: P) -> Result<()> {
