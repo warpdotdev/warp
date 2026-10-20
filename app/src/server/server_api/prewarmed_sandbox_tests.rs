@@ -149,6 +149,12 @@ fn deserializes_a_server_configuration() {
     assert_eq!(config.preparation.skills, ["warpdotdev/warp:review"]);
     assert_eq!(config.preparation.factory_skill_dirs, [".agents/skills"]);
     assert!(config.preparation.computer_use_enabled);
+    let providers = config.preparation.providers.as_ref().unwrap();
+    assert_eq!(providers.gcp.as_ref().unwrap().project_number, "123456789");
+    assert_eq!(
+        providers.aws.as_ref().unwrap().role_arn,
+        "arn:aws:iam::123456789012:role/OzAgent"
+    );
 
     assert_eq!(
         config.environment_variables.get("WARP_FACTORY_REPO_DIR"),

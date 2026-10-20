@@ -2871,6 +2871,7 @@ type PrewarmedSandboxSpec {
   factorySkillDirs: [String!]!
   harness: String!
   mcpServersJson: String!
+  providers: CloudProviderClientConfigs
   repositories: [ExecutionRepository!]!
   setupCommands: [String!]!
   skills: [String!]!

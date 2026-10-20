@@ -24,7 +24,7 @@ use warp_graphql::mutations::prewarmed_sandbox_config::{
     PrewarmedSandboxConfigVariables, PrewarmedSandboxConfiguration as GraphqlConfiguration,
 };
 use warp_graphql::queries::execution_config::{
-    ExecutionConfiguration, ExecutionRepository, SourceRepo,
+    CloudProviderClientConfigs, ExecutionConfiguration, ExecutionRepository, SourceRepo,
 };
 use warp_managed_secrets::{ManagedSecretValue, convert_task_secrets};
 pub use warp_server_client::base_client::PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER;
@@ -112,6 +112,7 @@ pub struct PrewarmedSandboxPreparation {
     pub skills: Vec<String>,
     pub factory_skill_dirs: Vec<String>,
     pub computer_use_enabled: bool,
+    pub providers: Option<CloudProviderClientConfigs>,
 }
 
 // Debug output omits values because setup commands and MCP settings can contain secrets.
@@ -166,6 +167,7 @@ impl TryFrom<GraphqlConfiguration> for PrewarmedSandboxConfiguration {
                 skills: preparation.skills,
                 factory_skill_dirs: preparation.factory_skill_dirs,
                 computer_use_enabled: preparation.computer_use_enabled,
+                providers: preparation.providers,
             },
             environment_variables: config
                 .environment_variables

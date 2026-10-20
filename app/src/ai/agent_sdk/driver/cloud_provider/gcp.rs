@@ -8,12 +8,13 @@ use anyhow::Context as _;
 use command::r#async::Command;
 use warp_core::{safe_info, safe_warn};
 use warp_managed_secrets::{GcpCredentials, GcpFederationConfig};
-use warpui::ModelSpawner;
 use warpui::r#async::FutureExt as _;
+use warpui::{ModelSpawner, SingletonEntity as _};
 
 use super::super::terminal::TerminalDriver;
 use super::{CloudProvider, CloudProviderSetupError, Result};
 use crate::ai::cloud_environments::GcpProviderConfig;
+use crate::auth::AuthStateProvider;
 
 /// Token lifetime for GCP executable-sourced credentials. The GCP client
 /// libraries handle refreshing automatically, so we keep this short.
@@ -76,12 +77,13 @@ async fn run_best_effort_with_timeout(
 /// executable to obtain tokens on demand.
 pub(crate) struct GcpCloudProvider {
     credentials: GcpCredentials,
+    run_id: Option<String>,
 }
 
 impl GcpCloudProvider {
     const PROVIDER_NAME: &'static str = "gcp";
 
-    pub fn new(config: &GcpProviderConfig, run_id: &str) -> Result<Self> {
+    pub fn new(config: &GcpProviderConfig, run_id: Option<&str>) -> Result<Self> {
         let federation_config = GcpFederationConfig {
             project_number: config.project_number.clone(),
             pool_id: config.workload_identity_federation_pool_id.clone(),
@@ -90,11 +92,14 @@ impl GcpCloudProvider {
             token_lifetime: Some(TOKEN_LIFETIME),
         };
 
-        let credentials = GcpCredentials::federated(run_id, &federation_config)
+        let credentials = GcpCredentials::federated(&federation_config)
             .context("Failed to prepare GCP federation credentials")
             .map_err(|error| CloudProviderSetupError::new(Self::PROVIDER_NAME, error))?;
 
-        Ok(Self { credentials })
+        Ok(Self {
+            credentials,
+            run_id: run_id.map(str::to_owned),
+        })
     }
 }
 
@@ -105,7 +110,7 @@ impl CloudProvider for GcpCloudProvider {
 
     fn setup(
         &mut self,
-        _spawner: ModelSpawner<TerminalDriver>,
+        spawner: ModelSpawner<TerminalDriver>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             // Point `gcloud`'s own auth system at the federated credential file. Writing
@@ -122,6 +127,21 @@ impl CloudProvider for GcpCloudProvider {
             );
 
             let mut command = Command::new("gcloud");
+            // Assignment replaces the shared credential, not the worker process's environment.
+            if let Some(api_key) = spawner
+                .spawn(|_, ctx| AuthStateProvider::as_ref(ctx).get().api_key())
+                .await
+                .map_err(|error| CloudProviderSetupError::new(Self::PROVIDER_NAME, error))?
+            {
+                command.env("WARP_API_KEY", api_key);
+            }
+            if let Some(run_id) = &self.run_id {
+                command.env(warp_cli::OZ_RUN_ID_ENV, run_id);
+                command.env(warp_cli::WARP_RUN_ID_ENV, run_id);
+            } else {
+                command.env_remove(warp_cli::OZ_RUN_ID_ENV);
+                command.env_remove(warp_cli::WARP_RUN_ID_ENV);
+            }
             command
                 // Ensure `gcloud` is allowed to invoke the executable-sourced credential
                 // command when it validates the account during login.

@@ -101,6 +101,15 @@ impl AgentDriver {
         expires_at: DateTime<Utc>,
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
+        let standby_providers = spawner
+            .spawn(|me, _| std::mem::take(&mut me.cloud_providers))
+            .await?;
+        for provider in standby_providers {
+            provider
+                .cleanup()
+                .await
+                .map_err(AgentDriverError::CloudProviderSetupFailed)?;
+        }
         validate_assignment(&config).map_err(AgentDriverError::ConfigBuildFailed)?;
         let team_scope = execution_config::team_scope(config.team_id.as_ref())
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -186,7 +195,7 @@ impl AgentDriver {
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         if FeatureFlag::OzIdentityFederation.is_enabled() {
             options.cloud_providers =
-                cloud_provider::load_providers(&providers, &task_id.to_string())
+                cloud_provider::load_providers(&providers, Some(&task_id.to_string()))
                     .map_err(AgentDriverError::CloudProviderSetupFailed)?;
         }
         options.team_scope = Some(team_scope);

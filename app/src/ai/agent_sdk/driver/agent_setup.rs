@@ -61,6 +61,12 @@ impl AgentDriver {
         bootstrap_terminal(foreground, setup_events).await?;
         setup_events
             .record_result(
+                SetupStep::CloudProviderSetup,
+                Self::setup_cloud_providers(foreground),
+            )
+            .await?;
+        setup_events
+            .record_result(
                 SetupStep::GlobalSkillRepoClone,
                 clone_global_skill_repos(foreground, &global_skills.repos),
             )

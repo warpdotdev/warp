@@ -640,6 +640,41 @@ fn issue_token_args(args: Args) -> crate::federate::IssueTokenArgs {
 
 #[test]
 #[serial_test::serial]
+fn federate_gcp_token_resolves_run_identity_per_invocation() {
+    let previous = std::env::var_os(OZ_RUN_ID_ENV);
+    restore_env_var(OZ_RUN_ID_ENV, None);
+    let argv = [
+        "warp",
+        "federate",
+        "issue-gcp-token",
+        "--audience",
+        "example.com",
+        "--token-type",
+        "jwt",
+    ];
+    let standby = Args::try_parse_from(argv);
+    set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+    let inherited = Args::try_parse_from(argv);
+    let explicit = Args::try_parse_from(argv.into_iter().chain(["--run-id", "run-from-flag"]));
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    for (parsed, expected) in [
+        (standby, None),
+        (inherited, Some("run-from-env")),
+        (explicit, Some("run-from-flag")),
+    ] {
+        let Some(Command::CommandLine(command)) = parsed.unwrap().command else {
+            panic!("expected a CLI command");
+        };
+        let CliCommand::Federate(FederateCommand::IssueGcpToken(args)) = *command else {
+            panic!("expected a GCP token command");
+        };
+        assert_eq!(args.run_id.as_deref(), expected);
+    }
+}
+
+#[test]
+#[serial_test::serial]
 fn federate_issue_token_reads_run_id_from_env() {
     let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
 
