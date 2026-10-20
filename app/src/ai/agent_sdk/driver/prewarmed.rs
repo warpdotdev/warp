@@ -245,7 +245,8 @@ impl AgentDriver {
             })
             .await?;
         Self::replace_shell_with_resolved_env(spawner).await?;
-        Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await?;
+        let mcp_restart = Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
+        Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
         spawner
             .spawn(move |me, ctx| {
                 let scope = me
