@@ -1,11 +1,13 @@
 use super::*;
-use crate::terminal::local_tty::shell::DirectShellStarter;
-use crate::terminal::shell::ShellType;
 
+/// Windows refuses planned shell replacement.
+#[cfg(unix)]
 #[test]
 fn planned_environment_becomes_the_next_recovery_baseline() {
+    use crate::terminal::local_tty::shell::DirectShellStarter;
+    use crate::terminal::shell::ShellType;
+
     warpui::App::test((), |mut app| async move {
-        #[cfg(unix)]
         let init = app.update(TerminalSurfaceInit::new_for_test);
         let mut resources = ShellRecoveryResources {
             starter: ShellStarter::Direct(DirectShellStarter::new_for_test(
@@ -15,7 +17,6 @@ fn planned_environment_becomes_the_next_recovery_baseline() {
             )),
             original_env: HashMap::from([("WARP_API_KEY".into(), "standby-key".into())]),
             channel_event_proxy: ChannelEventListener::new_for_test(),
-            #[cfg(unix)]
             model_events: init.model_events,
         };
         let run_env = HashMap::from([
