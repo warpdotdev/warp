@@ -420,6 +420,25 @@ fn decodes_messages_this_client_does_not_know_as_unknown() {
     }
 }
 
+/// The server pings an idle socket, and a ping must not end the connection.
+#[test]
+fn control_reader_skips_non_text_frames() {
+    let mut reader = PrewarmedSandboxControlReader {
+        stream: Box::pin(futures::stream::iter([
+            Ok::<_, websocket::Error>(websocket::Message::new_binary(vec![0])),
+            Ok(websocket::Message::new_text(
+                r#"{"type":"retired","reason":"unavailable"}"#.into(),
+            )),
+        ])),
+    };
+    let Some(PrewarmedSandboxControlEvent::Retired { reason }) =
+        futures::executor::block_on(reader.next()).unwrap()
+    else {
+        panic!("expected retirement");
+    };
+    assert_eq!(reason.as_deref(), Some("unavailable"));
+}
+
 #[test]
 fn bounds_a_stalled_request() {
     let error = futures::executor::block_on(bounded_request(

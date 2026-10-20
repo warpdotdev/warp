@@ -345,14 +345,18 @@ pub struct PrewarmedSandboxControlReader {
 
 impl PrewarmedSandboxControlReader {
     pub async fn next(&mut self) -> Result<Option<PrewarmedSandboxControlEvent>> {
-        let Some(message) = self.stream.next().await else {
-            return Ok(None);
-        };
-        let message = message.context("Pre-warmed sandbox control stream failed")?;
-        let text = message
-            .text()
-            .context("Pre-warmed sandbox control message was not text")?;
-        serde_json::from_str(text).context("Failed to decode pre-warmed sandbox control message")
+        loop {
+            let Some(message) = self.stream.next().await else {
+                return Ok(None);
+            };
+            let message = message.context("Pre-warmed sandbox control stream failed")?;
+            // tungstenite hands ping frames to the reader after it queues the pong itself.
+            let Some(text) = message.text() else {
+                continue;
+            };
+            return serde_json::from_str(text)
+                .context("Failed to decode pre-warmed sandbox control message");
+        }
     }
 }
 
