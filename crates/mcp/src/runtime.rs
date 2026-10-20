@@ -10,7 +10,7 @@ use std::future::Future;
 
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
-use futures::FutureExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use rmcp::ServiceExt as _;
 use rmcp::model::{ClientConfig, Implementation};
 use rmcp::transport::ConfigureCommandExt as _;
@@ -455,7 +455,17 @@ async fn determine_transport(
 
     let preflight = send_initialize_request(url, headers, None).await?;
     match preflight.status {
-        StatusCode::OK => Ok(Transport::Http(None)),
+        StatusCode::OK => {
+            close_preflight_session(
+                url,
+                headers,
+                preflight.session_id.as_deref(),
+                preflight.protocol_version.as_deref(),
+                None,
+            )
+            .await?;
+            Ok(Transport::Http(None))
+        }
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
             // A server that wants OAuth says so with a protected-resource
@@ -507,11 +517,18 @@ async fn determine_transport(
                 }
             };
 
-            match send_initialize_request(url, headers, Some(&client))
-                .await?
-                .status
-            {
+            let authenticated_preflight =
+                send_initialize_request(url, headers, Some(&client)).await?;
+            match authenticated_preflight.status {
                 StatusCode::OK => {
+                    close_preflight_session(
+                        url,
+                        headers,
+                        authenticated_preflight.session_id.as_deref(),
+                        authenticated_preflight.protocol_version.as_deref(),
+                        Some(&client),
+                    )
+                    .await?;
                     emit_authenticated_notification().await;
                     Ok(Transport::Http(Some(client)))
                 }
@@ -533,6 +550,62 @@ struct PreflightResponse {
     /// they are the only reliable way to tell an OAuth-protected resource apart
     /// from a server that merely rejected the credential we sent.
     www_authenticate: Vec<String>,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+}
+
+#[allow(clippy::result_large_err)]
+async fn close_preflight_session(
+    url: &str,
+    headers: &HashMap<String, String>,
+    session_id: Option<&str>,
+    protocol_version: Option<&str>,
+    auth_client: Option<&rmcp::transport::auth::AuthClient<reqwest::Client>>,
+) -> Result<(), rmcp::RmcpError> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    let Some(protocol_version) = protocol_version else {
+        return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
+            "MCP preflight created a session without a negotiated protocol version".to_string(),
+        ));
+    };
+
+    let mut request = build_client_with_headers(headers)?
+        .delete(url)
+        .header(
+            rmcp::transport::common::http_header::HEADER_SESSION_ID,
+            session_id,
+        )
+        .header(
+            rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION,
+            protocol_version,
+        );
+    if let Some(auth_client) = auth_client {
+        let access_token = auth_client
+            .get_access_token()
+            .await
+            .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+        request = request.bearer_auth(access_token);
+    }
+
+    let status = request
+        .send()
+        .await
+        .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?
+        .status();
+    if status.is_success()
+        || matches!(
+            status,
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
+        )
+    {
+        return Ok(());
+    }
+
+    Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
+        format!("Failed to close MCP preflight session (HTTP {status})"),
+    ))
 }
 
 /// Sends an InitializeRequest to the server and returns the parts of the
@@ -571,6 +644,7 @@ async fn send_initialize_request(
         .send()
         .await
         .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+    let status = response.status();
 
     let www_authenticate = response
         .headers()
@@ -579,10 +653,65 @@ async fn send_initialize_request(
         .filter_map(|value| value.to_str().ok())
         .map(ToString::to_string)
         .collect();
+    let session_id = response
+        .headers()
+        .get(rmcp::transport::common::http_header::HEADER_SESSION_ID)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let protocol_version = if status.is_success() && session_id.is_some() {
+        let is_event_stream = response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|media_type| {
+                media_type
+                    .trim()
+                    .eq_ignore_ascii_case(EVENT_STREAM_MIME_TYPE)
+            });
+        if is_event_stream {
+            let mut events = sse_stream::SseStream::from_bytes_stream(response.bytes_stream());
+            let mut protocol_version = None;
+            while let Some(event) = events.next().await {
+                let event =
+                    event.map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+                let Some(data) = event.data else {
+                    continue;
+                };
+                let Ok(message) = serde_json::from_str::<serde_json::Value>(&data) else {
+                    continue;
+                };
+                if message["id"].as_i64() == Some(0) {
+                    protocol_version = message
+                        .pointer("/result/protocolVersion")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    break;
+                }
+            }
+            protocol_version
+        } else {
+            let response_body = response
+                .bytes()
+                .await
+                .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+            serde_json::from_slice::<serde_json::Value>(&response_body)
+                .ok()
+                .and_then(|body| {
+                    body.pointer("/result/protocolVersion")?
+                        .as_str()
+                        .map(ToString::to_string)
+                })
+        }
+    } else {
+        None
+    };
 
     Ok(PreflightResponse {
-        status: response.status(),
+        status,
         www_authenticate,
+        session_id,
+        protocol_version,
     })
 }
 
