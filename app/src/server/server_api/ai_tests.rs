@@ -1402,6 +1402,31 @@ fn test_deserialize_list_tasks_corrupted_json_in_middle() {
 }
 
 #[test]
+fn test_deserialize_list_runs_null_returns_empty() {
+    let response: ListRunsResponse = serde_json::from_str(
+        r#"{
+            "as_of": "2026-10-20T20:19:11.750Z",
+            "page_info": {"has_next_page": false},
+            "runs": null,
+            "team_uid": null
+        }"#,
+    )
+    .unwrap();
+
+    assert!(response.runs.is_empty());
+}
+
+#[test]
+fn test_deserialize_list_runs_rejects_non_array() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{"runs": {}}"#).is_err());
+}
+
+#[test]
+fn test_deserialize_list_runs_requires_runs_field() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{}"#).is_err());
+}
+
+#[test]
 fn test_deserialize_list_tasks_empty_tasks_array() {
     // Empty tasks array should work fine
     let json = r#"{
