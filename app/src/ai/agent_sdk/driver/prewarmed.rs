@@ -101,6 +101,8 @@ impl AgentDriver {
         expires_at: DateTime<Utc>,
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
+        git_credentials::clear_standby_credentials()
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
         let standby_providers = spawner
             .spawn(|me, _| std::mem::take(&mut me.cloud_providers))
             .await?;
@@ -155,15 +157,32 @@ impl AgentDriver {
                 )
             })
             .await?;
-        // `gh` is never available to configure github.com inside an assignment sandbox, so the
-        // server fetch is the only credential source here.
-        AgentDriverRunner::bootstrap_git_credentials_for_task(
-            spawner,
-            &task_id.to_string(),
-            false,
+        let repositories = spawner
+            .spawn(|me, _| {
+                let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
+                    return Err(AgentDriverError::InvalidRuntimeState);
+                };
+                Ok(prepared
+                    .repositories
+                    .iter()
+                    .map(|repo| {
+                        (
+                            me.working_dir.join(&repo.repo),
+                            repo.code_forge.map(|forge| forge.host()).unwrap_or(""),
+                        )
+                    })
+                    .collect::<Vec<_>>())
+            })
+            .await??;
+        let credentials = AgentDriverRunner::fetch_task_git_credentials(
+            task_id.to_string(),
+            ai_client.clone(),
             use_factory_repositories,
         )
-        .await?;
+        .await
+        .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+        git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
         let (first_skill, discovery_dirs) =
             resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;

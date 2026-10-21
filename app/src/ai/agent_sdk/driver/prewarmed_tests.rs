@@ -40,6 +40,41 @@ fn config() -> ExecutionConfiguration {
 #[test]
 #[cfg(not(feature = "skip_login"))]
 fn installation_failures_are_reported_against_the_run_with_its_credential() {
+    if std::env::var_os("WARP_TEST_PREWARMED_ASSIGNMENT_HOME").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = command::blocking::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::prewarmed::tests::installation_failures_are_reported_against_the_run_with_its_credential",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_PREWARMED_ASSIGNMENT_HOME", home.path())
+            .env("HOME", home.path())
+            .env("GH_CONFIG_DIR", home.path().join("gh"))
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let home = PathBuf::from(std::env::var_os("WARP_TEST_PREWARMED_ASSIGNMENT_HOME").unwrap());
+    std::fs::write(
+        home.join(".git-credentials"),
+        "https://x-access-token:standby-token@github.com\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join("gh")).unwrap();
+    std::fs::write(
+        home.join("gh/hosts.yml"),
+        "github.com:\n    oauth_token: standby-token\n",
+    )
+    .unwrap();
     let mut server = crate::ChannelState::mock_server();
     let report = server
         .mock("POST", "/graphql/v2?op=UpdateAgentTask")
@@ -115,6 +150,8 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
         assert!(credential_paths.iter().all(|path| !path.exists()));
     });
     report.assert();
+    assert!(!home.join(".git-credentials").exists());
+    assert!(!home.join("gh/hosts.yml").exists());
 }
 
 /// The server commits runs with cloud providers to pre-warmed sandboxes, so validation must

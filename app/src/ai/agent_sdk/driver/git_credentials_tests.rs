@@ -13,6 +13,141 @@ use warp_graphql::response_context::ResponseContext;
 
 use super::*;
 use crate::server::server_api::ai::{MockAIClient, TaskGitCredentialsResponse};
+fn with_assignment_git_home(test_name: &str, test: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    if let Some(home) = std::env::var_os("WARP_TEST_ASSIGNMENT_GIT_HOME") {
+        return test(Path::new(&home));
+    }
+    let home = tempfile::tempdir()?;
+    let mut command = BlockingCommand::new(std::env::current_exe()?);
+    #[cfg(windows)]
+    command.creation_flags(0);
+    let output = command
+        .args([
+            "--exact",
+            &format!("ai::agent_sdk::driver::git_credentials::tests::{test_name}"),
+            "--nocapture",
+        ])
+        .current_dir(home.path())
+        .env("WARP_TEST_ASSIGNMENT_GIT_HOME", home.path())
+        .env("HOME", home.path())
+        .env("GH_CONFIG_DIR", home.path().join("gh"))
+        .env("GIT_CONFIG_GLOBAL", home.path().join(".gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn assignment_without_github_removes_standby_authentication() -> Result<()> {
+    with_assignment_git_home(
+        "assignment_without_github_removes_standby_authentication",
+        |home| {
+            configure_git_credentials(&[github_credential()])?;
+
+            clear_standby_credentials()?;
+            configure_assignment_git_credentials(&[gitlab_credential()], &[])?;
+
+            assert_eq!(
+                std::fs::read_to_string(home.join(".git-credentials"))?,
+                "https://oauth2:gitlab-token@gitlab.com\n"
+            );
+            assert!(!gh_config_dir(home).join(GH_HOSTS_FILENAME).exists());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn assignment_without_credentials_removes_standby_authentication() -> Result<()> {
+    with_assignment_git_home(
+        "assignment_without_credentials_removes_standby_authentication",
+        |home| {
+            configure_git_credentials(&[github_credential()])?;
+
+            clear_standby_credentials()?;
+            configure_assignment_git_credentials(&[], &[])?;
+
+            assert!(!home.join(".git-credentials").exists());
+            assert!(!gh_config_dir(home).join(GH_HOSTS_FILENAME).exists());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn assignment_replaces_standby_author_and_credentials() -> Result<()> {
+    with_assignment_git_home(
+        "assignment_replaces_standby_author_and_credentials",
+        |home| {
+            init_repo(home);
+            configure_git_credentials(&[github_credential()])?;
+            configure_repository_git_identity_if_unset(home, GITHUB_HOST, global_git_identity());
+            let creator = GitCredential {
+                token: "creator-token".into(),
+                username: Some("creator".into()),
+                email: Some("creator@example.com".into()),
+                host: GITHUB_HOST.into(),
+            };
+
+            clear_standby_credentials()?;
+            configure_assignment_git_credentials(&[creator], &[(home.into(), GITHUB_HOST)])?;
+
+            assert_eq!(
+                repository_git_identity(home),
+                Some(("creator".into(), "creator@example.com".into()))
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join(".git-credentials"))?,
+                "https://creator:creator-token@github.com\n"
+            );
+            let hosts = std::fs::read_to_string(gh_config_dir(home).join(GH_HOSTS_FILENAME))?;
+            assert!(hosts.contains("creator-token"));
+            assert!(!hosts.contains("github-token"));
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn assignment_preserves_setup_authors() -> Result<()> {
+    with_assignment_git_home("assignment_preserves_setup_authors", |home| {
+        init_repo(home);
+        configure_git_credentials(&[github_credential()])?;
+        run_git_config("user.name", "Setup Global");
+        run_git_config("user.email", "global@example.com");
+        run_repository_git_config(home, "user.name", "Setup Local");
+        run_repository_git_config(home, "user.email", "local@example.com");
+        let creator = GitCredential {
+            token: "creator-token".into(),
+            username: Some("creator".into()),
+            email: Some("creator@example.com".into()),
+            host: GITHUB_HOST.into(),
+        };
+
+        clear_standby_credentials()?;
+        configure_assignment_git_credentials(&[creator], &[(home.into(), GITHUB_HOST)])?;
+
+        assert_eq!(
+            global_git_identity(),
+            Some(("Setup Global".into(), "global@example.com".into()))
+        );
+        assert_eq!(
+            repository_git_identity(home),
+            Some(("Setup Local".into(), "local@example.com".into()))
+        );
+        Ok(())
+    })
+}
 
 #[test]
 fn git_authentication_preserves_managed_credentials() -> Result<()> {
