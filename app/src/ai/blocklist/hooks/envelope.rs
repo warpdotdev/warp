@@ -177,6 +177,7 @@ pub(crate) fn envelope_for_tool_result(
             action: action.action.clone(),
             tool_name: CanonicalToolName::for_action(&action.action),
             result: result.clone(),
+            duration: None,
         },
         ctx,
     );
@@ -198,6 +199,7 @@ pub(crate) fn envelope_for_tool_failure(
             tool_name: CanonicalToolName::for_action(&action.action),
             result: result.clone(),
             cancellation_reason: cancellation_reason.map(|reason| format!("{reason:?}")),
+            duration: None,
         },
         ctx,
     );
