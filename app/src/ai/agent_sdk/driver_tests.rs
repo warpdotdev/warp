@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{HookBoundary, HookRegistry};
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use chrono::Local;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
@@ -16,6 +15,7 @@ use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::poll;
 use mockito::Matcher;
+use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};

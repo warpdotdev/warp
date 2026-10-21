@@ -60,10 +60,7 @@ fn notices_and_diagnostics_are_one_typed_json_record_each() {
             record["conversation_id"], "server-conversation",
             "the same id conversation_started reports"
         );
-        assert_eq!(
-            record["local_conversation_id"],
-            conversation_id.to_string()
-        );
+        assert_eq!(record["local_conversation_id"], conversation_id.to_string());
         assert_eq!(record["action_id"], "action-1");
         assert_eq!(record["text"], "Blocked by policy\nsecond line");
 

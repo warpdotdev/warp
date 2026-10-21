@@ -231,9 +231,12 @@ impl HookRuntime {
     /// longer take effect; the registry records why, and this reports it through the messenger so
     /// the run's output says so too.
     fn subscribe_to_registry_changes(ctx: &mut ModelContext<Self>) {
-        ctx.subscribe_to_model(&HookRegistry::handle(ctx), |me, _, event, ctx| match event {
-            HookRegistryEvent::SnapshotChanged { .. } => me.report_project_diagnostics(ctx),
-        });
+        ctx.subscribe_to_model(
+            &HookRegistry::handle(ctx),
+            |me, _, event, ctx| match event {
+                HookRegistryEvent::SnapshotChanged { .. } => me.report_project_diagnostics(ctx),
+            },
+        );
     }
 
     fn report_project_diagnostics(&mut self, ctx: &AppContext) {

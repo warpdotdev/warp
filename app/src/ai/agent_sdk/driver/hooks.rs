@@ -25,11 +25,11 @@ use warpui::{AppContext, ModelContext, SingletonEntity as _};
 use super::{AgentDriver, AgentDriverError, output};
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
 use crate::ai::blocklist::hooks::{
     HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunIdentity, RunSurface,
 };
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 
 /// The hook settings a run was launched with. The run's `WARP_HOOK_DIRS` is read separately, when
 /// the driver is created.
