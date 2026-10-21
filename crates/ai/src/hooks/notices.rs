@@ -2,6 +2,7 @@ use ai_types::{AIAgentActionId, AIConversationId};
 
 use crate::hooks::model::HookDiagnostic;
 
+/// How a notice should be presented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookNoticeKind {
     Denied,

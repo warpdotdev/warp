@@ -35,6 +35,7 @@ impl WarpPermissionResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionFloors {}
 
+/// What the loop does with an action after hooks and Warp's own check are combined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Execute,

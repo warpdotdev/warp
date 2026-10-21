@@ -14,6 +14,9 @@ use crate::agent::action_result::AIAgentActionResultType;
 /// Version of the JSON contract hooks see on stdin and write on stdout.
 pub const HOOK_PROTOCOL_VERSION: u32 = 1;
 
+/// Version of the [`HookEnvelope`] shape. Bumped when the common fields change.
+pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
+
 /// Default deadline for hooks that run before an operation and can block it.
 pub const PRE_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -170,6 +173,7 @@ pub enum HookSourceLocation {
     Named(String),
 }
 
+/// A resolved source: what kind it is and where it was found.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HookSourceId {
     pub kind: HookSourceKind,
@@ -261,6 +265,8 @@ pub struct PermissionFacts {
 /// shape; scripts never see it directly.
 #[derive(Debug, Clone)]
 pub struct HookEnvelope {
+    /// Version of this envelope's shape; see [`ENVELOPE_SCHEMA_VERSION`]. Adapters read it;
+    /// scripts never see it.
     pub schema_version: u32,
     /// Identifies one firing of a boundary, shared by every hook that runs for it.
     pub occurrence_id: Uuid,
@@ -279,6 +285,7 @@ pub struct HookEnvelope {
     pub model_id: Option<LLMId>,
     pub user_email: Option<String>,
     pub warp_version: String,
+    /// Version of the stdin and stdout JSON contract scripts see; see [`HOOK_PROTOCOL_VERSION`].
     pub protocol_version: u32,
     pub permission_facts: PermissionFacts,
     pub payload: HookPayload,
@@ -496,7 +503,7 @@ pub struct HookEffects {
 }
 
 /// One channel of [`HookEffects`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EffectKind {
     Verdict,
     ReplacementInput,
@@ -723,7 +730,8 @@ pub fn validate_capabilities(
             });
         }
     }
-    warnings.sort_by_key(|warning| format!("{:?}", warning.effect));
+    // `may_produce` is a set, so sort for a stable order in diagnostics and tests.
+    warnings.sort_by_key(|warning| warning.effect);
     warnings
 }
 
