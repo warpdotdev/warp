@@ -55,10 +55,9 @@ impl Decoder<'_> {
         let output = parse_output(stdout).unwrap_or_default();
         let mut effects = self.verdict_effects(HookVerdict::Deny, &output);
         if effects.reasons.is_empty() {
-            effects.reasons.push(self.reason(format!(
-                "Denied by hook {} (exit 2).",
-                self.binding.command
-            )));
+            effects
+                .reasons
+                .push(self.reason(format!("Denied by hook {} (exit 2).", self.binding.command)));
         }
         effects
     }
@@ -95,18 +94,16 @@ impl Decoder<'_> {
             ..Default::default()
         };
         match verdict {
-            HookVerdict::Deny => {
-                match (agent_message, user_message) {
-                    (Some(agent), Some(user)) => {
-                        effects.reasons.push(self.reason(agent));
-                        effects.user_notices.push(user);
-                    }
-                    (Some(text), None) | (None, Some(text)) => {
-                        effects.reasons.push(self.reason(text));
-                    }
-                    (None, None) => {}
+            HookVerdict::Deny => match (agent_message, user_message) {
+                (Some(agent), Some(user)) => {
+                    effects.reasons.push(self.reason(agent));
+                    effects.user_notices.push(user);
                 }
-            }
+                (Some(text), None) | (None, Some(text)) => {
+                    effects.reasons.push(self.reason(text));
+                }
+                (None, None) => {}
+            },
             HookVerdict::Allow | HookVerdict::Ask | HookVerdict::NoOpinion | HookVerdict::Defer => {
                 effects.model_context.extend(agent_message);
                 effects.user_notices.extend(user_message);

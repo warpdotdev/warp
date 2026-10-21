@@ -140,13 +140,19 @@ fn the_command_runs_in_the_given_directory_with_the_expected_environment() {
     );
     let runner = CommandHookRunner::new(Arc::new(|| Some(OsString::from("/custom/bin"))));
     let mut invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10));
-    invocation.env = vec![(OsString::from("HOOK_TEST_VAR"), OsString::from("from-invocation"))];
+    invocation.env = vec![(
+        OsString::from("HOOK_TEST_VAR"),
+        OsString::from("from-invocation"),
+    )];
     let outcome = run(&runner, invocation);
     assert_eq!(outcome.exit, ProcessExit::Code(0));
     let lines = String::from_utf8(outcome.stdout).expect("utf-8");
     let lines = lines.lines().collect::<Vec<_>>();
     let canonical_dir = dir.path().canonicalize().expect("canonical tempdir");
-    assert_eq!(Path::new(lines[0]).canonicalize().expect("cwd"), canonical_dir);
+    assert_eq!(
+        Path::new(lines[0]).canonicalize().expect("cwd"),
+        canonical_dir
+    );
     assert_eq!(lines[1], "/custom/bin");
     assert_eq!(lines[2], HOOK_PROTOCOL_VERSION.to_string());
     assert_eq!(lines[3], "from-invocation");

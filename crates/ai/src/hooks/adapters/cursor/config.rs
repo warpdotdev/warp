@@ -103,7 +103,8 @@ fn validate_definition(
     index: usize,
     definition: &serde_json::Value,
 ) -> Result<ShellHookDefinition, HookConfigError> {
-    let invalid = |message: String| HookConfigError::Invalid(format!("{event}[{index}]: {message}"));
+    let invalid =
+        |message: String| HookConfigError::Invalid(format!("{event}[{index}]: {message}"));
     let raw: RawDefinition =
         serde_json::from_value(definition.clone()).map_err(|error| invalid(error.to_string()))?;
 

@@ -54,7 +54,11 @@ impl Slice {
 
         let mut registry = HookRegistry::new();
         registry
-            .install_explicit_source(&hooks_json, HookFormat::Cursor, HookSourceKind::RunDelivered)
+            .install_explicit_source(
+                &hooks_json,
+                HookFormat::Cursor,
+                HookSourceKind::RunDelivered,
+            )
             .expect("the file loads");
 
         let messenger = Arc::new(RecordingMessenger::new());
@@ -122,7 +126,11 @@ exit 2"#,
     assert_eq!(outcome.invocations.len(), 1);
     assert_eq!(outcome.invocations[0].exit, ProcessExit::Code(2));
     assert_eq!(outcome.registry_revision, 1);
-    assert_eq!(slice.messenger.notices().len(), 1, "the user message was routed");
+    assert_eq!(
+        slice.messenger.notices().len(),
+        1,
+        "the user message was routed"
+    );
 }
 
 #[test]
@@ -130,7 +138,10 @@ fn a_script_that_exits_two_silently_denies_with_the_default_reason() {
     let slice = Slice::new("exit 2", "");
     let outcome = slice.dispatch("rm -rf /tmp/x");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
-    assert_eq!(reasons(&outcome), vec!["Denied by hook ./hook.sh (exit 2)."]);
+    assert_eq!(
+        reasons(&outcome),
+        vec!["Denied by hook ./hook.sh (exit 2)."]
+    );
 }
 
 #[test]
@@ -200,7 +211,10 @@ fn the_script_receives_cursor_shaped_json_on_stdin() {
 
 #[test]
 fn the_hook_runs_in_the_directory_that_holds_the_file() {
-    let slice = Slice::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#, "");
+    let slice = Slice::new(
+        r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#,
+        "",
+    );
     slice.dispatch("ls");
     let recorded = fs::read_to_string(slice.dir.path().join("cwd.txt")).expect("cwd file");
     assert_eq!(
@@ -234,7 +248,10 @@ printf '{"permission":"allow"}'"#,
         .expect("a pid");
     let deadline = Instant::now() + Duration::from_secs(3);
     while nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok() {
-        assert!(Instant::now() < deadline, "process {pid} survived the timeout");
+        assert!(
+            Instant::now() < deadline,
+            "process {pid} survived the timeout"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -254,7 +271,10 @@ fn a_fail_closed_script_that_times_out_denies() {
 fn a_matcher_that_does_not_match_leaves_the_command_alone() {
     let slice = Slice::new("exit 2", r##", "matcher": "^rm ""##);
     assert_eq!(slice.dispatch("ls").effects.verdict, HookVerdict::NoOpinion);
-    assert_eq!(slice.dispatch("rm -rf x").effects.verdict, HookVerdict::Deny);
+    assert_eq!(
+        slice.dispatch("rm -rf x").effects.verdict,
+        HookVerdict::Deny
+    );
 }
 
 #[test]
@@ -286,13 +306,19 @@ fn a_missing_or_invalid_file_is_an_error_and_changes_nothing() {
     let error = registry
         .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
         .expect_err("missing file");
-    assert!(matches!(error, crate::hooks::adapters::HookConfigError::Unreadable(_)));
+    assert!(matches!(
+        error,
+        crate::hooks::adapters::HookConfigError::Unreadable(_)
+    ));
 
     fs::write(&missing, "{ not json").expect("write");
     let error = registry
         .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
         .expect_err("invalid file");
-    assert!(matches!(error, crate::hooks::adapters::HookConfigError::Parse(_)));
+    assert!(matches!(
+        error,
+        crate::hooks::adapters::HookConfigError::Parse(_)
+    ));
     assert_eq!(registry.revision(), 0);
     assert!(registry.snapshot().is_empty());
 }

@@ -111,9 +111,8 @@ fn matching_tests_the_command_text_with_an_unanchored_case_sensitive_regex() {
 #[test]
 fn only_shell_commands_match() {
     let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#,
-    );
+    let config =
+        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
     let binding = &adapter.bindings(&config)[0];
 
     let read = AIAgentActionType::ReadFiles(ReadFilesRequest {
@@ -142,9 +141,8 @@ fn only_shell_commands_match() {
 #[test]
 fn stdin_is_cursors_before_shell_execution_shape() {
     let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#,
-    );
+    let config =
+        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
     let binding = &adapter.bindings(&config)[0];
 
     let mut envelope = shell_envelope("rm -rf /tmp/x");
@@ -159,7 +157,10 @@ fn stdin_is_cursors_before_shell_execution_shape() {
 
     let input = adapter.encode_input(binding, &envelope);
     assert_eq!(input["hook_event_name"], "beforeShellExecution");
-    assert_eq!(input["conversation_id"], envelope.conversation_id.to_string());
+    assert_eq!(
+        input["conversation_id"],
+        envelope.conversation_id.to_string()
+    );
     assert_eq!(input["generation_id"], turn.as_uuid().to_string());
     assert_eq!(input["model"], "claude-sonnet");
     assert_eq!(input["cursor_version"], "v0.2026.01.01");
@@ -174,9 +175,8 @@ fn stdin_is_cursors_before_shell_execution_shape() {
 #[test]
 fn unknown_common_fields_are_absent_or_null_rather_than_invented() {
     let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#,
-    );
+    let config =
+        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
     let binding = &adapter.bindings(&config)[0];
 
     let mut envelope = shell_envelope("ls");
