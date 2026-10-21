@@ -149,6 +149,18 @@ fn malformed_output_denies_even_when_the_hook_fails_open() {
 }
 
 #[test]
+fn stdout_that_is_not_utf8_is_malformed() {
+    let outcome = HookProcessOutcome {
+        exit: ProcessExit::Code(0),
+        stdout: b"{\"permission\":\"allow\xff\"}".to_vec(),
+        stderr_tail: String::new(),
+        duration: Duration::from_millis(1),
+    };
+    let effects = decode_shell_permission_output(&binding(false), &outcome);
+    assert_eq!(effects.verdict, HookVerdict::Deny);
+}
+
+#[test]
 fn other_failures_follow_the_failure_policy() {
     let failures = [
         (ProcessExit::Code(1), "exited with code 1"),
