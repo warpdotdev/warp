@@ -24,8 +24,9 @@ use std::time::Duration;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    CommandExecutionPosture, DispatchPolicy, HookDispatcher, HookEnvelope, HookMessenger,
-    HookRegistry, HookRunner, HookSurface, HookTurnId, RegistrySnapshot, RunMetadata,
+    CommandExecutionPosture, DispatchPolicy, ExplicitHookSource, HookDispatcher, HookEnvelope,
+    HookMessenger, HookRegistry, HookRunner, HookSurface, HookTurnId, RegistrySnapshot,
+    RunMetadata,
 };
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
@@ -60,8 +61,6 @@ use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// What a hook's `ask` does on a surface with no one to ask. Like [`StrictHookPolicy`], it is
 /// run configuration a launcher sets on the runtime; there is no setting for it.
-// Only the run's launcher, which is later work, selects anything but the default.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum HeadlessAskBehavior {
     /// The action is denied with a reason that tells the model approval was unavailable.
@@ -72,10 +71,33 @@ pub(crate) enum HeadlessAskBehavior {
     FailRun,
 }
 
+/// Which kind of headless run this process is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RunSurface {
+    /// A run the server dispatched: an Oz cloud run, or a task resumed with `--task-id`.
+    Oz,
+    /// A `warp agent run` started from a command line.
+    #[default]
+    CommandLine,
+}
+
+impl RunSurface {
+    pub fn hook_surface(self) -> HookSurface {
+        match self {
+            Self::Oz => HookSurface::OzRun,
+            Self::CommandLine => HookSurface::CliRun,
+        }
+    }
+}
+
+/// The run this process belongs to and the surface its envelopes report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunIdentity {
+    pub metadata: RunMetadata,
+    pub surface: RunSurface,
+}
+
 /// Something the hook runtime did that the owner of the run may want to act on.
-// No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is
-// later work.
-#[allow(dead_code)]
 pub enum HookRuntimeEvent {
     /// A hook asked for confirmation on a surface with no one to ask, and the run asked to end
     /// when that happens. The action was already denied with a reason the model can read; the
@@ -94,7 +116,9 @@ pub struct HookRuntime {
     registry: ModelHandle<HookRegistry>,
     dispatcher: Arc<HookDispatcher>,
     messenger: Arc<dyn HookMessenger>,
-    run_metadata: Option<RunMetadata>,
+    run: Option<RunIdentity>,
+    /// The explicit sources the run was configured with, whether or not each one loaded.
+    delivered_sources: Vec<ExplicitHookSource>,
     strict_policy: StrictHookPolicy,
     headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
@@ -124,7 +148,8 @@ impl HookRuntime {
             registry: HookRegistry::handle(ctx),
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
             messenger,
-            run_metadata: None,
+            run: None,
+            delivered_sources: Vec::new(),
             strict_policy: StrictHookPolicy::default(),
             headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
@@ -270,15 +295,28 @@ impl HookRuntime {
     }
 
     /// The surface this process fires boundaries from.
-    fn surface(&self, ctx: &AppContext) -> HookSurface {
-        envelope::surface(self.run_metadata.is_some(), ctx)
+    pub(crate) fn surface(&self, ctx: &AppContext) -> HookSurface {
+        envelope::surface(self.run_surface(), ctx)
+    }
+
+    /// The surface of the run this process belongs to, once one was recorded.
+    pub(crate) fn run_surface(&self) -> Option<RunSurface> {
+        self.run.as_ref().map(|run| run.surface)
+    }
+
+    /// The command execution posture of the profile active for `terminal_view_id`, read the same
+    /// way [`Self::pin_for_run`] reads it.
+    pub(crate) fn command_execution_posture(
+        terminal_view_id: Option<EntityId>,
+        ctx: &AppContext,
+    ) -> CommandExecutionPosture {
+        command_execution_posture(terminal_view_id, ctx)
     }
 
     /// Whether nobody can answer a confirmation request for `conversation_id`: the process is a
     /// run, or the conversation is a hidden local child.
     pub fn is_headless_for(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
-        envelope::surface_for_conversation(conversation_id, self.run_metadata.is_some(), ctx)
-            .is_headless()
+        envelope::surface_for_conversation(conversation_id, self.run_surface(), ctx).is_headless()
     }
 
     pub fn strict_policy(&self) -> StrictHookPolicy {
@@ -372,7 +410,11 @@ impl HookRuntime {
     }
 
     pub fn run_metadata(&self) -> Option<&RunMetadata> {
-        self.run_metadata.as_ref()
+        self.run.as_ref().map(|run| &run.metadata)
+    }
+
+    pub(crate) fn delivered_sources(&self) -> &[ExplicitHookSource] {
+        &self.delivered_sources
     }
 
     /// Replaces the runner. Dispatches already in flight keep the runner they started with.
@@ -410,29 +452,29 @@ impl HookRuntime {
         });
     }
 
-    // No production caller yet: later work installs a surface-specific messenger, run metadata,
-    // and the run's hook policies through these setters.
+    /// Records the run this process belongs to. Envelopes built afterwards carry it and report
+    /// its surface.
+    pub(crate) fn set_run(&mut self, run: Option<RunIdentity>) {
+        self.run = run;
+    }
 
-    /// Records the run this process belongs to. Envelopes built afterwards carry it.
-    #[allow(dead_code)]
-    pub fn set_run_metadata(&mut self, run_metadata: Option<RunMetadata>) {
-        self.run_metadata = run_metadata;
+    /// Records the explicit sources the run was configured with, so launches that start other
+    /// runs can tell whether those sources would be missing there.
+    pub(crate) fn set_delivered_sources(&mut self, sources: Vec<ExplicitHookSource>) {
+        self.delivered_sources = sources;
     }
 
     /// Turns the strict hook policy on or off for every dispatch from now on.
-    #[allow(dead_code)]
     pub fn set_strict_policy(&mut self, policy: StrictHookPolicy) {
         self.strict_policy = policy;
     }
 
     /// Chooses what a hook's `ask` does on a surface with no one to ask.
-    #[allow(dead_code)]
-    pub fn set_headless_ask_behavior(&mut self, behavior: HeadlessAskBehavior) {
+    pub(crate) fn set_headless_ask_behavior(&mut self, behavior: HeadlessAskBehavior) {
         self.headless_ask_behavior = behavior;
     }
 
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
-    #[allow(dead_code)]
     pub fn set_messenger(&mut self, messenger: Arc<dyn HookMessenger>) {
         self.dispatcher = Arc::new(HookDispatcher::new(
             self.dispatcher.runner().clone(),
