@@ -843,14 +843,12 @@ impl BlocklistAIController {
             return;
         }
 
-        hooks::prompt::notify_prompt_submit(
-            &query,
-            Vec::new(),
-            conversation_id,
-            &self.active_session,
-            ctx,
+        let is_user_submitted_prompt = matches!(
+            input_query.input_query,
+            InputQueryType::UserSubmittedQueryFromInput { .. }
         );
-
+        // Hooks see the prompt as the user typed it, including any mode prefix.
+        let submitted_prompt = is_user_submitted_prompt.then(|| query.clone());
         let (query, user_query_mode) = extract_user_query_mode(query);
 
         // Attribute /orchestrate queries to the slash-command entry surface.
@@ -868,10 +866,7 @@ impl BlocklistAIController {
             );
         }
 
-        let should_prepend_finished_action_results = matches!(
-            input_query.input_query,
-            InputQueryType::UserSubmittedQueryFromInput { .. }
-        );
+        let should_prepend_finished_action_results = is_user_submitted_prompt;
 
         let completed_action_results = self.action_model.update(ctx, |action_model, ctx| {
             action_model.cancel_all_pending_actions(
@@ -881,6 +876,18 @@ impl BlocklistAIController {
             );
             action_model.drain_finished_action_results(conversation_id)
         });
+
+        // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
+        // turn's `prompt.submit`.
+        if let Some(prompt) = &submitted_prompt {
+            hooks::prompt::notify_prompt_submit(
+                prompt,
+                Vec::new(),
+                conversation_id,
+                &self.active_session,
+                ctx,
+            );
+        }
 
         let context = input_context_for_request(
             false,
@@ -3887,6 +3894,15 @@ impl BlocklistAIController {
                 });
             }
             ResponseStreamEvent::AfterStreamFinished { cancellation } => {
+                // Before any early return, so a stream whose conversation is gone still drops
+                // its observer state.
+                hooks::stream::flush_on_stream_end(
+                    &stream_id,
+                    cancellation.is_some(),
+                    &self.active_session,
+                    ctx,
+                );
+
                 // Cancellations provide conversation_id (survives truncation); otherwise use dynamic lookup.
                 let conversation_id = match &cancellation {
                     Some(stream_cancellation) => stream_cancellation.conversation_id,
@@ -3936,12 +3952,6 @@ impl BlocklistAIController {
                     && !is_any_exchange_unfinished
                     && actions_to_queue.is_empty()
                     && matches!(conversation.status(), ConversationStatus::Success);
-                hooks::stream::flush_on_stream_end(
-                    &stream_id,
-                    cancellation.is_some(),
-                    &self.active_session,
-                    ctx,
-                );
                 if turn_completed {
                     hooks::turn::notify_turn_stop(
                         TurnStopStatus::Completed,
