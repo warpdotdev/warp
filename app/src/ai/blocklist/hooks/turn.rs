@@ -1,9 +1,8 @@
 use ai::hooks::TurnStopStatus;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_turn_stop};
-use super::prompt::owns_turn_lifecycle;
+use super::{HookRuntime, owns_turn_lifecycle};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::model::session::active_session::ActiveSession;
 

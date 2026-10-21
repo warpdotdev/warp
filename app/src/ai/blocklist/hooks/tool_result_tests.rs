@@ -5,10 +5,10 @@ use warpui::{App, ModelHandle, SingletonEntity};
 
 use super::*;
 use crate::ai::agent::{AIAgentActionId, AIAgentActionResult};
-use crate::ai::blocklist::BlocklistAIActionModel;
 use crate::ai::blocklist::hooks::testing::{
     action_model, hook_test_app, init_project_action, read_nothing_action, settle, shell_action,
 };
+use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel};
 use crate::features::FeatureFlag;
 use crate::terminal::model::block::BlockId;
 

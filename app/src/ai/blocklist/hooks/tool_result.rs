@@ -1,10 +1,9 @@
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_tool_failure, envelope_for_tool_result};
+use super::{HookRuntime, executes_tool_calls_locally};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// What the funnel recorded about one terminal result, kept so tests can count calls per path.
@@ -47,14 +46,6 @@ pub(crate) fn observe_terminal_result(
         });
     }
     HookRuntime::as_ref(ctx).dispatch_detached(envelope, ctx);
-}
-
-/// Whether this client runs `conversation_id`'s tool calls. Unknown conversations do not.
-fn executes_tool_calls_locally(conversation_id: AIConversationId, ctx: &AppContext) -> bool {
-    ctx.has_singleton_model::<BlocklistAIHistoryModel>()
-        && BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .is_some_and(|conversation| conversation.driver().executes_tool_calls_locally())
 }
 
 #[cfg(test)]

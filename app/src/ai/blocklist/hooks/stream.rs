@@ -6,11 +6,10 @@ use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::{self as api};
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use super::HookRuntime;
 use super::envelope::{
     EnvelopeSite, envelope_for_reasoning_complete, envelope_for_response_complete,
 };
-use super::prompt::owns_turn_lifecycle;
+use super::{HookRuntime, owns_turn_lifecycle};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::ResponseStreamId;
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -56,18 +55,26 @@ struct CompletedMessage {
     text: String,
 }
 
+/// The text message currently being streamed.
+#[derive(Debug)]
+struct StreamingText {
+    message_id: String,
+    text: String,
+}
+
 #[derive(Debug, Default)]
 struct StreamState {
     conversation_id: Option<AIConversationId>,
-    current_text: Option<(String, String)>,
-    reasoning: HashMap<String, String>,
+    current_text: Option<StreamingText>,
+    /// Reasoning text received so far, by message id.
+    partial_reasoning: HashMap<String, String>,
     emitted_text: HashSet<String>,
     emitted_reasoning: HashSet<String>,
 }
 
 impl StreamState {
     fn complete_current_text(&mut self, completed: &mut Vec<CompletedMessage>) {
-        if let Some((message_id, text)) = self.current_text.take() {
+        if let Some(StreamingText { message_id, text }) = self.current_text.take() {
             self.emitted_text.insert(message_id.clone());
             completed.push(CompletedMessage {
                 conversation_id: self.conversation_id,
@@ -89,19 +96,16 @@ impl StreamState {
                 if self
                     .current_text
                     .as_ref()
-                    .is_some_and(|(current_id, _)| *current_id != message_id)
+                    .is_some_and(|current| current.message_id != message_id)
                 {
                     self.complete_current_text(completed);
                 }
                 let text = match (self.current_text.take(), update) {
-                    (Some((_, mut existing)), TextUpdate::Append(delta)) => {
-                        existing.push_str(&delta);
-                        existing
-                    }
+                    (Some(current), TextUpdate::Append(delta)) => current.text + &delta,
                     (None, TextUpdate::Append(delta)) => delta,
                     (_, TextUpdate::Set(text)) => text,
                 };
-                self.current_text = Some((message_id, text));
+                self.current_text = Some(StreamingText { message_id, text });
             }
             StreamObservation::Reasoning {
                 message_id,
@@ -112,13 +116,19 @@ impl StreamState {
                     return;
                 }
                 self.complete_current_text(completed);
-                let entry = self.reasoning.entry(message_id.clone()).or_default();
+                let entry = self
+                    .partial_reasoning
+                    .entry(message_id.clone())
+                    .or_default();
                 match update {
                     TextUpdate::Set(text) => *entry = text,
                     TextUpdate::Append(delta) => entry.push_str(&delta),
                 }
                 if let Some(duration) = finished_duration {
-                    let text = self.reasoning.remove(&message_id).unwrap_or_default();
+                    let text = self
+                        .partial_reasoning
+                        .remove(&message_id)
+                        .unwrap_or_default();
                     self.emitted_reasoning.insert(message_id.clone());
                     completed.push(CompletedMessage {
                         conversation_id: self.conversation_id,
@@ -134,7 +144,7 @@ impl StreamState {
                 if self
                     .current_text
                     .as_ref()
-                    .is_some_and(|(current_id, _)| *current_id != message_id)
+                    .is_some_and(|current| current.message_id != message_id)
                 {
                     self.complete_current_text(completed);
                 }
@@ -305,7 +315,7 @@ pub(crate) fn observe(
         return;
     }
     let completed = HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        runtime.stream.apply_batch(
+        runtime.stream_observer.apply_batch(
             stream_id,
             conversation_before,
             conversation_after,
@@ -327,7 +337,7 @@ pub(crate) fn flush_on_stream_end(
         return;
     }
     let completed = HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        runtime.stream.finish(stream_id, cancelled)
+        runtime.stream_observer.finish(stream_id, cancelled)
     });
     emit(completed, active_session, ctx);
 }

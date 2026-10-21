@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::{DispatchOutcome, HookBoundary, HookExecutionHost, MergedEffects};
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -10,8 +11,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentAction, AIAgentActionId};
-use crate::features::FeatureFlag;
+use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// What a cached verdict is keyed by. Action ids are only unique within a conversation, and the
@@ -30,7 +30,7 @@ pub(crate) enum PreToolHookState {
 }
 
 #[derive(Debug)]
-struct Entry {
+struct VerdictEntry {
     state: PreToolHookState,
     /// Set once any caller asked for this action with user approval, so the resumed attempt
     /// keeps that approval.
@@ -40,7 +40,7 @@ struct Entry {
 
 #[derive(Debug, Default)]
 pub(crate) struct PreToolVerdictCache {
-    entries: HashMap<VerdictKey, Entry>,
+    entries: HashMap<VerdictKey, VerdictEntry>,
 }
 
 /// Names one dispatch of one action. A later dispatch for the same action gets a new ticket, so
@@ -84,6 +84,50 @@ pub(crate) struct Resumption {
     pub is_user_initiated: bool,
 }
 
+/// The result an action finishes with when a hook denies it. Only shell commands have a result
+/// that carries the hook's reason; every other family finishes with its cancelled result and the
+/// reason reaches the user through a notice.
+pub(crate) fn denied_result(action: &AIAgentActionType, reason: &str) -> AIAgentActionResultType {
+    match action {
+        AIAgentActionType::RequestCommandOutput { command, .. } => {
+            AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
+                command: command.clone(),
+                reason: reason.to_owned(),
+            })
+        }
+        AIAgentActionType::WriteToLongRunningShellCommand { .. }
+        | AIAgentActionType::ReadFiles(_)
+        | AIAgentActionType::UploadArtifact(_)
+        | AIAgentActionType::SearchCodebase(_)
+        | AIAgentActionType::RequestFileEdits { .. }
+        | AIAgentActionType::Grep { .. }
+        | AIAgentActionType::FileGlob { .. }
+        | AIAgentActionType::FileGlobV2 { .. }
+        | AIAgentActionType::ReadMCPResource { .. }
+        | AIAgentActionType::CallMCPTool { .. }
+        | AIAgentActionType::SuggestNewConversation { .. }
+        | AIAgentActionType::SuggestPrompt(_)
+        | AIAgentActionType::InitProject
+        | AIAgentActionType::OpenCodeReview
+        | AIAgentActionType::ReadDocuments(_)
+        | AIAgentActionType::EditDocuments(_)
+        | AIAgentActionType::CreateDocuments(_)
+        | AIAgentActionType::ReadShellCommandOutput { .. }
+        | AIAgentActionType::UseComputer(_)
+        | AIAgentActionType::InsertCodeReviewComments { .. }
+        | AIAgentActionType::RequestComputerUse(_)
+        | AIAgentActionType::StartRecording { .. }
+        | AIAgentActionType::StopRecording { .. }
+        | AIAgentActionType::ReadSkill(_)
+        | AIAgentActionType::FetchConversation { .. }
+        | AIAgentActionType::SendMessageToAgent { .. }
+        | AIAgentActionType::TransferShellCommandControlToUser { .. }
+        | AIAgentActionType::AskUserQuestion { .. }
+        | AIAgentActionType::RunAgents(_)
+        | AIAgentActionType::WaitForEvents { .. } => action.cancelled_result(),
+    }
+}
+
 /// Sets the cancel flag if the dispatch future is dropped before it finishes, so a runner that
 /// polls the flag stops even when nobody is left to wait for the verdict.
 struct CancelOnDrop(Option<Arc<AtomicBool>>);
@@ -119,7 +163,7 @@ pub(crate) fn begin_or_lookup(
     };
     let runtime = HookRuntime::handle(ctx);
     let cached = runtime.update(ctx, |runtime, _| {
-        runtime.pre_tool.entries.get_mut(&key).map(|entry| {
+        runtime.pre_tool_verdicts.entries.get_mut(&key).map(|entry| {
             entry.is_user_initiated |= is_user_initiated;
             entry.state.clone()
         })
@@ -156,9 +200,9 @@ pub(crate) fn begin_or_lookup(
         cancel: Arc::new(AtomicBool::new(false)),
     };
     let dispatch = runtime.update(ctx, |runtime, _| {
-        runtime.pre_tool.entries.insert(
+        runtime.pre_tool_verdicts.entries.insert(
             key,
-            Entry {
+            VerdictEntry {
                 state: PreToolHookState::Pending,
                 is_user_initiated,
                 cancel: ticket.cancel.clone(),
@@ -187,12 +231,12 @@ pub(crate) fn on_resolved(
     outcome: DispatchOutcome,
     ctx: &mut AppContext,
 ) -> Option<Resumption> {
-    if ticket.cancel.load(Ordering::Acquire) || !ctx.has_singleton_model::<HookRuntime>() {
+    if ticket.cancel.load(Ordering::Acquire) || !HookRuntime::is_installed(ctx) {
         return None;
     }
     let key = ticket.key();
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        let entry = runtime.pre_tool.entries.get_mut(&key)?;
+        let entry = runtime.pre_tool_verdicts.entries.get_mut(&key)?;
         if !Arc::ptr_eq(&entry.cancel, &ticket.cancel) {
             return None;
         }
@@ -211,7 +255,7 @@ pub(crate) fn invalidate(
     action_id: &AIAgentActionId,
     ctx: &mut AppContext,
 ) {
-    if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<HookRuntime>() {
+    if !HookRuntime::is_installed(ctx) {
         return;
     }
     let key = VerdictKey {
@@ -219,7 +263,7 @@ pub(crate) fn invalidate(
         action_id: action_id.clone(),
     };
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        if let Some(entry) = runtime.pre_tool.entries.remove(&key) {
+        if let Some(entry) = runtime.pre_tool_verdicts.entries.remove(&key) {
             entry.cancel.store(true, Ordering::Release);
         }
     });
@@ -227,11 +271,11 @@ pub(crate) fn invalidate(
 
 /// Forgets every action of `conversation_id` and stops its in-flight dispatches.
 pub(crate) fn cancel_all_for_conversation(conversation_id: AIConversationId, ctx: &mut AppContext) {
-    if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<HookRuntime>() {
+    if !HookRuntime::is_installed(ctx) {
         return;
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        runtime.pre_tool.entries.retain(|key, entry| {
+        runtime.pre_tool_verdicts.entries.retain(|key, entry| {
             if key.conversation_id == conversation_id {
                 entry.cancel.store(true, Ordering::Release);
                 false
@@ -253,7 +297,7 @@ pub(crate) fn cached_state(
         action_id: action_id.clone(),
     };
     HookRuntime::as_ref(ctx)
-        .pre_tool
+        .pre_tool_verdicts
         .entries
         .get(&key)
         .map(|entry| entry.state.clone())
@@ -270,7 +314,7 @@ pub(crate) fn cancel_flag(
         action_id: action_id.clone(),
     };
     HookRuntime::as_ref(ctx)
-        .pre_tool
+        .pre_tool_verdicts
         .entries
         .get(&key)
         .map(|entry| entry.cancel.clone())
