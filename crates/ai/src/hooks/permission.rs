@@ -58,8 +58,7 @@ pub struct PermissionFloors {
     /// A command denylist that applies to this run matched the command: the organization's
     /// list, or the user's list when per-conversation auto-approve is not allowed to bypass it.
     pub command_denylist_hit: bool,
-    /// A file edit touches a protected path: an MCP configuration file outside a sandbox, or a
-    /// hook file or a script it names anywhere.
+    /// A file edit touches a protected MCP configuration file outside a sandbox.
     pub protected_write_path: bool,
     /// The MCP server is on the active profile's denylist.
     pub mcp_server_denylisted: bool,
@@ -155,7 +154,7 @@ impl HookPermissionPolicy {
                     // Interactive surfaces follow the vendor's "warn and ignore" rule for a
                     // deferral, unless the strict policy turns every unsupported control output
                     // into a denial.
-                    if run.headless || run.is_strict {
+                    if run.is_headless || run.is_strict {
                         PermissionDecision::Deny {
                             reason: default_reason(merged, DEFERRAL_UNSUPPORTED_DENY_REASON),
                             cause: DenyCause::DeferralUnsupported,
@@ -188,7 +187,7 @@ impl HookPermissionPolicy {
         run: RunFacts,
         warp_alone: PermissionDecision,
     ) -> PermissionDecision {
-        if run.headless {
+        if run.is_headless {
             let text = match verdict_reason(merged) {
                 Some(reason) => format!(
                     "{APPROVAL_UNAVAILABLE_PREFIX} ({}) and this run has no one to ask.",

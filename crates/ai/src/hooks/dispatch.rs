@@ -49,15 +49,13 @@ pub struct InvocationRecord {
 pub struct DispatchOutcome {
     pub effects: MergedEffects,
     pub invocations: Vec<InvocationRecord>,
-    pub registry_revision: u64,
 }
 
 impl DispatchOutcome {
-    fn no_opinion(registry_revision: u64) -> Self {
+    fn no_opinion() -> Self {
         Self {
             effects: MergedEffects::no_opinion(),
             invocations: Vec::new(),
-            registry_revision,
         }
     }
 }
@@ -66,8 +64,8 @@ impl DispatchOutcome {
 ///
 /// Every binding that matches runs at the same time (the runner bounds how many processes are
 /// alive at once) and each is held to its own timeout, so the dispatch ends when the slowest
-/// invocation does. Results are merged in the pinned snapshot's order, never in the order the
-/// processes finished. The adapter applies each binding's failure policy and the strict hook
+/// invocation does. Results are merged in the finalized snapshot's order, never in the order
+/// the processes finished. The adapter applies each binding's failure policy and the strict hook
 /// policy to what the process did; the dispatcher then refuses any effect the boundary cannot
 /// honor in this phase, by denying on a boundary that runs before an operation and by reporting
 /// it everywhere else.
@@ -85,18 +83,17 @@ impl HookDispatcher {
         &self.runner
     }
 
-    /// Runs every binding in `pinned` that matches `envelope`. `cancel` belongs to this firing:
+    /// Runs every binding in `snapshot` that matches `envelope`. `cancel` belongs to this firing:
     /// once set, no further binding starts, running ones are asked to stop, and whatever they
     /// produced is discarded rather than merged.
     pub fn dispatch(
         &self,
         envelope: HookEnvelope,
-        pinned: Arc<RegistrySnapshot>,
+        snapshot: Arc<RegistrySnapshot>,
         policy: DispatchPolicy,
         cancel: Arc<AtomicBool>,
     ) -> BoxFuture<'static, DispatchOutcome> {
-        let registry_revision = pinned.revision;
-        let matching = pinned
+        let matching = snapshot
             .bindings_for(envelope.boundary(), envelope.execution_host)
             .into_iter()
             .filter(|active| active.adapter.matches(&active.binding, &envelope))
@@ -106,7 +103,7 @@ impl HookDispatcher {
             "the registry handed the dispatcher the same binding twice"
         );
         if matching.is_empty() || cancel.load(Ordering::Acquire) {
-            return futures::future::ready(DispatchOutcome::no_opinion(registry_revision)).boxed();
+            return futures::future::ready(DispatchOutcome::no_opinion()).boxed();
         }
 
         let runner = self.runner.clone();
@@ -153,7 +150,6 @@ impl HookDispatcher {
                 return DispatchOutcome {
                     effects: MergedEffects::no_opinion(),
                     invocations,
-                    registry_revision,
                 };
             }
 
@@ -171,7 +167,6 @@ impl HookDispatcher {
             DispatchOutcome {
                 effects,
                 invocations,
-                registry_revision,
             }
         }
         .boxed()
@@ -179,8 +174,8 @@ impl HookDispatcher {
 }
 
 /// Whether no two bindings come from the same resolved source file at the same position. The
-/// registry runs a file reached under two kinds or two roots once; this checks that promise
-/// before any process starts.
+/// registry runs a canonical file selected through multiple configured scopes once; this checks
+/// that promise before any process starts.
 fn has_distinct_sources(matching: &[ActiveBinding]) -> bool {
     let mut seen = HashSet::new();
     matching.iter().all(|active| {

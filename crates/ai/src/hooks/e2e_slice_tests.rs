@@ -149,7 +149,6 @@ exit 2"#,
     assert_eq!(outcome.effects.user_notices, vec!["Blocked"]);
     assert_eq!(outcome.invocations.len(), 1);
     assert_eq!(outcome.invocations[0].exit, ProcessExit::Code(2));
-    assert_eq!(outcome.registry_revision, 1);
     assert_eq!(
         harness.messenger.notices().len(),
         1,

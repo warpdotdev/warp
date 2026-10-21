@@ -234,7 +234,7 @@ mod hooks {
     use std::sync::Arc;
 
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-    use ai::hooks::{HookBoundary, HookNoticeKind};
+    use ai::hooks::{APPROVAL_UNAVAILABLE_PREFIX, HookBoundary, HookNoticeKind};
     use parking_lot::FairMutex;
     use warp_multi_agent_api::{self as api};
     use warpui::{App, ModelHandle};
@@ -248,8 +248,8 @@ mod hooks {
     use crate::ai::blocklist::RecordingController;
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
     use crate::ai::blocklist::hooks::test_utils::{
-        HookTestApp, hook_test_app, init_project_action, let_background_work_settle, settle,
-        shell_action,
+        HookTestApp, add_child_conversation, hook_test_app, init_project_action,
+        let_background_work_settle, settle, shell_action,
     };
     use crate::ai::blocklist::hooks::{pre_tool, tool_result};
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -633,6 +633,98 @@ mod hooks {
                     .iter()
                     .any(|l| l == &format!("finished:{}:init_project", init.id))
             );
+        });
+    }
+
+    /// Runs `action` through the pre-tool hook once: the first attempt waits, the verdict lands,
+    /// and the second attempt's outcome is returned.
+    async fn execute_through_hooks(
+        app: &mut App,
+        executor: &ModelHandle<BlocklistAIActionExecutor>,
+        events: &EventLog,
+        action: &AIAgentAction,
+        conversation_id: AIConversationId,
+        is_user_initiated: bool,
+    ) -> TryExecuteResult {
+        let first = try_execute(app, executor, action, conversation_id, is_user_initiated);
+        assert_eq!(reason_of(&first), Some(NotExecutedReason::WaitingOnHooks));
+        let verdict_line = format!("verdict:{}:{is_user_initiated}", action.id);
+        settle(app, |_| events.borrow().iter().any(|l| l == &verdict_line)).await;
+        try_execute(app, executor, action, conversation_id, is_user_initiated)
+    }
+
+    #[test]
+    fn a_hook_ask_adds_a_confirmation_step_that_the_users_approval_satisfies() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(&mut app);
+            let binding =
+                test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("InitProject"));
+            harness.hooks.runner.script(
+                binding.id.clone(),
+                ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"check first"}"#),
+            );
+            app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
+            let (executor, events) = build_executor(&mut app, &harness);
+
+            // Warp would run project initialization on its own; the hook holds it for the user.
+            let init = init_project_action("id-init");
+            let held = execute_through_hooks(
+                &mut app,
+                &executor,
+                &events,
+                &init,
+                harness.conversation_id,
+                false,
+            )
+            .await;
+            assert_eq!(reason_of(&held), Some(NotExecutedReason::NeedsConfirmation));
+            assert!(harness.hooks.messenger.notices().is_empty());
+
+            // The user's approval of this revision satisfies the ask; the verdict is reused.
+            let approved = try_execute(&mut app, &executor, &init, harness.conversation_id, true);
+            assert!(matches!(approved, TryExecuteResult::ExecutedSync));
+            assert!(
+                events
+                    .borrow()
+                    .iter()
+                    .any(|l| l == &format!("finished:{}:init_project", init.id))
+            );
+            assert_eq!(harness.hooks.adapter.encoded_count(), 1);
+        });
+    }
+
+    #[test]
+    fn a_hook_ask_for_a_hidden_child_ends_in_hook_denied_with_approval_unavailable() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(&mut app);
+            let child = add_child_conversation(&mut app, &harness);
+            install_shell_binding(
+                &harness,
+                &mut app,
+                r#"{"verdict":"ask","reason":"this touches production"}"#,
+                0,
+            );
+            let (executor, events) = build_executor(&mut app, &harness);
+            let shell = shell_action("id-shell", "ls");
+
+            let outcome =
+                execute_through_hooks(&mut app, &executor, &events, &shell, child, false).await;
+            assert!(matches!(outcome, TryExecuteResult::ExecutedSync));
+            let finished = events
+                .borrow()
+                .iter()
+                .find(|l| l.starts_with(&format!("finished:{}:denied_by_hook(", shell.id)))
+                .cloned()
+                .expect("the command finishes denied");
+            assert!(finished.contains(APPROVAL_UNAVAILABLE_PREFIX), "{finished}");
+            assert!(finished.contains("this touches production"), "{finished}");
+
+            let notices = harness.hooks.messenger.notices();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].kind, HookNoticeKind::Denied);
+            assert!(notices[0].text.starts_with(APPROVAL_UNAVAILABLE_PREFIX));
         });
     }
 

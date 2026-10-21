@@ -102,7 +102,6 @@ fn no_bindings_is_no_opinion_without_touching_the_runner() {
     let outcome = dispatch(&h, shell_envelope(), Vec::new());
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
     assert!(outcome.invocations.is_empty());
-    assert_eq!(outcome.registry_revision, 7);
     assert_eq!(h.runner.invocation_count(), 0);
     assert_eq!(h.adapter.encoded_count(), 0);
 }
