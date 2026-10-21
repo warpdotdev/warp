@@ -17,13 +17,15 @@ use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, Repo
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
-use warp_cli::agent::{Harness, HarnessTransport};
+use ai::hooks::HookRegistry;
+use warp_cli::agent::{Harness, HarnessTransport, HooksOnAsk};
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
@@ -59,6 +61,10 @@ use crate::ai::blocklist::orchestration_events::{
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
     ResponseStream, ResponseStreamId,
+};
+use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::{
+    HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunSurface,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
@@ -1759,6 +1765,212 @@ fn skill_dirs_first_name_wins_hides_later_duplicates() {
         assert_eq!(skills.len(), 2, "{skills:?}");
         assert!(skills.contains(&("shared".to_owned(), "Agent copy.".to_owned())));
         assert!(skills.iter().any(|(name, _)| name == "ref-only"));
+    });
+}
+
+// ── Agent hooks ─────────────────────────────────────────────────────────────
+
+const HOOK_TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+/// A driver on a fresh terminal whose hook runtime uses recording doubles.
+fn driver_with_hooks(
+    app: &mut App,
+    working_dir: &Path,
+) -> (
+    warpui::ModelHandle<AgentDriver>,
+    warpui::ViewHandle<crate::terminal::TerminalView>,
+    TestHooks,
+) {
+    initialize_app_for_terminal_view(app);
+    let hooks = app.update(install_test_hooks);
+    let terminal_view = add_window_with_terminal(app, None);
+    let working_dir = working_dir.to_path_buf();
+    let driver = app.add_model(|ctx| {
+        let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+            terminal_view.clone(),
+            ctx,
+        );
+        let mut driver = AgentDriver::new_for_test(working_dir, terminal_driver, ctx);
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = None;
+        driver
+    });
+    (driver, terminal_view, hooks)
+}
+
+#[test]
+fn hook_setup_records_the_run_its_surface_and_its_policies() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let temp = TempDir::new().unwrap();
+        let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
+        let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
+
+        for (surface, strict, on_ask, behavior) in [
+            (
+                RunSurface::Oz,
+                true,
+                HooksOnAsk::FailRun,
+                HeadlessAskBehavior::FailRun,
+            ),
+            (
+                RunSurface::CommandLine,
+                false,
+                HooksOnAsk::Deny,
+                HeadlessAskBehavior::DenyWithReason,
+            ),
+        ] {
+            driver.update(&mut app, |driver, ctx| {
+                driver.task_id = Some(task_id);
+                driver.parent_run_id = Some("parent-run".to_owned());
+                driver.hook_options.surface = surface;
+                driver.hook_options.strict = strict;
+                driver.hook_options.on_ask = on_ask;
+                drop(driver.prepare_hooks_for_run(ctx));
+            });
+            app.read(|ctx| {
+                let runtime = HookRuntime::as_ref(ctx);
+                let run = runtime.run_metadata().expect("the run is recorded");
+                assert_eq!(run.run_id, HOOK_TASK_ID);
+                assert_eq!(run.task_id.as_deref(), Some(HOOK_TASK_ID));
+                assert_eq!(run.parent_run_id.as_deref(), Some("parent-run"));
+                assert_eq!(runtime.run_surface(), Some(surface));
+                assert_eq!(runtime.strict_policy().enabled, strict);
+                assert_eq!(runtime.headless_ask_behavior(), behavior);
+            });
+        }
+    });
+}
+
+#[test]
+fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        for dir in ["early", "late"] {
+            fs::create_dir_all(working_dir.join(dir)).unwrap();
+            fs::write(
+                working_dir.join(dir).join("hooks.json"),
+                r#"{"version":1,"hooks":{"beforeShellExecution":[{"command":"true"}]}}"#,
+            )
+            .unwrap();
+        }
+        let (driver, _terminal, hooks) = driver_with_hooks(&mut app, &working_dir);
+
+        let loaded = driver.update(&mut app, |driver, ctx| {
+            driver.hook_dirs = vec![PathBuf::from("early")];
+            driver.load_hook_sources_for_run(ctx)
+        });
+        assert!(loaded.is_ok(), "{loaded:?}");
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.pinned().is_none(), "loading sources must not pin");
+            assert_eq!(registry.snapshot().bindings.len(), 1);
+        });
+
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.pinned().is_some(), "execute_run pins the run");
+            assert_eq!(
+                registry.snapshot().bindings.len(),
+                1,
+                "the source loaded before pinning stays active"
+            );
+        });
+
+        let late = driver.update(&mut app, |driver, ctx| {
+            driver.hook_dirs = vec![PathBuf::from("late")];
+            driver.load_hook_sources_for_run(ctx)
+        });
+        assert!(late.is_ok());
+        assert_eq!(
+            app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
+            1,
+            "a source loaded after the run pinned does not activate"
+        );
+        assert!(
+            hooks
+                .messenger
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.source.to_string().contains("late")),
+            "the refused source is reported"
+        );
+    });
+}
+
+#[test]
+fn execute_run_does_not_fire_session_start() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, hooks) = driver_with_hooks(&mut app, temp.path());
+        app.update(|ctx| {
+            hooks.install_bindings(
+                vec![ai::hooks::test_util::test_binding(
+                    ai::hooks::test_util::test_source_id("session"),
+                    ai::hooks::HookBoundary::SessionStart,
+                    0,
+                    None,
+                )],
+                ctx,
+            );
+        });
+        let terminal_id = terminal.id();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_id, false, false, false, ctx);
+        });
+
+        let _run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        Timer::after(Duration::from_millis(50)).await;
+
+        assert_eq!(hooks.runner.invocation_count(), 0);
+    });
+}
+
+#[test]
+fn an_unanswerable_ask_in_a_fail_run_run_fails_the_conversation_with_the_hook_reason() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let temp = TempDir::new().unwrap();
+        let (driver, terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (conversation_id, _stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        let run_exit_rx = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+
+        let reason = "Approval unavailable: an agent hook asked for confirmation (needs a human) \
+                      and this run has no one to ask.";
+        HookRuntime::handle(&app).update(&mut app, |_, ctx| {
+            ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
+                conversation_id,
+                action_id: crate::ai::agent::AIAgentActionId::from("action-1".to_owned()),
+                reason: reason.to_owned(),
+            });
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).unwrap().status(),
+                &ConversationStatus::Error
+            );
+        });
+        let SDKConversationOutputStatus::Error { error } = run_exit_rx.await.unwrap() else {
+            panic!("the run must end as a failure");
+        };
+        let message = error.to_string();
+        assert!(message.contains("needs a human"), "{message}");
+        assert!(message.contains("action-1"), "{message}");
     });
 }
 
