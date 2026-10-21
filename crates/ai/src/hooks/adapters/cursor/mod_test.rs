@@ -83,6 +83,31 @@ fn bindings_are_declared_per_definition_in_file_order() {
 }
 
 #[test]
+fn a_prompt_hook_becomes_a_warning_and_the_command_hook_after_it_keeps_its_index() {
+    let adapter = CursorAdapter::new();
+    let config = parsed(
+        r#"{ "version": 1, "hooks": { "beforeShellExecution": [
+            { "type": "prompt", "prompt": "Is this safe?" },
+            { "command": "./check.sh" }
+        ] } }"#,
+    );
+    assert_eq!(config.warnings.len(), 1);
+    assert_eq!(
+        config.warnings[0].message,
+        "beforeShellExecution[0]: prompt hooks are not supported yet; it was skipped"
+    );
+    assert_eq!(config.warnings[0].severity, DiagnosticSeverity::Warning);
+
+    let bindings = adapter.bindings(&config);
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        bindings[0].id.index, 1,
+        "the id keeps the position in the file"
+    );
+    assert_eq!(bindings[0].command, "./check.sh");
+}
+
+#[test]
 fn matching_tests_the_command_text_with_an_unanchored_case_sensitive_regex() {
     let adapter = CursorAdapter::new();
     let config = parsed(

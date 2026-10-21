@@ -17,11 +17,13 @@ fn a_minimal_file_yields_one_shell_hook_with_defaults() {
         parsed,
         ParsedCursorFile {
             shell_hooks: vec![ShellHookDefinition {
+                index: 0,
                 command: "./check.sh".to_owned(),
                 matcher: None,
                 timeout: PRE_EXECUTION_TIMEOUT,
                 fail_closed: false,
             }],
+            skipped_definitions: Vec::new(),
             unknown_events: Vec::new(),
         }
     );
@@ -103,20 +105,33 @@ fn a_definition_without_a_command_is_invalid() {
 }
 
 #[test]
-fn a_prompt_hook_is_rejected() {
-    let error = parse(
+fn a_prompt_hook_is_skipped_and_the_command_hooks_beside_it_keep_their_positions() {
+    let parsed = parse(
         r#"{ "version": 1, "hooks": { "beforeShellExecution": [
-            { "type": "prompt", "prompt": "Is this command safe?" }
+            { "type": "prompt", "prompt": "Is this command safe?" },
+            { "command": "./check.sh" }
         ] } }"#,
+    )
+    .expect("parses");
+    assert_eq!(parsed.shell_hooks.len(), 1);
+    assert_eq!(parsed.shell_hooks[0].index, 1);
+    assert_eq!(parsed.shell_hooks[0].command, "./check.sh");
+    assert_eq!(
+        parsed.skipped_definitions,
+        vec!["beforeShellExecution[0]: prompt hooks are not supported yet; it was skipped"]
+    );
+}
+
+#[test]
+fn an_unknown_hook_type_is_invalid() {
+    let error = parse(
+        r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "type": "http", "command": "x" } ] } }"#,
     )
     .expect_err("rejects");
     let HookConfigError::Invalid(message) = error else {
         panic!("expected an invalid-config error, got {error:?}");
     };
-    assert!(
-        message.contains("prompt hooks are not supported"),
-        "{message}"
-    );
+    assert!(message.contains("unknown hook type"), "{message}");
 }
 
 #[test]
