@@ -137,8 +137,16 @@ pub fn invocation_environment(hook: &HookIdentity) -> Vec<(OsString, OsString)> 
     }
 
     let project_dir = hook.project_dir.clone().into_os_string();
-    set(&mut variables, "WARP_PROJECT_DIR".into(), project_dir.clone());
-    set(&mut variables, "WARP_VERSION".into(), hook.warp_version.clone().into());
+    set(
+        &mut variables,
+        "WARP_PROJECT_DIR".into(),
+        project_dir.clone(),
+    );
+    set(
+        &mut variables,
+        "WARP_VERSION".into(),
+        hook.warp_version.clone().into(),
+    );
     if let Some(run_id) = &hook.run_id {
         set(&mut variables, "WARP_RUN_ID".into(), run_id.into());
     }
@@ -151,7 +159,11 @@ pub fn invocation_environment(hook: &HookIdentity) -> Vec<(OsString, OsString)> 
 
     match hook.format {
         HookFormat::Cursor => {
-            set(&mut variables, "CURSOR_PROJECT_DIR".into(), project_dir.clone());
+            set(
+                &mut variables,
+                "CURSOR_PROJECT_DIR".into(),
+                project_dir.clone(),
+            );
             set(
                 &mut variables,
                 "CURSOR_VERSION".into(),
@@ -170,7 +182,9 @@ pub fn invocation_environment(hook: &HookIdentity) -> Vec<(OsString, OsString)> 
 }
 
 fn is_scrubbed(name: &OsStr) -> bool {
-    HOST_SCRUB_LIST.iter().any(|scrubbed| names_match(name, scrubbed))
+    HOST_SCRUB_LIST
+        .iter()
+        .any(|scrubbed| names_match(name, scrubbed))
         || HOST_SCRUB_PREFIXES
             .iter()
             .any(|prefix| name_has_prefix(name, prefix))

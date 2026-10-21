@@ -75,9 +75,9 @@ pub fn working_directory_for(
                 .and_then(Path::parent)
                 .map(Path::to_path_buf)
         }),
-        HookSourceKind::RunDelivered | HookSourceKind::FactoryAgent | HookSourceKind::FactoryWide => {
-            declaring_dir
-        }
+        HookSourceKind::RunDelivered
+        | HookSourceKind::FactoryAgent
+        | HookSourceKind::FactoryWide => declaring_dir,
     }
 }
 
