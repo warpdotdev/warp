@@ -671,15 +671,13 @@ mod hooks {
         });
     }
 
-    /// The slice with no test doubles: a Cursor `hooks.json` on disk, a real script, the real
-    /// process runner, and the real registry loader.
+    /// End-to-end shell hook execution with no test doubles: a Cursor `hooks.json` on disk, a real
+    /// script, the process runner, and the registry loader.
     #[cfg(all(feature = "local_fs", unix))]
     mod real_process {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
-        use std::sync::Arc;
 
-        use ai::hooks::runner::command::CommandHookRunner;
         use ai::hooks::{HookFormat, HookRegistry, HookSourceKind};
         use tempfile::TempDir;
         use warpui::{App, SingletonEntity};
@@ -712,9 +710,7 @@ mod hooks {
                 .expect("write hooks.json");
 
                 app.update(|ctx| {
-                    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-                        runtime.set_runner(Arc::new(CommandHookRunner::new(Arc::new(|| None))));
-                    });
+                    HookRuntime::install_command_runner(ctx);
                     HookRegistry::handle(ctx)
                         .update(ctx, |registry, _| {
                             registry.install_explicit_source(
