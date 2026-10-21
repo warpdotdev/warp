@@ -121,7 +121,14 @@ fn a_prompt_hook_is_rejected() {
 
 #[test]
 fn a_bad_timeout_is_invalid() {
-    for timeout in ["0", "-1", "\"5\""] {
+    for timeout in [
+        "0",
+        "-1",
+        "\"5\"",
+        "1e20",
+        "99999999999999999999999",
+        "1e-30",
+    ] {
         let text = format!(
             r#"{{ "version": 1, "hooks": {{ "beforeShellExecution": [ {{ "command": "x", "timeout": {timeout} }} ] }} }}"#
         );
