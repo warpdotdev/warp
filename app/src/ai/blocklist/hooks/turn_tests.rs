@@ -893,7 +893,11 @@ fn a_newer_turn_whose_actions_still_run_is_not_finished_under_them() {
             has_unfinished_actions(&app, &harness, conversation_id),
             "the newer turn's command was not cancelled"
         );
-        assert_eq!(exchange_count(&app, conversation_id), 2, "the follow-up was not sent");
+        assert_eq!(
+            exchange_count(&app, conversation_id),
+            2,
+            "the follow-up was not sent"
+        );
         let queued = queued_texts(&app, conversation_id);
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].0, "later");
