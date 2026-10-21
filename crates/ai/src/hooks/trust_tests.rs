@@ -32,6 +32,28 @@ fn strictest_prefers_requires_approval_then_unknown_then_auto_approves() {
 }
 
 #[test]
+fn strictest_of_folds_a_sequence_and_is_unknown_for_none() {
+    use CommandExecutionPosture::*;
+    assert_eq!(
+        CommandExecutionPosture::strictest_of([AutoApproves, AutoApproves]),
+        AutoApproves
+    );
+    assert_eq!(
+        CommandExecutionPosture::strictest_of([AutoApproves, Unknown]),
+        Unknown
+    );
+    assert_eq!(
+        CommandExecutionPosture::strictest_of([Unknown, AutoApproves, RequiresApproval]),
+        RequiresApproval
+    );
+    assert_eq!(
+        CommandExecutionPosture::strictest_of(Vec::new()),
+        Unknown,
+        "no posture to read means the posture cannot be known"
+    );
+}
+
+#[test]
 fn deny_all_keeps_every_source_inert() {
     let policy = DenyAllTrustPolicy;
     for surface in SURFACES {
@@ -57,8 +79,6 @@ fn static_trust_returns_its_fixed_decision() {
     );
 }
 
-/// The whole table: a project file activates only for a headless run that auto-approves command
-/// execution; every explicit source activates everywhere.
 #[test]
 fn static_policy_activates_exactly_the_expected_cells() {
     let policy = StaticTrustPolicy;

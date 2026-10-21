@@ -187,7 +187,6 @@ fn installing_a_snapshot_bumps_the_revision_and_replaces_the_set() {
     assert!(registry.snapshot().is_empty());
 }
 
-// Criterion 1: valid, malformed, valid produces three snapshots.
 #[test]
 fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale() {
     let source = project_source("/repo/.cursor/hooks.json");
@@ -233,7 +232,6 @@ fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale(
     assert!(self::errors(&registry).is_empty());
 }
 
-// Criterion 2: a first read that is malformed is inactive with an error.
 #[test]
 fn a_source_whose_first_load_fails_is_inactive_with_an_error() {
     let source = project_source("/repo/.cursor/hooks.json");
@@ -258,7 +256,6 @@ fn a_source_whose_first_load_fails_is_inactive_with_an_error() {
     );
 }
 
-// S4: a file the registry tried and failed to load is still a hook file.
 #[test]
 fn a_file_whose_only_load_failed_is_still_protected() {
     let project = SourceOnDisk::project(MALFORMED);
@@ -271,7 +268,6 @@ fn a_file_whose_only_load_failed_is_still_protected() {
     );
 }
 
-// S1: the project for a working directory is the nearest known root, with or without a file.
 #[test]
 fn a_known_root_without_a_hook_file_is_its_own_project() {
     let outer = project_source("/work/.cursor/hooks.json");
@@ -380,7 +376,6 @@ fn a_read_failure_behaves_like_a_failed_parse() {
     assert_eq!(errors(&registry).len(), 2);
 }
 
-// Criterion 3: after pin, changes bump the revision and are reported but not applied.
 #[test]
 fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
     let source = project_source("/repo/.cursor/hooks.json");
@@ -433,7 +428,6 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
     assert_eq!(self::warnings(&registry).len(), 1);
 }
 
-// S3: a project file found after pinning is parsed, so it is protected, but stays inert.
 #[test]
 fn after_pinning_a_new_project_file_is_protected_and_waits_for_the_next_run() {
     let project = SourceOnDisk::project(VALID);
@@ -467,7 +461,6 @@ fn after_pinning_a_new_project_file_is_protected_and_waits_for_the_next_run() {
     );
 }
 
-// S5: an explicit source that arrives after pinning is an error, not a warning.
 #[test]
 fn after_pinning_a_new_explicit_source_is_an_error() {
     let run = SourceOnDisk::new(HookSourceKind::RunDelivered, VALID);
@@ -576,7 +569,6 @@ fn changing_an_unknown_source_does_not_change_the_revision() {
     );
 }
 
-// Criterion 5: precedence, nearest root, and cwd outside any root.
 #[test]
 fn bindings_for_orders_by_precedence_and_picks_the_nearest_root() {
     let outer = project_source("/work/.cursor/hooks.json");
@@ -705,7 +697,6 @@ fn an_inert_source_contributes_no_bindings_but_is_reported() {
     assert!(registry.snapshot().is_empty());
 }
 
-// Criterion 6: identity is the resolved file; identical text in two files is two bindings.
 #[cfg(unix)]
 #[test]
 fn a_file_reached_through_a_symlink_is_one_source_and_two_files_are_two() {
@@ -744,7 +735,6 @@ fn a_file_reached_through_a_symlink_is_one_source_and_two_files_are_two() {
     );
 }
 
-// N1: one file delivered with the run and found as a project file runs once.
 #[test]
 fn a_file_delivered_with_the_run_and_found_as_a_project_file_runs_once() {
     let project = SourceOnDisk::project(VALID);
@@ -820,7 +810,6 @@ fn a_project_file_reached_from_two_roots_applies_under_each() {
     assert!(registry.source_status(&source).is_none());
 }
 
-// Criterion 7, registry half: protected paths.
 #[test]
 fn protected_paths_cover_the_source_file_and_every_script_that_resolves() {
     let project = SourceOnDisk::project(
@@ -897,7 +886,6 @@ fn a_named_explicit_source_with_no_directory_does_not_activate() {
     assert!(registry.protected_paths().is_empty());
 }
 
-// Criterion 9: the timeout ceiling.
 #[test]
 fn resolve_timeout_returns_the_declared_or_default_value_and_rejects_values_above_the_ceiling() {
     let default = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);

@@ -1,10 +1,7 @@
-//! Interception points for agent hooks. Each submodule owns one boundary (or a group of related
-//! boundaries) and exposes the function the agent loop calls at that moment. Every entry point
-//! starts with [`HookRuntime::is_active`], or [`HookRuntime::is_installed`] when it only clears
-//! state, and returns early when hooks are off or nothing is configured, so the inactive path
-//! adds no work beyond that check. `HookRuntime` also wires discovery: it hands detected
-//! repository roots to the hook file watcher and pins the active set when the run's first
-//! request goes out.
+//! Interception points and process-wide runtime for agent hooks. Each submodule owns one
+//! boundary (or a group of related boundaries) and exposes the entry point the agent loop calls
+//! at that moment. Every entry point returns early when hooks are off or nothing is configured,
+//! so the inactive path adds no work beyond that check.
 
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
@@ -52,7 +49,9 @@ use crate::features::FeatureFlag;
 use crate::terminal::local_shell::LocalShellState;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
-/// Process-wide hook state shared by every conversation and surface.
+/// Process-wide hook state shared by every conversation and surface. It also wires discovery:
+/// it hands detected repository roots to the hook file watcher and pins the active set when the
+/// run's first request goes out.
 pub struct HookRuntime {
     registry: ModelHandle<HookRegistry>,
     dispatcher: Arc<HookDispatcher>,
@@ -149,7 +148,7 @@ impl HookRuntime {
     }
 
     /// The surface this process fires boundaries from.
-    pub fn surface(&self, ctx: &AppContext) -> HookSurface {
+    fn surface(&self, ctx: &AppContext) -> HookSurface {
         envelope::surface(self.run_metadata.is_some(), ctx)
     }
 
@@ -189,7 +188,10 @@ impl HookRuntime {
             return;
         };
         let watcher = self.config_watcher_or_start(surface, ctx);
-        watcher.update(ctx, |watcher, ctx| watcher.add_root(&root, ctx));
+        watcher.update(ctx, |watcher, ctx| {
+            // The watch is requested either way; the future only says when it has attached.
+            drop(watcher.add_root(&root, ctx));
+        });
     }
 
     /// The watcher, started on first use so a process that never visits a repository runs none.
@@ -346,24 +348,9 @@ fn posture_for_scopes(
         return CommandExecutionPosture::Unknown;
     }
     let permissions = BlocklistAIPermissions::as_ref(ctx);
-    posture_from_settings(
-        scopes
-            .iter()
-            .map(|scope| permissions.get_execute_commands_setting(terminal_view_id, scope, ctx)),
-    )
-}
-
-/// Folds the execute-commands settings seen through each scope into one posture: a setting that
-/// needs approval anywhere wins, then one that could not be read, and only all-allow
-/// auto-approves. No settings at all is unknown.
-fn posture_from_settings(
-    settings: impl IntoIterator<Item = ActionPermission>,
-) -> CommandExecutionPosture {
-    settings
-        .into_iter()
-        .map(posture_for_setting)
-        .reduce(CommandExecutionPosture::strictest)
-        .unwrap_or(CommandExecutionPosture::Unknown)
+    CommandExecutionPosture::strictest_of(scopes.iter().map(|scope| {
+        posture_for_setting(permissions.get_execute_commands_setting(terminal_view_id, scope, ctx))
+    }))
 }
 
 fn posture_for_setting(setting: ActionPermission) -> CommandExecutionPosture {

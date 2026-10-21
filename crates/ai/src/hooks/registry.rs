@@ -48,8 +48,8 @@ impl std::fmt::Debug for ActiveBinding {
     }
 }
 
-/// An immutable view of the active hook set. Dispatch pins one snapshot for the whole of a
-/// boundary firing so a reload in the middle cannot change which hooks ran.
+/// An immutable view of the active hook set, known project roots, and protected paths at one
+/// revision.
 #[derive(Debug, Default)]
 pub struct RegistrySnapshot {
     pub revision: u64,
@@ -131,8 +131,7 @@ pub struct SourceUpdate<'a> {
     pub trust: TrustDecision,
 }
 
-/// What the registry knows about one source, for callers that report state rather than run
-/// hooks.
+/// Load, trust, and pin state of one registered source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceStatus {
     /// Whether a valid configuration has ever loaded from the source.
@@ -265,15 +264,14 @@ impl SourceState {
 
     /// Records the outcome of one load.
     fn apply(&mut self, source: &HookSourceId, parsed: Result<ParsedSource, HookConfigError>) {
-        let load = std::mem::replace(&mut self.load, LoadState::Unloaded);
-        self.load = match parsed {
-            Ok(parsed) => LoadState::Loaded(parsed),
-            Err(error) => load.after_failed_load(source, &error.to_string()),
-        };
+        match parsed {
+            Ok(parsed) => self.load = LoadState::Loaded(parsed),
+            Err(error) => self.apply_load_failure(source, &error.to_string()),
+        }
     }
 
-    /// Records that the source could not be read at all.
-    fn apply_read_failure(&mut self, source: &HookSourceId, message: &str) {
+    /// Records that the source could not be read or parsed.
+    fn apply_load_failure(&mut self, source: &HookSourceId, message: &str) {
         let load = std::mem::replace(&mut self.load, LoadState::Unloaded);
         self.load = load.after_failed_load(source, message);
     }
@@ -364,6 +362,13 @@ fn script_path(command: &str, dir: &Path) -> Option<PathBuf> {
     None
 }
 
+fn canonical_source_path(source: &HookSourceId) -> Option<&Path> {
+    match &source.location {
+        HookSourceLocation::CanonicalPath(path) => Some(path.as_path()),
+        HookSourceLocation::Named(_) => None,
+    }
+}
+
 /// The source a project root's hook file would be, so a diagnostic about the root itself has a
 /// source to hang on.
 fn root_source(root: &Path) -> HookSourceId {
@@ -382,9 +387,10 @@ pub enum HookRegistryEvent {
 /// Holds every known source and publishes immutable snapshots of the bindings that may run.
 ///
 /// Each change, including a failed reload, publishes a new snapshot with a higher revision, so a
-/// decision keyed by revision is invalidated whenever a source changes. A source whose reload
-/// fails keeps its last valid configuration in effect and is marked stale. Once the run is
-/// pinned, changes to sources and to the set of project roots are reported and never applied.
+/// decision keyed by revision is invalidated whenever a source changes. Every mutator returns the
+/// resulting revision. A source whose reload fails keeps its last valid configuration in effect
+/// and is marked stale. Once the run is pinned, changes to sources and to the set of project
+/// roots are reported and never applied.
 pub struct HookRegistry {
     snapshot: Arc<RegistrySnapshot>,
     sources: IndexMap<HookSourceId, SourceState>,
@@ -480,8 +486,7 @@ impl HookRegistry {
     }
 
     /// Makes `root` a project the registry knows, with or without a hook file, so a working
-    /// directory under it belongs to that project and not to an enclosing one. After the run is
-    /// pinned a new root is only reported. Returns the new revision.
+    /// directory under it belongs to that project and not to an enclosing one.
     pub fn add_project_root(&mut self, root: &Path) -> u64 {
         if self.project_roots.contains(root) {
             return self.revision;
@@ -509,8 +514,7 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Forgets `root` as a project. After the run is pinned the set of projects does not change.
-    /// Returns the new revision.
+    /// Forgets `root` as a project.
     pub fn remove_project_root(&mut self, root: &Path) -> u64 {
         if self.pinned.is_some() || !self.project_roots.remove(root) {
             return self.revision;
@@ -518,11 +522,8 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Loads or reloads one source from the bytes a loader read. A successful parse replaces the
-    /// source's last valid configuration; a failed one keeps it and marks the source stale. A
-    /// source whose first load fails stays inactive with an error. After the run is pinned, a
-    /// change to a known source is only reported, and a new source is parsed so its files are
-    /// protected but stays inert. Returns the new revision.
+    /// Loads or reloads one source from the bytes a loader read. A source first seen after the
+    /// run is pinned is still parsed so its files are protected, but stays inert.
     pub fn upsert_source(&mut self, update: SourceUpdate<'_>) -> u64 {
         let SourceUpdate {
             source,
@@ -557,8 +558,7 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Records that `source` could not be read. Behaves like a failed parse: a last valid
-    /// configuration stays in effect and the source is marked stale. Returns the new revision.
+    /// Records that `source` could not be read, treating it like a failed parse.
     pub fn record_read_failure(&mut self, source: &HookSourceId, message: &str) -> u64 {
         if self.pinned.is_some() {
             self.note_change_after_pin(source, "could not be read");
@@ -567,17 +567,16 @@ impl HookRegistry {
         self.sources
             .entry(source.clone())
             .or_insert_with(SourceState::unloaded)
-            .apply_read_failure(source, message);
+            .apply_load_failure(source, message);
         self.rebuild()
     }
 
-    /// Forgets `source`. After the run is pinned, a pinned source keeps its bindings until the
-    /// run ends and the removal is only reported. Returns the new revision.
+    /// Forgets `source`.
     pub fn remove_source(&mut self, source: &HookSourceId) -> u64 {
-        if !self.sources.contains_key(source) {
+        let Some(state) = self.sources.get(source) else {
             return self.revision;
-        }
-        if self.pinned.is_some() && self.sources[source].pinned {
+        };
+        if self.pinned.is_some() && state.pinned {
             self.note_change_after_pin(source, "was removed");
             return self.rebuild();
         }
@@ -585,9 +584,8 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Stops applying a project file under `root`. The source is forgotten once no root is left.
-    /// The root itself stays a project; see [`Self::remove_project_root`]. Returns the new
-    /// revision.
+    /// Stops applying a project file under `root`, forgetting the source once no root is left.
+    /// The root itself stays a project; see [`Self::remove_project_root`].
     pub fn remove_source_root(&mut self, source: &HookSourceId, root: &Path) -> u64 {
         let Some(state) = self.sources.get_mut(source) else {
             return self.revision;
@@ -603,8 +601,7 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Replaces the trust decision for `source` without reloading it. After the run is pinned
-    /// the change is only reported. Returns the new revision.
+    /// Replaces the trust decision for `source` without reloading it.
     pub fn set_trust(&mut self, source: &HookSourceId, trust: TrustDecision) -> u64 {
         let Some(state) = self.sources.get_mut(source) else {
             return self.revision;
@@ -617,9 +614,8 @@ impl HookRegistry {
         self.rebuild()
     }
 
-    /// Fixes the active set and the set of projects for the rest of the run. Later changes bump
-    /// the revision and produce a diagnostic but never change the active bindings. A second
-    /// call changes nothing. Returns the new revision.
+    /// Fixes the active set and the set of projects for the rest of the run. A second call
+    /// changes nothing.
     pub fn pin(&mut self, posture: CommandExecutionPosture) -> u64 {
         if self.pinned.is_some() {
             log::warn!("hook registry was already pinned; the second pin was ignored");
@@ -696,17 +692,10 @@ impl HookRegistry {
         }
     }
 
-    /// Publishes a new snapshot from the current source states.
-    fn rebuild(&mut self) -> u64 {
-        self.revision += 1;
-        let mut bindings = Vec::new();
-        let mut diagnostics = Vec::new();
-        let mut protected_paths = BTreeSet::new();
-
-        // A file the run delivered explicitly may also be a project's file. It is one source,
-        // and the explicit load is the one that runs it.
-        let explicit_files = self
-            .sources
+    /// Canonical paths of explicit sources that have loaded. When the same file is also found as
+    /// a project file, only the explicit source runs.
+    fn loaded_explicit_files(&self) -> HashSet<&Path> {
+        self.sources
             .iter()
             .filter(|(source, state)| {
                 state.load.last_valid().is_some()
@@ -717,27 +706,30 @@ impl HookRegistry {
                         | HookSourceKind::FactoryWide => true,
                     }
             })
-            .filter_map(|(source, _)| match &source.location {
-                HookSourceLocation::CanonicalPath(path) => Some(path),
-                HookSourceLocation::Named(_) => None,
-            })
-            .collect::<HashSet<_>>();
+            .filter_map(|(source, _)| canonical_source_path(source))
+            .collect()
+    }
+
+    /// Publishes a new snapshot from the current source states.
+    fn rebuild(&mut self) -> u64 {
+        self.revision += 1;
+        let mut bindings = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut protected_paths = BTreeSet::new();
+        let explicit_files = self.loaded_explicit_files();
 
         for (source, state) in &self.sources {
             diagnostics.extend(state.diagnostics(source));
             // A file the registry knows is a hook file even when its contents never loaded.
-            if let HookSourceLocation::CanonicalPath(path) = &source.location {
-                protected_paths.insert(path.clone());
+            if let Some(path) = canonical_source_path(source) {
+                protected_paths.insert(path.to_path_buf());
             }
             let Some(parsed) = state.load.last_valid() else {
                 continue;
             };
-            let runs_as_explicit_source = source.kind == HookSourceKind::ProjectCursorFile
-                && match &source.location {
-                    HookSourceLocation::CanonicalPath(path) => explicit_files.contains(path),
-                    HookSourceLocation::Named(_) => false,
-                };
-            if runs_as_explicit_source {
+            let shadowed_by_explicit = source.kind == HookSourceKind::ProjectCursorFile
+                && canonical_source_path(source).is_some_and(|path| explicit_files.contains(path));
+            if shadowed_by_explicit {
                 diagnostics.push(HookDiagnostic {
                     source: source.clone(),
                     severity: DiagnosticSeverity::Info,
@@ -763,7 +755,7 @@ impl HookRegistry {
                         .iter()
                         .filter_map(|binding| script_path(&binding.command, &working_directory)),
                 );
-                if state.trust != TrustDecision::Activate || runs_as_explicit_source {
+                if state.trust != TrustDecision::Activate || shadowed_by_explicit {
                     continue;
                 }
                 bindings.extend(parsed.bindings.iter().map(|binding| ActiveBinding {

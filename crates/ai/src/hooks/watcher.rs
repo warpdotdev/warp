@@ -21,10 +21,12 @@ pub use native::{HOOK_CONFIG_DEBOUNCE, HookConfigWatcher};
 mod native {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::future::{Future, ready};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
 
+    use futures::future::Either;
     use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
     use warpui_core::{Entity, ModelContext, ModelHandle};
     use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
@@ -115,25 +117,28 @@ mod native {
 
         /// Starts watching `root`, makes it a project the registry knows, and loads its hook
         /// file now. A root that is already watched is left alone.
-        pub fn add_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
+        ///
+        /// The platform watch attaches on a background thread, which can take a moment. The
+        /// returned future resolves once it has; the watch does not depend on the future being
+        /// awaited, but a change made before it attaches is not seen until the next one.
+        pub fn add_root(
+            &mut self,
+            root: &Path,
+            ctx: &mut ModelContext<Self>,
+        ) -> impl Future<Output = anyhow::Result<()>> + use<> {
             let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
             if self.roots.contains_key(&root) {
-                return;
+                return Either::Left(ready(Ok(())));
             }
             self.roots.insert(root.clone(), None);
-            self.fs_watcher.update(ctx, |fs_watcher, _| {
-                // The path is registered on send; the future only reports completion, and the
-                // watcher logs its own failures.
-                drop(fs_watcher.register_path(
-                    &root,
-                    hook_file_filter(&root),
-                    RecursiveMode::Recursive,
-                ));
+            let attached = self.fs_watcher.update(ctx, |fs_watcher, _| {
+                fs_watcher.register_path(&root, hook_file_filter(&root), RecursiveMode::Recursive)
             });
             HookRegistry::change(&self.registry, ctx, |registry| {
                 registry.add_project_root(&root)
             });
             self.load_root(&root, ctx);
+            Either::Right(attached)
         }
 
         /// Stops watching `root` and withdraws it and its hook file from the registry.
@@ -143,6 +148,8 @@ mod native {
                 return;
             };
             self.fs_watcher.update(ctx, |fs_watcher, _| {
+                // The path is unregistered on send; the future only reports completion, and the
+                // watcher logs its own failures.
                 drop(fs_watcher.unregister_path(&root));
             });
             if let Some(source) = source {
@@ -196,11 +203,12 @@ mod native {
         fn load_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
             let path = root.join(PROJECT_CURSOR_HOOKS_PATH);
             let previous = self.roots.get(root).cloned().flatten();
-            let canonical = dunce::canonicalize(&path).ok();
-            let current = canonical.clone().map(|canonical| HookSourceId {
-                kind: HookSourceKind::ProjectCursorFile,
-                location: HookSourceLocation::CanonicalPath(canonical),
-            });
+            let current = dunce::canonicalize(&path)
+                .ok()
+                .map(|canonical| HookSourceId {
+                    kind: HookSourceKind::ProjectCursorFile,
+                    location: HookSourceLocation::CanonicalPath(canonical),
+                });
 
             if let Some(previous) = &previous
                 && current.as_ref() != Some(previous)
@@ -209,9 +217,9 @@ mod native {
                     registry.remove_source_root(previous, root)
                 });
             }
-            if let (Some(source), Some(canonical)) = (&current, &canonical) {
+            if let Some(source) = &current {
                 let trust = self.trust.may_activate(source, self.surface, self.posture);
-                match fs::read(canonical) {
+                match fs::read(&path) {
                     Ok(bytes) => {
                         HookRegistry::change(&self.registry, ctx, |registry| {
                             registry.upsert_source(SourceUpdate {
@@ -256,7 +264,7 @@ mod native {
     fn touches_hook_file(event: &BulkFilesystemWatcherEvent, root: &Path) -> bool {
         let cursor_dir = root.join(".cursor");
         let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
-        let is_target = |path: &PathBuf| *path == hooks_file || *path == cursor_dir;
+        let is_target = |path| path == &hooks_file || path == &cursor_dir;
         event.added_or_updated_iter().any(is_target)
             || event.deleted.iter().any(is_target)
             || event.moved.keys().any(is_target)

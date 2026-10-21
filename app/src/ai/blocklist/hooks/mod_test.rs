@@ -46,37 +46,16 @@ fn set_execute_commands(app: &mut App, terminal_view_id: EntityId, setting: Acti
 }
 
 #[test]
-fn the_posture_is_the_strictest_setting_seen_through_any_scope() {
+fn only_always_allow_auto_approves() {
     use ActionPermission::{AgentDecides, AlwaysAllow, AlwaysAsk, Unknown};
     use CommandExecutionPosture::{AutoApproves, RequiresApproval};
 
-    assert_eq!(posture_from_settings([AlwaysAllow]), AutoApproves);
-    assert_eq!(posture_from_settings([AlwaysAsk]), RequiresApproval);
-    assert_eq!(posture_from_settings([AgentDecides]), RequiresApproval);
+    assert_eq!(posture_for_setting(AlwaysAllow), AutoApproves);
+    assert_eq!(posture_for_setting(AlwaysAsk), RequiresApproval);
+    assert_eq!(posture_for_setting(AgentDecides), RequiresApproval);
     assert_eq!(
-        posture_from_settings([Unknown]),
+        posture_for_setting(Unknown),
         CommandExecutionPosture::Unknown
-    );
-    assert_eq!(
-        posture_from_settings([AlwaysAllow, AlwaysAllow]),
-        AutoApproves
-    );
-    assert_eq!(
-        posture_from_settings([AlwaysAllow, AgentDecides]),
-        RequiresApproval
-    );
-    assert_eq!(
-        posture_from_settings([AlwaysAllow, Unknown]),
-        CommandExecutionPosture::Unknown
-    );
-    assert_eq!(
-        posture_from_settings([Unknown, AlwaysAsk]),
-        RequiresApproval
-    );
-    assert_eq!(
-        posture_from_settings(Vec::new()),
-        CommandExecutionPosture::Unknown,
-        "no scope to read through means the posture cannot be known"
     );
 }
 
@@ -245,16 +224,19 @@ fn an_appended_exchange_does_not_pin_when_the_flag_is_off() {
 #[cfg(feature = "local_fs")]
 mod discovery {
     use std::fs;
+    use std::sync::Arc;
 
-    use ai::hooks::PROJECT_CURSOR_HOOKS_PATH;
+    use ai::hooks::{LogOnlyMessenger, PROJECT_CURSOR_HOOKS_PATH, UnavailableRunner};
     use repo_metadata::DirectoryWatcher;
     use repo_metadata::repositories::{
         DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
     };
     use tempfile::TempDir;
+    use warp_core::execution_mode::ExecutionMode;
     use warp_util::standardized_path::StandardizedPath;
 
     use super::*;
+    use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 
     const VALID: &str =
         r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#;
@@ -333,13 +315,6 @@ mod discovery {
     /// as the client navigates, but remote hosts are not a hook surface.
     #[test]
     fn the_remote_server_daemon_neither_watches_roots_nor_pins() {
-        use std::sync::Arc;
-
-        use ai::hooks::{LogOnlyMessenger, UnavailableRunner};
-        use warp_core::execution_mode::ExecutionMode;
-
-        use crate::test_util::settings::initialize_settings_for_tests_with_mode;
-
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             initialize_settings_for_tests_with_mode(

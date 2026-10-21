@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use instant::Instant;
 use tempfile::TempDir;
-use warpui_core::r#async::Timer;
+use warpui_core::r#async::{FutureExt, Timer};
 use warpui_core::{App, ModelHandle};
 use watcher::BulkFilesystemWatcherEvent;
 
@@ -158,8 +158,23 @@ impl Harness {
     }
 
     fn add_root(&self, app: &mut App, root: &Path) {
-        self.watcher
+        drop(
+            self.watcher
+                .update(app, |watcher, ctx| watcher.add_root(root, ctx)),
+        );
+    }
+
+    /// Adds `root` and waits for the platform watch to attach, which can take over a second;
+    /// a write made before that is not reported.
+    async fn add_root_and_wait_for_the_watch(&self, app: &mut App, root: &Path) {
+        let attached = self
+            .watcher
             .update(app, |watcher, ctx| watcher.add_root(root, ctx));
+        attached
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .expect("the platform watch attaches within 30 s")
+            .expect("the platform watch attaches");
     }
 
     fn event(&self, app: &mut App, event: BulkFilesystemWatcherEvent) {
@@ -241,7 +256,6 @@ fn adding_the_same_root_twice_loads_it_once() {
     });
 }
 
-// Criterion 10: create, modify, and delete each produce one registry update.
 #[test]
 fn create_modify_and_delete_each_update_the_registry_once() {
     App::test((), |mut app| async move {
@@ -367,8 +381,6 @@ fn two_roots_are_loaded_and_scoped_independently() {
     });
 }
 
-/// A nested repository is its own project. Without a hook file it has no project hooks, and the
-/// enclosing project's hooks do not reach into it.
 #[test]
 fn a_nested_root_without_a_hook_file_is_its_own_project() {
     App::test((), |mut app| async move {
@@ -420,8 +432,6 @@ fn removing_a_root_withdraws_its_source() {
     });
 }
 
-/// The static policy keeps a project file inert until the run's posture is known, and then
-/// activates it only for a headless run that auto-approves commands.
 #[test]
 fn trust_is_decided_again_from_the_posture_when_the_run_starts() {
     App::test((), |mut app| async move {
@@ -522,19 +532,16 @@ fn a_change_after_the_run_is_pinned_is_reported_and_not_applied() {
     });
 }
 
-/// Through the real file system watcher: a burst of writes loads the file once, and a file the
-/// filter does not report changes nothing.
 #[test]
 fn rapid_writes_seen_by_the_real_watcher_load_the_file_once() {
     App::test((), |mut app| async move {
         let root = Root::with_hooks(VALID);
         let harness = Harness::with_real_watcher(&mut app);
-        harness.add_root(&mut app, &root.path);
+        harness
+            .add_root_and_wait_for_the_watch(&mut app, &root.path)
+            .await;
         let loaded = harness.revision(&app);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
-
-        // The platform watch registers on a background thread; give it a moment to attach.
-        Timer::after(Duration::from_millis(500)).await;
 
         for _ in 0..5 {
             root.write(VALID_TWO);

@@ -12,7 +12,7 @@ use crate::hooks::model::{HookFormat, HookSourceKind};
 pub const WARP_HOOK_DIRS_ENV: &str = "WARP_HOOK_DIRS";
 
 /// The configuration file inside a hook directory or a project's `.cursor` directory.
-pub const HOOKS_FILE_NAME: &str = "hooks.json";
+const HOOKS_FILE_NAME: &str = "hooks.json";
 
 /// Where a project keeps its Cursor hooks, relative to the project root.
 pub const PROJECT_CURSOR_HOOKS_PATH: &str = ".cursor/hooks.json";

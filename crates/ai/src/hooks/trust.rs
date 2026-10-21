@@ -18,6 +18,14 @@ impl CommandExecutionPosture {
             (Self::AutoApproves, Self::AutoApproves) => Self::AutoApproves,
         }
     }
+
+    /// The strictest posture across `postures`, or [`Self::Unknown`] when `postures` is empty.
+    pub fn strictest_of(postures: impl IntoIterator<Item = Self>) -> Self {
+        postures
+            .into_iter()
+            .reduce(Self::strictest)
+            .unwrap_or(Self::Unknown)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +48,7 @@ pub trait TrustPolicy: Send + Sync {
     ) -> TrustDecision;
 }
 
-/// Keeps every source inert. Used by tests and by builds that must not run any hook.
+/// Keeps every source inert.
 pub struct DenyAllTrustPolicy;
 
 impl TrustPolicy for DenyAllTrustPolicy {
@@ -72,48 +80,39 @@ impl TrustPolicy for StaticTrustPolicy {
         surface: HookSurface,
         posture: CommandExecutionPosture,
     ) -> TrustDecision {
-        match source.kind {
-            HookSourceKind::RunDelivered
-            | HookSourceKind::FactoryAgent
-            | HookSourceKind::FactoryWide => match surface {
-                HookSurface::OzRun
-                | HookSurface::CliRun
-                | HookSurface::LocalChild
-                | HookSurface::Gui
-                | HookSurface::Tui => TrustDecision::Activate,
+        use CommandExecutionPosture::{AutoApproves, RequiresApproval, Unknown};
+        use HookSourceKind::{FactoryAgent, FactoryWide, ProjectCursorFile, RunDelivered};
+        use HookSurface::{CliRun, Gui, LocalChild, OzRun, Tui};
+
+        match (surface, source.kind, posture) {
+            (
+                OzRun | CliRun | LocalChild | Gui | Tui,
+                RunDelivered | FactoryAgent | FactoryWide,
+                AutoApproves | RequiresApproval | Unknown,
+            ) => TrustDecision::Activate,
+            (OzRun | CliRun, ProjectCursorFile, AutoApproves) => TrustDecision::Activate,
+            (OzRun | CliRun, ProjectCursorFile, RequiresApproval) => TrustDecision::Inert {
+                reason: "the run's execution profile does not auto-approve command execution, \
+                         so project hooks only run when the run names them as an explicit source"
+                    .to_owned(),
             },
-            HookSourceKind::ProjectCursorFile => match surface {
-                HookSurface::OzRun | HookSurface::CliRun => match posture {
-                    CommandExecutionPosture::AutoApproves => TrustDecision::Activate,
-                    CommandExecutionPosture::RequiresApproval => TrustDecision::Inert {
-                        reason: "the run's execution profile does not auto-approve command \
-                                 execution, so project hooks only run when the run names them \
-                                 as an explicit source"
-                            .to_owned(),
-                    },
-                    CommandExecutionPosture::Unknown => TrustDecision::Inert {
-                        reason: "the run's command execution posture is not known yet".to_owned(),
-                    },
-                },
-                HookSurface::LocalChild => match posture {
-                    CommandExecutionPosture::AutoApproves
-                    | CommandExecutionPosture::RequiresApproval
-                    | CommandExecutionPosture::Unknown => TrustDecision::Inert {
-                        reason: "a local child runs under its parent's approved project hooks, \
-                                 which do not exist yet"
-                            .to_owned(),
-                    },
-                },
-                HookSurface::Gui | HookSurface::Tui => match posture {
-                    CommandExecutionPosture::AutoApproves
-                    | CommandExecutionPosture::RequiresApproval
-                    | CommandExecutionPosture::Unknown => TrustDecision::Inert {
-                        reason: "project hooks only run in headless runs for now; interactive \
-                                 approval is not available yet"
-                            .to_owned(),
-                    },
-                },
+            (OzRun | CliRun, ProjectCursorFile, Unknown) => TrustDecision::Inert {
+                reason: "the run's command execution posture is not known yet".to_owned(),
             },
+            (LocalChild, ProjectCursorFile, AutoApproves | RequiresApproval | Unknown) => {
+                TrustDecision::Inert {
+                    reason: "a local child runs under its parent's approved project hooks, which \
+                             do not exist yet"
+                        .to_owned(),
+                }
+            }
+            (Gui | Tui, ProjectCursorFile, AutoApproves | RequiresApproval | Unknown) => {
+                TrustDecision::Inert {
+                    reason: "project hooks only run in headless runs for now; interactive \
+                             approval is not available yet"
+                        .to_owned(),
+                }
+            }
         }
     }
 }
