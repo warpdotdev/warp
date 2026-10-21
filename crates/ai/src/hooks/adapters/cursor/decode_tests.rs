@@ -354,6 +354,7 @@ fn stdout_that_is_not_utf8_is_malformed() {
     let outcome = HookProcessOutcome {
         exit: ProcessExit::Code(0),
         stdout: b"{\"permission\":\"allow\xff\"}".to_vec(),
+        stdout_truncated: false,
         stderr_tail: String::new(),
         duration: std::time::Duration::from_millis(1),
     };
@@ -364,6 +365,43 @@ fn stdout_that_is_not_utf8_is_malformed() {
         &DEFAULT,
     );
     assert_eq!(effects.verdict, HookVerdict::Deny);
+}
+
+#[test]
+fn stdout_the_runner_cut_off_is_malformed_even_when_what_remains_parses() {
+    // The kept prefix happens to be a complete allow; it is still not the whole response.
+    let mut truncated = outcome(OK, r#"{"permission":"allow"}"#);
+    truncated.stdout_truncated = true;
+    for event in PERMISSION_EVENTS {
+        let effects = decode_output(
+            event.spec(),
+            &binding_for(event, false),
+            &truncated,
+            &DEFAULT,
+        );
+        assert_eq!(effects.verdict, HookVerdict::Deny, "{}", event.name());
+        assert_eq!(
+            reasons(&effects),
+            vec![format!(
+                "Hook ./check.sh printed output that is not a valid permission decision, so {} \
+                 was denied.",
+                subject(event)
+            )]
+        );
+    }
+    for event in OBSERVER_EVENTS {
+        assert_eq!(
+            decode_output(
+                event.spec(),
+                &binding_for(event, false),
+                &truncated,
+                &DEFAULT
+            ),
+            HookEffects::default(),
+            "{} follows its failure policy",
+            event.name()
+        );
+    }
 }
 
 // Permission decisions.
