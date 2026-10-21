@@ -31,16 +31,82 @@ impl WarpPermissionResult {
     }
 }
 
-/// Limits a hook can never loosen. Empty until the floors are named.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PermissionFloors {}
+/// Facts about the run that change how a hook verdict is applied.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunFacts {
+    /// No one can answer a confirmation request: an Oz run, a command-line run, or a hidden
+    /// local child.
+    pub headless: bool,
+    /// The strict hook policy is on for this run.
+    pub is_strict: bool,
+}
+
+/// Limits a hook can never loosen. Each one is a fact Warp's own permission check already
+/// established for this action; the policy may add restrictions on top of them but never
+/// removes one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PermissionFloors {
+    /// A command denylist that applies to this run matched the command: the organization's
+    /// list, or the user's list when per-conversation auto-approve is not allowed to bypass it.
+    pub command_denylist_hit: bool,
+    /// A file edit touches a protected path: an MCP configuration file outside a sandbox, or a
+    /// hook file or a script it names anywhere.
+    pub protected_write_path: bool,
+    /// The MCP server is on the active profile's denylist.
+    pub mcp_server_denylisted: bool,
+    /// The active profile's setting for this action family is "always ask" and nothing on the
+    /// allowlist let the action through.
+    pub always_ask_setting: bool,
+}
+
+impl PermissionFloors {
+    pub fn any(&self) -> bool {
+        let Self {
+            command_denylist_hit,
+            protected_write_path,
+            mcp_server_denylisted,
+            always_ask_setting,
+        } = *self;
+        command_denylist_hit || protected_write_path || mcp_server_denylisted || always_ask_setting
+    }
+}
+
+/// Why the policy denied an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenyCause {
+    /// A hook said deny.
+    Hook,
+    /// A hook asked to rewrite the input, which cannot be honored yet.
+    RewriteUnsupported,
+    /// A hook asked for confirmation on a surface with no one to ask.
+    ApprovalUnavailable,
+    /// A hook asked to defer the action, which Warp cannot resume later.
+    DeferralUnsupported,
+}
 
 /// What the loop does with an action after hooks and Warp's own check are combined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Execute,
-    RequireConfirmation { reason: Option<HookReason> },
-    Deny { reason: HookReason },
+    RequireConfirmation {
+        reason: Option<HookReason>,
+    },
+    Deny {
+        reason: HookReason,
+        cause: DenyCause,
+    },
+}
+
+impl PermissionDecision {
+    /// How far the decision restricts the action, so two decisions can be compared: a denial is
+    /// stricter than a confirmation, which is stricter than execution.
+    pub fn strictness(&self) -> u8 {
+        match self {
+            Self::Execute => 0,
+            Self::RequireConfirmation { .. } => 1,
+            Self::Deny { .. } => 2,
+        }
+    }
 }
 
 /// Composes a merged hook verdict with Warp's permission result. Hooks can only tighten: a deny
@@ -54,23 +120,33 @@ impl HookPermissionPolicy {
         warp: WarpPermissionResult,
         floors: &PermissionFloors,
     ) -> PermissionDecision {
-        let PermissionFloors {} = floors;
-        if merged.replacement_input.is_some() && merged.verdict != HookVerdict::Deny {
-            return PermissionDecision::Deny {
+        let warp_alone = warp.decision_without_hooks();
+        let decision = if merged.replacement_input.is_some() && merged.verdict != HookVerdict::Deny
+        {
+            PermissionDecision::Deny {
                 reason: HookReason {
                     text: REWRITE_UNSUPPORTED_DENY_REASON.to_owned(),
                     binding: None,
                 },
-            };
-        }
-        match merged.verdict {
-            HookVerdict::Deny => PermissionDecision::Deny {
-                reason: deny_reason(merged),
-            },
-            HookVerdict::NoOpinion | HookVerdict::Allow | HookVerdict::Ask | HookVerdict::Defer => {
-                warp.decision_without_hooks()
+                cause: DenyCause::RewriteUnsupported,
             }
-        }
+        } else {
+            match merged.verdict {
+                HookVerdict::Deny => PermissionDecision::Deny {
+                    reason: deny_reason(merged),
+                    cause: DenyCause::Hook,
+                },
+                HookVerdict::NoOpinion
+                | HookVerdict::Allow
+                | HookVerdict::Ask
+                | HookVerdict::Defer => warp_alone.clone(),
+            }
+        };
+        debug_assert!(
+            !floors.any() || decision.strictness() >= warp_alone.strictness(),
+            "a hook verdict loosened Warp's decision past a floor"
+        );
+        decision
     }
 }
 

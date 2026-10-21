@@ -5,7 +5,9 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::CancellationReason;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, install_test_hooks, shell_action};
+use crate::ai::blocklist::hooks::testing::{
+    add_child_conversation, hook_test_app, install_test_hooks, shell_action,
+};
 use crate::features::FeatureFlag;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 
@@ -115,6 +117,27 @@ fn cancellation_reason_names_are_stable() {
     for (reason, name) in expected {
         assert_eq!(cancellation_reason_name(reason), name, "{reason:?}");
     }
+}
+
+#[test]
+fn a_child_conversation_in_a_desktop_process_is_a_local_child() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let child_id = add_child_conversation(&mut app, &harness);
+        let action = shell_action("a1", "ls");
+        let (parent_surface, child_surface) = app.read(|ctx| {
+            let parent = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            let child = EnvelopeSite::new(child_id, &harness.active_session);
+            (
+                envelope_for_tool_pre(&action, &parent, ctx).surface,
+                envelope_for_tool_pre(&action, &child, ctx).surface,
+            )
+        });
+        assert_eq!(parent_surface, HookSurface::Gui);
+        assert_eq!(child_surface, HookSurface::LocalChild);
+        assert!(child_surface.is_headless());
+    });
 }
 
 #[test]

@@ -653,7 +653,7 @@ impl BlocklistAIActionExecutor {
         // A hook denial ends the action here. The policy's other outcomes are exactly the checks
         // below, so they fall through to them.
         if let Some(merged) = hook_effects
-            && let PermissionDecision::Deny { reason } = HookPermissionPolicy::compose(
+            && let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
                 &merged,
                 WarpPermissionResult {
                     can_auto_execute,

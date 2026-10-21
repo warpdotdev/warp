@@ -29,8 +29,8 @@ pub use model::{
 };
 pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
 pub use permission::{
-    DEFAULT_DENY_REASON, HookPermissionPolicy, PermissionDecision, PermissionFloors,
-    REWRITE_UNSUPPORTED_DENY_REASON, WarpPermissionResult,
+    DEFAULT_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision, PermissionFloors,
+    REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
 };
 pub use registry::{
     ActiveBinding, BindingScope, HookRegistry, HookRegistryEvent, RegistrySnapshot,

@@ -220,6 +220,21 @@ pub(crate) mod testing {
         }
     }
 
+    /// Adds a second native conversation that a parent conversation spawned, so a test can see
+    /// how a hidden local child is treated.
+    pub(crate) fn add_child_conversation(app: &mut App, harness: &HookTestApp) -> AIConversationId {
+        let mut child = AIConversation::new(false, false);
+        child.set_parent_conversation_id(harness.conversation_id);
+        let child_id = child.id();
+        let terminal_view_id = harness.terminal_view_id;
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.restore_conversations(terminal_view_id, vec![child], ctx);
+            });
+        });
+        child_id
+    }
+
     pub(crate) fn shell_action(id: &str, command: &str) -> AIAgentAction {
         AIAgentAction {
             id: AIAgentActionId::from(id.to_owned()),
