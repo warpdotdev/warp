@@ -31,10 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
-use ai::hooks::{
-    HookNotice, HookNoticeKind, HookPermissionPolicy, PermissionDecision, PermissionFloors,
-    WarpPermissionResult,
-};
+use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
 use call_mcp_tool::CallMCPToolExecutor;
 pub(crate) use call_mcp_tool::coerce_integer_args;
@@ -85,6 +82,7 @@ use warp_files::{FileModel, TextFileReadResult};
 use warp_util::file::FileLoadError;
 #[cfg(feature = "local_fs")]
 use warp_util::file_type::is_buffer_binary;
+use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, SpawnableOutput};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -97,11 +95,21 @@ use crate::ai::agent::{
     FileLocations, ReadFilesFailedFile, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::hooks::denied_result::denied_result_for;
 use crate::ai::blocklist::hooks::pre_tool::{self, PendingDispatch, PreToolLookup};
-use crate::ai::blocklist::hooks::{HookRuntime, tool_result};
+use crate::ai::blocklist::hooks::tool_result;
+use crate::ai::blocklist::permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionDeniedReason,
+};
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::TemplatableMCPServerManager;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
 use crate::server::team_scope::RequestTeamScope;
@@ -236,6 +244,19 @@ pub(super) enum TryExecuteResult {
     },
 }
 
+/// What Warp's own permission check decided for an action, with the facts it established that
+/// no hook may loosen.
+struct ExecutorPermissionFacts {
+    can_auto_execute: bool,
+    floors: PermissionFloors,
+}
+
+/// How an MCP action names its server when it carries no installation id.
+enum McpLookup<'a> {
+    Tool { name: &'a str },
+    Resource { name: &'a str, uri: Option<&'a str> },
+}
+
 #[derive(Clone)]
 struct AsyncExecutingAction {
     action: AIAgentAction,
@@ -291,6 +312,7 @@ pub struct BlocklistAIActionExecutor {
     team_context_resolver: TeamContextResolver,
     /// The session actions run in, used to describe their working directory to hooks.
     active_session: ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
 }
 
 impl BlocklistAIActionExecutor {
@@ -386,6 +408,7 @@ impl BlocklistAIActionExecutor {
             terminal_model,
             team_context_resolver,
             active_session,
+            terminal_view_id,
             read_skill_executor,
             fetch_conversation_executor,
             start_agent_executor,
@@ -645,35 +668,41 @@ impl BlocklistAIActionExecutor {
             action: &action,
             conversation_id,
         };
-        let can_auto_execute = self.should_autoexecute(input, ctx);
+        let facts = self.permission_facts(input, hook_effects.is_some(), ctx);
+        let can_auto_execute = facts.can_auto_execute;
         let is_agent_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
         let is_autonomous_shell_exception =
             is_agent_autonomous && action.action.is_request_command_output();
 
-        // A hook denial ends the action here. The policy's other outcomes are exactly the checks
-        // below, so they fall through to them.
-        if let Some(merged) = hook_effects
-            && let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
+        // A hook denial ends the action here and a hook's request for confirmation holds it;
+        // execution falls through to the checks below, which are what the policy started from.
+        if let Some(merged) = hook_effects {
+            let decision = pre_tool::decide(
                 &merged,
                 WarpPermissionResult {
                     can_auto_execute,
                     is_user_initiated,
                     is_autonomous_shell_exception,
                 },
-                &PermissionFloors::default(),
-            )
-        {
-            let result = AIAgentActionResultType::DeniedByHook {
-                reason: reason.text.clone(),
-            };
-            HookRuntime::as_ref(ctx).messenger().notify(HookNotice {
+                facts.floors,
+                &action,
                 conversation_id,
-                action_id: Some(action.id.clone()),
-                kind: HookNoticeKind::Denied,
-                text: reason.text,
-            });
-            self.finish_sync(action, result, conversation_id, ctx);
-            return TryExecuteResult::ExecutedSync;
+                ctx,
+            );
+            match decision {
+                PermissionDecision::Deny { reason, .. } => {
+                    let result = denied_result_for(&action.action, &reason.text);
+                    self.finish_sync(action, result, conversation_id, ctx);
+                    return TryExecuteResult::ExecutedSync;
+                }
+                PermissionDecision::RequireConfirmation { .. } => {
+                    return TryExecuteResult::NotExecuted {
+                        action: Box::new(action),
+                        reason: NotExecutedReason::NeedsConfirmation,
+                    };
+                }
+                PermissionDecision::Execute => {}
+            }
         }
 
         // The agent cannot auto execute and either:
@@ -1062,6 +1091,221 @@ impl BlocklistAIActionExecutor {
         for action_id in action_ids {
             self.cancel_running_async_action(&action_id, reason, ctx);
         }
+    }
+
+    /// Runs Warp's own permission check for `input`. When `with_floors` is set, it also names
+    /// the facts that check established which no hook may loosen. Only the shell, file edit, and
+    /// MCP families have floors; every other family has none.
+    fn permission_facts(
+        &self,
+        input: ExecuteActionInput,
+        with_floors: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> ExecutorPermissionFacts {
+        let can_auto_execute = self.should_autoexecute(input, ctx);
+        let floors = if with_floors {
+            self.permission_floors(input, can_auto_execute, ctx)
+        } else {
+            PermissionFloors::default()
+        };
+        ExecutorPermissionFacts {
+            can_auto_execute,
+            floors,
+        }
+    }
+
+    /// The floors for `input`, read from the same permission functions the per-family
+    /// `should_autoexecute` checks call, so a denylist bypass or a sandbox exemption is applied
+    /// exactly as Warp applies it.
+    fn permission_floors(
+        &self,
+        input: ExecuteActionInput,
+        can_auto_execute: bool,
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let permissions = BlocklistAIPermissions::as_ref(ctx);
+        let terminal_view_id = Some(self.terminal_view_id);
+        match &input.action.action {
+            AIAgentActionType::RequestCommandOutput {
+                command,
+                is_read_only,
+                is_risky,
+                ..
+            } => {
+                let Some(escape_char) = self
+                    .active_session
+                    .as_ref(ctx)
+                    .shell_type(ctx)
+                    .map(|shell| ShellFamily::from(shell).escape_char())
+                else {
+                    return PermissionFloors::default();
+                };
+                let scope = (self.team_context_resolver)(ctx);
+                match permissions.can_autoexecute_command(
+                    &input.conversation_id,
+                    command,
+                    escape_char,
+                    is_read_only.unwrap_or(false),
+                    *is_risky,
+                    terminal_view_id,
+                    &scope,
+                    ctx,
+                ) {
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted,
+                    ) => PermissionFloors {
+                        command_denylist_hit: true,
+                        ..Default::default()
+                    },
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::AlwaysAskEnabled,
+                    ) => PermissionFloors {
+                        always_ask_setting: true,
+                        ..Default::default()
+                    },
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::AutonomyForceDisabled
+                        | CommandExecutionPermissionDeniedReason::ContainsRedirection
+                        | CommandExecutionPermissionDeniedReason::Inconclusive
+                        | CommandExecutionPermissionDeniedReason::AgentDecided,
+                    )
+                    | CommandExecutionPermission::Allowed(_) => PermissionFloors::default(),
+                }
+            }
+            AIAgentActionType::RequestFileEdits { file_edits, .. } => {
+                let paths = file_edits
+                    .iter()
+                    .filter_map(|edit| edit.file().map(PathBuf::from))
+                    .collect::<Vec<_>>();
+                let scope = (self.team_context_resolver)(ctx);
+                match permissions.can_write_files(
+                    &input.conversation_id,
+                    &paths,
+                    terminal_view_id,
+                    &scope,
+                    ctx,
+                ) {
+                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath) => {
+                        PermissionFloors {
+                            protected_write_path: true,
+                            ..Default::default()
+                        }
+                    }
+                    FileWritePermission::Denied(
+                        FileWritePermissionDeniedReason::AlwaysAskEnabled,
+                    ) => PermissionFloors {
+                        always_ask_setting: true,
+                        ..Default::default()
+                    },
+                    FileWritePermission::Denied(
+                        FileWritePermissionDeniedReason::AutonomyForceDisabled
+                        | FileWritePermissionDeniedReason::Inconclusive
+                        | FileWritePermissionDeniedReason::AgentDecided,
+                    )
+                    | FileWritePermission::Allowed(_) => PermissionFloors::default(),
+                }
+            }
+            AIAgentActionType::CallMCPTool {
+                server_id, name, ..
+            } => self.mcp_floors(
+                server_id.as_ref(),
+                McpLookup::Tool { name },
+                can_auto_execute,
+                ctx,
+            ),
+            AIAgentActionType::ReadMCPResource {
+                server_id,
+                name,
+                uri,
+            } => self.mcp_floors(
+                server_id.as_ref(),
+                McpLookup::Resource {
+                    name,
+                    uri: uri.as_deref(),
+                },
+                can_auto_execute,
+                ctx,
+            ),
+            AIAgentActionType::WriteToLongRunningShellCommand { .. }
+            | AIAgentActionType::ReadShellCommandOutput { .. }
+            | AIAgentActionType::TransferShellCommandControlToUser { .. }
+            | AIAgentActionType::ReadFiles(_)
+            | AIAgentActionType::UploadArtifact(_)
+            | AIAgentActionType::SearchCodebase(_)
+            | AIAgentActionType::Grep { .. }
+            | AIAgentActionType::FileGlob { .. }
+            | AIAgentActionType::FileGlobV2 { .. }
+            | AIAgentActionType::SuggestNewConversation { .. }
+            | AIAgentActionType::SuggestPrompt(_)
+            | AIAgentActionType::InitProject
+            | AIAgentActionType::OpenCodeReview
+            | AIAgentActionType::ReadDocuments(_)
+            | AIAgentActionType::EditDocuments(_)
+            | AIAgentActionType::CreateDocuments(_)
+            | AIAgentActionType::UseComputer(_)
+            | AIAgentActionType::InsertCodeReviewComments { .. }
+            | AIAgentActionType::RequestComputerUse(_)
+            | AIAgentActionType::StartRecording { .. }
+            | AIAgentActionType::StopRecording { .. }
+            | AIAgentActionType::ReadSkill(_)
+            | AIAgentActionType::FetchConversation { .. }
+            | AIAgentActionType::SendMessageToAgent { .. }
+            | AIAgentActionType::AskUserQuestion { .. }
+            | AIAgentActionType::RunAgents(_)
+            | AIAgentActionType::WaitForEvents { .. } => PermissionFloors::default(),
+        }
+    }
+
+    /// The floors for an MCP call. The server is found the way `can_call_mcp_tool` and
+    /// `can_read_mcp_resource` find it (by installation id, else by the tool or resource name),
+    /// because those checks answer only yes or no and do not say whether the denylist was why.
+    #[cfg(not(target_family = "wasm"))]
+    fn mcp_floors(
+        &self,
+        server_id: Option<&uuid::Uuid>,
+        lookup: McpLookup<'_>,
+        can_auto_execute: bool,
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let permissions = BlocklistAIPermissions::as_ref(ctx);
+        let manager = TemplatableMCPServerManager::as_ref(ctx);
+        let terminal_view_id = Some(self.terminal_view_id);
+        let template = server_id
+            .and_then(|id| manager.get_template_uuid(*id))
+            .or_else(|| {
+                let installation = match lookup {
+                    McpLookup::Tool { name } => manager.server_from_tool(name.to_owned()),
+                    McpLookup::Resource { name, uri } => manager.server_from_resource(name, uri),
+                };
+                installation
+                    .copied()
+                    .and_then(|id| manager.get_template_uuid(id))
+            });
+        let mcp_server_denylisted = template.is_some_and(|template| {
+            permissions
+                .get_mcp_denylist(ctx, terminal_view_id)
+                .contains(&template)
+        });
+        let always_ask_setting = !can_auto_execute
+            && permissions.get_mcp_permissions_setting(ctx, terminal_view_id)
+                == ActionPermission::AlwaysAsk;
+        PermissionFloors {
+            mcp_server_denylisted,
+            always_ask_setting,
+            ..Default::default()
+        }
+    }
+
+    /// MCP calls never run on wasm, so the check that would establish a floor never runs either.
+    #[cfg(target_family = "wasm")]
+    fn mcp_floors(
+        &self,
+        _server_id: Option<&uuid::Uuid>,
+        _lookup: McpLookup<'_>,
+        _can_auto_execute: bool,
+        _ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        PermissionFloors::default()
     }
 
     fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {

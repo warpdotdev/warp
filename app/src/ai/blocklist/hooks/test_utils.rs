@@ -1,8 +1,11 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai::hooks::test_util::{RecordingAdapter, RecordingMessenger, ScriptedRunner};
-use ai::hooks::{ActiveBinding, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner};
+use ai::hooks::{
+    ActiveBinding, BindingScope, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner,
+};
 use async_channel::unbounded;
 use parking_lot::FairMutex;
 use warpui::r#async::Timer;
@@ -14,10 +17,12 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType, ReadFilesRequest};
 use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel, RecordingController};
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::event::BlockMetadataReceivedEvent;
+use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::model::terminal_model::TerminalModel;
-use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -52,6 +57,21 @@ pub(crate) fn hook_test_app(app: &mut App) -> HookTestApp {
         conversation_id,
         terminal_view_id,
     }
+}
+
+/// Moves the harness's session to `cwd`, the way a shell's prompt would report it.
+pub(crate) fn set_working_directory(app: &mut App, harness: &HookTestApp, cwd: &Path) {
+    let cwd = cwd.display().to_string();
+    harness.dispatcher.update(app, |_, ctx| {
+        ctx.emit(ModelEvent::BlockMetadataReceived(
+            BlockMetadataReceivedEvent {
+                block_metadata: BlockMetadata::new(None, Some(cwd)),
+                block_index: BlockIndex::zero(),
+                is_after_in_band_command: false,
+                is_done_bootstrapping: true,
+            },
+        ));
+    });
 }
 
 /// Adds a second native conversation that a parent conversation spawned, so a test can see
@@ -160,20 +180,38 @@ pub(crate) struct TestHooks {
 }
 
 impl TestHooks {
-    /// Replaces the active snapshot with `bindings`, all using this adapter.
+    /// Replaces the active snapshot with `bindings`, all using this adapter and applying
+    /// everywhere.
     pub(crate) fn install_bindings(&self, bindings: Vec<DeclaredBinding>, ctx: &mut AppContext) {
+        self.install_scoped_bindings(
+            bindings
+                .into_iter()
+                .map(|binding| (binding, BindingScope::Everywhere))
+                .collect(),
+            ctx,
+        );
+    }
+
+    /// Replaces the active snapshot with `bindings`, each applying within its own scope. A
+    /// root a binding is scoped to is also made a project the registry knows.
+    pub(crate) fn install_scoped_bindings(
+        &self,
+        bindings: Vec<(DeclaredBinding, BindingScope)>,
+        ctx: &mut AppContext,
+    ) {
         let adapter: Arc<dyn ai::hooks::HookFormatAdapter> = self.adapter.clone();
         let active = bindings
             .into_iter()
-            .map(|binding| {
-                ai::hooks::test_util::active_binding(
-                    binding,
-                    adapter.clone(),
-                    ai::hooks::BindingScope::Everywhere,
-                )
+            .map(|(binding, scope)| {
+                ai::hooks::test_util::active_binding(binding, adapter.clone(), scope)
             })
             .collect::<Vec<ActiveBinding>>();
         HookRegistry::handle(ctx).update(ctx, |registry, _| {
+            for binding in &active {
+                if let BindingScope::Root(root) = &binding.scope {
+                    registry.add_project_root(root);
+                }
+            }
             registry.install_snapshot_for_test(active, Vec::<HookDiagnostic>::new());
         });
     }
