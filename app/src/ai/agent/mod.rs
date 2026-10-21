@@ -1316,6 +1316,12 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                         "\nCommand ({command}) was on denylist and so was not allowed to run"
                     )
                 }
+                RequestCommandOutputResult::HookDenied { command, reason } => {
+                    write!(
+                        f,
+                        "\nCommand ({command}) was denied by an agent hook: {reason}"
+                    )
+                }
             },
             AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                 WriteToLongRunningShellCommandResult::CommandFinished { output, .. } => {

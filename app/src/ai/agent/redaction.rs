@@ -104,6 +104,9 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                             grid_contents,
                             ..
                         } => redact_secrets(grid_contents),
+                        RequestCommandOutputResult::HookDenied { reason, .. } => {
+                            redact_secrets(reason)
+                        }
                         RequestCommandOutputResult::CancelledBeforeExecution
                         | RequestCommandOutputResult::Denylisted { .. }
                         | RequestCommandOutputResult::TerminalBusy { .. } => {}
