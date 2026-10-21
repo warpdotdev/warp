@@ -90,13 +90,17 @@ mod loader {
     use std::fs;
 
     use super::ExplicitHookSource;
-    use crate::hooks::model::{HookDiagnostic, HookSourceId, HookSourceLocation};
+    use crate::hooks::model::{
+        DiagnosticSeverity, HookDiagnostic, HookSourceId, HookSourceLocation,
+    };
     use crate::hooks::registry::{HookRegistry, SourceUpdate};
     use crate::hooks::trust::TrustDecision;
 
-    /// Reads each explicit source and activates it. A missing or unreadable file is recorded in
-    /// the registry as a failed load and returned, so the caller can decide whether the run may
-    /// continue without it. A file reached through two paths is one source.
+    /// Reads each explicit source and activates it. Returns every error the registry recorded
+    /// for these sources: a file that is missing, unreadable, or does not parse, a definition it
+    /// rejected, and a load that came after the run was pinned, which cannot activate. An empty
+    /// result means every named file loaded and its definitions may run; the caller decides
+    /// whether the run may continue otherwise. A file reached through two paths is one source.
     pub fn load_explicit_sources(
         sources: &[ExplicitHookSource],
         registry: &mut HookRegistry,
@@ -106,18 +110,20 @@ mod loader {
             let kind = source.scope.source_kind();
             let contents = dunce::canonicalize(&source.path)
                 .and_then(|canonical| fs::read(&canonical).map(|bytes| (canonical, bytes)));
-            match contents {
+            let id = match contents {
                 Ok((canonical, bytes)) => {
+                    let id = HookSourceId {
+                        kind,
+                        location: HookSourceLocation::CanonicalPath(canonical),
+                    };
                     registry.upsert_source(SourceUpdate {
-                        source: HookSourceId {
-                            kind,
-                            location: HookSourceLocation::CanonicalPath(canonical),
-                        },
+                        source: id.clone(),
                         format: source.format,
                         bytes: &bytes,
                         project_root: None,
                         trust: TrustDecision::Activate,
                     });
+                    id
                 }
                 Err(error) => {
                     let id = HookSourceId {
@@ -125,16 +131,19 @@ mod loader {
                         location: HookSourceLocation::Named(source.path.display().to_string()),
                     };
                     registry.record_read_failure(&id, &error.to_string());
-                    failures.extend(
-                        registry
-                            .snapshot()
-                            .diagnostics
-                            .iter()
-                            .filter(|diagnostic| diagnostic.source == id)
-                            .cloned(),
-                    );
+                    id
                 }
-            }
+            };
+            failures.extend(
+                registry
+                    .snapshot()
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.source == id && diagnostic.severity == DiagnosticSeverity::Error
+                    })
+                    .cloned(),
+            );
         }
         failures
     }

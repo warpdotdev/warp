@@ -1,5 +1,7 @@
 use ai::hooks::{CommandExecutionPosture, HookRegistry};
-use warpui::{App, SingletonEntity};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{App, Element, SingletonEntity, TypedActionView, View};
 
 use super::testing::hook_test_app;
 use super::*;
@@ -10,6 +12,38 @@ use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::features::FeatureFlag;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// An empty root view, so a test can open a window the posture read resolves a team through.
+#[derive(Default)]
+struct TestRootView;
+
+impl Entity for TestRootView {
+    type Event = ();
+}
+
+impl View for TestRootView {
+    fn ui_name() -> &'static str {
+        "HookTestRootView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TestRootView {
+    type Action = ();
+}
+
+fn set_execute_commands(app: &mut App, terminal_view_id: EntityId, setting: ActionPermission) {
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = profiles
+            .active_profile(Some(terminal_view_id), ctx)
+            .id()
+            .clone();
+        profiles.set_execute_commands(&profile_id, &setting, ctx);
+    });
+}
 
 #[test]
 fn the_posture_is_the_strictest_setting_seen_through_any_scope() {
@@ -53,13 +87,7 @@ fn the_posture_follows_the_active_profile_and_ignores_the_conversation_toggle() 
         let scope = UserWorkspaces::teamless_context_for_operation_for_test();
         let scopes = std::slice::from_ref(&scope);
         let set_execute_commands = |app: &mut App, setting: ActionPermission| {
-            AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-                let profile_id = profiles
-                    .active_profile(Some(harness.terminal_view_id), ctx)
-                    .id()
-                    .clone();
-                profiles.set_execute_commands(&profile_id, &setting, ctx);
-            });
+            set_execute_commands(app, harness.terminal_view_id, setting);
         };
 
         set_execute_commands(&mut app, ActionPermission::AlwaysAllow);
@@ -99,6 +127,66 @@ fn the_posture_follows_the_active_profile_and_ignores_the_conversation_toggle() 
                 "a process with no window has no team policy to read through"
             );
         });
+    });
+}
+
+/// The real posture read goes through the open windows' team policy. A headless run has exactly
+/// one window, so this is the path the posture rule rests on.
+#[test]
+fn the_posture_is_read_through_an_open_window_and_is_unknown_without_one() {
+    App::test((), |mut app| async move {
+        let harness = hook_test_app(&mut app);
+        set_execute_commands(
+            &mut app,
+            harness.terminal_view_id,
+            ActionPermission::AlwaysAllow,
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                command_execution_posture(Some(harness.terminal_view_id), ctx),
+                CommandExecutionPosture::Unknown,
+                "no window means no team policy to read through"
+            );
+        });
+
+        app.add_window(WindowStyle::NotStealFocus, |_| TestRootView);
+        app.read(|ctx| {
+            assert_eq!(
+                command_execution_posture(Some(harness.terminal_view_id), ctx),
+                CommandExecutionPosture::AutoApproves
+            );
+        });
+
+        set_execute_commands(
+            &mut app,
+            harness.terminal_view_id,
+            ActionPermission::AgentDecides,
+        );
+        app.read(|ctx| {
+            assert_eq!(
+                command_execution_posture(Some(harness.terminal_view_id), ctx),
+                CommandExecutionPosture::RequiresApproval
+            );
+        });
+    });
+}
+
+#[test]
+fn the_pin_records_the_posture_read_through_the_window() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        app.add_window(WindowStyle::NotStealFocus, |_| TestRootView);
+        set_execute_commands(
+            &mut app,
+            harness.terminal_view_id,
+            ActionPermission::AlwaysAllow,
+        );
+        append_exchange(&mut app, harness.terminal_view_id, harness.conversation_id);
+        assert_eq!(
+            pinned(&app).map(|pinned| pinned.posture),
+            Some(CommandExecutionPosture::AutoApproves)
+        );
     });
 }
 
@@ -238,6 +326,46 @@ mod discovery {
                 0,
                 "nothing was loaded"
             );
+        });
+    }
+
+    /// The remote server daemon serves SSH sessions on a remote host. It detects repositories
+    /// as the client navigates, but remote hosts are not a hook surface.
+    #[test]
+    fn the_remote_server_daemon_neither_watches_roots_nor_pins() {
+        use std::sync::Arc;
+
+        use ai::hooks::{LogOnlyMessenger, UnavailableRunner};
+        use warp_core::execution_mode::ExecutionMode;
+
+        use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            initialize_settings_for_tests_with_mode(
+                &mut app,
+                ExecutionMode::RemoteServerDaemon,
+                false,
+            );
+            app.add_singleton_model(DirectoryWatcher::new);
+            app.add_singleton_model(|_| DetectedRepositories::default());
+            app.add_singleton_model(|_| HookRegistry::new());
+            app.add_singleton_model(|ctx| {
+                HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
+            });
+            let dir = TempDir::new().expect("tempdir");
+            let root = dunce::canonicalize(dir.path()).expect("canonical");
+            fs::create_dir_all(root.join(".cursor")).expect("mkdir");
+            fs::write(root.join(PROJECT_CURSOR_HOOKS_PATH), VALID).expect("write");
+
+            detect_root(&mut app, &root, RepoDetectionSource::TerminalNavigation);
+            assert_eq!(app.read(|ctx| HookRegistry::as_ref(ctx).revision()), 0);
+
+            let runtime = HookRuntime::handle(&app);
+            runtime.update(&mut app, |runtime, ctx| {
+                runtime.pin_for_run(None, ctx);
+            });
+            assert!(pinned(&app).is_none());
         });
     }
 

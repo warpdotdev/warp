@@ -183,22 +183,75 @@ mod loading {
     }
 
     #[test]
-    fn an_invalid_explicit_source_loads_as_an_inactive_source_with_an_error() {
+    fn an_invalid_explicit_source_is_a_returned_failure_and_an_inactive_source() {
         let dir = hook_dir("{ not json");
         let mut registry = HookRegistry::new();
         let failures = load_explicit_sources(
             &sources_for_hook_dirs(&[dir.path().to_path_buf()]),
             &mut registry,
         );
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].severity, DiagnosticSeverity::Error);
+        assert!(failures[0].message.contains("is not active"));
+        assert!(registry.snapshot().is_empty());
+        assert_eq!(registry.snapshot().diagnostics, failures);
+    }
+
+    #[test]
+    fn a_rejected_definition_is_a_returned_failure() {
+        let dir = hook_dir(
+            r#"{ "version": 1, "hooks": { "beforeShellExecution": [
+                { "command": "./hook.sh", "timeout": 601 } ] } }"#,
+        );
+        let mut registry = HookRegistry::new();
+        let failures = load_explicit_sources(
+            &sources_for_hook_dirs(&[dir.path().to_path_buf()]),
+            &mut registry,
+        );
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].message.contains("skipped"));
+        assert!(registry.snapshot().is_empty());
+    }
+
+    #[test]
+    fn loading_after_the_run_is_pinned_is_a_returned_failure() {
+        let dir = hook_dir(VALID);
+        let mut registry = HookRegistry::new();
+        registry.pin(crate::hooks::trust::CommandExecutionPosture::AutoApproves);
+        let failures = load_explicit_sources(
+            &sources_for_hook_dirs(&[dir.path().to_path_buf()]),
+            &mut registry,
+        );
+        assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(
-            failures.is_empty(),
-            "a parse error is the registry's diagnostic, not a read failure"
+            failures[0]
+                .message
+                .contains("explicit sources must be loaded before the run starts")
         );
         assert!(registry.snapshot().is_empty());
-        assert_eq!(registry.snapshot().diagnostics.len(), 1);
-        assert_eq!(
-            registry.snapshot().diagnostics[0].severity,
-            DiagnosticSeverity::Error
+    }
+
+    #[test]
+    fn a_valid_explicit_source_returns_no_failures_even_with_warnings() {
+        let dir = hook_dir(
+            r#"{ "version": 1, "hooks": {
+                "beforeShellExecution": [ { "command": "./hook.sh" } ],
+                "notAnEvent": [ { "command": "./other.sh" } ] } }"#,
+        );
+        let mut registry = HookRegistry::new();
+        let failures = load_explicit_sources(
+            &sources_for_hook_dirs(&[dir.path().to_path_buf()]),
+            &mut registry,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(registry.snapshot().bindings.len(), 1);
+        assert!(
+            registry
+                .snapshot()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Warning),
+            "the unknown event is still reported"
         );
     }
 

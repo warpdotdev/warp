@@ -323,10 +323,12 @@ fn a_missing_or_invalid_file_is_reported_and_activates_nothing() {
 
     fs::write(&missing, "{ not json").expect("write");
     let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
-    assert!(
-        failures.is_empty(),
-        "a file that does not parse is the registry's diagnostic"
+    assert_eq!(
+        failures.len(),
+        1,
+        "a file that does not parse is a failure the caller sees: {failures:?}"
     );
+    assert!(failures[0].message.contains("is not active"));
     assert!(registry.snapshot().is_empty());
     assert!(
         registry

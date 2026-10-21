@@ -115,8 +115,8 @@ mod native {
             self.roots.keys().map(PathBuf::as_path)
         }
 
-        /// Starts watching `root` and loads its hook file now. A root that is already watched
-        /// is left alone.
+        /// Starts watching `root`, makes it a project the registry knows, and loads its hook
+        /// file now. A root that is already watched is left alone.
         pub fn add_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
             let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
             if self.roots.contains_key(&root) {
@@ -130,10 +130,13 @@ mod native {
                     RecursiveMode::Recursive,
                 ));
             });
+            HookRegistry::change(&self.registry, ctx, |registry| {
+                registry.add_project_root(&root)
+            });
             self.load_root(&root, ctx);
         }
 
-        /// Stops watching `root` and withdraws its hook file from the registry.
+        /// Stops watching `root` and withdraws it and its hook file from the registry.
         pub fn remove_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
             let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
             let Some(source) = self.roots.remove(&root) else {
@@ -147,6 +150,9 @@ mod native {
                     registry.remove_source_root(&source, &root)
                 });
             }
+            HookRegistry::change(&self.registry, ctx, |registry| {
+                registry.remove_project_root(&root)
+            });
         }
 
         /// Records the run's surface and command execution posture and decides trust again for

@@ -251,10 +251,115 @@ fn a_source_whose_first_load_fails_is_inactive_with_an_error() {
     let errors = errors(&registry);
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("is not active"), "{errors:?}");
-    assert!(
-        registry.snapshot().project_roots.is_empty(),
-        "a root with no loaded file does not shadow an outer project"
+    assert_eq!(
+        registry.snapshot().project_roots,
+        vec![PathBuf::from("/repo")],
+        "a project with a broken file is still that directory's project"
     );
+}
+
+// S4: a file the registry tried and failed to load is still a hook file.
+#[test]
+fn a_file_whose_only_load_failed_is_still_protected() {
+    let project = SourceOnDisk::project(MALFORMED);
+    let mut registry = HookRegistry::new();
+    registry.upsert_source(project.update(TrustDecision::Activate));
+    assert!(registry.snapshot().is_empty());
+    assert_eq!(
+        registry.protected_paths(),
+        std::slice::from_ref(&project.hooks_file)
+    );
+}
+
+// S1: the project for a working directory is the nearest known root, with or without a file.
+#[test]
+fn a_known_root_without_a_hook_file_is_its_own_project() {
+    let outer = project_source("/work/.cursor/hooks.json");
+    let mut registry = HookRegistry::new();
+    registry.upsert_source(update(
+        &outer,
+        VALID,
+        Some(Path::new("/work")),
+        TrustDecision::Activate,
+    ));
+    assert_eq!(tool_pre_bindings(&registry, "/work/inner/src").len(), 1);
+
+    let revision = registry.add_project_root(Path::new("/work/inner"));
+    assert_eq!(revision, 2);
+    assert_eq!(
+        registry.add_project_root(Path::new("/work/inner")),
+        2,
+        "a known root changes nothing"
+    );
+    assert!(
+        tool_pre_bindings(&registry, "/work/inner/src").is_empty(),
+        "the inner project has no hooks of its own and the outer project's do not reach in"
+    );
+    assert_eq!(tool_pre_bindings(&registry, "/work/src").len(), 1);
+    assert_eq!(
+        registry.snapshot().project_roots,
+        vec![PathBuf::from("/work"), PathBuf::from("/work/inner")]
+    );
+
+    let inner = project_source("/work/inner/.cursor/hooks.json");
+    registry.upsert_source(update(
+        &inner,
+        MALFORMED,
+        Some(Path::new("/work/inner")),
+        TrustDecision::Activate,
+    ));
+    assert!(
+        tool_pre_bindings(&registry, "/work/inner/src").is_empty(),
+        "a broken inner file does not hand the directory to the outer project"
+    );
+
+    registry.remove_source(&inner);
+    let revision = registry.remove_project_root(Path::new("/work/inner"));
+    assert_eq!(revision, registry.revision());
+    assert_eq!(tool_pre_bindings(&registry, "/work/inner/src").len(), 1);
+    assert_eq!(
+        registry.remove_project_root(Path::new("/work/inner")),
+        revision,
+        "an unknown root changes nothing"
+    );
+}
+
+#[test]
+fn a_root_found_after_pinning_does_not_become_a_project_until_the_next_run() {
+    let outer = project_source("/work/.cursor/hooks.json");
+    let mut registry = HookRegistry::new();
+    registry.upsert_source(update(
+        &outer,
+        VALID,
+        Some(Path::new("/work")),
+        TrustDecision::Activate,
+    ));
+    registry.pin(CommandExecutionPosture::AutoApproves);
+
+    let revision = registry.add_project_root(Path::new("/work/inner"));
+    assert_eq!(revision, 3);
+    assert_eq!(
+        tool_pre_bindings(&registry, "/work/inner/src").len(),
+        1,
+        "the outer project's hooks keep applying where they did when the run started"
+    );
+    assert_eq!(
+        registry.snapshot().project_roots,
+        vec![PathBuf::from("/work")]
+    );
+    assert!(
+        warnings(&registry)
+            .iter()
+            .any(|warning| warning.contains("the project was found after the run started")),
+        "{:?}",
+        warnings(&registry)
+    );
+    assert_eq!(
+        registry.remove_project_root(Path::new("/work")),
+        3,
+        "the project set does not shrink after pinning either"
+    );
+    assert_eq!(tool_pre_bindings(&registry, "/work/src").len(), 1);
 }
 
 #[test]
@@ -328,24 +433,55 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
     assert_eq!(self::warnings(&registry).len(), 1);
 }
 
+// S3: a project file found after pinning is parsed, so it is protected, but stays inert.
 #[test]
-fn after_pinning_a_new_project_file_waits_for_the_next_run() {
+fn after_pinning_a_new_project_file_is_protected_and_waits_for_the_next_run() {
+    let project = SourceOnDisk::project(VALID);
     let mut registry = HookRegistry::new();
     registry.pin(CommandExecutionPosture::AutoApproves);
-    let source = project_source("/repo/.cursor/hooks.json");
-    let revision = registry.upsert_source(update(
-        &source,
-        VALID,
-        Some(Path::new("/repo")),
-        TrustDecision::Activate,
-    ));
+    let revision = registry.upsert_source(project.update(TrustDecision::Activate));
     assert_eq!(revision, 2);
     assert!(registry.snapshot().is_empty());
+    let status = registry.source_status(&project.source()).expect("known");
+    assert!(status.loaded && !status.pinned);
+    assert!(matches!(status.trust, TrustDecision::Inert { .. }));
+    let mut expected = vec![project.hooks_file.clone(), project.root.join("hook.sh")];
+    expected.sort();
+    assert_eq!(registry.protected_paths(), expected.as_slice());
     assert!(
-        warnings(&registry)[0].contains("takes effect at the next run start"),
+        registry.snapshot().project_roots.is_empty(),
+        "the project set was pinned with the run"
+    );
+    assert!(
+        warnings(&registry)
+            .iter()
+            .any(|warning| warning.contains("takes effect at the next run start")),
         "{:?}",
         warnings(&registry)
     );
+
+    registry.set_trust(&project.source(), TrustDecision::Activate);
+    assert!(
+        registry.snapshot().is_empty(),
+        "nothing activates it this run"
+    );
+}
+
+// S5: an explicit source that arrives after pinning is an error, not a warning.
+#[test]
+fn after_pinning_a_new_explicit_source_is_an_error() {
+    let run = SourceOnDisk::new(HookSourceKind::RunDelivered, VALID);
+    let mut registry = HookRegistry::new();
+    registry.pin(CommandExecutionPosture::AutoApproves);
+    registry.upsert_source(run.update(TrustDecision::Activate));
+    assert!(registry.snapshot().is_empty());
+    let errors = errors(&registry);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].contains("explicit sources must be loaded before the run starts"),
+        "{errors:?}"
+    );
+    assert_eq!(registry.protected_paths().len(), 2);
 }
 
 #[test]
@@ -608,6 +744,52 @@ fn a_file_reached_through_a_symlink_is_one_source_and_two_files_are_two() {
     );
 }
 
+// N1: one file delivered with the run and found as a project file runs once.
+#[test]
+fn a_file_delivered_with_the_run_and_found_as_a_project_file_runs_once() {
+    let project = SourceOnDisk::project(VALID);
+    let explicit = HookSourceId {
+        kind: HookSourceKind::RunDelivered,
+        location: HookSourceLocation::CanonicalPath(project.hooks_file.clone()),
+    };
+    let mut registry = HookRegistry::new();
+    registry.upsert_source(project.update(TrustDecision::Activate));
+    registry.upsert_source(SourceUpdate {
+        source: explicit.clone(),
+        format: HookFormat::Cursor,
+        bytes: &project.bytes,
+        project_root: None,
+        trust: TrustDecision::Activate,
+    });
+
+    let cwd = project.root.join("src");
+    let bindings = tool_pre_bindings(&registry, cwd.to_str().unwrap());
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].binding.id.source, explicit);
+    assert_eq!(
+        registry
+            .source_status(&project.source())
+            .expect("known")
+            .active_bindings,
+        0
+    );
+    assert!(
+        messages(&registry, DiagnosticSeverity::Info)
+            .iter()
+            .any(|message| message.contains("also delivered with the run"))
+    );
+
+    registry.remove_source(&explicit);
+    assert_eq!(
+        registry
+            .source_status(&project.source())
+            .expect("known")
+            .active_bindings,
+        1,
+        "the project file runs again once it is the only source for the file"
+    );
+}
+
 #[test]
 fn a_project_file_reached_from_two_roots_applies_under_each() {
     let source = project_source("/shared/hooks.json");
@@ -645,15 +827,30 @@ fn protected_paths_cover_the_source_file_and_every_script_that_resolves() {
         r#"{ "version": 1, "hooks": { "beforeShellExecution": [
             { "command": "./hook.sh --strict" },
             { "command": "npx some-linter" },
-            { "command": "./missing.sh" }
+            { "command": "./missing.sh" },
+            { "command": "bash scripts/check.sh --fix" },
+            { "command": "node ./hooks/format.js" },
+            { "command": "python3 hooks/audit.py" },
+            { "command": "python3 hooks/missing.py" }
         ] } }"#,
     );
+    fs::create_dir_all(project.root.join("scripts")).expect("mkdir");
+    fs::create_dir_all(project.root.join("hooks")).expect("mkdir");
+    for script in ["scripts/check.sh", "hooks/format.js", "hooks/audit.py"] {
+        fs::write(project.root.join(script), "").expect("write");
+    }
     let mut registry = HookRegistry::new();
     registry.upsert_source(project.update(TrustDecision::Activate));
-    let mut expected = vec![project.hooks_file.clone(), project.root.join("hook.sh")];
+    let mut expected = vec![
+        project.hooks_file.clone(),
+        project.root.join("hook.sh"),
+        project.root.join("scripts/check.sh"),
+        project.root.join("hooks/format.js"),
+        project.root.join("hooks/audit.py"),
+    ];
     expected.sort();
     assert_eq!(registry.protected_paths(), expected.as_slice());
-    assert_eq!(registry.snapshot().bindings.len(), 3);
+    assert_eq!(registry.snapshot().bindings.len(), 7);
 }
 
 #[test]

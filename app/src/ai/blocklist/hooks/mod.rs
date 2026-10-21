@@ -123,13 +123,14 @@ impl HookRuntime {
 
     /// Fixes the active hook set for the rest of the run. The command execution posture is read
     /// here, once, from the profile active for `terminal_view_id`; project files are trusted
-    /// against it and the registry is pinned. Later calls do nothing.
+    /// against it and the registry is pinned. Explicit sources must already be loaded, since a
+    /// source loaded afterwards cannot activate. Later calls do nothing.
     pub fn pin_for_run(
         &mut self,
         terminal_view_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !FeatureFlag::AgentHooks.is_enabled() || self.registry.as_ref(ctx).pinned().is_some() {
+        if !Self::process_runs_agents(ctx) || self.registry.as_ref(ctx).pinned().is_some() {
             return;
         }
         let posture = command_execution_posture(terminal_view_id, ctx);
@@ -152,6 +153,15 @@ impl HookRuntime {
         envelope::surface(self.run_metadata.is_some(), ctx)
     }
 
+    /// Whether hooks are on and this process is one that runs an agent. The remote server daemon
+    /// serves SSH sessions on a remote host; remote hosts are not a hook surface, so it neither
+    /// discovers project files nor pins a run.
+    fn process_runs_agents(ctx: &AppContext) -> bool {
+        FeatureFlag::AgentHooks.is_enabled()
+            && !(ctx.has_singleton_model::<AppExecutionMode>()
+                && AppExecutionMode::as_ref(ctx).is_remote_server_daemon())
+    }
+
     /// Starts watching a detected repository's hook file when the surface watches roots found
     /// the way this one was. Roots from rule indexing and code review are not where the agent's
     /// session is, so only navigation and cloud preparation count.
@@ -162,7 +172,7 @@ impl HookRuntime {
         source: RepoDetectionSource,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !FeatureFlag::AgentHooks.is_enabled() {
+        if !Self::process_runs_agents(ctx) {
             return;
         }
         let is_cloud_prepared_root = match source {
