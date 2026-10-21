@@ -6,7 +6,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use crate::hooks::model::HookFormat;
+use crate::hooks::model::{HOOK_PROTOCOL_VERSION, HookFormat};
 
 /// Variables Warp's own process may carry that a hook must not inherit: every Warp-owned
 /// credential Warp reads from its own environment (the CLI API key, the workload token a cloud
@@ -84,13 +84,12 @@ pub struct HookIdentity {
     pub remote: bool,
 }
 
-/// Everything [`build_environment`] needs.
 #[derive(Debug, Clone)]
 pub struct EnvironmentInput {
     pub runner: RunnerEnvironment,
-    pub hook: HookIdentity,
     /// Variables earlier hooks in this conversation asked to set for later ones.
     pub session_env: Vec<(String, String)>,
+    pub hook: HookIdentity,
 }
 
 /// The complete environment for one hook process: the host layer, then the invocation layer.
@@ -148,6 +147,10 @@ pub fn invocation_environment(
     let project_dir = hook.project_dir.clone().into_os_string();
     put("WARP_PROJECT_DIR", project_dir.clone());
     put("WARP_VERSION", hook.warp_version.clone().into());
+    put(
+        "WARP_HOOK_PROTOCOL_VERSION",
+        HOOK_PROTOCOL_VERSION.to_string().into(),
+    );
     if let Some(run_id) = &hook.run_id {
         put("WARP_RUN_ID", run_id.into());
     }
