@@ -1,5 +1,5 @@
 use ai::hooks::test_util::{test_binding, test_source_id};
-use ai::hooks::{HookBoundary, HookPayload};
+use ai::hooks::{HookBoundary, HookPayload, PromptProvenance};
 use warpui::{App, SingletonEntity};
 
 use super::*;
@@ -42,12 +42,14 @@ fn prompt_submit_reaches_the_adapter_with_the_text_and_conversation() {
         let HookPayload::PromptSubmit {
             text,
             attachments_summary,
+            provenance,
         } = &envelope.payload
         else {
             panic!("expected a prompt.submit payload");
         };
         assert_eq!(text, "fix the build");
         assert_eq!(attachments_summary, &["file.rs".to_owned()]);
+        assert_eq!(*provenance, PromptProvenance::User);
         assert_eq!(harness.hooks.runner.invocation_count(), 1);
     });
 }
