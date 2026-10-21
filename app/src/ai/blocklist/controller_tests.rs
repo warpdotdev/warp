@@ -1080,14 +1080,9 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
 }
 
 mod hooks {
-    use std::time::SystemTime;
-
     use ai::hooks::test_util::{test_binding, test_source_id};
     use ai::hooks::{FollowUpChainId, HookBoundary, HookPayload, PromptProvenance, TurnStopStatus};
     use warp_core::features::FeatureFlag;
-    use warp_multi_agent_api::Message;
-    use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
-    use warp_multi_agent_api::message::{Message as MessageKind, ToolCall};
     use warpui::{App, SingletonEntity};
 
     use super::{register_mock_response_stream, stream_init_event};
@@ -1096,7 +1091,7 @@ mod hooks {
     use crate::ai::blocklist::hooks::HookRuntime;
     use crate::ai::blocklist::hooks::test_utils::{
         TestHooks, create_task_with_messages, done_event, exchange_count, install_test_hooks,
-        let_background_work_settle, root_task_id, settle, text_message,
+        let_background_work_settle, root_task_id, settle, shell_tool_call_message, text_message,
     };
     use crate::ai::blocklist::{
         BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
@@ -1145,23 +1140,6 @@ mod hooks {
                 (envelope.conversation_id, detail)
             })
             .collect()
-    }
-
-    fn tool_call_message(task_id: &str) -> Message {
-        Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            task_id: task_id.to_owned(),
-            request_id: "request".to_owned(),
-            timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
-            message: Some(MessageKind::ToolCall(ToolCall {
-                tool_call_id: "call_1".to_owned(),
-                tool: Some(Tool::RunShellCommand(RunShellCommand {
-                    command: "ls".to_owned(),
-                    ..Default::default()
-                })),
-            })),
-            ..Default::default()
-        }
     }
 
     #[test]
@@ -1262,7 +1240,7 @@ mod hooks {
                         &task_id,
                         vec![
                             text_message(&task_id, "Let me look."),
-                            tool_call_message(&task_id),
+                            shell_tool_call_message(&task_id, "ls"),
                         ],
                     ),
                     ctx,
