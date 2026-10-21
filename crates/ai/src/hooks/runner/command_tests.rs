@@ -61,8 +61,8 @@ mod unix {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::hooks::runner::env::{HookIdentity, invocation_environment};
     use crate::hooks::HookFormat;
+    use crate::hooks::runner::env::{HookIdentity, invocation_environment};
 
     /// Writes an executable `#!/bin/sh` script and returns its path.
     fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -177,13 +177,20 @@ mod unix {
         assert!(outcome.stdout_truncated);
         assert_eq!(outcome.stdout.len(), HOOK_STDOUT_LIMIT);
         assert!(outcome.stdout.iter().all(|byte| *byte == b'a'));
-        assert!(started.elapsed() < Duration::from_secs(15), "the hook was not blocked");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the hook was not blocked"
+        );
     }
 
     #[test]
     fn stdout_within_the_limit_is_kept_whole() {
         let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "hook.sh", "head -c 1048576 /dev/zero | tr '\\0' a");
+        write_script(
+            dir.path(),
+            "hook.sh",
+            "head -c 1048576 /dev/zero | tr '\\0' a",
+        );
         let outcome = run(
             &runner(),
             invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(20)),
@@ -236,15 +243,25 @@ mod unix {
     #[test]
     fn without_a_captured_path_or_home_the_process_values_are_inherited() {
         let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "hook.sh", r#"printf '%s\n%s\n' "$PATH" "$HOME""#);
+        write_script(
+            dir.path(),
+            "hook.sh",
+            r#"printf '%s\n%s\n' "$PATH" "$HOME""#,
+        );
         let outcome = run(
             &runner().with_home(None),
             invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10)),
         );
         let lines = String::from_utf8(outcome.stdout).expect("utf-8");
         let lines = lines.lines().collect::<Vec<_>>();
-        assert_eq!(lines[0], std::env::var("PATH").expect("the test process has a PATH"));
-        assert_eq!(lines[1], std::env::var("HOME").expect("the test process has a HOME"));
+        assert_eq!(
+            lines[0],
+            std::env::var("PATH").expect("the test process has a PATH")
+        );
+        assert_eq!(
+            lines[1],
+            std::env::var("HOME").expect("the test process has a HOME")
+        );
     }
 
     #[test]
@@ -465,7 +482,10 @@ exit 2"#,
             "a descendant that stops when asked does not delay the outcome"
         );
         for pid in recorded_pids(dir.path()) {
-            assert!(wait_until_gone(pid), "the background child {pid} outlived the hook");
+            assert!(
+                wait_until_gone(pid),
+                "the background child {pid} outlived the hook"
+            );
         }
     }
 
@@ -497,7 +517,11 @@ exit 2"#,
 
     /// Starts `count` copies of a script that marks itself running for `hold`, all at once, and
     /// returns the outcomes with the largest number of copies ever seen running together.
-    fn run_concurrently(count: usize, hold: Duration, timeout: Duration) -> (Vec<HookProcessOutcome>, usize) {
+    fn run_concurrently(
+        count: usize,
+        hold: Duration,
+        timeout: Duration,
+    ) -> (Vec<HookProcessOutcome>, usize) {
         let dir = TempDir::new().expect("tempdir");
         write_script(
             dir.path(),
@@ -564,7 +588,14 @@ rm -f "$PWD/running.$$""#,
         write_script(dir.path(), "late.sh", r#"touch "$PWD/late-ran""#);
         let runner = runner();
         let mut futures = (0..HOOK_MAX_CONCURRENT)
-            .map(|_| runner.run(invocation(dir.path(), "./sleeper.sh", b"{}", Duration::from_secs(20))))
+            .map(|_| {
+                runner.run(invocation(
+                    dir.path(),
+                    "./sleeper.sh",
+                    b"{}",
+                    Duration::from_secs(20),
+                ))
+            })
             .collect::<Vec<_>>();
         futures.push(runner.run(invocation(
             dir.path(),
@@ -575,8 +606,14 @@ rm -f "$PWD/running.$$""#,
         let outcomes = block_on(join_all(futures));
         let late = outcomes.last().expect("the late hook's outcome");
         assert_eq!(late.exit, ProcessExit::TimedOut);
-        assert!(late.duration < Duration::from_secs(1), "gave up at its own deadline");
-        assert!(!dir.path().join("late-ran").exists(), "a waiter that timed out never ran");
+        assert!(
+            late.duration < Duration::from_secs(1),
+            "gave up at its own deadline"
+        );
+        assert!(
+            !dir.path().join("late-ran").exists(),
+            "a waiter that timed out never ran"
+        );
         for outcome in &outcomes[..HOOK_MAX_CONCURRENT] {
             assert_eq!(outcome.exit, ProcessExit::Code(0));
         }
@@ -590,7 +627,14 @@ rm -f "$PWD/running.$$""#,
         let runner = runner();
         let timeout = Duration::from_millis(1500);
         let mut futures = (0..HOOK_MAX_CONCURRENT)
-            .map(|_| runner.run(invocation(dir.path(), "./sleeper.sh", b"{}", Duration::from_secs(20))))
+            .map(|_| {
+                runner.run(invocation(
+                    dir.path(),
+                    "./sleeper.sh",
+                    b"{}",
+                    Duration::from_secs(20),
+                ))
+            })
             .collect::<Vec<_>>();
         futures.push(runner.run(invocation(dir.path(), "./slow.sh", b"{}", timeout)));
         let started = Instant::now();
@@ -663,7 +707,10 @@ rm -f "$PWD/running.$$""#,
         assert_eq!(lines.len(), 1, "exactly one invocation line: {lines:?}");
         let line = &lines[0];
         assert!(!line.contains('\n'), "the record is one line: {line:?}");
-        assert!(!line.contains('\x1b'), "control characters are escaped: {line:?}");
+        assert!(
+            !line.contains('\x1b'),
+            "control characters are escaped: {line:?}"
+        );
         for field in [
             "event=beforeShellExecution",
             "source=",
@@ -675,8 +722,14 @@ rm -f "$PWD/running.$$""#,
         ] {
             assert!(line.contains(field), "missing {field} in {line:?}");
         }
-        assert!(!line.contains("rm -rf"), "the stdin payload is never logged: {line:?}");
-        assert!(!line.contains("permission"), "stdout is never logged: {line:?}");
+        assert!(
+            !line.contains("rm -rf"),
+            "the stdin payload is never logged: {line:?}"
+        );
+        assert!(
+            !line.contains("permission"),
+            "stdout is never logged: {line:?}"
+        );
     }
 }
 
@@ -745,13 +798,18 @@ mod windows {
             "hook.cmd",
             r#"powershell -NoProfile -Command "$in = [Console]::OpenStandardInput(); $out = [IO.File]::Create('received.bin'); $in.CopyTo($out); $out.Close()""#,
         );
-        let payload = "{\"command\":\"echo h\u{e9}llo \u{1f600}\"}".as_bytes().to_vec();
+        let payload = "{\"command\":\"echo h\u{e9}llo \u{1f600}\"}"
+            .as_bytes()
+            .to_vec();
         let outcome = run(
             &runner(),
             invocation(dir.path(), "hook.cmd", &payload, Duration::from_secs(30)),
         );
         assert_eq!(outcome.exit, ProcessExit::Code(0));
-        assert_eq!(fs::read(dir.path().join("received.bin")).expect("received"), payload);
+        assert_eq!(
+            fs::read(dir.path().join("received.bin")).expect("received"),
+            payload
+        );
     }
 
     #[test]
@@ -764,6 +822,8 @@ mod windows {
             invocation(dir.path(), "hook.cmd", b"{}", Duration::from_secs(1)),
         );
         assert_eq!(outcome.exit, ProcessExit::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(1) + HOOK_KILL_GRACE + Duration::from_secs(3));
+        assert!(
+            started.elapsed() < Duration::from_secs(1) + HOOK_KILL_GRACE + Duration::from_secs(3)
+        );
     }
 }

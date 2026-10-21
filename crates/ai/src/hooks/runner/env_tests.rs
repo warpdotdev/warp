@@ -56,10 +56,22 @@ fn the_identity_variables_and_cursor_aliases_are_set() {
     let variables = build(runner(), cursor_hook());
     assert_eq!(value_of(&variables, "WARP_PROJECT_DIR"), Some("/work/repo"));
     assert_eq!(value_of(&variables, "WARP_VERSION"), Some("v0.2026.01.01"));
-    assert_eq!(value_of(&variables, "WARP_HOOK_PROTOCOL_VERSION"), Some("1"));
-    assert_eq!(value_of(&variables, "CURSOR_PROJECT_DIR"), Some("/work/repo"));
-    assert_eq!(value_of(&variables, "CURSOR_VERSION"), Some("v0.2026.01.01"));
-    assert_eq!(value_of(&variables, "CLAUDE_PROJECT_DIR"), Some("/work/repo"));
+    assert_eq!(
+        value_of(&variables, "WARP_HOOK_PROTOCOL_VERSION"),
+        Some("1")
+    );
+    assert_eq!(
+        value_of(&variables, "CURSOR_PROJECT_DIR"),
+        Some("/work/repo")
+    );
+    assert_eq!(
+        value_of(&variables, "CURSOR_VERSION"),
+        Some("v0.2026.01.01")
+    );
+    assert_eq!(
+        value_of(&variables, "CLAUDE_PROJECT_DIR"),
+        Some("/work/repo")
+    );
     for absent in [
         "WARP_RUN_ID",
         "WARP_USER_EMAIL",
@@ -80,9 +92,15 @@ fn optional_identity_is_set_only_when_known() {
     hook.remote = true;
     let variables = build(runner(), hook);
     assert_eq!(value_of(&variables, "WARP_RUN_ID"), Some("run-123"));
-    assert_eq!(value_of(&variables, "WARP_USER_EMAIL"), Some("dev@example.com"));
+    assert_eq!(
+        value_of(&variables, "WARP_USER_EMAIL"),
+        Some("dev@example.com")
+    );
     assert_eq!(value_of(&variables, "WARP_CODE_REMOTE"), Some("true"));
-    assert_eq!(value_of(&variables, "CURSOR_USER_EMAIL"), Some("dev@example.com"));
+    assert_eq!(
+        value_of(&variables, "CURSOR_USER_EMAIL"),
+        Some("dev@example.com")
+    );
     assert_eq!(value_of(&variables, "CURSOR_CODE_REMOTE"), Some("true"));
     assert_eq!(value_of(&variables, "CURSOR_TRANSCRIPT_PATH"), None);
 }
@@ -130,7 +148,10 @@ fn a_protected_variable_inherited_from_the_host_is_replaced_or_removed() {
     assert_eq!(value_of(&variables, "WARP_RUN_ID"), None);
     assert_eq!(value_of(&variables, "WARP_PROJECT_DIR"), Some("/work/repo"));
     assert_eq!(value_of(&variables, "CURSOR_TRANSCRIPT_PATH"), None);
-    assert_eq!(value_of(&variables, "CLAUDE_PROJECT_DIR"), Some("/work/repo"));
+    assert_eq!(
+        value_of(&variables, "CLAUDE_PROJECT_DIR"),
+        Some("/work/repo")
+    );
 }
 
 #[test]
@@ -163,8 +184,14 @@ fn the_hook_session_environment_is_applied_but_cannot_touch_protected_names() {
     ];
     let variables = build(runner(), hook);
     assert_eq!(value_of(&variables, "WARP_PROJECT_DIR"), Some("/work/repo"));
-    assert_eq!(value_of(&variables, "WARP_HOOK_PROTOCOL_VERSION"), Some("1"));
-    assert_eq!(value_of(&variables, "CURSOR_VERSION"), Some("v0.2026.01.01"));
+    assert_eq!(
+        value_of(&variables, "WARP_HOOK_PROTOCOL_VERSION"),
+        Some("1")
+    );
+    assert_eq!(
+        value_of(&variables, "CURSOR_VERSION"),
+        Some("v0.2026.01.01")
+    );
     assert_eq!(value_of(&variables, "MY_TOKEN"), Some("from-session-start"));
     // Session variables come after the host layer, so they may change PATH and the rest of it.
     assert_eq!(value_of(&variables, "PATH"), Some("/session/bin"));
@@ -296,7 +323,11 @@ mod subprocess {
         assert_eq!(value_of(&seen, "WARP_API_KEY"), None);
         assert_eq!(value_of(&seen, "WARP_METADATA_SECRET_TEST"), None);
         assert_eq!(value_of(&seen, "WARP_IS_LOCAL_SHELL_SESSION"), None);
-        assert_eq!(value_of(&seen, "WARP_RUN_ID"), None, "not inherited from an outer run");
+        assert_eq!(
+            value_of(&seen, "WARP_RUN_ID"),
+            None,
+            "not inherited from an outer run"
+        );
         assert_eq!(value_of(&seen, "HOOK_ENV_TEST_KEEP"), Some("inherited"));
         assert_eq!(value_of(&seen, "PATH"), Some("/captured/bin"));
         assert_eq!(value_of(&seen, "HOME"), Some("/custom/home"));

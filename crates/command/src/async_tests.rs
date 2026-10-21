@@ -40,10 +40,8 @@ mod unix {
             .kill_on_drop(true);
         let (mut child, guard) = command.spawn_in_job().expect("spawns");
         let mut line = String::new();
-        block_on(
-            BufReader::new(child.stdout.take().expect("piped stdout")).read_line(&mut line),
-        )
-        .expect("reads the grandchild pid");
+        block_on(BufReader::new(child.stdout.take().expect("piped stdout")).read_line(&mut line))
+            .expect("reads the grandchild pid");
         let grandchild = line.trim().parse().expect("a pid");
         assert!(process_exists(child.id() as i32));
         assert!(process_exists(grandchild));

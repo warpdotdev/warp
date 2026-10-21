@@ -359,7 +359,11 @@ impl Permits {
     }
 
     /// Waits for a permit until `deadline` passes or `cancel` is set.
-    async fn acquire(&self, deadline: Instant, cancel: &Arc<AtomicBool>) -> Result<Permit, ProcessExit> {
+    async fn acquire(
+        &self,
+        deadline: Instant,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<Permit, ProcessExit> {
         let mut taken = Box::pin(self.available.recv().fuse());
         let mut deadline = Timer::at(deadline).fuse();
         let mut cancelled = Box::pin(cancelled(cancel.clone()).fuse());
