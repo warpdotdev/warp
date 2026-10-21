@@ -252,9 +252,8 @@ fn observe_message(
     }
 }
 
-/// Reduces a batch of client actions to what the observers need. Empty when hooks are inactive
-/// or the conversation is not driven by this client, so the caller copies nothing on the common
-/// path.
+/// Reduces a batch of client actions to what the observers need. Empty when hooks are inactive or
+/// the conversation is not driven by this client, so the caller copies nothing on the common path.
 pub(crate) fn collect_observations(
     actions: &[api::ClientAction],
     conversation_id: AIConversationId,
