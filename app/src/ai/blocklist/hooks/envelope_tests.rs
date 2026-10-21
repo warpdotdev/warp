@@ -106,7 +106,11 @@ fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
         let conversation_id = AIConversationId::new();
 
         let before = app.read(|ctx| {
-            envelope_for_session_start(true, &EnvelopeSite::for_new_conversation(conversation_id), ctx)
+            envelope_for_session_start(
+                true,
+                &EnvelopeSite::for_new_conversation(conversation_id),
+                ctx,
+            )
         });
         assert_eq!(before.run, None);
         assert_eq!(before.surface, HookSurface::CliRun);
@@ -122,7 +126,11 @@ fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
             });
         });
         let after = app.read(|ctx| {
-            envelope_for_session_start(true, &EnvelopeSite::for_new_conversation(conversation_id), ctx)
+            envelope_for_session_start(
+                true,
+                &EnvelopeSite::for_new_conversation(conversation_id),
+                ctx,
+            )
         });
         assert_eq!(after.run, Some(run));
         assert_eq!(after.surface, HookSurface::OzRun);
