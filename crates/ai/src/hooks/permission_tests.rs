@@ -41,27 +41,16 @@ fn all_warp_results() -> Vec<WarpPermissionResult> {
     results
 }
 
-/// Every floor unset, then each floor set on its own.
+/// Every combination of the four floors.
 fn all_floors() -> Vec<PermissionFloors> {
-    vec![
-        PermissionFloors::default(),
-        PermissionFloors {
-            command_denylist_hit: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            protected_write_path: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            mcp_server_denylisted: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            always_ask_setting: true,
-            ..Default::default()
-        },
-    ]
+    (0..16u8)
+        .map(|bits| PermissionFloors {
+            command_denylist_hit: bits & 1 != 0,
+            protected_write_path: bits & 2 != 0,
+            mcp_server_denylisted: bits & 4 != 0,
+            always_ask_setting: bits & 8 != 0,
+        })
+        .collect()
 }
 
 fn all_runs() -> Vec<RunFacts> {
