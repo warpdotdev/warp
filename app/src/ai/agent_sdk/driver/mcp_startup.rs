@@ -9,6 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures::channel::oneshot;
 use futures::future::{self, Either};
+use futures::{StreamExt as _, stream};
 use handlebars::get_arguments;
 use instant::Instant;
 use itertools::Itertools as _;
@@ -58,6 +59,7 @@ const MCP_SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 /// capacity period), while staying well under the ~35s a run had before it was marked
 /// FAILED in that incident.
 const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
+const MCP_SPEC_RESOLVE_CONCURRENCY: usize = 8;
 
 /// Fixed namespace for [`ephemeral_mcp_installation_id`]. Arbitrary; never reused.
 const EPHEMERAL_MCP_INSTALLATION_NAMESPACE: Uuid = Uuid::from_bytes([
@@ -112,6 +114,12 @@ fn log_unresolved_secret_refs(
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+}
+
+enum ResolvedMcpSpec {
+    LocalUuid(Uuid),
+    EphemeralInstallations(Vec<TemplatableMCPServerInstallation>),
+    Skipped,
 }
 
 /// Why an [`await_model_event`] wait resolved without a value.
@@ -723,92 +731,103 @@ impl AgentDriver {
         task_id: Option<AmbientAgentTaskId>,
     ) -> Result<ResolvedMcpSpecs, AgentDriverError> {
         let mut resolved = ResolvedMcpSpecs::default();
+        let resolutions = specs
+            .iter()
+            .map(|spec| {
+                Self::resolve_mcp_spec(
+                    spec,
+                    local_installed_uuids,
+                    managed_mcp_client.as_ref(),
+                    task_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut outcomes = stream::iter(resolutions).buffered(MCP_SPEC_RESOLVE_CONCURRENCY);
 
-        for spec in specs {
-            match spec {
-                MCPSpec::Uuid(uuid) if local_installed_uuids.contains(uuid) => {
-                    resolved.local_uuids.push(*uuid);
-                }
-                MCPSpec::Uuid(uuid) => {
-                    let client_config = with_bounded_retry_using(
-                        &format!("resolve managed MCP server '{uuid}'"),
-                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
-                        is_transient_graphql_or_http_error,
-                        || managed_mcp_client.create_managed_mcp_client_config(uuid.to_string()),
-                    )
-                    .await
-                    .map_err(|err| {
-                        AgentDriverError::ManagedMcpResolutionFailed {
-                            uid: *uuid,
-                            message: format!("{err:#}"),
-                        }
-                    })?;
-                    let installations = Self::installations_from_managed_client_config_json(
-                        &client_config.mcp_config_json,
-                        task_id,
-                        &uuid.to_string(),
-                    )
-                    .map_err(|err| {
-                        AgentDriverError::ManagedMcpResolutionFailed {
-                            uid: *uuid,
-                            message: err.to_string(),
-                        }
-                    })?;
+        while let Some(outcome) = outcomes.next().await {
+            match outcome? {
+                ResolvedMcpSpec::LocalUuid(uuid) => resolved.local_uuids.push(uuid),
+                ResolvedMcpSpec::EphemeralInstallations(installations) => {
                     resolved.ephemeral_installations.extend(installations);
                 }
-                MCPSpec::WellKnown(id) => {
-                    // Backstop for specs created before the flag was disabled
-                    // (e.g. persisted configs): skip rather than resolve.
-                    if !FeatureFlag::WellKnownMcpIds.is_enabled() {
-                        log::warn!(
-                            "Skipping well-known MCP server '{id}': WellKnownMcpIds is disabled"
-                        );
-                        continue;
-                    }
-                    // Well-known MCP ids (e.g. "linear") resolve best-effort:
-                    // the server owns the set of recognized ids, and the
-                    // backing integration may be disconnected or the feature
-                    // disabled between dispatch and run setup — so resolution
-                    // failures skip the server instead of failing the run. A
-                    // transient failure still gets the same retry budget as the
-                    // UUID case first, so a brief backend blip doesn't silently
-                    // drop the server from an otherwise-healthy run.
-                    let client_config = match with_bounded_retry_using(
-                        &format!("resolve well-known MCP server '{id}'"),
-                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
-                        is_transient_graphql_or_http_error,
-                        || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
-                    )
-                    .await
-                    {
-                        Ok(client_config) => client_config,
-                        Err(err) => {
-                            log::warn!("Skipping well-known MCP server '{id}': {err:#}");
-                            continue;
-                        }
-                    };
-                    match Self::installations_from_managed_client_config_json(
-                        &client_config.mcp_config_json,
-                        task_id,
-                        id,
-                    ) {
-                        Ok(installations) => {
-                            resolved.ephemeral_installations.extend(installations);
-                        }
-                        Err(err) => {
-                            log::warn!("Skipping well-known MCP server '{id}': {err}");
-                        }
-                    }
-                }
-                MCPSpec::Json(json_str) => {
-                    resolved
-                        .ephemeral_installations
-                        .extend(Self::installations_from_user_mcp_json(json_str)?);
-                }
+                ResolvedMcpSpec::Skipped => {}
             }
         }
 
         Ok(resolved)
+    }
+
+    async fn resolve_mcp_spec(
+        spec: &MCPSpec,
+        local_installed_uuids: &HashSet<Uuid>,
+        managed_mcp_client: &dyn ManagedMcpClient,
+        task_id: Option<AmbientAgentTaskId>,
+    ) -> Result<ResolvedMcpSpec, AgentDriverError> {
+        match spec {
+            MCPSpec::Uuid(uuid) if local_installed_uuids.contains(uuid) => {
+                Ok(ResolvedMcpSpec::LocalUuid(*uuid))
+            }
+            MCPSpec::Uuid(uuid) => {
+                let client_config = with_bounded_retry_using(
+                    &format!("resolve managed MCP server '{uuid}'"),
+                    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                    is_transient_graphql_or_http_error,
+                    || managed_mcp_client.create_managed_mcp_client_config(uuid.to_string()),
+                )
+                .await
+                .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
+                    uid: *uuid,
+                    message: format!("{err:#}"),
+                })?;
+                Self::installations_from_managed_client_config_json(
+                    &client_config.mcp_config_json,
+                    task_id,
+                    &uuid.to_string(),
+                )
+                .map(ResolvedMcpSpec::EphemeralInstallations)
+                .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
+                    uid: *uuid,
+                    message: err.to_string(),
+                })
+            }
+            MCPSpec::WellKnown(id) => {
+                // Persisted specs may outlive the flag that enabled them.
+                if !FeatureFlag::WellKnownMcpIds.is_enabled() {
+                    log::warn!(
+                        "Skipping well-known MCP server '{id}': WellKnownMcpIds is disabled"
+                    );
+                    return Ok(ResolvedMcpSpec::Skipped);
+                }
+                // Disconnected integrations are best-effort, but transient failures still get retries.
+                let client_config = match with_bounded_retry_using(
+                    &format!("resolve well-known MCP server '{id}'"),
+                    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                    is_transient_graphql_or_http_error,
+                    || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
+                )
+                .await
+                {
+                    Ok(client_config) => client_config,
+                    Err(err) => {
+                        log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                        return Ok(ResolvedMcpSpec::Skipped);
+                    }
+                };
+                match Self::installations_from_managed_client_config_json(
+                    &client_config.mcp_config_json,
+                    task_id,
+                    id,
+                ) {
+                    Ok(installations) => Ok(ResolvedMcpSpec::EphemeralInstallations(installations)),
+                    Err(err) => {
+                        log::warn!("Skipping well-known MCP server '{id}': {err}");
+                        Ok(ResolvedMcpSpec::Skipped)
+                    }
+                }
+            }
+            MCPSpec::Json(json_str) => Self::installations_from_user_mcp_json(json_str)
+                .map(ResolvedMcpSpec::EphemeralInstallations),
+        }
     }
 
     /// Returns the built-in Factory MCP server installation to attach to this
