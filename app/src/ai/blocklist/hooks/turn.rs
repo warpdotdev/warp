@@ -4,6 +4,10 @@
 //! queued, with provenance that says which binding asked for it. Each binding may ask for at most
 //! its `loop_limit` follow-ups in one chain (the user's prompt and everything queued from it),
 //! and a chain never grows past the host cap. Only a turn that completed fires the boundary.
+//!
+//! A newer turn can start while the hooks run. Whether it did is read from live state when the
+//! hooks answer (a prompt whose own hooks are running, a request in flight), never from a flag
+//! set earlier, so a turn that came and went in the meantime leaves nothing behind.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -31,9 +35,6 @@ struct HeldTurn {
     cancel: Arc<AtomicBool>,
     /// The envelope to dispatch and how long to wait for it, until the dispatch starts.
     pending: Option<(HookEnvelope, Duration)>,
-    /// A new prompt started a turn while the hooks ran. That turn owns the conversation's
-    /// status now; a follow-up still queues behind it.
-    superseded: bool,
 }
 
 /// How many follow-ups each stop binding has asked for since the user's last prompt.
@@ -58,7 +59,7 @@ impl FollowUpChain {
 pub(crate) struct TurnStops {
     held: HashMap<AIConversationId, HeldTurn>,
     chains: HashMap<AIConversationId, FollowUpChain>,
-    /// Conversations whose stop hooks finished while a newer prompt's hooks were still running.
+    /// Conversations whose stop hooks finished while a prompt's own hooks were still running.
     /// That prompt owns the status if it goes out; if it does not, the turn is still unfinished.
     deferred: HashSet<AIConversationId>,
 }
@@ -88,25 +89,8 @@ impl TurnStops {
             .or_insert_with(FollowUpChain::new)
     }
 
-    /// A prompt is starting a turn. A held turn's status now belongs to the new one.
-    pub(super) fn note_new_turn(&mut self, conversation_id: AIConversationId) {
-        if let Some(held) = self.held.get_mut(&conversation_id) {
-            held.superseded = true;
-        }
-    }
-
-    /// The new turn's request went out.
-    pub(super) fn turn_started(&mut self, conversation_id: AIConversationId) {
-        self.deferred.remove(&conversation_id);
-    }
-
-    /// The new turn's prompt was not sent. Returns whether the earlier turn's finalization was
-    /// left to it and must now happen; otherwise the earlier turn's hooks are still running and
-    /// will finalize it themselves.
-    pub(super) fn turn_did_not_start(&mut self, conversation_id: AIConversationId) -> bool {
-        if let Some(held) = self.held.get_mut(&conversation_id) {
-            held.superseded = false;
-        }
+    /// Takes the note that an earlier turn's finalization was left to the prompt now settling.
+    pub(super) fn take_deferred(&mut self, conversation_id: AIConversationId) -> bool {
         self.deferred.remove(&conversation_id)
     }
 
@@ -158,7 +142,6 @@ pub(crate) fn hold_turn(
             HeldTurn {
                 cancel: Arc::new(AtomicBool::new(false)),
                 pending: Some((envelope, timeout)),
-                superseded: false,
             },
         );
     });
@@ -210,10 +193,13 @@ pub(crate) fn start_turn_stop(
     })
 }
 
-/// What the controller does once a held turn's stop hooks have finished.
+/// What the controller does once a held turn's stop hooks have finished. The controller also
+/// checks for a request in flight before it marks anything: a turn that started by any other
+/// path while the hooks ran owns the conversation's status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnStopResolution {
-    /// Nothing: the hold was cancelled or another turn took the conversation over.
+    /// Nothing: the hold was cancelled, or a prompt whose own hooks are still running will own
+    /// the status if it goes out and finish this turn if it does not.
     Dropped,
     /// Mark the turn successful.
     Finalize,
@@ -233,18 +219,20 @@ pub(crate) fn resolve_turn_stop(
         return TurnStopResolution::Dropped;
     }
     let runtime = HookRuntime::handle(ctx);
-    let Some(held) = runtime.update(ctx, |runtime, _| {
+    let is_current = runtime.update(ctx, |runtime, _| {
         let is_current = runtime
             .turn_stops
             .held
             .get(&conversation_id)
             .is_some_and(|held| Arc::ptr_eq(&held.cancel, &ticket));
+        if is_current {
+            runtime.turn_stops.held.remove(&conversation_id);
+        }
         is_current
-            .then(|| runtime.turn_stops.held.remove(&conversation_id))
-            .flatten()
-    }) else {
+    });
+    if !is_current {
         return TurnStopResolution::Dropped;
-    };
+    }
     let effects = match outcome {
         Some(outcome) if !outcome.cancelled => Some(outcome.effects),
         Some(_) | None => None,
@@ -259,12 +247,14 @@ pub(crate) fn resolve_turn_stop(
         }
         None => false,
     };
-    if held.superseded {
-        // The newer turn owns the status. If its prompt never goes out, the controller learns
-        // the earlier turn still needs finishing.
-        runtime.update(ctx, |runtime, _| {
+    let prompt_pending = runtime.update(ctx, |runtime, _| {
+        let pending = runtime.pending_prompts.is_pending(conversation_id);
+        if pending {
             runtime.turn_stops.deferred.insert(conversation_id);
-        });
+        }
+        pending
+    });
+    if prompt_pending {
         return TurnStopResolution::Dropped;
     }
     if queued {

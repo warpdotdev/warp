@@ -1,19 +1,20 @@
 use std::time::Duration;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload, PromptProvenance};
+use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload, HookTurnId, PromptProvenance};
 use instant::Instant;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::CancellationReason;
 use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::{AIAgentInput, CancellationReason, UserQueryMode};
+use crate::ai::blocklist::hooks::prompt::is_pending;
 use crate::ai::blocklist::hooks::test_utils::{
     HookTestApp, controller_harness, conversation_status, exchange_count, finish_turn_with_text,
-    hook_test_app, record_statuses, settle,
+    hook_test_app, let_background_work_settle, record_statuses, settle,
 };
-use crate::ai::blocklist::{QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use crate::features::FeatureFlag;
 
 fn stop_binding(loop_limit: Option<u32>) -> DeclaredBinding {
@@ -52,6 +53,30 @@ fn queued_texts(app: &App, conversation_id: AIConversationId) -> Vec<(String, Pr
             })
             .collect()
     })
+}
+
+/// The text and mode of the user query in the conversation's latest exchange.
+fn latest_user_query(app: &App, conversation_id: AIConversationId) -> Option<(String, UserQueryMode)> {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .conversation(&conversation_id)?
+            .latest_exchange()?
+            .input
+            .iter()
+            .find_map(|input| match input {
+                AIAgentInput::UserQuery {
+                    query,
+                    user_query_mode,
+                    ..
+                } => Some((query.clone(), *user_query_mode)),
+                _ => None,
+            })
+    })
+}
+
+/// Starts a turn by hand for a conversation whose first request was mocked.
+fn start_turn(app: &mut App, conversation_id: AIConversationId) -> HookTurnId {
+    app.update(|ctx| HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.start_turn(conversation_id)))
 }
 
 #[test]
@@ -399,16 +424,20 @@ fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
                 .install_bindings(vec![stop.clone(), prompt], ctx)
         });
         let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let first_turn = start_turn(&mut app, conversation_id);
         let (_recorder, statuses) = record_statuses(&mut app, conversation_id);
 
         finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
         settle(&mut app, |app| exchange_count(app, conversation_id) == 2).await;
 
-        let follow_up = harness
-            .hooks
-            .adapter
-            .encoded_envelopes()
-            .into_iter()
+        let envelopes = harness.hooks.adapter.encoded_envelopes();
+        let stop_envelope = envelopes
+            .iter()
+            .find(|envelope| envelope.boundary() == HookBoundary::TurnStop)
+            .expect("the stop hooks ran");
+        assert_eq!(stop_envelope.turn_id, Some(first_turn));
+        let follow_up = envelopes
+            .iter()
             .find(|envelope| envelope.boundary() == HookBoundary::PromptSubmit)
             .expect("the follow-up ran the prompt hooks");
         let HookPayload::PromptSubmit {
@@ -422,11 +451,253 @@ fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
             provenance,
             PromptProvenance::HookFollowUp { binding, .. } if *binding == stop.id
         ));
+        assert!(follow_up.turn_id.is_some(), "the follow-up starts a turn of its own");
+        assert_ne!(follow_up.turn_id, Some(first_turn));
+        assert_eq!(
+            follow_up.turn_id,
+            app.read(|ctx| HookRuntime::as_ref(ctx).turn_id_for(conversation_id))
+        );
         let seen = statuses.lock().unwrap().clone();
         assert!(
             !seen.contains(&ConversationStatus::Success),
             "the conversation never looked finished between the stop hook and its follow-up: \
              {seen:?}"
+        );
+        assert!(queued_texts(&app, conversation_id).is_empty());
+    });
+}
+
+#[test]
+fn a_follow_ups_text_is_sent_as_written() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        // A slash command for a person; for a hook, text like any other.
+        harness
+            .hooks
+            .runner
+            .script(stop.id.clone(), continuation("/compact the rest"));
+        let prompt = test_binding(
+            test_source_id("prompt"),
+            HookBoundary::PromptSubmit,
+            0,
+            None,
+        );
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop, prompt], ctx));
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+
+        finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
+        settle(&mut app, |app| exchange_count(app, conversation_id) == 2).await;
+
+        assert_eq!(
+            latest_user_query(&app, conversation_id),
+            Some(("/compact the rest".to_owned(), UserQueryMode::Normal))
+        );
+        let follow_up = harness
+            .hooks
+            .adapter
+            .encoded_envelopes()
+            .into_iter()
+            .find(|envelope| envelope.boundary() == HookBoundary::PromptSubmit)
+            .expect("the follow-up ran the prompt hooks");
+        assert!(matches!(
+            &follow_up.payload,
+            HookPayload::PromptSubmit { text, .. } if text == "/compact the rest"
+        ));
+    });
+}
+
+#[test]
+fn a_turn_that_came_and_went_during_the_hold_leaves_nothing_behind() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        harness
+            .hooks
+            .runner
+            .script(stop.id.clone(), continuation("later"));
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+
+        finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        // No prompt hook applies, so this prompt goes out on the same call.
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation(
+                "something else".to_owned(),
+                conversation_id,
+                None,
+                ctx,
+            );
+        });
+        assert_eq!(exchange_count(&app, conversation_id), 2);
+
+        // The hooks answer while the newer turn owns the conversation.
+        hold.release();
+        settle(&mut app, |app| {
+            !app.read(|ctx| HookRuntime::as_ref(ctx).turn_stops.is_held(conversation_id))
+        })
+        .await;
+        let_background_work_settle(&mut app).await;
+
+        // The newer turn is cancelled, which settles the status.
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.cancel_conversation_progress(
+                conversation_id,
+                CancellationReason::ManuallyCancelled,
+                ctx,
+            );
+        });
+        settle(&mut app, |app| {
+            conversation_status(app, conversation_id) == Some(ConversationStatus::Cancelled)
+        })
+        .await;
+
+        // A later cancellation of the idle conversation finds nothing left over from the hold,
+        // so it does not write a status of its own.
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.cancel_conversation_progress(
+                conversation_id,
+                CancellationReason::Reverted,
+                ctx,
+            );
+        });
+        let_background_work_settle(&mut app).await;
+        assert_eq!(
+            conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Cancelled)
+        );
+    });
+}
+
+#[test]
+fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        let prompt = test_binding(
+            test_source_id("prompt"),
+            HookBoundary::PromptSubmit,
+            0,
+            None,
+        );
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop, prompt], ctx));
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let (_recorder, statuses) = record_statuses(&mut app, conversation_id);
+
+        // Each hold covers the invocations started while it is the current one.
+        let stop_hold = harness.hooks.runner.hold();
+        finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        let first_prompt_hold = harness.hooks.runner.hold();
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("one".to_owned(), conversation_id, None, ctx);
+        });
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 2).await;
+        let second_prompt_hold = harness.hooks.runner.hold();
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("two".to_owned(), conversation_id, None, ctx);
+        });
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 3).await;
+
+        // The replaced prompt settles first, then the stop hooks; the second prompt still waits.
+        first_prompt_hold.release();
+        let_background_work_settle(&mut app).await;
+        stop_hold.release();
+        settle(&mut app, |app| {
+            !app.read(|ctx| HookRuntime::as_ref(ctx).turn_stops.is_held(conversation_id))
+        })
+        .await;
+        let_background_work_settle(&mut app).await;
+        assert!(app.read(|ctx| is_pending(conversation_id, ctx)));
+        assert_eq!(exchange_count(&app, conversation_id), 1);
+        assert!(
+            !statuses.lock().unwrap().contains(&ConversationStatus::Success),
+            "{:?}",
+            statuses.lock().unwrap()
+        );
+
+        second_prompt_hold.release();
+        settle(&mut app, |app| exchange_count(app, conversation_id) == 2).await;
+        assert_eq!(
+            latest_user_query(&app, conversation_id).map(|(text, _)| text),
+            Some("two".to_owned())
+        );
+        assert!(!statuses.lock().unwrap().contains(&ConversationStatus::Success));
+    });
+}
+
+#[test]
+fn a_follow_up_for_a_conversation_the_surface_left_waits_for_its_drain() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        harness
+            .hooks
+            .runner
+            .script(stop.id.clone(), continuation("later"));
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (left_behind, stream) = harness.mock_stream(&mut app);
+        finish_turn_with_text(&mut app, left_behind, &stream, "First answer.");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        // The person moves on to another conversation on the same surface.
+        let (current, _current_stream) = harness.mock_stream(&mut app);
+
+        hold.release();
+        settle(&mut app, |app| {
+            conversation_status(app, left_behind) == Some(ConversationStatus::Success)
+        })
+        .await;
+        let queued = queued_texts(&app, left_behind);
+        assert_eq!(queued.len(), 1, "the follow-up waits for the conversation's next drain");
+        assert_eq!(queued[0].0, "later");
+        assert_eq!(exchange_count(&app, left_behind), 1);
+        assert_eq!(
+            conversation_status(&app, current),
+            Some(ConversationStatus::InProgress),
+            "the conversation the person is in was not touched"
+        );
+    });
+}
+
+#[test]
+fn clearing_the_surface_during_a_hold_settles_the_cleared_turn() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        harness
+            .hooks
+            .runner
+            .script(stop.id.clone(), continuation("ignored"));
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+
+        let terminal_id = harness.terminal_id();
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.clear_conversations_for_terminal_surface(terminal_id, ctx);
+            });
+        });
+        assert_eq!(
+            conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Cancelled)
+        );
+
+        hold.release();
+        let_background_work_settle(&mut app).await;
+        assert_eq!(
+            conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Cancelled)
         );
         assert!(queued_texts(&app, conversation_id).is_empty());
     });
