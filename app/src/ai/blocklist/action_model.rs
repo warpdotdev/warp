@@ -755,6 +755,8 @@ impl BlocklistAIActionModel {
             return;
         }
         action.action = AIAgentActionType::RunAgents(Box::new(request));
+        // The request may differ from the one the hooks saw, so their verdict no longer applies.
+        pre_tool::invalidate(conversation_id, action_id, ctx);
         self.execute_action(action_id, conversation_id, ctx);
     }
 
@@ -1363,7 +1365,7 @@ impl BlocklistAIActionModel {
         ctx: &mut ModelContext<Self>,
     ) {
         // Search through all pending conversations to find the action and conversation ID
-        let mut found_conversation_id = None;
+        let mut found = None;
         for (conversation_id, pending_actions_for_conversation) in self.pending_actions.iter_mut() {
             if let Some(action) = pending_actions_for_conversation
                 .iter_mut()
@@ -1373,19 +1375,22 @@ impl BlocklistAIActionModel {
                     ..
                 } = &mut action.action
             {
+                let command_changed = *original_command != command;
                 *original_command = command;
-                found_conversation_id = Some(*conversation_id);
+                found = Some((*conversation_id, command_changed));
                 break;
             }
         }
 
-        let Some(conversation_id) = found_conversation_id else {
+        let Some((conversation_id, command_changed)) = found else {
             log::warn!("Ignoring acceptance for non-pending requested command: {action_id:?}");
             return;
         };
 
-        // The command text may have changed, so any hook verdict for the old text is stale.
-        pre_tool::invalidate(action_id, ctx);
+        // A hook verdict for the old command text no longer applies to the new text.
+        if command_changed {
+            pre_tool::invalidate(conversation_id, action_id, ctx);
+        }
         self.execute_action(action_id, conversation_id, ctx);
     }
 
@@ -1416,7 +1421,7 @@ impl BlocklistAIActionModel {
         self.executor.update(ctx, |executor, ctx| {
             executor.discard_action_state(&action_id, ctx);
         });
-        pre_tool::invalidate(&action_id, ctx);
+        pre_tool::invalidate(conversation_id, &action_id, ctx);
 
         // If a command action entered long-running mode (returned a snapshot), cancel all other
         // pending RequestCommandOutput actions. Only one command can be active at a time, and the

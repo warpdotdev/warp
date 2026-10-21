@@ -963,11 +963,11 @@ impl BlocklistAIActionExecutor {
 
     /// Runs a pre-tool hook dispatch in the background and announces the verdict when it lands.
     fn spawn_hook_dispatch(&self, dispatch: PendingDispatch, ctx: &mut ModelContext<Self>) {
-        let PendingDispatch { action_id, future } = dispatch;
+        let PendingDispatch { ticket, future } = dispatch;
         ctx.spawn(future, move |_, outcome, ctx| {
-            if let Some(resumption) = pre_tool::on_resolved(&action_id, outcome, ctx) {
+            if let Some(resumption) = pre_tool::on_resolved(&ticket, outcome, ctx) {
                 ctx.emit(BlocklistAIActionExecutorEvent::HookVerdictResolved {
-                    action_id,
+                    action_id: ticket.action_id,
                     conversation_id: resumption.conversation_id,
                     is_user_initiated: resumption.is_user_initiated,
                 });
