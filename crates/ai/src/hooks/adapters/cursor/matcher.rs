@@ -19,6 +19,14 @@ pub(super) struct MatcherCache {
 }
 
 impl MatcherCache {
+    /// Compiles `pattern` now so the first envelope does not pay for it. A pattern that does not
+    /// compile was already skipped at parse time, so nothing is reported here.
+    pub(super) fn precompile(&self, pattern: &str) {
+        if !matches_everything(pattern) {
+            self.get(pattern);
+        }
+    }
+
     fn get(&self, pattern: &str) -> Option<Arc<Regex>> {
         let mut compiled = self.compiled.lock().expect("matcher cache lock");
         if let Some(regex) = compiled.get(pattern) {
