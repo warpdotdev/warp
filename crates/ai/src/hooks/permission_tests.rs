@@ -49,10 +49,11 @@ fn deny_denies_for_every_warp_result_including_user_initiated() {
             warp,
             &PermissionFloors::default(),
         );
-        let PermissionDecision::Deny { reason } = decision else {
+        let PermissionDecision::Deny { reason, cause } = decision else {
             panic!("expected deny for {warp:?}, got {decision:?}");
         };
         assert_eq!(reason.text, "policy says no");
+        assert_eq!(cause, DenyCause::Hook);
     }
 }
 
@@ -75,7 +76,7 @@ fn a_deny_is_reported_with_the_denying_bindings_reason() {
         ],
         ..Default::default()
     };
-    let PermissionDecision::Deny { reason } = HookPermissionPolicy::compose(
+    let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
         &effects,
         WarpPermissionResult {
             can_auto_execute: true,
@@ -101,7 +102,7 @@ fn deny_without_a_reason_uses_the_default_text() {
         },
         &PermissionFloors::default(),
     );
-    let PermissionDecision::Deny { reason } = decision else {
+    let PermissionDecision::Deny { reason, .. } = decision else {
         panic!("expected deny");
     };
     assert_eq!(reason.text, DEFAULT_DENY_REASON);
@@ -144,17 +145,18 @@ fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
             },
             &PermissionFloors::default(),
         );
-        let PermissionDecision::Deny { reason } = decision else {
+        let PermissionDecision::Deny { reason, cause } = decision else {
             panic!("expected deny for {verdict:?}");
         };
         assert_eq!(reason.text, REWRITE_UNSUPPORTED_DENY_REASON);
         assert_eq!(reason.binding, None, "Warp wrote this reason, not a hook");
+        assert_eq!(cause, DenyCause::RewriteUnsupported);
     }
 
     // A hook that both rewrites and denies is reported with its own reason.
     let mut effects = merged(HookVerdict::Deny, vec!["no"]);
     effects.replacement_input = Some(serde_json::json!({}));
-    let PermissionDecision::Deny { reason } = HookPermissionPolicy::compose(
+    let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
         &effects,
         WarpPermissionResult {
             can_auto_execute: true,
@@ -166,6 +168,54 @@ fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
         panic!("expected deny");
     };
     assert_eq!(reason.text, "no");
+}
+
+#[test]
+fn floors_report_whether_any_is_set() {
+    assert!(!PermissionFloors::default().any());
+    for floors in [
+        PermissionFloors {
+            command_denylist_hit: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            protected_write_path: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            mcp_server_denylisted: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            always_ask_setting: true,
+            ..Default::default()
+        },
+    ] {
+        assert!(floors.any(), "{floors:?}");
+    }
+}
+
+#[test]
+fn decisions_order_by_strictness() {
+    let reason = HookReason {
+        text: "no".to_owned(),
+        binding: None,
+    };
+    assert!(
+        PermissionDecision::Execute.strictness()
+            < PermissionDecision::RequireConfirmation { reason: None }.strictness()
+    );
+    assert!(
+        PermissionDecision::RequireConfirmation {
+            reason: Some(reason.clone())
+        }
+        .strictness()
+            < PermissionDecision::Deny {
+                reason,
+                cause: DenyCause::Hook
+            }
+            .strictness()
+    );
 }
 
 #[test]

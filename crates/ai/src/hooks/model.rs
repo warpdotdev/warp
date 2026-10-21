@@ -224,6 +224,17 @@ pub enum HookSurface {
     Tui,
 }
 
+impl HookSurface {
+    /// Whether the surface has no one who can answer a confirmation request. A hidden local
+    /// child counts: its parent cannot see or approve its actions.
+    pub fn is_headless(&self) -> bool {
+        match self {
+            Self::OzRun | Self::CliRun | Self::LocalChild => true,
+            Self::Gui | Self::Tui => false,
+        }
+    }
+}
+
 /// Where the operation the hook describes is executing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookExecutionHost {

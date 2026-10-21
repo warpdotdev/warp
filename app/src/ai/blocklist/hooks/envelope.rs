@@ -77,6 +77,11 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         .filter(|email| !email.is_empty());
     let runtime = HookRuntime::as_ref(ctx);
     let run = runtime.run_metadata().cloned();
+    let surface = if site.read_conversation {
+        surface_for_conversation(site.conversation_id, run.is_some(), ctx)
+    } else {
+        surface(run.is_some(), ctx)
+    };
 
     HookEnvelope {
         schema_version: ENVELOPE_SCHEMA_VERSION,
@@ -86,7 +91,7 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         turn_id: None,
         exchange_id,
         action_id: None,
-        surface: surface(run.is_some(), ctx),
+        surface,
         run,
         execution_host: HookExecutionHost::Local,
         cwd,
@@ -118,6 +123,32 @@ pub(super) fn surface(is_run: bool, ctx: &AppContext) -> HookSurface {
         HookSurface::Tui
     } else {
         HookSurface::Gui
+    }
+}
+
+/// The surface `conversation_id` fires boundaries from. A child agent conversation in a desktop
+/// or TUI process is a hidden local child: nobody can see or approve its actions, even though
+/// the process itself is interactive. Runs keep their process surface, since a remote child is
+/// an Oz run of its own.
+pub(super) fn surface_for_conversation(
+    conversation_id: AIConversationId,
+    is_run: bool,
+    ctx: &AppContext,
+) -> HookSurface {
+    let process_surface = surface(is_run, ctx);
+    match process_surface {
+        HookSurface::Gui | HookSurface::Tui => {
+            let is_child = ctx.has_singleton_model::<BlocklistAIHistoryModel>()
+                && BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| conversation.is_child_agent_conversation());
+            if is_child {
+                HookSurface::LocalChild
+            } else {
+                process_surface
+            }
+        }
+        HookSurface::OzRun | HookSurface::CliRun | HookSurface::LocalChild => process_surface,
     }
 }
 
