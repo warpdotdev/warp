@@ -57,35 +57,18 @@ fn send_request_finishes_only_after_flush_and_does_not_wait_for_the_response() {
         assert!(futures::poll!(send.as_mut()).is_pending());
         release_tx.send(()).unwrap();
         let response = send.await.unwrap();
-        futures::pin_mut!(response);
-        assert!(futures::poll!(response.as_mut()).is_pending());
-        agent
-            .send(json!({"jsonrpc": "2.0", "id": prompt["id"], "result": {"done": true}}))
-            .await;
-        assert_eq!(response.await.unwrap(), json!({"done": true}));
-    });
-}
-
-#[test]
-fn a_flushed_request_is_sent_before_a_subsequent_cancel_without_polling_its_response() {
-    let (connection, _notifications, mut agent) = connect(rejecting_handler());
-    block_on(async {
-        let response = connection
-            .send_request::<_, Value>("session/prompt", json!({}))
-            .await
-            .unwrap();
         connection
             .notify("session/cancel", json!({"sessionId": "sess_1"}))
             .await
             .unwrap();
-        let prompt = agent.next_message().await;
         let cancel = agent.next_message().await;
-        assert_eq!(prompt["method"], "session/prompt");
         assert_eq!(cancel["method"], "session/cancel");
+        futures::pin_mut!(response);
+        assert!(futures::poll!(response.as_mut()).is_pending());
         agent
             .send(json!({"jsonrpc": "2.0", "id": prompt["id"], "result": {"stopReason": "cancelled"}}))
             .await;
-        assert_eq!(response.await.unwrap()["stopReason"], "cancelled");
+        assert_eq!(response.await.unwrap(), json!({"stopReason": "cancelled"}));
     });
 }
 

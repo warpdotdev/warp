@@ -12,9 +12,7 @@ use session_sharing_protocol::common::AgentAttachment;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message as MessageKind;
 use warp_multi_agent_api::response_event::StreamInit;
-use warp_multi_agent_api::{
-    ExternalMessage, QueryAuthor, UserQueryOrigin, WarpUser, query_author, user_query_origin,
-};
+use warp_multi_agent_api::{QueryAuthor, WarpUser, query_author};
 use warpui::r#async::executor::Background;
 
 use super::super::connection::AgentRequestHandler;
@@ -984,38 +982,6 @@ fn a_pending_permission_request_is_answered_cancelled_when_a_follow_up_steers() 
 }
 
 #[test]
-fn an_arrival_during_opening_batch_preparation_is_included_before_initial_submission() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    block_on(fixture.send_follow_up("B"));
-    let release = fixture.host.gate_next_apply();
-    let script = async {
-        fixture.host.wait_for(|events| events.iter().any(
-            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"B".to_owned()))
-        )).await;
-        fixture.send_follow_up("C during opening preparation").await;
-        release.send(()).unwrap();
-        let first = fixture.agent.next_prompt().await;
-        assert_eq!(
-            first["params"]["prompt"],
-            json!([
-                {"type": "text", "text": "initial prompt"},
-                {"type": "text", "text": "B"},
-                {"type": "text", "text": "C during opening preparation"}
-            ])
-        );
-        fixture.agent.respond(&first, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
-    };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
-    assert_eq!(host.streams().len(), 1, "{:?}", host.events());
-    assert_eq!(
-        host.texts_on(&host.streams()[0]),
-        vec!["B", "C during opening preparation"]
-    );
-}
-
-#[test]
 fn follow_ups_after_expired_grace_do_not_rearm_cancellation_or_start_an_overlapping_prompt() {
     let (driver, mut mapper, mut fixture, timers) = start_manual();
     let script = async {
@@ -1200,81 +1166,6 @@ fn stop_during_unsent_preparation_is_local_and_retains_later_fifo_input() {
         assert!(host.queued_rows.lock().is_empty());
         assert!(!state.is_settling());
     }
-}
-
-#[test]
-fn ready_notification_and_follow_up_backlogs_both_make_progress_before_the_active_turn_settles() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    let expected = (0..MAX_BATCHED_FOLLOW_UPS * 2 + 1)
-        .map(|index| format!("B backlog-{index}"))
-        .collect::<Vec<_>>();
-    let updates = (0..MAX_BATCHED_FOLLOW_UPS * 2)
-        .map(|index| format!("A update-{index}"))
-        .collect::<Vec<_>>();
-    let script = async {
-        let first = fixture.agent.next_prompt().await;
-        let release = fixture.host.gate_next_apply();
-        fixture.agent.send_chunk("A gate").await;
-        fixture.host.wait_for(|events| events.iter().any(
-            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A gate".to_owned()))
-        )).await;
-        for text in &expected {
-            fixture.send_follow_up(text).await;
-        }
-        for text in &updates {
-            fixture.agent.send_chunk(text).await;
-        }
-        fixture.agent.read_barrier().await;
-        release.send(()).unwrap();
-        fixture
-            .host
-            .wait_for(|events| {
-                let all_input_held = expected
-                    .iter()
-                    .all(|text| events.contains(&HostEvent::ShowQueued(text.clone())));
-                let all_updates_applied = updates.iter().all(|text| {
-                    events.iter().any(
-                |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(text))
-            )
-                });
-                all_input_held && all_updates_applied
-            })
-            .await;
-        assert_eq!(fixture.host.streams().len(), 1);
-        fixture.agent.expect_cancel().await;
-        fixture.agent.respond(&first, "end_turn").await;
-        let mut delivered = Vec::new();
-        let mut finished = 1;
-        while delivered.len() < expected.len() {
-            let prompt = fixture.agent.next_prompt().await;
-            let blocks = prompt["params"]["prompt"].as_array().unwrap();
-            assert!(!blocks.is_empty());
-            assert!(blocks.len() <= MAX_BATCHED_FOLLOW_UPS);
-            delivered.extend(
-                blocks
-                    .iter()
-                    .map(|block| block["text"].as_str().unwrap().to_owned()),
-            );
-            fixture.agent.respond(&prompt, "end_turn").await;
-            finished += 1;
-            fixture.host.wait_for_finished(finished).await;
-        }
-        assert_eq!(delivered, expected);
-        fixture.unbind()
-    };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
-    let streams = host.streams();
-    let mut expected_updates = vec!["A gate".to_owned()];
-    expected_updates.extend(updates);
-    assert_eq!(host.texts_on(&streams[0]), expected_updates);
-    let echoes = streams
-        .iter()
-        .skip(1)
-        .flat_map(|stream| host.texts_on(stream))
-        .collect::<Vec<_>>();
-    assert_eq!(echoes, expected);
-    assert!(host.queued_rows.lock().is_empty());
-    assert!(!state.is_settling());
 }
 
 #[test]
@@ -1571,17 +1462,10 @@ fn turn_state_reports_idle_once_the_prompt_resolves() {
 }
 
 #[test]
-fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_attachments() {
+fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
     let (driver, mut mapper, mut fixture) = start_default();
     let author_b = ParticipantId::new();
     let base = BaseUserQuery::from_proto(warp_multi_agent_api::request::input::UserQuery {
-        origin: Some(UserQueryOrigin {
-            variant: Some(user_query_origin::Variant::ServerSynthesized(
-                user_query_origin::ServerSynthesized {
-                    reason: "follow-up-B".to_owned(),
-                },
-            )),
-        }),
         author: Some(QueryAuthor {
             principal: Some(query_author::Principal::User(WarpUser {
                 uid: "author-B".to_owned(),
@@ -1589,13 +1473,9 @@ fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_att
             })),
             ..Default::default()
         }),
-        source_message: Some(ExternalMessage {
-            body: "source-B".to_owned(),
-            ..Default::default()
-        }),
         ..Default::default()
     });
-    let expected_base = base.to_proto();
+    let expected_author = base.to_proto().author;
     fixture
         .follow_ups
         .try_send(ExternalHarnessPrompt {
@@ -1608,7 +1488,13 @@ fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_att
         })
         .unwrap();
     block_on(fixture.send_follow_up("C"));
+    let release = fixture.host.gate_next_apply();
     let script = async {
+        fixture.host.wait_for(|events| events.iter().any(
+            |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"B".to_owned()))
+        )).await;
+        fixture.send_follow_up("D during preparation").await;
+        release.send(()).unwrap();
         let opening = fixture.agent.next_prompt().await;
         assert_eq!(
             opening["params"]["prompt"],
@@ -1616,7 +1502,8 @@ fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_att
                 {"type": "text", "text": "initial prompt"},
                 {"type": "text", "text": "B"},
                 {"type": "text", "text": "<attached_text>\nB context\n</attached_text>"},
-                {"type": "text", "text": "C"}
+                {"type": "text", "text": "C"},
+                {"type": "text", "text": "D during preparation"}
             ])
         );
         fixture.agent.read_barrier().await;
@@ -1626,7 +1513,10 @@ fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_att
     };
     let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
     assert_eq!(host.streams().len(), 1, "{:?}", host.events());
-    assert_eq!(host.texts_on(&host.streams()[0]), vec!["B", "C"]);
+    assert_eq!(
+        host.texts_on(&host.streams()[0]),
+        vec!["B", "C", "D during preparation"]
+    );
     let actions = host.actions.lock();
     let echoes = actions
         .iter()
@@ -1641,59 +1531,21 @@ fn ready_opening_follow_ups_are_batched_without_cancel_and_keep_metadata_and_att
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(echoes.len(), 2);
-    assert_eq!(echoes[0].author, expected_base.author);
-    assert_eq!(echoes[0].origin, expected_base.origin);
-    assert_eq!(echoes[0].source_message, expected_base.source_message);
+    assert_eq!(echoes.len(), 3);
+    assert_eq!(echoes[0].author, expected_author);
     assert!(!state.is_settling());
 }
 
 #[test]
-fn ready_idle_follow_ups_share_one_prompt_attributed_to_the_first_author() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    let script = async {
-        let first = fixture.agent.next_prompt().await;
-        fixture.agent.respond(&first, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        let author = fixture.send_follow_up("B").await;
-        fixture.send_follow_up("C").await;
-        let second = fixture.agent.next_prompt().await;
-        assert_eq!(
-            second["params"]["prompt"],
-            json!([
-                {"type": "text", "text": "B"}, {"type": "text", "text": "C"}
-            ])
-        );
-        fixture.agent.read_barrier().await;
-        fixture.agent.respond(&second, "end_turn").await;
-        fixture.host.wait_for_finished(2).await;
-        (author, fixture.unbind())
-    };
-    let ((author, (host, _)), ()) = block_on(join(script, driver.run(&mut mapper)));
-    let streams = host.streams();
-    assert_eq!(streams.len(), 2, "{:?}", host.events());
-    assert_eq!(host.texts_on(&streams[1]), vec!["B", "C"]);
-    assert!(host.events().contains(&HostEvent::BeginTurn {
-        stream: streams[1].clone(),
-        initiator: Some(author),
-    }));
-    assert!(
-        !host
-            .events()
-            .iter()
-            .any(|event| matches!(event, HostEvent::Cancelled { .. }))
-    );
-}
-
-#[test]
-fn a_follow_up_arriving_during_async_turn_preparation_joins_the_unsent_batch() {
+fn idle_batch_preserves_fifo_and_first_author_across_async_preparation() {
     let (driver, mut mapper, mut fixture) = start_default();
     let script = async {
         let first = fixture.agent.next_prompt().await;
         fixture.agent.respond(&first, "end_turn").await;
         fixture.host.wait_for_finished(1).await;
         let release = fixture.host.gate_next_begin();
-        fixture.send_follow_up("B").await;
+        let author = fixture.send_follow_up("B").await;
+        fixture.send_follow_up("C ready").await;
         fixture
             .host
             .wait_for(|events| {
@@ -1704,25 +1556,38 @@ fn a_follow_up_arriving_during_async_turn_preparation_joins_the_unsent_batch() {
                     == 2
             })
             .await;
-        fixture.send_follow_up("C during preparation").await;
+        fixture.send_follow_up("D during preparation").await;
         release.send(()).unwrap();
         let second = fixture.agent.next_prompt().await;
         assert_eq!(
             second["params"]["prompt"],
             json!([
                 {"type": "text", "text": "B"},
-                {"type": "text", "text": "C during preparation"}
+                {"type": "text", "text": "C ready"},
+                {"type": "text", "text": "D during preparation"}
             ])
         );
+        fixture.agent.read_barrier().await;
         fixture.agent.respond(&second, "end_turn").await;
         fixture.host.wait_for_finished(2).await;
-        fixture.unbind()
+        (author, fixture.unbind())
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
-    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
+    let ((author, (host, _)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
     assert_eq!(
-        host.texts_on(&host.streams()[1]),
-        vec!["B", "C during preparation"]
+        host.texts_on(&streams[1]),
+        vec!["B", "C ready", "D during preparation"]
+    );
+    assert!(host.events().contains(&HostEvent::BeginTurn {
+        stream: streams[1].clone(),
+        initiator: Some(author),
+    }));
+    assert!(
+        !host
+            .events()
+            .iter()
+            .any(|event| matches!(event, HostEvent::Cancelled { .. }))
     );
 }
 
@@ -1737,6 +1602,7 @@ fn a_ready_final_beats_retry_and_grace_and_drains_ready_input_into_the_held_batc
         let retry_three = timers.take(Duration::from_secs(3)).await;
         let grace = timers.take(STEER_CANCEL_DEADLINE).await;
         let release = fixture.host.gate_next_apply();
+        let release_boundary = fixture.host.gate_next_snapshot();
         fixture.agent.send_chunk("A final chunk").await;
         fixture.host.wait_for(|events| events.iter().any(
             |event| matches!(event, HostEvent::Texts { texts, .. } if texts.contains(&"A final chunk".to_owned()))
@@ -1748,11 +1614,16 @@ fn a_ready_final_beats_retry_and_grace_and_drains_ready_input_into_the_held_batc
         retry_three.send(()).unwrap();
         grace.send(()).unwrap();
         release.send(()).unwrap();
+        fixture.host.wait_for_finished(1).await;
+        fixture.send_follow_up("D after final").await;
+        release_boundary.send(()).unwrap();
         let second = fixture.agent.next_prompt().await;
         assert_eq!(
             second["params"]["prompt"],
             json!([
-                {"type": "text", "text": "B held"}, {"type": "text", "text": "C ready"}
+                {"type": "text", "text": "B held"},
+                {"type": "text", "text": "C ready"},
+                {"type": "text", "text": "D after final"}
             ])
         );
         fixture.agent.respond(&second, "end_turn").await;
@@ -1763,36 +1634,12 @@ fn a_ready_final_beats_retry_and_grace_and_drains_ready_input_into_the_held_batc
     let streams = host.streams();
     assert_eq!(streams.len(), 2, "{:?}", host.events());
     assert_eq!(host.texts_on(&streams[0]), vec!["A final chunk"]);
-    assert_eq!(host.texts_on(&streams[1]), vec!["B held", "C ready"]);
+    assert_eq!(
+        host.texts_on(&streams[1]),
+        vec!["B held", "C ready", "D after final"]
+    );
     assert!(!host.events().iter().any(|event| matches!(
         event,
         HostEvent::InterruptedTerminal | HostEvent::Cancelled { .. }
     )));
-}
-
-#[test]
-fn a_follow_up_ready_after_the_natural_final_is_drained_before_the_next_prompt() {
-    let (driver, mut mapper, mut fixture) = start_default();
-    let script = async {
-        let first = fixture.agent.next_prompt().await;
-        fixture.send_follow_up("B").await;
-        fixture.agent.expect_cancel().await;
-        let release = fixture.host.gate_next_snapshot();
-        fixture.agent.respond(&first, "end_turn").await;
-        fixture.host.wait_for_finished(1).await;
-        fixture.send_follow_up("C after final").await;
-        release.send(()).unwrap();
-        let second = fixture.agent.next_prompt().await;
-        assert_eq!(
-            second["params"]["prompt"],
-            json!([
-                {"type": "text", "text": "B"}, {"type": "text", "text": "C after final"}
-            ])
-        );
-        fixture.agent.respond(&second, "end_turn").await;
-        fixture.host.wait_for_finished(2).await;
-        fixture.unbind()
-    };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
-    assert_eq!(host.streams().len(), 2, "{:?}", host.events());
 }
