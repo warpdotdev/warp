@@ -1,6 +1,14 @@
 use super::*;
 use crate::hooks::test_util::{test_binding_id, test_source_id};
 
+const VERDICTS: [HookVerdict; 5] = [
+    HookVerdict::NoOpinion,
+    HookVerdict::Allow,
+    HookVerdict::Deny,
+    HookVerdict::Ask,
+    HookVerdict::Defer,
+];
+
 fn merged(verdict: HookVerdict, reasons: Vec<&str>) -> MergedEffects {
     let binding = test_binding_id(test_source_id("s"), "tool.pre", 0);
     MergedEffects {
@@ -33,6 +41,42 @@ fn all_warp_results() -> Vec<WarpPermissionResult> {
     results
 }
 
+/// Every floor unset, then each floor set on its own.
+fn all_floors() -> Vec<PermissionFloors> {
+    vec![
+        PermissionFloors::default(),
+        PermissionFloors {
+            command_denylist_hit: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            protected_write_path: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            mcp_server_denylisted: true,
+            ..Default::default()
+        },
+        PermissionFloors {
+            always_ask_setting: true,
+            ..Default::default()
+        },
+    ]
+}
+
+fn all_runs() -> Vec<RunFacts> {
+    let mut runs = Vec::new();
+    for headless in [false, true] {
+        for is_strict in [false, true] {
+            runs.push(RunFacts {
+                headless,
+                is_strict,
+            });
+        }
+    }
+    runs
+}
+
 fn warp_alone(warp: WarpPermissionResult) -> PermissionDecision {
     if warp.is_user_initiated || warp.can_auto_execute || warp.is_autonomous_shell_exception {
         PermissionDecision::Execute
@@ -41,24 +85,146 @@ fn warp_alone(warp: WarpPermissionResult) -> PermissionDecision {
     }
 }
 
+fn interactive() -> RunFacts {
+    RunFacts::default()
+}
+
+fn headless() -> RunFacts {
+    RunFacts {
+        headless: true,
+        is_strict: false,
+    }
+}
+
+fn warp(can_auto_execute: bool, is_user_initiated: bool) -> WarpPermissionResult {
+    WarpPermissionResult {
+        can_auto_execute,
+        is_user_initiated,
+        is_autonomous_shell_exception: false,
+    }
+}
+
+/// The whole matrix: verdict x Warp's three facts x headless x strict x floors. The invariants
+/// hold in every cell; the hand-written tests below pin the interesting corners.
 #[test]
-fn deny_denies_for_every_warp_result_including_user_initiated() {
-    for warp in all_warp_results() {
-        let decision = HookPermissionPolicy::compose(
-            &merged(HookVerdict::Deny, vec!["policy says no", "second"]),
-            warp,
-            &PermissionFloors::default(),
-        );
-        let PermissionDecision::Deny { reason, cause } = decision else {
-            panic!("expected deny for {warp:?}, got {decision:?}");
-        };
-        assert_eq!(reason.text, "policy says no");
-        assert_eq!(cause, DenyCause::Hook);
+fn the_policy_only_ever_tightens_warps_decision() {
+    for verdict in VERDICTS {
+        for warp in all_warp_results() {
+            for run in all_runs() {
+                for floors in all_floors() {
+                    let effects = merged(verdict, vec!["hook says so"]);
+                    let decision = HookPermissionPolicy::compose(&effects, warp, &floors, run);
+                    let baseline = warp_alone(warp);
+                    let cell = format!("{verdict:?} {warp:?} {run:?} {floors:?}");
+
+                    // Floors are never crossed: no cell is looser than Warp alone.
+                    assert!(
+                        decision.strictness() >= baseline.strictness(),
+                        "loosened: {cell} -> {decision:?}"
+                    );
+                    // Allow and no opinion never change the outcome.
+                    if matches!(verdict, HookVerdict::Allow | HookVerdict::NoOpinion) {
+                        assert_eq!(decision, baseline, "{cell}");
+                    }
+                    // Deny always denies, whoever approved what.
+                    if verdict == HookVerdict::Deny {
+                        assert!(
+                            matches!(
+                                decision,
+                                PermissionDecision::Deny {
+                                    cause: DenyCause::Hook,
+                                    ..
+                                }
+                            ),
+                            "{cell} -> {decision:?}"
+                        );
+                    }
+                    // Ask: a confirmation step where someone can answer and the user has not
+                    // already approved; a denial where nobody can.
+                    if verdict == HookVerdict::Ask {
+                        match (run.headless, warp.is_user_initiated) {
+                            (true, _) => assert!(
+                                matches!(
+                                    &decision,
+                                    PermissionDecision::Deny {
+                                        cause: DenyCause::ApprovalUnavailable,
+                                        reason,
+                                    } if reason.text.starts_with(APPROVAL_UNAVAILABLE_PREFIX)
+                                ),
+                                "{cell} -> {decision:?}"
+                            ),
+                            (false, true) => assert_eq!(decision, baseline, "{cell}"),
+                            (false, false) => assert!(
+                                matches!(
+                                    decision,
+                                    PermissionDecision::RequireConfirmation { reason: Some(_) }
+                                ),
+                                "{cell} -> {decision:?}"
+                            ),
+                        }
+                    }
+                    // Defer: denied where nobody can resume it or under the strict policy,
+                    // ignored otherwise.
+                    if verdict == HookVerdict::Defer {
+                        if run.headless || run.is_strict {
+                            assert!(
+                                matches!(
+                                    decision,
+                                    PermissionDecision::Deny {
+                                        cause: DenyCause::DeferralUnsupported,
+                                        ..
+                                    }
+                                ),
+                                "{cell} -> {decision:?}"
+                            );
+                        } else {
+                            assert_eq!(decision, baseline, "{cell}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 #[test]
-fn a_deny_is_reported_with_the_denying_bindings_reason() {
+fn warp_alone_requires_confirmation_only_when_every_fact_is_false() {
+    let needs_confirmation = all_warp_results()
+        .into_iter()
+        .filter(|warp| {
+            warp_alone(*warp) == PermissionDecision::RequireConfirmation { reason: None }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        needs_confirmation,
+        vec![WarpPermissionResult {
+            can_auto_execute: false,
+            is_user_initiated: false,
+            is_autonomous_shell_exception: false,
+        }]
+    );
+}
+
+#[test]
+fn allow_cannot_make_warp_execute_what_it_would_ask_about_or_deny() {
+    for floors in all_floors() {
+        for run in all_runs() {
+            let decision = HookPermissionPolicy::compose(
+                &merged(HookVerdict::Allow, vec!["looks safe"]),
+                warp(false, false),
+                &floors,
+                run,
+            );
+            assert_eq!(
+                decision,
+                PermissionDecision::RequireConfirmation { reason: None }
+            );
+        }
+    }
+}
+
+#[test]
+fn deny_denies_a_user_initiated_action_with_the_denying_bindings_reason() {
     let allowing = test_binding_id(test_source_id("s"), "tool.pre", 0);
     let denying = test_binding_id(test_source_id("s"), "tool.pre", 1);
     let effects = MergedEffects {
@@ -76,33 +242,27 @@ fn a_deny_is_reported_with_the_denying_bindings_reason() {
         ],
         ..Default::default()
     };
-    let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
+    let PermissionDecision::Deny { reason, cause } = HookPermissionPolicy::compose(
         &effects,
-        WarpPermissionResult {
-            can_auto_execute: true,
-            is_user_initiated: false,
-            is_autonomous_shell_exception: false,
-        },
+        warp(true, true),
         &PermissionFloors::default(),
+        interactive(),
     ) else {
         panic!("expected deny");
     };
     assert_eq!(reason.text, "not in this repository");
     assert_eq!(reason.binding, Some(denying));
+    assert_eq!(cause, DenyCause::Hook);
 }
 
 #[test]
 fn deny_without_a_reason_uses_the_default_text() {
-    let decision = HookPermissionPolicy::compose(
+    let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
         &merged(HookVerdict::Deny, vec![]),
-        WarpPermissionResult {
-            can_auto_execute: true,
-            is_user_initiated: false,
-            is_autonomous_shell_exception: false,
-        },
+        warp(true, false),
         &PermissionFloors::default(),
-    );
-    let PermissionDecision::Deny { reason, .. } = decision else {
+        interactive(),
+    ) else {
         panic!("expected deny");
     };
     assert_eq!(reason.text, DEFAULT_DENY_REASON);
@@ -113,21 +273,132 @@ fn deny_without_a_reason_uses_the_default_text() {
 }
 
 #[test]
-fn every_other_verdict_leaves_warps_decision_in_place() {
-    for verdict in [
-        HookVerdict::NoOpinion,
-        HookVerdict::Allow,
-        HookVerdict::Ask,
-        HookVerdict::Defer,
-    ] {
-        for warp in all_warp_results() {
-            let decision = HookPermissionPolicy::compose(
-                &merged(verdict, vec!["ignored"]),
-                warp,
-                &PermissionFloors::default(),
-            );
-            assert_eq!(decision, warp_alone(warp), "{verdict:?} with {warp:?}");
+fn ask_adds_a_confirmation_step_with_the_hooks_reason_where_someone_can_answer() {
+    let decision = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec!["this touches production"]),
+        warp(true, false),
+        &PermissionFloors::default(),
+        interactive(),
+    );
+    let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+        panic!("expected a confirmation step, got {decision:?}");
+    };
+    assert_eq!(reason.text, "this touches production");
+
+    let decision = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec![]),
+        warp(false, false),
+        &PermissionFloors::default(),
+        interactive(),
+    );
+    let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+        panic!("expected a confirmation step, got {decision:?}");
+    };
+    assert_eq!(reason.text, DEFAULT_ASK_REASON);
+}
+
+#[test]
+fn ask_is_satisfied_by_the_users_approval_of_this_revision() {
+    let decision = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec!["please check"]),
+        warp(false, true),
+        &PermissionFloors::default(),
+        interactive(),
+    );
+    assert_eq!(decision, PermissionDecision::Execute);
+}
+
+#[test]
+fn ask_denies_where_nobody_can_answer_and_names_the_hooks_reason() {
+    let decision = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec!["this touches production"]),
+        warp(true, false),
+        &PermissionFloors::default(),
+        headless(),
+    );
+    let PermissionDecision::Deny { reason, cause } = decision else {
+        panic!("expected deny, got {decision:?}");
+    };
+    assert_eq!(cause, DenyCause::ApprovalUnavailable);
+    assert_eq!(
+        reason.text,
+        "Approval unavailable: an agent hook asked for confirmation (this touches production) \
+         and this run has no one to ask."
+    );
+    assert_eq!(
+        reason.binding,
+        Some(test_binding_id(test_source_id("s"), "tool.pre", 0))
+    );
+
+    let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec![]),
+        warp(true, false),
+        &PermissionFloors::default(),
+        headless(),
+    ) else {
+        panic!("expected deny");
+    };
+    assert_eq!(
+        reason.text,
+        "Approval unavailable: an agent hook asked for confirmation and this run has no one to \
+         ask."
+    );
+}
+
+#[test]
+fn ask_denies_on_a_headless_surface_even_for_a_user_initiated_revision() {
+    let decision = HookPermissionPolicy::compose(
+        &merged(HookVerdict::Ask, vec!["please check"]),
+        WarpPermissionResult {
+            can_auto_execute: true,
+            is_user_initiated: true,
+            is_autonomous_shell_exception: true,
+        },
+        &PermissionFloors::default(),
+        headless(),
+    );
+    assert!(matches!(
+        decision,
+        PermissionDecision::Deny {
+            cause: DenyCause::ApprovalUnavailable,
+            ..
         }
+    ));
+}
+
+#[test]
+fn defer_is_ignored_interactively_and_denied_headless_or_under_the_strict_policy() {
+    let effects = merged(HookVerdict::Defer, vec!["later"]);
+    assert_eq!(
+        HookPermissionPolicy::compose(
+            &effects,
+            warp(true, false),
+            &PermissionFloors::default(),
+            interactive()
+        ),
+        PermissionDecision::Execute
+    );
+    for run in [
+        headless(),
+        RunFacts {
+            headless: false,
+            is_strict: true,
+        },
+    ] {
+        let PermissionDecision::Deny { reason, cause } = HookPermissionPolicy::compose(
+            &effects,
+            warp(true, false),
+            &PermissionFloors::default(),
+            run,
+        ) else {
+            panic!("expected deny for {run:?}");
+        };
+        assert_eq!(cause, DenyCause::DeferralUnsupported);
+        assert_eq!(reason.text, DEFERRAL_UNSUPPORTED_DENY_REASON);
+        assert_eq!(
+            reason.binding,
+            Some(test_binding_id(test_source_id("s"), "tool.pre", 0))
+        );
     }
 }
 
@@ -144,6 +415,7 @@ fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
                 is_autonomous_shell_exception: true,
             },
             &PermissionFloors::default(),
+            interactive(),
         );
         let PermissionDecision::Deny { reason, cause } = decision else {
             panic!("expected deny for {verdict:?}");
@@ -158,12 +430,9 @@ fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
     effects.replacement_input = Some(serde_json::json!({}));
     let PermissionDecision::Deny { reason, .. } = HookPermissionPolicy::compose(
         &effects,
-        WarpPermissionResult {
-            can_auto_execute: true,
-            is_user_initiated: false,
-            is_autonomous_shell_exception: false,
-        },
+        warp(true, false),
         &PermissionFloors::default(),
+        interactive(),
     ) else {
         panic!("expected deny");
     };
@@ -173,24 +442,7 @@ fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
 #[test]
 fn floors_report_whether_any_is_set() {
     assert!(!PermissionFloors::default().any());
-    for floors in [
-        PermissionFloors {
-            command_denylist_hit: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            protected_write_path: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            mcp_server_denylisted: true,
-            ..Default::default()
-        },
-        PermissionFloors {
-            always_ask_setting: true,
-            ..Default::default()
-        },
-    ] {
+    for floors in all_floors().into_iter().skip(1) {
         assert!(floors.any(), "{floors:?}");
     }
 }
@@ -215,23 +467,5 @@ fn decisions_order_by_strictness() {
                 cause: DenyCause::Hook
             }
             .strictness()
-    );
-}
-
-#[test]
-fn warp_alone_requires_confirmation_only_when_every_fact_is_false() {
-    let needs_confirmation = all_warp_results()
-        .into_iter()
-        .filter(|warp| {
-            warp_alone(*warp) == PermissionDecision::RequireConfirmation { reason: None }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        needs_confirmation,
-        vec![WarpPermissionResult {
-            can_auto_execute: false,
-            is_user_initiated: false,
-            is_autonomous_shell_exception: false,
-        }]
     );
 }
