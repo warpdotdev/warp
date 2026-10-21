@@ -135,6 +135,11 @@ fn one_deny_binding_denies_with_its_reason() {
         encoded[0].invocation_id,
         outcome.invocations[0].invocation_id
     );
+    assert_eq!(
+        h.adapter.decode_policies(),
+        vec![DecodePolicy { strict: false }],
+        "output is decoded under the vendor defaults until strict mode is wired"
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use uuid::Uuid;
 
-use crate::hooks::adapters::DeclaredBinding;
+use crate::hooks::adapters::{DecodePolicy, DeclaredBinding};
 use crate::hooks::model::{
     DiagnosticSeverity, FailurePolicy, HookBindingId, HookDiagnostic, HookEffects, HookEnvelope,
     HookReason, HookVerdict, MergedEffects, reduce_effects,
@@ -191,7 +191,10 @@ async fn run_binding(
         stderr_tail
     );
 
-    let effects = active.adapter.decode_output(&active.binding, &outcome);
+    // The strict hook policy setting is not wired yet, so every decode uses the vendor defaults.
+    let effects = active
+        .adapter
+        .decode_output(&active.binding, &outcome, &DecodePolicy::default());
     let record = InvocationRecord {
         invocation_id: per_invocation.invocation_id,
         binding: active.binding.id.clone(),

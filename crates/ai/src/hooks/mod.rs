@@ -14,7 +14,9 @@ pub mod runner;
 pub mod test_util;
 pub mod trust;
 
-pub use adapters::{DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig};
+pub use adapters::{
+    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+};
 pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CanonicalToolName, CapabilityWarning, ContinuationRequest,
