@@ -3,8 +3,7 @@ use std::time::Duration;
 
 use ai::hooks::{
     CanonicalToolName, ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope,
-    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, PromptProvenance,
-    TurnStopStatus,
+    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, PromptProvenance, TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -108,15 +107,15 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
     }
 }
 
-/// The surface this process fires boundaries from. `is_run` tells an Oz run apart from a local
-/// command-line run, which share an execution mode.
-pub(super) fn surface(is_run: bool, ctx: &AppContext) -> HookSurface {
+/// The surface this process fires boundaries from. `has_run_metadata` tells an Oz run apart from
+/// a local command-line run, which share an execution mode.
+pub(super) fn surface(has_run_metadata: bool, ctx: &AppContext) -> HookSurface {
     if !ctx.has_singleton_model::<AppExecutionMode>() {
         return HookSurface::CliRun;
     }
     let mode = AppExecutionMode::as_ref(ctx);
     if mode.is_autonomous() {
-        if is_run {
+        if has_run_metadata {
             HookSurface::OzRun
         } else {
             HookSurface::CliRun
@@ -134,10 +133,10 @@ pub(super) fn surface(is_run: bool, ctx: &AppContext) -> HookSurface {
 /// an Oz run of its own.
 pub(super) fn surface_for_conversation(
     conversation_id: AIConversationId,
-    is_run: bool,
+    has_run_metadata: bool,
     ctx: &AppContext,
 ) -> HookSurface {
-    let process_surface = surface(is_run, ctx);
+    let process_surface = surface(has_run_metadata, ctx);
     match process_surface {
         HookSurface::Gui | HookSurface::Tui => {
             let is_child = ctx.has_singleton_model::<BlocklistAIHistoryModel>()

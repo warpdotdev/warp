@@ -57,8 +57,7 @@ impl HookRuntime {
         }
     }
 
-    /// Whether the flag is on and the runtime is registered. True even when no binding is
-    /// active, for callers that clean up state left from an earlier active period.
+    /// Whether the flag is on and the runtime is registered. True even when no binding is active.
     pub fn is_installed(ctx: &AppContext) -> bool {
         FeatureFlag::AgentHooks.is_enabled() && ctx.has_singleton_model::<HookRuntime>()
     }
@@ -110,7 +109,7 @@ impl HookRuntime {
         self.messenger = messenger;
     }
 
-    /// Starts a dispatch whose outcome nobody waits for. Used by boundaries that only observe.
+    /// Starts a dispatch on the background executor and detaches its future.
     pub(crate) fn dispatch_detached(&self, envelope: HookEnvelope, ctx: &AppContext) {
         let future = self.dispatcher.dispatch(
             envelope,
@@ -310,8 +309,15 @@ pub(crate) mod testing {
         panic!("condition was not met in time");
     }
 
-    /// The doubles behind a [`HookRuntime`] installed for a test, and the adapter its bindings
-    /// use.
+    /// Yields to background work for a short, fixed time, for asserting that nothing more happens.
+    pub(crate) async fn let_background_work_settle(app: &mut App) {
+        for _ in 0..10 {
+            Timer::after(Duration::from_millis(5)).await;
+            app.update(|_| {});
+        }
+    }
+
+    /// The doubles behind a [`HookRuntime`] installed for a test, and the adapter its bindings use.
     pub(crate) struct TestHooks {
         pub adapter: Arc<RecordingAdapter>,
         pub runner: Arc<ScriptedRunner>,
