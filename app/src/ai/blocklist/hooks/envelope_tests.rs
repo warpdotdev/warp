@@ -106,7 +106,10 @@ fn cancellation_reason_names_are_stable() {
             CancellationReason::CommandFinishedDuringInlineAgentView,
             "command_finished",
         ),
-        (CancellationReason::CLISubagentUserTakeover, "user_took_control"),
+        (
+            CancellationReason::CLISubagentUserTakeover,
+            "user_took_control",
+        ),
         (CancellationReason::AgentExitedShell, "shell_exited"),
     ];
     for (reason, name) in expected {
