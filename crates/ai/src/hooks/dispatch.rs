@@ -58,6 +58,10 @@ impl HookDispatcher {
         Self { runner, messenger }
     }
 
+    pub fn runner(&self) -> &Arc<dyn HookRunner> {
+        &self.runner
+    }
+
     pub fn messenger(&self) -> &Arc<dyn HookMessenger> {
         &self.messenger
     }
