@@ -56,8 +56,7 @@ pub(crate) enum PromptDecision {
     Cancelled,
 }
 
-/// Names one prompt whose hooks are running, so a decision can be matched to the prompt it was
-/// made for.
+/// Names one waiting prompt, so a decision can be matched to the prompt it was made for.
 #[derive(Debug, Clone)]
 pub(crate) struct PromptTicket(Arc<AtomicBool>);
 
@@ -69,8 +68,9 @@ impl PartialEq for PromptTicket {
 
 impl Eq for PromptTicket {}
 
-/// Prompts whose `prompt.submit` hooks are running, one per conversation. A newer prompt for the
-/// same conversation replaces the older one, whose hooks are told to stop.
+/// Prompts waiting to be sent, one per conversation: on their own `prompt.submit` hooks, on the
+/// conversation's `session.start` barrier, or both. A newer prompt for the same conversation
+/// replaces the older one, which is given up on.
 #[derive(Default)]
 pub(crate) struct PendingPrompts {
     cancels: HashMap<AIConversationId, Arc<AtomicBool>>,
@@ -103,7 +103,7 @@ impl PendingPrompts {
         }
     }
 
-    fn is_pending(&self, conversation_id: AIConversationId) -> bool {
+    pub(super) fn is_pending(&self, conversation_id: AIConversationId) -> bool {
         self.cancels.contains_key(&conversation_id)
     }
 }
@@ -115,7 +115,6 @@ struct PromptDispatch {
     snapshot: Arc<RegistrySnapshot>,
     policy: DispatchPolicy,
     messenger: Arc<dyn HookMessenger>,
-    cancel: Arc<AtomicBool>,
 }
 
 /// Starts the turn `prompt` (or an input Warp built, when `None`) begins in `conversation_id`,
@@ -142,7 +141,6 @@ pub(crate) fn prepare_turn(
         .is_some_and(|prompt| prompt.provenance == PromptProvenance::User);
     runtime.update(ctx, |runtime, _| {
         runtime.start_turn(conversation_id);
-        runtime.turn_stops.note_new_turn(conversation_id);
         if starts_chain {
             runtime.turn_stops.start_chain(conversation_id);
         }
@@ -151,28 +149,30 @@ pub(crate) fn prepare_turn(
     let dispatch = prompt
         .filter(|_| owns_turn_lifecycle(conversation_id, ctx))
         .and_then(|prompt| prompt_dispatch(prompt, conversation_id, active_session, ctx));
-    match (barrier, dispatch) {
-        (None, None) => TurnPreparation::Ready,
-        (barrier, None) => TurnPreparation::Pending(
-            async move {
-                if let Some(barrier) = barrier {
-                    barrier.await;
-                }
-                PromptDecision::Proceed(PromptTicket(Arc::new(AtomicBool::new(false))))
-            }
-            .boxed(),
-        ),
-        (barrier, Some(dispatch)) => TurnPreparation::Pending(
-            async move {
-                let env = match barrier {
-                    Some(barrier) => Some(barrier.await),
-                    None => None,
-                };
-                run_prompt_dispatch(dispatch, env, conversation_id).await
-            }
-            .boxed(),
-        ),
+    if barrier.is_none() && dispatch.is_none() {
+        return TurnPreparation::Ready;
     }
+    // Whatever the prompt waits on, it is the conversation's one pending prompt: a newer prompt
+    // replaces it and a cancellation drops it, in both cases before it is sent.
+    let cancel = runtime.update(ctx, |runtime, _| {
+        runtime.pending_prompts.begin(conversation_id)
+    });
+    TurnPreparation::Pending(
+        async move {
+            let env = match barrier {
+                Some(barrier) => Some(barrier.await),
+                None => None,
+            };
+            if cancel.load(Ordering::Acquire) {
+                return PromptDecision::Cancelled;
+            }
+            match dispatch {
+                Some(dispatch) => run_prompt_dispatch(dispatch, env, cancel, conversation_id).await,
+                None => PromptDecision::Proceed(PromptTicket(cancel)),
+            }
+        }
+        .boxed(),
+    )
 }
 
 /// Prepares the `prompt.submit` dispatch for `prompt`, or `None` when no binding would run.
@@ -191,21 +191,13 @@ fn prompt_dispatch(
     let envelope =
         envelope_for_prompt_submit(prompt.text, Vec::new(), prompt.provenance, &site, ctx);
     longest_matching_timeout(&snapshot, &envelope)?;
-    let (dispatcher, policy, messenger, cancel) = runtime.update(ctx, |runtime, _| {
-        (
-            runtime.dispatcher(),
-            runtime.dispatch_policy(),
-            runtime.messenger(),
-            runtime.pending_prompts.begin(conversation_id),
-        )
-    });
+    let runtime = runtime.as_ref(ctx);
     Some(PromptDispatch {
         envelope,
-        dispatcher,
+        dispatcher: runtime.dispatcher(),
         snapshot,
-        policy,
-        messenger,
-        cancel,
+        policy: runtime.dispatch_policy(),
+        messenger: runtime.messenger(),
     })
 }
 
@@ -213,6 +205,7 @@ fn prompt_dispatch(
 async fn run_prompt_dispatch(
     dispatch: PromptDispatch,
     session_env: Option<SessionEnv>,
+    cancel: Arc<AtomicBool>,
     conversation_id: AIConversationId,
 ) -> PromptDecision {
     let PromptDispatch {
@@ -221,7 +214,6 @@ async fn run_prompt_dispatch(
         snapshot,
         policy,
         messenger,
-        cancel,
     } = dispatch;
     if let Some(env) = session_env {
         envelope.session_env = env;
@@ -274,52 +266,48 @@ fn halt_reason(effects: &MergedEffects) -> Option<String> {
     }
 }
 
-/// Settles the bookkeeping for a decision and says whether the prompt goes out. A prompt that
-/// does not go out may leave a turn whose finalization was waiting on it; the controller is
-/// told so it can finish that turn.
+/// Settles the bookkeeping for a decision and says what the controller does next.
 pub(crate) fn finish_turn_preparation(
     conversation_id: AIConversationId,
     decision: &PromptDecision,
     ctx: &mut AppContext,
 ) -> PromptOutcome {
+    let send = matches!(decision, PromptDecision::Proceed(_));
     if !HookRuntime::is_installed(ctx) {
-        return match decision {
-            PromptDecision::Proceed(_) => PromptOutcome::Send,
-            PromptDecision::Halted(_) | PromptDecision::Cancelled => PromptOutcome::DoNotSend {
-                finalize_turn: false,
-            },
+        return PromptOutcome {
+            send,
+            owes_earlier_turn: false,
         };
     }
-    HookRuntime::handle(ctx).update(ctx, |runtime, _| match decision {
-        PromptDecision::Proceed(ticket) => {
-            runtime.pending_prompts.settle(conversation_id, ticket);
-            runtime.turn_stops.turn_started(conversation_id);
-            PromptOutcome::Send
-        }
-        PromptDecision::Halted(ticket) => {
-            runtime.pending_prompts.settle(conversation_id, ticket);
-            PromptOutcome::DoNotSend {
-                finalize_turn: runtime.turn_stops.turn_did_not_start(conversation_id),
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+        match decision {
+            PromptDecision::Proceed(ticket) | PromptDecision::Halted(ticket) => {
+                runtime.pending_prompts.settle(conversation_id, ticket);
             }
+            PromptDecision::Cancelled => {}
         }
-        PromptDecision::Cancelled => PromptOutcome::DoNotSend {
-            finalize_turn: runtime.turn_stops.turn_did_not_start(conversation_id),
-        },
+        // While a newer prompt is still waiting, an earlier turn's finalization stays with it.
+        let owes_earlier_turn = !runtime.pending_prompts.is_pending(conversation_id)
+            && runtime.turn_stops.take_deferred(conversation_id);
+        PromptOutcome {
+            send,
+            owes_earlier_turn,
+        }
     })
 }
 
-/// What the controller does with a prepared query once its hooks have decided.
+/// What the controller does with a prepared query once its wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PromptOutcome {
-    Send,
-    DoNotSend {
-        /// A turn was waiting for this prompt to take over the conversation; it did not, so
-        /// the turn must be finished.
-        finalize_turn: bool,
-    },
+pub(crate) struct PromptOutcome {
+    /// Whether the prompt goes out.
+    pub send: bool,
+    /// An earlier turn's stop hooks finished while this prompt waited, and left that turn's
+    /// finalization to it. If the prompt does not go out after all, the controller finishes
+    /// that turn.
+    pub owes_earlier_turn: bool,
 }
 
-/// Whether a prompt's hooks are running for `conversation_id`.
+/// Whether a prompt is waiting to be sent in `conversation_id`.
 pub(crate) fn is_pending(conversation_id: AIConversationId, ctx: &AppContext) -> bool {
     HookRuntime::is_installed(ctx)
         && HookRuntime::as_ref(ctx)
@@ -327,7 +315,7 @@ pub(crate) fn is_pending(conversation_id: AIConversationId, ctx: &AppContext) ->
             .is_pending(conversation_id)
 }
 
-/// Stops the hooks of a prompt still waiting to be sent in `conversation_id`.
+/// Gives up on a prompt still waiting to be sent in `conversation_id`, and stops its hooks.
 pub(crate) fn cancel_pending(conversation_id: AIConversationId, ctx: &mut AppContext) {
     if !HookRuntime::is_installed(ctx) {
         return;

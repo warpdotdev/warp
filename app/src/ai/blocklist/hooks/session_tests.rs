@@ -9,6 +9,7 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
 use super::*;
+use crate::ai::blocklist::hooks::prompt;
 use crate::ai::blocklist::hooks::test_utils::{
     ControllerHarness, controller_harness, exchange_count, hook_test_app, settle,
 };
@@ -319,6 +320,63 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
             .is_none(),
             "a conversation whose session started does not start it again"
         );
+    });
+}
+
+#[test]
+fn a_newer_prompt_replaces_one_waiting_only_on_the_session_barrier() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        // No prompt hook: the first prompt waits on nothing but the session hooks.
+        app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
+        let hold = harness.hooks.runner.hold();
+
+        let conversation_id = send_prompt(&mut app, &harness, "first");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        assert!(app.read(|ctx| prompt::is_pending(conversation_id, ctx)));
+        send_prompt_in(&mut app, &harness, conversation_id, "second");
+
+        hold.release();
+        settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
+        let_things_settle(&mut app).await;
+        assert_eq!(
+            exchange_count(&app, conversation_id),
+            1,
+            "only the newer prompt went out"
+        );
+        let sent = BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .and_then(|conversation| conversation.initial_query())
+        });
+        assert_eq!(sent.as_deref(), Some("second"));
+        assert!(!app.read(|ctx| prompt::is_pending(conversation_id, ctx)));
+    });
+}
+
+#[test]
+fn cancelling_during_the_session_wait_drops_the_prompt() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
+        let hold = harness.hooks.runner.hold();
+
+        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+        harness.update_controller(&mut app, |controller, ctx| {
+            controller.cancel_conversation_progress(
+                conversation_id,
+                crate::ai::agent::CancellationReason::ManuallyCancelled,
+                ctx,
+            );
+        });
+        assert!(!app.read(|ctx| prompt::is_pending(conversation_id, ctx)));
+
+        hold.release();
+        let_things_settle(&mut app).await;
+        assert_eq!(exchange_count(&app, conversation_id), 0);
     });
 }
 

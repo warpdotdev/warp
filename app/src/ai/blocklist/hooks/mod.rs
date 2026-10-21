@@ -167,7 +167,7 @@ impl HookRuntime {
                     ..
                 } => {
                     for conversation_id in cleared_conversation_ids {
-                        me.forget_conversation(*conversation_id);
+                        me.forget_cleared_conversation(*conversation_id);
                     }
                 }
                 BlocklistAIHistoryEvent::StartedNewConversation { .. }
@@ -200,9 +200,16 @@ impl HookRuntime {
     /// Drops everything remembered about a conversation that no longer exists. A dispatch still
     /// running for it is told to stop.
     fn forget_conversation(&mut self, conversation_id: AIConversationId) {
+        self.forget_cleared_conversation(conversation_id);
+        self.turn_stops.forget(conversation_id);
+    }
+
+    /// Drops what is remembered about a conversation its surface cleared. The conversation still
+    /// exists, so a turn whose success is held keeps its hold: the surface's cancellation settles
+    /// it when the conversation was the active one, and otherwise the hooks' answer does.
+    fn forget_cleared_conversation(&mut self, conversation_id: AIConversationId) {
         self.turn_ids.remove(&conversation_id);
         self.session_starts.forget(conversation_id);
-        self.turn_stops.forget(conversation_id);
         self.pending_prompts.forget(conversation_id);
         self.shell_completions.forget(conversation_id);
     }

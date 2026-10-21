@@ -1083,7 +1083,7 @@ mod hooks {
     use std::time::SystemTime;
 
     use ai::hooks::test_util::{test_binding, test_source_id};
-    use ai::hooks::{HookBoundary, HookPayload, TurnStopStatus};
+    use ai::hooks::{FollowUpChainId, HookBoundary, HookPayload, PromptProvenance, TurnStopStatus};
     use warp_core::features::FeatureFlag;
     use warp_multi_agent_api::Message;
     use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
@@ -1091,12 +1091,15 @@ mod hooks {
     use warpui::{App, SingletonEntity};
 
     use super::{register_mock_response_stream, stream_init_event};
-    use crate::ai::agent::AIAgentInput;
     use crate::ai::agent::conversation::AIConversationId;
-    use crate::ai::blocklist::BlocklistAIHistoryModel;
+    use crate::ai::agent::{AIAgentInput, CancellationReason};
+    use crate::ai::blocklist::hooks::HookRuntime;
     use crate::ai::blocklist::hooks::test_utils::{
-        TestHooks, create_task_with_messages, done_event, install_test_hooks,
+        TestHooks, create_task_with_messages, done_event, exchange_count, install_test_hooks,
         let_background_work_settle, root_task_id, settle, text_message,
+    };
+    use crate::ai::blocklist::{
+        BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
     };
     use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -1275,6 +1278,107 @@ mod hooks {
                 vec![(conversation_id, "response.complete:Let me look.".to_owned())],
                 "the turn is still open while the tool call waits"
             );
+        });
+    }
+
+    /// An Oz-bound conversation steers the queue's head into its next tool-result request. A
+    /// prompt a stop hook asked for must not take that shortcut: it starts a turn of its own, so
+    /// it runs the prompt hooks and gets a turn id.
+    #[test]
+    fn a_hook_follow_up_at_the_queue_head_is_not_steered_into_a_running_turn() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+            let stop = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
+            let follow_up = QueuedQuery::new_hook_follow_up(
+                "keep going".to_owned(),
+                PromptProvenance::HookFollowUp {
+                    binding: stop.id.clone(),
+                    chain_id: FollowUpChainId::new(),
+                },
+            );
+
+            let (conversation_id, task_id) = controller.update(&mut app, |controller, ctx| {
+                let conversation_id = controller.bind_native_prompt_conversation(None, ctx);
+                controller.send_user_query_in_conversation(
+                    "initial".to_owned(),
+                    conversation_id,
+                    None,
+                    ctx,
+                );
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .get_root_task_id()
+                    .clone();
+                QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                    queue.append(
+                        conversation_id,
+                        QueuedQuery::new(
+                            "a person's".to_owned(),
+                            QueuedQueryOrigin::QueueSlashCommand,
+                        ),
+                        ctx,
+                    );
+                    queue.append(conversation_id, follow_up, ctx);
+                });
+                (conversation_id, task_id)
+            });
+            // The initial prompt waits for its hooks; its request going out ends native setup.
+            settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
+            assert_eq!(fired(&hooks)[0].1, "prompt.submit:initial");
+
+            controller.update(&mut app, |controller, ctx| {
+                // The person's row steers into the running turn as before.
+                let steered = controller.steer_head_prompt_for_request(
+                    conversation_id,
+                    &task_id,
+                    true,
+                    ctx,
+                );
+                assert!(matches!(
+                    steered,
+                    Some(AIAgentInput::UserQuery { query, .. }) if query == "a person's"
+                ));
+                // The hook's row does not: it stays queued for a turn of its own.
+                assert!(
+                    controller
+                        .steer_head_prompt_for_request(conversation_id, &task_id, true, ctx)
+                        .is_none()
+                );
+                let queued = QueuedQueryModel::as_ref(ctx).queue(conversation_id);
+                assert_eq!(queued.len(), 1);
+                assert_eq!(queued[0].origin(), QueuedQueryOrigin::HookFollowUp);
+            });
+            assert_eq!(fired(&hooks).len(), 1, "no prompt hook ran for the steered row");
+
+            // Once the turn is over, the row leaves through the prompt path: it runs the prompt
+            // hooks with its provenance and its own turn id.
+            let first_turn = app.read(|ctx| HookRuntime::as_ref(ctx).turn_id_for(conversation_id));
+            controller.update(&mut app, |controller, ctx| {
+                controller.cancel_conversation_progress(
+                    conversation_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
+            });
+            settle(&mut app, |_| fired(&hooks).len() == 2).await;
+            let envelope = hooks.adapter.encoded_envelopes()[1].clone();
+            assert!(matches!(
+                &envelope.payload,
+                HookPayload::PromptSubmit { text, provenance, .. }
+                    if text == "keep going"
+                        && matches!(provenance, PromptProvenance::HookFollowUp { binding, .. } if *binding == stop.id)
+            ));
+            assert!(envelope.turn_id.is_some());
+            assert_ne!(envelope.turn_id, first_turn);
+            QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+                assert!(!queue.has_queue(conversation_id));
+            });
         });
     }
 }

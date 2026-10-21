@@ -122,6 +122,8 @@ impl ControllerHarness {
                         ConversationStatus::InProgress,
                         ctx,
                     );
+                    // A request going out marks its conversation as the surface's active one.
+                    history.mark_active_conversation_id(conversation_id, terminal_surface_id, ctx);
                     conversation_id
                 });
             let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
