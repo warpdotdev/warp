@@ -341,10 +341,9 @@ pub fn prepare_remote_child_launch(
 }
 
 /// A remote child runs on another machine, and the launch request has no way to give it the hook
-/// sources this run was configured with: the server starts the child without them. The child
-/// still runs the hooks of its own checkout under the posture rule. When this run uses the strict
-/// hook policy, a child without the run's sources is not started; otherwise the parent
-/// conversation gets a warning.
+/// sources this run was configured with. The child resolves hook sources from its own agent
+/// configuration. When this run uses the strict hook policy, a child without the run's sources is
+/// not started; otherwise the parent conversation gets a warning.
 fn check_hook_sources_for_remote_child(
     request: &StartAgentRequest,
     agent_name: Option<&str>,
@@ -372,7 +371,7 @@ fn check_hook_sources_for_remote_child(
         kind: HookNoticeKind::Warning,
         text: format!(
             "Remote child agent {child} does not receive this run's hook sources ({}); it runs \
-             only the hooks of its own repository.",
+             only the hooks selected by its own agent configuration.",
             sources.join(", ")
         ),
     });

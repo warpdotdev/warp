@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::hooks::{
@@ -9,7 +8,6 @@ use ai::hooks::{
 };
 use ai_types::{AIAgentActionId, AIConversationId};
 use serde_json::Value;
-use tempfile::TempDir;
 use warp_cli::agent::{HooksOnAsk, OutputFormat};
 
 use super::*;
@@ -165,89 +163,6 @@ fn hook_directories_resolve_against_the_working_directory_and_config_sources_fol
             },
             configured,
         ]
-    );
-}
-
-#[test]
-fn a_path_inside_a_checkout_has_an_enclosing_repository() {
-    let temp = TempDir::new().unwrap();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(repo.join(".git")).unwrap();
-    fs::create_dir_all(repo.join("hooks")).unwrap();
-    let outside = temp.path().join("outside");
-    fs::create_dir_all(&outside).unwrap();
-
-    assert_eq!(
-        enclosing_repository(&repo.join("hooks")),
-        Some(repo.clone())
-    );
-    assert_eq!(enclosing_repository(&repo), Some(repo));
-    assert_eq!(enclosing_repository(&outside), None);
-}
-
-#[cfg(unix)]
-#[test]
-fn a_link_from_outside_a_repository_into_one_is_held_to_that_repository() {
-    let temp = TempDir::new().unwrap();
-    let root = dunce::canonicalize(temp.path()).unwrap();
-    let repo = root.join("repo");
-    fs::create_dir_all(repo.join(".git")).unwrap();
-    fs::create_dir_all(repo.join("hooks")).unwrap();
-    fs::write(repo.join("hooks/hooks.json"), "{}").unwrap();
-    let outside = root.join("outside");
-    fs::create_dir_all(&outside).unwrap();
-    std::os::unix::fs::symlink(repo.join("hooks"), outside.join("linked-dir")).unwrap();
-    std::os::unix::fs::symlink(
-        repo.join("hooks/hooks.json"),
-        outside.join("linked-file.json"),
-    )
-    .unwrap();
-    fs::write(outside.join("hooks.json"), "{}").unwrap();
-
-    assert_eq!(
-        repository_holding(&outside.join("linked-dir/hooks.json"), &[]),
-        Some(repo.clone())
-    );
-    assert_eq!(
-        repository_holding(&outside.join("linked-file.json"), &[]),
-        Some(repo)
-    );
-    assert_eq!(repository_holding(&outside.join("hooks.json"), &[]), None);
-}
-
-#[test]
-fn a_dot_dot_segment_does_not_take_a_file_out_of_its_repository() {
-    let temp = TempDir::new().unwrap();
-    let root = dunce::canonicalize(temp.path()).unwrap();
-    let repo = root.join("repo");
-    fs::create_dir_all(repo.join(".git")).unwrap();
-    fs::create_dir_all(repo.join("hooks")).unwrap();
-    fs::write(repo.join("hooks/hooks.json"), "{}").unwrap();
-    fs::create_dir_all(root.join("outside")).unwrap();
-
-    // The file exists, so the path resolves.
-    assert_eq!(
-        repository_holding(&root.join("outside/../repo/hooks/hooks.json"), &[]),
-        Some(repo.clone())
-    );
-    // A missing component stops resolution; the path is checked with `..` removed.
-    assert_eq!(
-        repository_holding(&root.join("missing/../repo/hooks/hooks.json"), &[]),
-        Some(repo)
-    );
-}
-
-#[test]
-fn an_unresolvable_path_under_a_detected_root_is_held_to_that_root() {
-    let root = PathBuf::from("/no/such/workspace");
-    let detected = vec![root.clone(), root.join("repo")];
-    assert_eq!(
-        repository_holding(&root.join("repo/hooks/hooks.json"), &detected),
-        Some(root.join("repo"))
-    );
-    assert_eq!(
-        repository_holding(Path::new("/elsewhere/hooks/hooks.json"), &detected),
-        None
     );
 }
 

@@ -20,7 +20,7 @@ use super::super::environment::WorkspaceConfiguration;
 use super::super::terminal::TerminalDriver;
 use super::*;
 use crate::ai::blocklist::hooks::HookRuntime;
-use crate::ai::blocklist::hooks::testing::install_test_hooks;
+use crate::ai::blocklist::hooks::test_utils::install_test_hooks;
 use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -416,13 +416,12 @@ fn a_missing_hook_directory_fails_a_strict_run_before_it_starts() {
 }
 
 #[test]
-fn a_configured_source_inside_a_repository_follows_the_rule_for_project_hooks() {
+fn a_configured_source_inside_a_repository_loads_as_an_explicit_source() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         let repo = working_dir.join("repo");
-        fs::create_dir_all(repo.join(".git")).unwrap();
         write_hooks_file(&repo.join("hooks"));
         let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
         let configured = ExplicitHookSource {
@@ -431,29 +430,40 @@ fn a_configured_source_inside_a_repository_follows_the_rule_for_project_hooks() 
             scope: ExplicitSourceScope::Run,
         };
 
-        // The test surface is not a headless run that auto-approves commands, so a
-        // repository's own hooks stay inert there, and so does this entry.
-        let lenient = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.configured_sources = vec![configured.clone()];
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hook_options.configured_sources = vec![configured];
             driver.load_hook_sources_for_run(ctx)
         });
-        assert!(lenient.is_ok(), "{lenient:?}");
-        assert!(loaded_hook_sources(&app).is_empty());
-        let diagnostics = messenger.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].message.contains("inside the repository"),
-            "{diagnostics:?}"
-        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+        assert_eq!(loaded_hook_sources(&app).len(), 1);
+    });
+}
 
-        let strict = driver.update(&mut app, |driver, ctx| {
+#[test]
+fn a_source_named_by_a_hook_directory_and_config_loads_once() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let repo = working_dir.join("repo");
+        write_hooks_file(&repo.join("hooks"));
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hook_dirs = vec![repo.join("hooks")];
+            driver.hook_options.configured_sources = vec![ExplicitHookSource {
+                path: repo.join("hooks/hooks.json"),
+                format: HookFormat::Cursor,
+                scope: ExplicitSourceScope::Run,
+            }];
             driver.hook_options.strict = true;
             driver.load_hook_sources_for_run(ctx)
         });
-        assert!(matches!(
-            strict,
-            Err(AgentDriverError::HookSourcesUnavailable { .. })
-        ));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+        assert_eq!(loaded_hook_sources(&app).len(), 1);
     });
 }
 
@@ -470,5 +480,25 @@ fn hook_sources_are_not_loaded_when_hooks_are_off() {
         });
         assert!(result.is_ok());
         assert!(messenger.diagnostics().is_empty());
+    });
+}
+
+#[test]
+fn an_empty_hook_source_list_finalizes_the_registry() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+
+        let result =
+            driver.update(&mut app, |driver, ctx| driver.load_hook_sources_for_run(ctx));
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+        app.read(|ctx| {
+            let registry = HookRegistry::as_ref(ctx);
+            assert!(registry.is_finalized());
+            assert!(registry.snapshot().is_empty());
+        });
     });
 }

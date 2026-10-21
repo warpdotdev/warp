@@ -16,7 +16,7 @@ use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::blocklist::hooks::HookRuntime;
 use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
-use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::test_utils::{TestHooks, install_test_hooks};
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;
@@ -322,6 +322,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
 
 fn remote_request() -> StartAgentRequest {
     StartAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         id: Default::default(),
         name: "child".to_string(),

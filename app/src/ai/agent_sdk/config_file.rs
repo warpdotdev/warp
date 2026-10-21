@@ -48,7 +48,7 @@ pub struct AgentConfigSnapshotFile {
 }
 
 impl AgentConfigSnapshotFile {
-    fn has_hook_settings(&self) -> bool {
+    pub fn has_hook_settings(&self) -> bool {
         self.hooks.is_some() || self.hooks_strict.is_some() || self.hooks_on_ask.is_some()
     }
 }

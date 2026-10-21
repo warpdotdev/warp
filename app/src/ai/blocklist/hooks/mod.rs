@@ -230,11 +230,6 @@ impl HookRuntime {
         self.session_starts.env_for(conversation_id)
     }
 
-    /// The surface this process fires boundaries from.
-    pub(crate) fn surface(&self, ctx: &AppContext) -> HookSurface {
-        envelope::surface(self.run_surface(), ctx)
-    }
-
     /// The surface of the run this process belongs to, once one was recorded.
     pub(crate) fn run_surface(&self) -> Option<RunSurface> {
         self.run.as_ref().map(|run| run.surface)

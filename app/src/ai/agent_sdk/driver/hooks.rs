@@ -4,20 +4,18 @@
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::future::Future;
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ai::hooks::{
     DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookMessenger, HookNotice,
-    HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation, LogOnlyMessenger,
-    RunMetadata, StaticTrustPolicy, TrustDecision, TrustPolicy as _, WARP_HOOK_DIRS_ENV,
-    parse_hook_dirs_value, resolve_hook_dirs, sources_for_hook_dirs,
+    HookNoticeKind, LogOnlyMessenger, RunMetadata, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value,
+    resolve_hook_dirs, sources_for_hook_dirs,
 };
+#[cfg(not(feature = "local_fs"))]
+use ai::hooks::{HookSourceId, HookSourceLocation};
 use anyhow::Context as _;
-use futures::FutureExt as _;
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use warp_cli::agent::{HooksOnAsk, OutputFormat};
 use warp_errors::report_if_error;
 use warpui::{AppContext, ModelContext, SingletonEntity as _};
@@ -91,59 +89,6 @@ pub(crate) fn explicit_sources(
     sources
 }
 
-/// The git repository `path` is inside, found by looking for a `.git` entry in `path` and each of
-/// its parents. There is no stop at the home directory: a configuration entry inside any
-/// repository is treated as that repository's, which is the cautious reading.
-pub(crate) fn enclosing_repository(path: &Path) -> Option<PathBuf> {
-    path.ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
-        .map(Path::to_path_buf)
-}
-
-/// The git repository a hook file belongs to, so that neither a symbolic link nor a `..` segment
-/// can make a file inside a repository look as if it were outside one. The file counts as the
-/// repository's when it really is inside it once links are followed, or when the path as written
-/// is inside one. A path that cannot be resolved (a component is missing) is checked as written
-/// with `..` segments removed, and failing that is treated as inside the deepest of
-/// `detected_roots` that contains it.
-pub(crate) fn repository_holding(hooks_file: &Path, detected_roots: &[PathBuf]) -> Option<PathBuf> {
-    let in_repository = |path: &Path| path.parent().and_then(enclosing_repository);
-    if let Ok(real_file) = dunce::canonicalize(hooks_file) {
-        return in_repository(&real_file).or_else(|| in_repository(hooks_file));
-    }
-    let normalized = without_dot_segments(hooks_file);
-    in_repository(hooks_file)
-        .or_else(|| in_repository(&normalized))
-        .or_else(|| {
-            detected_roots
-                .iter()
-                .filter(|root| normalized.starts_with(root))
-                .max_by_key(|root| root.components().count())
-                .cloned()
-        })
-}
-
-/// `path` with `.` and `..` segments removed, without consulting the filesystem.
-fn without_dot_segments(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component)
-            }
-        }
-    }
-    normalized
-}
-
-fn real_path(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
 /// The server token of each conversation in this process, by local id, so a record names a
 /// conversation the way `conversation_started` does. Filled in as tokens are assigned.
 #[derive(Clone, Default)]
@@ -173,6 +118,7 @@ impl ConversationTokens {
 
 /// Why a named hook source could not take part in the run. These are what a strict run refuses
 /// to start with.
+#[cfg(not(feature = "local_fs"))]
 fn unavailable_source(source: &ExplicitHookSource, message: String) -> HookDiagnostic {
     HookDiagnostic {
         source: HookSourceId {
@@ -187,14 +133,9 @@ fn unavailable_source(source: &ExplicitHookSource, message: String) -> HookDiagn
 impl AgentDriver {
     /// Records how hooks behave in this run (its identity and surface, the strict policy, what
     /// an unanswerable `ask` does) and installs the messenger that writes to the run's output.
-    /// Returns the detection of the working directory's repository, which must finish before
-    /// the run pins its hooks so a project file there is discovered first.
-    pub(super) fn prepare_hooks_for_run(
-        &self,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<impl Future<Output = ()> + use<>> {
+    pub(super) fn prepare_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
         if !HookRuntime::is_installed(ctx) {
-            return None;
+            return;
         }
         let run = self.task_id.map(|task_id| RunIdentity {
             metadata: RunMetadata {
@@ -232,24 +173,10 @@ impl AgentDriver {
             runtime.set_headless_ask_behavior(ask_behavior);
             runtime.set_messenger(messenger);
         });
-        if !ctx.has_singleton_model::<DetectedRepositories>() {
-            return None;
-        }
-        let working_dir = self.working_dir.to_string_lossy().into_owned();
-        let detection = DetectedRepositories::handle(ctx).update(ctx, |repositories, ctx| {
-            repositories.detect_possible_local_git_repo(
-                &working_dir,
-                RepoDetectionSource::TerminalNavigation,
-                ctx,
-            )
-        });
-        Some(detection.map(|_| ()))
     }
 
-    /// Loads every explicit hook source the run names and reports the ones that could not be
-    /// loaded. A configuration file entry inside a git repository is that repository's code,
-    /// so it activates only when a repository's own hook file would. In a strict run, any
-    /// source that is missing, unreadable, invalid, or held back fails the run.
+    /// Loads and finalizes every explicit hook source the run names. In a strict run, any source
+    /// that is missing, unreadable, or invalid fails the run.
     pub(super) fn load_hook_sources_for_run(
         &self,
         ctx: &mut ModelContext<Self>,
@@ -265,47 +192,7 @@ impl AgentDriver {
         HookRuntime::handle(ctx).update(ctx, |runtime, _| {
             runtime.set_delivered_sources(sources.clone());
         });
-        if sources.is_empty() {
-            return Ok(());
-        }
-        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
-        let posture = HookRuntime::command_execution_posture(Some(terminal_view_id), ctx);
-        let surface = HookRuntime::as_ref(ctx).surface(ctx);
-        let detected_roots = HookRuntime::as_ref(ctx).snapshot(ctx).project_roots.clone();
-        let mut problems = Vec::new();
-        // Hook directories come from whoever started the process and are loaded as given; only
-        // the configuration file's entries are checked against the repository rule.
-        let mut loadable = explicit_sources(&self.working_dir, &self.hook_dirs, &[]);
-        let from_hook_dirs = loadable
-            .iter()
-            .map(|source| real_path(&source.path))
-            .collect::<Vec<_>>();
-        for source in self.hook_options.configured_sources.iter().cloned() {
-            // The same file named by a hook directory already loads through that route.
-            if from_hook_dirs.contains(&real_path(&source.path)) {
-                continue;
-            }
-            let Some(repository) = repository_holding(&source.path, &detected_roots) else {
-                loadable.push(source);
-                continue;
-            };
-            let as_project_file = HookSourceId {
-                kind: HookSourceKind::ProjectCursorFile,
-                location: HookSourceLocation::CanonicalPath(source.path.clone()),
-            };
-            match StaticTrustPolicy.may_activate(&as_project_file, surface, posture) {
-                TrustDecision::Activate => loadable.push(source),
-                TrustDecision::Inert { reason } => {
-                    let message = format!(
-                        "not loaded: this configuration entry is inside the repository at {}, \
-                         so it follows the rule for a repository's own hooks: {reason}",
-                        repository.display()
-                    );
-                    problems.push(unavailable_source(&source, message));
-                }
-            }
-        }
-        problems.extend(load_into_registry(&loadable, ctx));
+        let problems = load_into_registry(&sources, ctx);
 
         let messenger = HookRuntime::as_ref(ctx).messenger();
         for problem in &problems {
@@ -320,30 +207,6 @@ impl AgentDriver {
             });
         }
         Ok(())
-    }
-
-    /// Fixes the run's hook set before its first request. The explicit sources and the
-    /// repositories environment preparation registered are all known by now. What the registry
-    /// found wrong with, or held back from, the repositories' own hook files is reported then;
-    /// explicit sources were reported when they loaded.
-    pub(super) fn pin_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
-        if !HookRuntime::is_installed(ctx) {
-            return;
-        }
-        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
-        HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
-            runtime.pin_for_run(Some(terminal_view_id), ctx);
-        });
-        let runtime = HookRuntime::as_ref(ctx);
-        let messenger = runtime.messenger();
-        for diagnostic in &runtime.snapshot(ctx).diagnostics {
-            match diagnostic.source.kind {
-                HookSourceKind::ProjectCursorFile => messenger.diagnostic(diagnostic.clone()),
-                HookSourceKind::RunDelivered
-                | HookSourceKind::FactoryAgent
-                | HookSourceKind::FactoryWide => {}
-            }
-        }
     }
 
     /// Ends the run as a failure when a hook asks for confirmation and the run is configured to
@@ -402,9 +265,8 @@ fn load_into_registry(sources: &[ExplicitHookSource], ctx: &mut AppContext) -> V
     use ai::hooks::{HookRegistry, load_explicit_sources};
 
     let mut failures = Vec::new();
-    HookRegistry::change(&HookRegistry::handle(ctx), ctx, |registry| {
+    HookRegistry::handle(ctx).update(ctx, |registry, _| {
         failures = load_explicit_sources(sources, registry);
-        registry.snapshot().revision
     });
     failures
 }

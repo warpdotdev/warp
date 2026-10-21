@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use ai::hooks::HookRegistry;
+use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
+use ai::hooks::{HookBoundary, HookRegistry};
 use chrono::Local;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
@@ -55,8 +56,8 @@ use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
-use crate::ai::blocklist::hooks::{HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunSurface};
+use crate::ai::blocklist::hooks::test_utils::{self as testing, TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::{HeadlessAskBehavior, HookRuntime, RunSurface};
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -1822,7 +1823,7 @@ fn hook_setup_records_the_run_its_surface_and_its_policies() {
                 driver.hook_options.surface = surface;
                 driver.hook_options.strict = strict;
                 driver.hook_options.on_ask = on_ask;
-                drop(driver.prepare_hooks_for_run(ctx));
+                driver.prepare_hooks_for_run(ctx);
             });
             app.read(|ctx| {
                 let runtime = HookRuntime::as_ref(ctx);
@@ -1839,7 +1840,7 @@ fn hook_setup_records_the_run_its_surface_and_its_policies() {
 }
 
 #[test]
-fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
+fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
@@ -1861,7 +1862,7 @@ fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
         assert!(loaded.is_ok(), "{loaded:?}");
         app.read(|ctx| {
             let registry = HookRegistry::as_ref(ctx);
-            assert!(registry.pinned().is_none(), "loading sources must not pin");
+            assert!(registry.is_finalized());
             assert_eq!(registry.snapshot().bindings.len(), 1);
         });
 
@@ -1870,11 +1871,10 @@ fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
         });
         app.read(|ctx| {
             let registry = HookRegistry::as_ref(ctx);
-            assert!(registry.pinned().is_some(), "execute_run pins the run");
             assert_eq!(
                 registry.snapshot().bindings.len(),
                 1,
-                "the source loaded before pinning stays active"
+                "the finalized source stays active"
             );
         });
 
@@ -1886,15 +1886,15 @@ fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
         assert_eq!(
             app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
             1,
-            "a source loaded after the run pinned does not activate"
+            "a source loaded after finalization does not activate"
         );
         assert!(
             hooks
                 .messenger
                 .diagnostics()
                 .iter()
-                .any(|diagnostic| diagnostic.source.to_string().contains("late")),
-            "the refused source is reported"
+                .any(|diagnostic| diagnostic.message.contains("already finalized")),
+            "the second load attempt is reported"
         );
     });
 }
@@ -1907,9 +1907,9 @@ fn execute_run_does_not_fire_session_start() {
         let (driver, terminal, hooks) = driver_with_hooks(&mut app, temp.path());
         app.update(|ctx| {
             hooks.install_bindings(
-                vec![ai::hooks::test_util::test_binding(
-                    ai::hooks::test_util::test_source_id("session"),
-                    ai::hooks::HookBoundary::SessionStart,
+                vec![test_binding(
+                    test_source_id("session"),
+                    HookBoundary::SessionStart,
                     0,
                     None,
                 )],
@@ -1930,43 +1930,101 @@ fn execute_run_does_not_fire_session_start() {
     });
 }
 
+/// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
+/// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the run is set to
+/// fail in that case.
 #[test]
-fn an_unanswerable_ask_in_a_fail_run_run_fails_the_conversation_with_the_hook_reason() {
+fn a_scripted_ask_in_a_fail_run_run_ends_the_run_with_the_hook_reason() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let temp = TempDir::new().unwrap();
-        let (driver, terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
-        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
-            (terminal.id(), terminal.ai_controller().clone())
+        let harness = testing::controller_harness(&mut app);
+        let binding = test_binding(
+            test_source_id("policy"),
+            HookBoundary::ToolPre,
+            0,
+            Some("Shell"),
+        );
+        harness.hooks.runner.script(
+            binding.id.clone(),
+            ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
+        );
+        app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
+        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
+            runtime.set_headless_ask_behavior(HeadlessAskBehavior::FailRun);
         });
-        let (conversation_id, _stream) =
-            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        // A hidden child conversation has nobody to answer an `ask` even in a desktop test
+        // process, the way a run has nobody.
+        let terminal_id = harness.terminal_id();
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let parent = history.start_new_conversation(terminal_id, false, false, false, ctx);
+                history.start_new_child_conversation(
+                    terminal_id,
+                    "child".to_owned(),
+                    parent,
+                    None,
+                    false,
+                    ctx,
+                )
+            });
+        let stream = harness.mock_request(&mut app, conversation_id);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
+                harness.terminal.clone(),
+                ctx,
+            );
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver
+        });
         let run_exit_rx = driver.update(&mut app, |driver, ctx| {
             driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
         });
 
-        let reason = "Approval unavailable: an agent hook asked for confirmation (needs a human) \
-                      and this run has no one to ask.";
-        HookRuntime::handle(&app).update(&mut app, |_, ctx| {
-            ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
-                conversation_id,
-                action_id: crate::ai::agent::AIAgentActionId::from("action-1".to_owned()),
-                reason: reason.to_owned(),
-            });
+        let task_id = testing::root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(testing::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                testing::create_task_with_messages(
+                    &task_id,
+                    vec![testing::shell_tool_call_message(&task_id, "rm -rf build")],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(testing::done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
         });
 
-        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
-            assert_eq!(
-                history.conversation(&conversation_id).unwrap().status(),
-                &ConversationStatus::Error
-            );
-        });
+        // The hook runs on the background executor and the action is retried when it answers,
+        // which can take longer than `testing::settle` waits on a loaded machine.
+        for _ in 0..200 {
+            if testing::conversation_status(&app, conversation_id)
+                == Some(ConversationStatus::Error)
+            {
+                break;
+            }
+            testing::let_background_work_settle(&mut app).await;
+        }
+        testing::let_background_work_settle(&mut app).await;
+        assert_eq!(harness.hooks.runner.invocation_count(), 1);
+        assert_eq!(
+            testing::exchange_count(&app, conversation_id),
+            1,
+            "no request goes out after the hook ended the run"
+        );
+        assert_eq!(
+            testing::conversation_status(&app, conversation_id),
+            Some(ConversationStatus::Error)
+        );
         let SDKConversationOutputStatus::Error { error } = run_exit_rx.await.unwrap() else {
             panic!("the run must end as a failure");
         };
         let message = error.to_string();
         assert!(message.contains("needs a human"), "{message}");
-        assert!(message.contains("action-1"), "{message}");
+        assert!(message.contains("Approval unavailable"), "{message}");
     });
 }
 

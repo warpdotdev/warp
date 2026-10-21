@@ -530,20 +530,24 @@ impl BlocklistAIController {
             }
 
             let history_model = BlocklistAIHistoryModel::handle(ctx);
-            let Some((driver, is_entirely_passive_code_diff)) = history_model
+            let Some((driver, is_entirely_passive_code_diff, has_failed)) = history_model
                 .as_ref(ctx)
                 .conversation(conversation_id)
                 .map(|conversation| {
                     (
                         conversation.driver(),
                         conversation.is_entirely_passive_code_diff(),
+                        matches!(conversation.status(), ConversationStatus::Error),
                     )
                 })
             else {
                 return;
             };
 
-            if !driver.owns_turn_lifecycle() {
+            // An action that finishes after its conversation was failed (by an agent hook that
+            // ended the run while the action was being decided) must not send its result or
+            // move the conversation out of `Error`.
+            if !driver.owns_turn_lifecycle() || has_failed {
                 return;
             }
 
