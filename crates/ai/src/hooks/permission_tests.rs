@@ -97,6 +97,44 @@ fn every_other_verdict_leaves_warps_decision_in_place() {
 }
 
 #[test]
+fn a_rewrite_request_denies_because_rewrites_cannot_be_honored_yet() {
+    for verdict in [HookVerdict::NoOpinion, HookVerdict::Allow, HookVerdict::Ask] {
+        let mut effects = merged(verdict, vec![]);
+        effects.replacement_input = Some(serde_json::json!({"command": "ls -la"}));
+        let decision = HookPermissionPolicy::compose(
+            &effects,
+            WarpPermissionResult {
+                can_auto_execute: true,
+                is_user_initiated: true,
+                is_autonomous_shell_exception: true,
+            },
+            &PermissionFloors::default(),
+        );
+        let PermissionDecision::Deny { reason } = decision else {
+            panic!("expected deny for {verdict:?}");
+        };
+        assert_eq!(reason.text, REWRITE_UNSUPPORTED_DENY_REASON);
+        assert_eq!(reason.binding, None, "Warp wrote this reason, not a hook");
+    }
+
+    // A hook that both rewrites and denies is reported with its own reason.
+    let mut effects = merged(HookVerdict::Deny, vec!["no"]);
+    effects.replacement_input = Some(serde_json::json!({}));
+    let PermissionDecision::Deny { reason } = HookPermissionPolicy::compose(
+        &effects,
+        WarpPermissionResult {
+            can_auto_execute: true,
+            is_user_initiated: false,
+            is_autonomous_shell_exception: false,
+        },
+        &PermissionFloors::default(),
+    ) else {
+        panic!("expected deny");
+    };
+    assert_eq!(reason.text, "no");
+}
+
+#[test]
 fn warp_alone_requires_confirmation_only_when_every_fact_is_false() {
     let needs_confirmation = all_warp_results()
         .into_iter()
