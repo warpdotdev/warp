@@ -2,11 +2,12 @@
 //! explicit sources they name, and the messenger that writes hook notices and diagnostics to the
 //! run's structured output.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ai::hooks::{
     DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookMessenger, HookNotice,
@@ -24,14 +25,14 @@ use warpui::{AppContext, ModelContext, SingletonEntity as _};
 use super::{AgentDriver, AgentDriverError, output};
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
 use crate::ai::blocklist::hooks::{
     HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunIdentity, RunSurface,
 };
 
-/// The hook settings a run was launched with. The process environment's `WARP_HOOK_DIRS` is read
-/// separately, when the driver is created.
+/// The hook settings a run was launched with. The run's `WARP_HOOK_DIRS` is read separately, when
+/// the driver is created.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HookRunOptions {
     /// Sources the configuration file named, with absolute paths.
@@ -60,7 +61,7 @@ pub(crate) fn headless_ask_behavior(on_ask: HooksOnAsk) -> HeadlessAskBehavior {
     }
 }
 
-/// The run's hook directories: the process's `WARP_HOOK_DIRS` entries, then `extra_dirs`.
+/// The run's hook directories: the `WARP_HOOK_DIRS` entries, then `extra_dirs`.
 /// Relative entries stay relative until the run's working directory resolves them.
 pub(crate) fn hook_dirs(env_value: Option<&str>, extra_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs = env_value.map(parse_hook_dirs_value).unwrap_or_default();
@@ -68,9 +69,14 @@ pub(crate) fn hook_dirs(env_value: Option<&str>, extra_dirs: &[PathBuf]) -> Vec<
     dirs
 }
 
-/// The process's `WARP_HOOK_DIRS` value, when it is set.
-pub(crate) fn hook_dirs_env_value() -> Option<String> {
-    std::env::var(WARP_HOOK_DIRS_ENV).ok()
+/// The run's `WARP_HOOK_DIRS` value: the one the run hands its terminal session (the execution's
+/// environment variables, managed secrets, and task variables) when it sets one, else the
+/// process environment's.
+pub(crate) fn hook_dirs_env_value(session_env: &HashMap<OsString, OsString>) -> Option<String> {
+    session_env
+        .get(OsStr::new(WARP_HOOK_DIRS_ENV))
+        .map(|value| value.to_string_lossy().into_owned())
+        .or_else(|| std::env::var(WARP_HOOK_DIRS_ENV).ok())
 }
 
 /// Every explicit source the run names: one `hooks.json` per hook directory, resolved against
@@ -92,6 +98,77 @@ pub(crate) fn enclosing_repository(path: &Path) -> Option<PathBuf> {
     path.ancestors()
         .find(|ancestor| ancestor.join(".git").exists())
         .map(Path::to_path_buf)
+}
+
+/// The git repository a hook file belongs to, so that neither a symbolic link nor a `..` segment
+/// can make a file inside a repository look as if it were outside one. The file counts as the
+/// repository's when it really is inside it once links are followed, or when the path as written
+/// is inside one. A path that cannot be resolved (a component is missing) is checked as written
+/// with `..` segments removed, and failing that is treated as inside the deepest of
+/// `detected_roots` that contains it.
+pub(crate) fn repository_holding(hooks_file: &Path, detected_roots: &[PathBuf]) -> Option<PathBuf> {
+    let in_repository = |path: &Path| path.parent().and_then(enclosing_repository);
+    if let Ok(real_file) = dunce::canonicalize(hooks_file) {
+        return in_repository(&real_file).or_else(|| in_repository(hooks_file));
+    }
+    let normalized = without_dot_segments(hooks_file);
+    in_repository(hooks_file)
+        .or_else(|| in_repository(&normalized))
+        .or_else(|| {
+            detected_roots
+                .iter()
+                .filter(|root| normalized.starts_with(root))
+                .max_by_key(|root| root.components().count())
+                .cloned()
+        })
+}
+
+/// `path` with `.` and `..` segments removed, without consulting the filesystem.
+fn without_dot_segments(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component)
+            }
+        }
+    }
+    normalized
+}
+
+fn real_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The server token of each conversation in this process, by local id, so a record names a
+/// conversation the way `conversation_started` does. Filled in as tokens are assigned.
+#[derive(Clone, Default)]
+pub(crate) struct ConversationTokens(Arc<Mutex<HashMap<AIConversationId, String>>>);
+
+impl ConversationTokens {
+    fn insert(&self, conversation_id: AIConversationId, token: String) {
+        if let Ok(mut tokens) = self.0.lock() {
+            tokens.insert(conversation_id, token);
+        }
+    }
+
+    fn get(&self, conversation_id: &AIConversationId) -> Option<String> {
+        self.0.lock().ok()?.get(conversation_id).cloned()
+    }
+
+    /// Records the token of `conversation_id` when it has one.
+    fn record(&self, conversation_id: &AIConversationId, ctx: &AppContext) {
+        if let Some(token) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(conversation_id)
+            .and_then(|conversation| conversation.server_conversation_token())
+        {
+            self.insert(*conversation_id, token.as_str().to_owned());
+        }
+    }
 }
 
 /// Why a named hook source could not take part in the run. These are what a strict run refuses
@@ -131,7 +208,24 @@ impl AgentDriver {
             enabled: self.hook_options.strict,
         };
         let ask_behavior = headless_ask_behavior(self.hook_options.on_ask);
-        let messenger = Arc::new(OzHookMessenger::new(self.output_format));
+        let tokens = ConversationTokens::default();
+        let history = BlocklistAIHistoryModel::handle(ctx);
+        for (_, conversation) in history.as_ref(ctx).all_live_conversations() {
+            tokens.record(&conversation.id(), ctx);
+        }
+        ctx.subscribe_to_model(&history, {
+            let tokens = tokens.clone();
+            move |_, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                    conversation_id,
+                    ..
+                } = event
+                {
+                    tokens.record(conversation_id, ctx);
+                }
+            }
+        });
+        let messenger = Arc::new(OzHookMessenger::new(self.output_format, tokens));
         HookRuntime::handle(ctx).update(ctx, |runtime, _| {
             runtime.set_run(run);
             runtime.set_strict_policy(strict);
@@ -174,23 +268,24 @@ impl AgentDriver {
         if sources.is_empty() {
             return Ok(());
         }
-        let configured = self
-            .hook_options
-            .configured_sources
-            .iter()
-            .map(|source| source.path.as_path())
-            .collect::<HashSet<_>>();
         let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         let posture = HookRuntime::command_execution_posture(Some(terminal_view_id), ctx);
         let surface = HookRuntime::as_ref(ctx).surface(ctx);
+        let detected_roots = HookRuntime::as_ref(ctx).snapshot(ctx).project_roots.clone();
         let mut problems = Vec::new();
-        let mut loadable = Vec::new();
-        for source in sources {
-            let repository = configured
-                .contains(source.path.as_path())
-                .then(|| source.path.parent().and_then(enclosing_repository))
-                .flatten();
-            let Some(repository) = repository else {
+        // Hook directories come from whoever started the process and are loaded as given; only
+        // the configuration file's entries are checked against the repository rule.
+        let mut loadable = explicit_sources(&self.working_dir, &self.hook_dirs, &[]);
+        let from_hook_dirs = loadable
+            .iter()
+            .map(|source| real_path(&source.path))
+            .collect::<Vec<_>>();
+        for source in self.hook_options.configured_sources.iter().cloned() {
+            // The same file named by a hook directory already loads through that route.
+            if from_hook_dirs.contains(&real_path(&source.path)) {
+                continue;
+            }
+            let Some(repository) = repository_holding(&source.path, &detected_roots) else {
                 loadable.push(source);
                 continue;
             };
@@ -328,21 +423,31 @@ fn load_into_registry(sources: &[ExplicitHookSource], _: &mut AppContext) -> Vec
 /// one record per message, and also to the log.
 pub(crate) struct OzHookMessenger {
     output_format: OutputFormat,
+    tokens: ConversationTokens,
 }
 
 impl OzHookMessenger {
-    pub(crate) fn new(output_format: OutputFormat) -> Self {
-        Self { output_format }
+    pub(crate) fn new(output_format: OutputFormat, tokens: ConversationTokens) -> Self {
+        Self {
+            output_format,
+            tokens,
+        }
     }
 }
 
 impl HookMessenger for OzHookMessenger {
     fn notify(&self, notice: HookNotice) {
+        let server_token = self.tokens.get(&notice.conversation_id);
         // Each record is written under one stdout lock, so it cannot interleave with the
         // conversation's own records.
         report_if_error!(
-            output::with_stdout_buffered(|buf| write_notice(&notice, self.output_format, buf))
-                .context("Failed to write a hook notice")
+            output::with_stdout_buffered(|buf| write_notice(
+                &notice,
+                server_token.as_deref(),
+                self.output_format,
+                buf
+            ))
+            .context("Failed to write a hook notice")
         );
         LogOnlyMessenger.notify(notice);
     }
@@ -376,8 +481,12 @@ fn severity_name(severity: DiagnosticSeverity) -> &'static str {
     }
 }
 
+/// Writes `notice` as one record. `server_token` is the conversation's server token, which the
+/// JSON record reports as `conversation_id` like `conversation_started` does; before the server
+/// has assigned one it is null, and the local id is always in `local_conversation_id`.
 pub(crate) fn write_notice<W: Write>(
     notice: &HookNotice,
+    server_token: Option<&str>,
     format: OutputFormat,
     w: &mut W,
 ) -> io::Result<()> {
@@ -385,6 +494,7 @@ pub(crate) fn write_notice<W: Write>(
     match format {
         OutputFormat::Json | OutputFormat::Ndjson => output::json::hook_notice(
             kind,
+            server_token,
             &notice.conversation_id.to_string(),
             notice
                 .action_id
