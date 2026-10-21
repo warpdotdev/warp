@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use instant::Instant;
 use warpui_core::r#async::Timer;
 
 use crate::hooks::model::HookBindingId;

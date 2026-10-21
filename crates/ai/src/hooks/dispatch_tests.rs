@@ -2,10 +2,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ai_types::{AIAgentActionId, AIConversationId};
 use futures::executor::block_on;
+use instant::Instant;
 use warpui_core::r#async::Timer;
 
 use super::*;
@@ -156,7 +157,10 @@ fn one_deny_binding_denies_with_its_reason() {
         encoded[0].invocation_id,
         outcome.invocations[0].invocation_id
     );
-    assert_eq!(h.adapter.decode_policies(), vec![DecodePolicy { strict: false }]);
+    assert_eq!(
+        h.adapter.decode_policies(),
+        vec![DecodePolicy { strict: false }]
+    );
 }
 
 #[test]
@@ -172,7 +176,10 @@ fn the_strict_policy_reaches_the_adapter() {
         DispatchPolicy { strict: true },
         not_cancelled(),
     ));
-    assert_eq!(h.adapter.decode_policies(), vec![DecodePolicy { strict: true }]);
+    assert_eq!(
+        h.adapter.decode_policies(),
+        vec![DecodePolicy { strict: true }]
+    );
 }
 
 #[test]
@@ -253,9 +260,10 @@ fn matching_bindings_run_at_the_same_time_and_merge_in_snapshot_order() {
     let bindings = (0..3)
         .map(|index| test_binding(source.clone(), HookBoundary::ToolResult, index, None))
         .collect::<Vec<_>>();
-    for (binding, (latency, name)) in bindings
-        .iter()
-        .zip([(300, "slow"), (100, "fast"), (200, "middle")])
+    for (binding, (latency, name)) in
+        bindings
+            .iter()
+            .zip([(300, "slow"), (100, "fast"), (200, "middle")])
     {
         runner.script(
             binding.id.clone(),
@@ -364,7 +372,11 @@ fn cancelling_a_running_dispatch_discards_the_partial_result() {
     );
 
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
-    assert_eq!(outcome.invocations.len(), 3, "every invocation is on record");
+    assert_eq!(
+        outcome.invocations.len(),
+        3,
+        "every invocation is on record"
+    );
     let exits = runner
         .finished()
         .into_iter()
@@ -705,7 +717,10 @@ fn the_invocation_carries_the_identity_variables_for_its_format() {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
     };
-    assert_eq!(value("WARP_PROJECT_DIR"), Some(OsString::from("/work/repo")));
+    assert_eq!(
+        value("WARP_PROJECT_DIR"),
+        Some(OsString::from("/work/repo"))
+    );
     assert_eq!(value("WARP_VERSION"), Some(OsString::from("v1.2.3")));
     assert_eq!(value("WARP_RUN_ID"), Some(OsString::from("run-9")));
     assert_eq!(
@@ -713,8 +728,14 @@ fn the_invocation_carries_the_identity_variables_for_its_format() {
         Some(OsString::from("dev@example.com"))
     );
     assert_eq!(value("WARP_CODE_REMOTE"), Some(OsString::from("true")));
-    assert_eq!(value("CURSOR_PROJECT_DIR"), Some(OsString::from("/work/repo")));
-    assert_eq!(value("CLAUDE_PROJECT_DIR"), Some(OsString::from("/work/repo")));
+    assert_eq!(
+        value("CURSOR_PROJECT_DIR"),
+        Some(OsString::from("/work/repo"))
+    );
+    assert_eq!(
+        value("CLAUDE_PROJECT_DIR"),
+        Some(OsString::from("/work/repo"))
+    );
 }
 
 #[test]
