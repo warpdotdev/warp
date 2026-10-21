@@ -265,7 +265,7 @@ async fn run_binding(
             binding: active.binding.id.clone(),
             command: active.binding.command.clone(),
             cwd: active.working_directory.clone(),
-            env: invocation_environment(&hook_identity(active, envelope), &[]),
+            env: invocation_environment(&hook_identity(active, envelope), &envelope.session_env),
             stdin,
             timeout: active.binding.timeout,
             cancel,

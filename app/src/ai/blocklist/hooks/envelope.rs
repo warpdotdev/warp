@@ -22,11 +22,8 @@ use crate::terminal::model::session::active_session::ActiveSession;
 /// Where the boundary fired from, as far as the envelope builders need to know.
 pub(crate) struct EnvelopeSite<'a> {
     pub conversation_id: AIConversationId,
-    /// The session whose working directory the operation runs in, when the caller has one.
-    pub active_session: Option<&'a ModelHandle<ActiveSession>>,
-    /// Whether the conversation's latest exchange may be read from the history model. False when
-    /// the caller is inside a history-model update, where that read would re-borrow the model.
-    read_conversation: bool,
+    /// The session whose working directory the operation runs in.
+    pub active_session: &'a ModelHandle<ActiveSession>,
 }
 
 impl<'a> EnvelopeSite<'a> {
@@ -36,24 +33,15 @@ impl<'a> EnvelopeSite<'a> {
     ) -> Self {
         Self {
             conversation_id,
-            active_session: Some(active_session),
-            read_conversation: true,
-        }
-    }
-
-    /// A site for a conversation that is still being created: no session is attached yet and the
-    /// history model cannot be read.
-    pub fn for_new_conversation(conversation_id: AIConversationId) -> Self {
-        Self {
-            conversation_id,
-            active_session: None,
-            read_conversation: false,
+            active_session,
         }
     }
 
     pub fn cwd(&self, ctx: &AppContext) -> Option<PathBuf> {
         self.active_session
-            .and_then(|session| session.as_ref(ctx).current_working_directory().cloned())
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
             .map(PathBuf::from)
     }
 }
@@ -65,11 +53,7 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         .and_then(|cwd| repository_root(cwd, ctx))
         .into_iter()
         .collect();
-    let (exchange_id, model_id) = if site.read_conversation {
-        latest_exchange_facts(site.conversation_id, ctx)
-    } else {
-        (None, None)
-    };
+    let (exchange_id, model_id) = latest_exchange_facts(site.conversation_id, ctx);
     let user_email = ctx
         .has_singleton_model::<AuthStateProvider>()
         .then(|| AuthStateProvider::as_ref(ctx).get().user_email())
@@ -77,18 +61,14 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         .filter(|email| !email.is_empty());
     let runtime = HookRuntime::as_ref(ctx);
     let run = runtime.run_metadata().cloned();
-    let surface = if site.read_conversation {
-        surface_for_conversation(site.conversation_id, run.is_some(), ctx)
-    } else {
-        surface(run.is_some(), ctx)
-    };
+    let surface = surface_for_conversation(site.conversation_id, run.is_some(), ctx);
 
     HookEnvelope {
         schema_version: ENVELOPE_SCHEMA_VERSION,
         occurrence_id: Uuid::new_v4(),
         invocation_id: Uuid::nil(),
         conversation_id: site.conversation_id,
-        turn_id: None,
+        turn_id: runtime.turn_id_for(site.conversation_id),
         exchange_id,
         action_id: None,
         surface,
@@ -102,7 +82,7 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         warp_version: ChannelState::app_version().unwrap_or("unknown").to_owned(),
         protocol_version: HOOK_PROTOCOL_VERSION,
         permission_facts: PermissionFacts::default(),
-        session_env: Vec::new(),
+        session_env: runtime.session_env_for(site.conversation_id),
         payload,
     }
 }

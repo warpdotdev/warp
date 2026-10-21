@@ -1,30 +1,291 @@
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use ai::hooks::test_util::{RecordingAdapter, RecordingMessenger, ScriptedRunner};
 use ai::hooks::{
     ActiveBinding, BindingScope, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner,
 };
 use async_channel::unbounded;
+use chrono::Local;
 use parking_lot::FairMutex;
+use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
+use warp_multi_agent_api::message::{AgentOutput, Message as MessageKind};
+use warp_multi_agent_api::response_event::{StreamFinished, StreamInit, stream_finished};
+use warp_multi_agent_api::{
+    ClientAction, Message, ResponseEvent, Task, client_action, response_event,
+};
 use warpui::r#async::Timer;
-use warpui::{App, AppContext, ModelHandle, SingletonEntity};
+use warpui::{App, AppContext, Entity, EntityId, ModelHandle, SingletonEntity, ViewHandle};
 
 use super::HookRuntime;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType, ReadFilesRequest};
-use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel, RecordingController};
+use crate::ai::blocklist::history_model::ConversationStatusUpdate;
+use crate::ai::blocklist::{
+    BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, RecordingController, RequestInput, ResponseStream, ResponseStreamId,
+};
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::ai::llms::LLMId;
+use crate::terminal::TerminalView;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// A terminal view in a window with the hook doubles installed, for tests that drive the
+/// controller the way a person or a response stream would.
+pub(crate) struct ControllerHarness {
+    pub hooks: TestHooks,
+    pub terminal: ViewHandle<TerminalView>,
+}
+
+pub(crate) fn controller_harness(app: &mut App) -> ControllerHarness {
+    initialize_app_for_terminal_view(app);
+    let hooks = app.update(install_test_hooks);
+    let terminal = add_window_with_terminal(app, None);
+    ControllerHarness { hooks, terminal }
+}
+
+impl ControllerHarness {
+    pub(crate) fn terminal_id(&self) -> EntityId {
+        self.terminal.id()
+    }
+
+    pub(crate) fn controller(&self, app: &App) -> ModelHandle<BlocklistAIController> {
+        self.terminal
+            .read(app, |view, _| view.ai_controller().clone())
+    }
+
+    pub(crate) fn update_controller<T>(
+        &self,
+        app: &mut App,
+        update: impl FnOnce(
+            &mut BlocklistAIController,
+            &mut warpui::ModelContext<BlocklistAIController>,
+        ) -> T,
+    ) -> T {
+        let controller = self.controller(app);
+        controller.update(app, update)
+    }
+
+    /// A new conversation with one request in flight on a stream the test drives by hand.
+    pub(crate) fn mock_stream(
+        &self,
+        app: &mut App,
+    ) -> (AIConversationId, ModelHandle<ResponseStream>) {
+        self.terminal.update(app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let stream_id = ResponseStreamId::new_for_test();
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let task_id = history
+                        .conversation(&conversation_id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input_for_test(
+                            RequestInput {
+                                conversation_id,
+                                input_messages: Vec::from([(task_id, vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .unwrap();
+                    history.update_conversation_status(
+                        terminal_surface_id,
+                        conversation_id,
+                        ConversationStatus::InProgress,
+                        ctx,
+                    );
+                    conversation_id
+                });
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.register_mock_stream_for_test(
+                    stream_id,
+                    conversation_id,
+                    stream.clone(),
+                    ctx,
+                );
+            });
+            (conversation_id, stream)
+        })
+    }
+}
+
+pub(crate) fn root_task_id(app: &App, conversation_id: AIConversationId) -> String {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .conversation(&conversation_id)
+            .expect("conversation exists")
+            .get_root_task_id()
+            .to_string()
+    })
+}
+
+pub(crate) fn conversation_status(
+    app: &App,
+    conversation_id: AIConversationId,
+) -> Option<ConversationStatus> {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.status().clone())
+    })
+}
+
+pub(crate) fn exchange_count(app: &App, conversation_id: AIConversationId) -> usize {
+    BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+        history
+            .conversation(&conversation_id)
+            .map_or(0, |conversation| conversation.exchange_count())
+    })
+}
+
+pub(crate) fn stream_init_event() -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::Init(StreamInit {
+            request_id: "request".to_owned(),
+            conversation_id: "test-server-conversation".to_owned(),
+            run_id: String::new(),
+        })),
+    }
+}
+
+pub(crate) fn text_message(task_id: &str, text: &str) -> Message {
+    Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task_id.to_owned(),
+        request_id: "request".to_owned(),
+        timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
+        message: Some(MessageKind::AgentOutput(AgentOutput {
+            text: text.to_owned(),
+        })),
+        ..Default::default()
+    }
+}
+
+/// A batch that creates the root task (the stream's first action does this in production)
+/// and adds `messages` to it.
+pub(crate) fn create_task_with_messages(task_id: &str, messages: Vec<Message>) -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::ClientActions(
+            response_event::ClientActions {
+                actions: vec![
+                    ClientAction {
+                        action: Some(client_action::Action::CreateTask(CreateTask {
+                            task: Some(Task {
+                                id: task_id.to_owned(),
+                                ..Default::default()
+                            }),
+                        })),
+                    },
+                    ClientAction {
+                        action: Some(client_action::Action::AddMessagesToTask(
+                            AddMessagesToTask {
+                                task_id: task_id.to_owned(),
+                                messages,
+                            },
+                        )),
+                    },
+                ],
+            },
+        )),
+    }
+}
+
+pub(crate) fn done_event() -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::Finished(StreamFinished {
+            reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+            ..Default::default()
+        })),
+    }
+}
+
+/// Streams one text message and ends the stream cleanly, the way a turn with no tool calls
+/// ends.
+pub(crate) fn finish_turn_with_text(
+    app: &mut App,
+    conversation_id: AIConversationId,
+    stream: &ModelHandle<ResponseStream>,
+    text: &str,
+) {
+    let task_id = root_task_id(app, conversation_id);
+    stream.update(app, |stream, ctx| {
+        stream.emit_response_event_for_test(stream_init_event(), ctx);
+        stream.emit_response_event_for_test(
+            create_task_with_messages(&task_id, vec![text_message(&task_id, text)]),
+            ctx,
+        );
+        stream.emit_response_event_for_test(done_event(), ctx);
+        stream.emit_after_stream_finished_for_test(ctx);
+    });
+}
+
+/// Every status change the history model reports for one conversation, in order.
+pub(crate) struct StatusRecorder {
+    conversation_id: AIConversationId,
+    statuses: Arc<Mutex<Vec<ConversationStatus>>>,
+}
+
+impl Entity for StatusRecorder {
+    type Event = ();
+}
+
+pub(crate) fn record_statuses(
+    app: &mut App,
+    conversation_id: AIConversationId,
+) -> (
+    ModelHandle<StatusRecorder>,
+    Arc<Mutex<Vec<ConversationStatus>>>,
+) {
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    let recorder = app.add_model(|ctx: &mut warpui::ModelContext<StatusRecorder>| {
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, _, event, _| {
+            if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id: id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+                ..
+            } = event
+                && *id == me.conversation_id
+            {
+                me.statuses.lock().unwrap().push(new_status.clone());
+            }
+        });
+        StatusRecorder {
+            statuses: statuses.clone(),
+            conversation_id,
+        }
+    });
+    (recorder, statuses)
+}
 
 /// A terminal-view-sized app with the hook doubles installed and one native conversation.
 pub(crate) struct HookTestApp {
@@ -38,10 +299,7 @@ pub(crate) struct HookTestApp {
 pub(crate) fn hook_test_app(app: &mut App) -> HookTestApp {
     initialize_app_for_terminal_view(app);
     let hooks = app.update(install_test_hooks);
-    let sessions = app.add_model(|_| Sessions::new_for_test());
-    let (_tx, rx) = unbounded();
-    let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
-    let active_session = app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+    let (active_session, dispatcher) = mock_session(app);
     let terminal_view_id = warpui::EntityId::new();
     let conversation = AIConversation::new(false, false);
     let conversation_id = conversation.id();
@@ -57,6 +315,25 @@ pub(crate) fn hook_test_app(app: &mut App) -> HookTestApp {
         conversation_id,
         terminal_view_id,
     }
+}
+
+/// A session over a mock terminal, with the dispatcher that feeds it, for envelopes that
+/// need a working directory to read.
+fn mock_session(
+    app: &mut App,
+) -> (
+    ModelHandle<ActiveSession>,
+    ModelHandle<ModelEventDispatcher>,
+) {
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let (_tx, rx) = unbounded();
+    let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
+    let active_session = app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+    (active_session, dispatcher)
+}
+
+pub(crate) fn mock_active_session(app: &mut App) -> ModelHandle<ActiveSession> {
+    mock_session(app).0
 }
 
 /// Moves the harness's session to `cwd`, the way a shell's prompt would report it.
