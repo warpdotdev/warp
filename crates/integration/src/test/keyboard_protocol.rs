@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use warp::features::FeatureFlag;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::{
     assert_long_running_block_executing_for_single_terminal_in_tab,
@@ -142,7 +141,6 @@ pub fn test_keyboard_protocol_disabled_shift_enter() -> Builder {
 
 /// Test that when keyboard protocol is enabled, Shift+Enter sends CSI u sequence
 pub fn test_keyboard_protocol_enabled_shift_enter() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_with_protocol.py",
@@ -214,7 +212,6 @@ pub fn test_keyboard_protocol_enabled_shift_enter() -> Builder {
 
 /// Test that shifted printable keys encode the unshifted keycode in CSI-u.
 pub fn test_keyboard_protocol_enabled_shifted_symbol_uses_unshifted_keycode() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_with_protocol.py",
@@ -257,7 +254,6 @@ pub fn test_keyboard_protocol_enabled_shifted_symbol_uses_unshifted_keycode() ->
 /// With flags 29 (1+4+8+16), shift+A should produce CSI 97:65;2;65u
 /// (base=97 'a', alternate=65 'A', shift modifier=2, text=65 'A').
 pub fn test_keyboard_protocol_alternate_keys_and_text() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_alternate_text.py",
@@ -327,7 +323,6 @@ pub fn test_keyboard_protocol_alternate_keys_and_text() -> Builder {
 
 /// Test kitty apply-mode semantics and query responses through terminal integration.
 pub fn test_keyboard_protocol_query_and_apply_modes() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "query_keyboard_modes.py",
@@ -372,7 +367,6 @@ pub fn test_keyboard_protocol_query_and_apply_modes() -> Builder {
 /// Test flag 8 (report all keys as escape codes): printable chars become CSI u,
 /// cursor keys remain legacy, and Ctrl+key combos include modifier.
 pub fn test_keyboard_protocol_report_all_keys_printable_and_cursor() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_report_all.py",
@@ -460,7 +454,6 @@ pub fn test_keyboard_protocol_report_all_keys_printable_and_cursor() -> Builder 
 /// type and is omitted per the Kitty spec. Pressing 'a' produces ESC[97u (same as
 /// without flag 2). Event types only differ for repeat/release events.
 pub fn test_keyboard_protocol_event_types() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_event_types.py",
@@ -496,7 +489,6 @@ pub fn test_keyboard_protocol_event_types() -> Builder {
 /// Sends ModifierKeyChanged events for ShiftLeft press/release and verifies
 /// the CSI u encoding includes the correct key code and event type.
 pub fn test_keyboard_protocol_modifier_key_reporting() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_event_types.py",
@@ -551,7 +543,6 @@ pub fn test_keyboard_protocol_modifier_key_reporting() -> Builder {
 ///
 /// Uses flags 1+2+8=11 to enable event type reporting.
 pub fn test_keyboard_protocol_modifier_self_bit() -> Builder {
-    FeatureFlag::KittyKeyboardProtocol.set_enabled(true);
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys_event_types.py",

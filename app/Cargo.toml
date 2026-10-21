@@ -645,7 +645,6 @@ default = [
     "figma_detection",
     "file_based_mcp",
     "inline_repo_menu",
-    "kitty_keyboard_protocol",
     "inline_menu_headers",
     "github_pr_prompt_chip",
     "conversations_as_context",
@@ -780,7 +779,6 @@ jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
 jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof"]
 run_generators_with_cmd_exe = []
 kitty_images = []
-kitty_keyboard_protocol = []
 ligatures = []
 trim_trailing_blank_lines = []
 cli_agent_rich_input = []

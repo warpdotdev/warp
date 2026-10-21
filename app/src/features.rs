@@ -441,8 +441,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::QueueSlashCommand,
         #[cfg(feature = "queued_prompts_v2")]
         FeatureFlag::QueuedPromptsV2,
-        #[cfg(feature = "kitty_keyboard_protocol")]
-        FeatureFlag::KittyKeyboardProtocol,
         #[cfg(feature = "inline_menu_headers")]
         FeatureFlag::InlineMenuHeaders,
         #[cfg(feature = "restore_prompt_on_inline_model_selector_search")]
