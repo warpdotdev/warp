@@ -232,14 +232,12 @@ mod hooks {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::time::Duration;
 
     use ai::agent::action_result::RequestCommandOutputResult;
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
     use ai::hooks::{HookBoundary, HookNoticeKind};
     use parking_lot::FairMutex;
     use warp_multi_agent_api::{self as api};
-    use warpui::r#async::Timer;
     use warpui::{App, ModelHandle};
 
     use super::super::{
@@ -251,7 +249,8 @@ mod hooks {
     use crate::ai::blocklist::RecordingController;
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
     use crate::ai::blocklist::hooks::testing::{
-        HookTestApp, hook_test_app, init_project_action, settle, shell_action,
+        HookTestApp, hook_test_app, init_project_action, let_background_work_settle, settle,
+        shell_action,
     };
     use crate::ai::blocklist::hooks::{pre_tool, tool_result};
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -368,13 +367,6 @@ mod hooks {
             .runner
             .script(binding.id.clone(), ScriptedRunner::exit_with(exit, stdout));
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
-    }
-
-    async fn let_background_work_settle(app: &mut App) {
-        for _ in 0..10 {
-            Timer::after(Duration::from_millis(5)).await;
-            app.update(|_| {});
-        }
     }
 
     #[test]

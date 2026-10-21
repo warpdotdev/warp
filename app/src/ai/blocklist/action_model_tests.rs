@@ -115,7 +115,7 @@ mod hooks {
     };
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
     use crate::ai::blocklist::hooks::testing::{
-        HookTestApp, action_model, hook_test_app, settle, shell_action,
+        HookTestApp, action_model, hook_test_app, let_background_work_settle, settle, shell_action,
     };
     use crate::features::FeatureFlag;
 
@@ -249,8 +249,7 @@ mod hooks {
         });
     }
 
-    /// Queues `action`, lets its allowing hook resolve, and waits until Warp blocks it on the
-    /// user.
+    /// Queues `action`, lets its allowing hook resolve, and waits until Warp blocks it on the user.
     async fn queue_until_blocked_with_verdict(
         app: &mut App,
         harness: &HookTestApp,
@@ -463,10 +462,7 @@ mod hooks {
             );
 
             // Let any late verdict land: it must not revive the action or deny it.
-            for _ in 0..10 {
-                warpui::r#async::Timer::after(std::time::Duration::from_millis(5)).await;
-                app.update(|_| {});
-            }
+            let_background_work_settle(&mut app).await;
             let result = model.read(&app, |model, _| {
                 model.get_action_result(&action_id).cloned()
             });
