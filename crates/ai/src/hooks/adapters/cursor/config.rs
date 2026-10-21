@@ -124,12 +124,15 @@ fn validate_definition(
 
     let timeout = match raw.timeout {
         None => HookBoundary::ToolPre.default_timeout(),
-        Some(seconds) if seconds.is_finite() && seconds > 0.0 => Duration::from_secs_f64(seconds),
-        Some(seconds) => {
-            return Err(invalid(format!(
-                "timeout must be a positive number of seconds, got {seconds}"
-            )));
-        }
+        // `try_from_secs_f64` rejects negative, NaN, infinite, and overflowing values.
+        Some(seconds) => Duration::try_from_secs_f64(seconds)
+            .ok()
+            .filter(|timeout| !timeout.is_zero())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "timeout must be a positive number of seconds, got {seconds}"
+                ))
+            })?,
     };
 
     if let Some(pattern) = raw.matcher.as_deref()
