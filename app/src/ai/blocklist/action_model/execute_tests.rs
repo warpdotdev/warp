@@ -653,7 +653,7 @@ mod hooks {
             let harness = hook_test_app(&mut app);
             install_shell_binding(&harness, &mut app, "denied", 2);
             let (executor, events) = build_executor(&mut app, &harness);
-            let gate = harness.hooks.runner.hold();
+            let hold = harness.hooks.runner.hold();
             let shell = shell_action("id-shell", "ls");
 
             let first = try_execute(&mut app, &executor, &shell, harness.conversation_id, false);
@@ -666,7 +666,7 @@ mod hooks {
             app.update(|ctx| pre_tool::cancel_all_for_conversation(harness.conversation_id, ctx));
             assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
 
-            gate.release();
+            hold.release();
             let_background_work_settle(&mut app).await;
             assert!(
                 app.read(|ctx| cached_state(harness.conversation_id, &shell.id, ctx))

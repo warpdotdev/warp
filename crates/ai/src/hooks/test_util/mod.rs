@@ -9,7 +9,7 @@ use std::sync::Arc;
 use ai_types::AIConversationId;
 pub use recording_adapter::RecordingAdapter;
 pub use recording_messenger::RecordingMessenger;
-pub use scripted_runner::{RunnerGate, ScriptedRunner};
+pub use scripted_runner::{RunnerHold, ScriptedRunner};
 use uuid::Uuid;
 
 use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};

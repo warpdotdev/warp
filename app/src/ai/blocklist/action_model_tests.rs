@@ -426,7 +426,7 @@ mod hooks {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             install_shell_hook(&harness, &mut app, 2, "denied");
-            let gate = harness.hooks.runner.hold();
+            let hold = harness.hooks.runner.hold();
             let model = action_model(&mut app, &harness);
             let action = shell_action("shell", "ls");
             let action_id = action.id.clone();
@@ -447,7 +447,7 @@ mod hooks {
                     ctx,
                 )
             });
-            gate.release();
+            hold.release();
             let result = model.read(&app, |model, _| {
                 model.get_action_result(&action_id).cloned()
             });

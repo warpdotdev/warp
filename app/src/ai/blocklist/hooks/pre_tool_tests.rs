@@ -198,7 +198,7 @@ fn a_replaced_dispatch_cannot_resolve_the_entry_that_replaced_it() {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
-        let gate = harness.hooks.runner.hold();
+        let hold = harness.hooks.runner.hold();
         let action = shell_action("a1", "ls");
 
         let first = expect_dispatch(lookup(
@@ -216,7 +216,7 @@ fn a_replaced_dispatch_cannot_resolve_the_entry_that_replaced_it() {
             harness.conversation_id,
             false,
         ));
-        gate.release();
+        hold.release();
 
         let first_outcome = block_on(first.future);
         assert!(
@@ -250,7 +250,7 @@ fn the_same_action_id_in_two_conversations_gets_two_entries() {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
-        let gate = harness.hooks.runner.hold();
+        let hold = harness.hooks.runner.hold();
         let other_conversation = AIConversationId::new();
         let mine = shell_action("call_1", "ls");
         let theirs = shell_action("call_1", "rm -rf x");
@@ -269,7 +269,7 @@ fn the_same_action_id_in_two_conversations_gets_two_entries() {
             other_conversation,
             false,
         ));
-        gate.release();
+        hold.release();
         let my_outcome = block_on(my_dispatch.future);
         let their_outcome = block_on(their_dispatch.future);
         assert_eq!(harness.hooks.runner.invocation_count(), 2);
