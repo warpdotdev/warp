@@ -7,15 +7,14 @@ use crate::ai::agent_sdk::{
     AgentDriverRunner, FACTORY_ID_ENV, RepositoryContract, build_execution_task_and_options,
     factory_repository_contract,
 };
+use crate::terminal::view::load_ai_conversation::{
+    RestoreConversationEntryBehavior, RestoredAIConversation,
+};
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
     anyhow::ensure!(
         execution_config::harness(&config.harness)? == Harness::Oz,
         "Pre-warmed assignment requires the Oz harness"
-    );
-    anyhow::ensure!(
-        config.conversation_id.is_none() && !config.skip_initial_turn,
-        "Pre-warmed assignment does not support resumed or promptless runs"
     );
     anyhow::ensure!(
         FeatureFlag::FactoryDeferredRepositories.is_enabled()
@@ -167,9 +166,9 @@ impl AgentDriver {
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
         let (first_skill, discovery_dirs) =
             resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;
-        let (mut options, mut task, providers) = spawner
+        let (mut options, mut task, conversation_id, providers) = spawner
             .spawn(move |me, ctx| {
-                let (options, task, _, providers) = build_execution_task_and_options(
+                let (options, task, conversation_id, providers) = build_execution_task_and_options(
                     None,
                     config,
                     RepositoryContract {
@@ -189,7 +188,7 @@ impl AgentDriver {
                     prepared.configuration.same_preparation(&options.workspace),
                     "Assignment workspace does not match prepared resources"
                 );
-                Ok::<_, anyhow::Error>((options, task, providers))
+                Ok::<_, anyhow::Error>((options, task, conversation_id, providers))
             })
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -228,6 +227,18 @@ impl AgentDriver {
             &mut task,
         )
         .await?;
+        if let Some(conversation_id) = conversation_id {
+            options.resume = setup_events
+                .record_result(
+                    SetupStep::ConversationResumeLoading,
+                    AgentDriverRunner::load_conversation_information(
+                        spawner,
+                        conversation_id,
+                        &task.harness,
+                    ),
+                )
+                .await?;
+        }
         #[cfg(not(target_family = "wasm"))]
         if let Some(bedrock) = bedrock {
             let region = bedrock.region.ok_or_else(|| {
@@ -249,10 +260,11 @@ impl AgentDriver {
         let should_share = terminal_inputs.should_share;
         spawner
             .spawn(move |me, ctx| {
-                me.apply_run_configuration(run_config, ctx);
+                me.apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)?;
                 me.sandbox_deadline = Some(expires_at.into());
+                Ok::<_, AgentDriverError>(())
             })
-            .await?;
+            .await??;
         Self::replace_shell_with_resolved_env(spawner).await?;
         let mcp_restart = Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
         Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
@@ -264,11 +276,14 @@ impl AgentDriver {
                     .ok_or(AgentDriverError::InvalidRuntimeState)?;
                 me.terminal_driver.update(ctx, |driver, ctx| {
                     driver.bind_prewarmed_task(
-                        task_id,
-                        me.working_dir.clone(),
-                        scope,
-                        share_requests,
-                        should_share,
+                        terminal::PrewarmedTaskBinding {
+                            task_id,
+                            working_dir: me.working_dir.clone(),
+                            team_scope: scope,
+                            share_requests,
+                            should_share,
+                            restored_conversation_id: me.restored_conversation_id,
+                        },
                         ctx,
                     )
                 })
@@ -282,6 +297,39 @@ impl AgentDriver {
             .await?
             .await?;
         Ok(task)
+    }
+
+    fn apply_prewarmed_run_configuration(
+        &mut self,
+        terminal_inputs: TerminalLaunchInputs,
+        config: RunConfiguration,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), AgentDriverError> {
+        if let Some(restoration) = terminal_inputs.conversation_restoration {
+            let use_live_appearance = restoration.should_use_live_appearance();
+            let ConversationRestorationInNewPaneType::Historical { conversation, .. } = restoration
+            else {
+                return Err(AgentDriverError::InvalidRuntimeState);
+            };
+            self.terminal_driver.update(ctx, |driver, ctx| {
+                driver.with_terminal_view(ctx, |terminal, ctx| {
+                    terminal.restore_conversation_after_view_creation(
+                        RestoredAIConversation::new(conversation),
+                        use_live_appearance,
+                        RestoreConversationEntryBehavior::EnterRestoredConversation,
+                        ctx,
+                    );
+                });
+            });
+        }
+        self.apply_run_configuration(config, ctx);
+        self.bind_run_conversation(
+            terminal_inputs.selected_harness,
+            terminal_inputs.harness_transport,
+            terminal_inputs.should_share,
+            ctx,
+        );
+        Ok(())
     }
 
     pub(crate) async fn run_prewarmed_assignment(

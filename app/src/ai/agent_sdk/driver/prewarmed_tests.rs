@@ -1,15 +1,22 @@
 use std::ffi::OsStr;
+use std::path::Path;
 
 use chrono::TimeDelta;
 #[cfg(not(feature = "skip_login"))]
 use mockito::Matcher;
+use session_sharing_protocol::common::ParticipantId;
 use warp_graphql::queries::execution_config::{CodeForge, ExecutionRepository};
+use warp_multi_agent_api as api;
 use warpui::App;
 
 use super::environment_preparation::{FILE_ENV, MODE_ENV, PreparationPolicy};
 use super::*;
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::ambient_agents::task::TaskAttachment;
 use crate::ai::cloud_environments::{AwsProviderConfig, GcpProviderConfig, ProvidersConfig};
+use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::prewarmed_sandbox::PrewarmedSandboxControlEvent;
+use crate::terminal::model::blocks::BlockHeightItem;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 const TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
@@ -125,10 +132,10 @@ fn prewarmed_accepts_server_assignments_and_rejects_unsupported_runs() {
     assert!(configuration.providers.is_some());
     validate_assignment(&configuration).unwrap();
     configuration.skip_initial_turn = true;
-    assert!(validate_assignment(&configuration).is_err());
+    validate_assignment(&configuration).unwrap();
     configuration.skip_initial_turn = false;
     configuration.conversation_id = Some("conversation".into());
-    assert!(validate_assignment(&configuration).is_err());
+    validate_assignment(&configuration).unwrap();
     configuration.conversation_id = None;
     configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
     assert!(validate_assignment(&configuration).is_err());
@@ -259,4 +266,307 @@ fn prewarmed_workspace_reuse_checks_setup_and_checkouts() {
     assert!(first.same_preparation(&second));
     second.setup_commands.push("different-setup".into());
     assert!(!first.same_preparation(&second));
+}
+
+fn completed_conversation(working_dir: &Path) -> AIConversation {
+    let mut conversation = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".into(),
+            messages: vec![
+                api::Message {
+                    id: "user".into(),
+                    task_id: "root-task".into(),
+                    request_id: "previous-request".into(),
+                    message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                        query: "previous prompt".into(),
+                        context: Some(api::InputContext {
+                            directory: Some(api::input_context::Directory {
+                                pwd: working_dir.to_string_lossy().into_owned(),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                api::Message {
+                    id: "answer".into(),
+                    task_id: "root-task".into(),
+                    request_id: "previous-request".into(),
+                    message: Some(api::message::Message::AgentOutput(
+                        api::message::AgentOutput {
+                            text: "previous answer".into(),
+                        },
+                    )),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    conversation.set_server_conversation_token("conversation".into());
+    conversation
+}
+
+fn install_resumed_configuration(
+    app: &mut App,
+    root: &Path,
+    conversation: AIConversation,
+    skip_initial_turn: bool,
+) -> (
+    ModelHandle<AgentDriver>,
+    warpui::ViewHandle<crate::terminal::TerminalView>,
+    Task,
+) {
+    let terminal = add_window_with_terminal(app, None);
+    terminal.update(app, |terminal, _| {
+        terminal
+            .model
+            .lock()
+            .simulate_block("standby setup", "prepared");
+    });
+    let terminal_driver = app
+        .update(|ctx| terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx));
+    let driver = app.add_model(|ctx| AgentDriver::new_for_test(root.into(), terminal_driver, ctx));
+    let mut configuration = config();
+    configuration.conversation_id = Some("conversation".into());
+    configuration.parent_run_id = Some("parent-run".into());
+    configuration.skip_initial_turn = skip_initial_turn;
+    configuration.idle_on_complete_seconds = Some(300);
+    let (mut options, task, conversation_id, _) = app.update(|ctx| {
+        build_execution_task_and_options(
+            None,
+            configuration,
+            RepositoryContract {
+                supports_deferred_repositories: true,
+                use_factory_repositories: true,
+            },
+            root.into(),
+            None,
+            Vec::new(),
+            ctx,
+        )
+        .unwrap()
+    });
+    assert_eq!(conversation_id.as_deref(), Some("conversation"));
+    options.resume = Some(ResumeOptions::Native(Box::new(
+        ConversationRestorationInNewPaneType::Historical {
+            conversation,
+            should_use_live_appearance: false,
+            ambient_agent_task_id: None,
+        },
+    )));
+    let prepared_configuration = options.workspace.clone();
+    let (terminal_inputs, run_config) = split_run_options(options).unwrap();
+    driver.update(app, |driver, ctx| {
+        driver.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+            configuration: prepared_configuration,
+            repositories: Vec::new(),
+        }));
+        driver
+            .apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)
+            .unwrap();
+        driver.terminal_driver.update(ctx, |terminal_driver, ctx| {
+            terminal_driver
+                .bind_prewarmed_task(
+                    terminal::PrewarmedTaskBinding {
+                        task_id: TASK_ID.parse().unwrap(),
+                        working_dir: root.into(),
+                        team_scope: &HeadlessTeamScope::Personal,
+                        share_requests: Vec::new(),
+                        should_share: false,
+                        restored_conversation_id: driver.restored_conversation_id,
+                    },
+                    ctx,
+                )
+                .unwrap();
+        });
+    });
+    (driver, terminal, task)
+}
+
+#[test]
+fn prewarmed_resume_restores_conversation_without_replacing_workspace_root() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let conversation = completed_conversation(other_dir.path());
+        let conversation_id = conversation.id();
+
+        let (driver, terminal, _) =
+            install_resumed_configuration(&mut app, root.path(), conversation, false);
+
+        driver.read(&app, |driver, _| {
+            assert_eq!(driver.restored_conversation_id, Some(conversation_id));
+            assert_eq!(driver.run_conversation_id, Some(conversation_id));
+            assert_eq!(driver.working_dir, root.path());
+            assert_eq!(driver.harness_working_dir, root.path());
+            assert!(matches!(
+                driver.workspace,
+                Some(WorkspaceState::Prepared(_))
+            ));
+        });
+        terminal.read(&app, |terminal, ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.parent_agent_id(), Some("parent-run"));
+            assert_eq!(
+                conversation.initial_working_directory().as_deref(),
+                other_dir.path().to_str()
+            );
+            assert_eq!(
+                history.terminal_surface_id_for_conversation(&conversation_id),
+                Some(terminal.id())
+            );
+            let ai_block = terminal.last_ai_block().unwrap();
+            let model = terminal.model.lock();
+            let block_heights = model.block_list().block_heights().items();
+            let setup_position = block_heights
+                .iter()
+                .position(|item| matches!(item, BlockHeightItem::Block(_)))
+                .unwrap();
+            let restored_position = block_heights
+                .iter()
+                .position(|item| matches!(item, BlockHeightItem::RichContent(item) if item.view_id == ai_block.id()))
+                .unwrap();
+            assert!(setup_position < restored_position);
+            drop(model);
+            assert_eq!(
+                terminal.ai_controller().as_ref(ctx).native_prompt_conversation_id(),
+                Some(conversation_id)
+            );
+            assert!(QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn prewarmed_promptless_resume_idles_until_a_queued_followup_arrives() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let conversation = completed_conversation(root.path());
+        let conversation_id = conversation.id();
+        let (driver, terminal, task) =
+            install_resumed_configuration(&mut app, root.path(), conversation, true);
+
+        let mut completion =
+            driver.update(&mut app, |driver, ctx| driver.execute_run(task.prompt, ctx));
+        assert!(completion.try_recv().unwrap().is_none());
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .exchange_count(),
+                1
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_pending_native_injections(conversation_id));
+        });
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        controller.update(&mut app, |controller, ctx| {
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "queued followup".into(),
+                None,
+                Vec::new(),
+                ParticipantId::new(),
+                None,
+                ctx,
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&conversation_id).unwrap();
+            assert_eq!(conversation.exchange_count(), 2);
+            assert!(matches!(
+                &conversation.all_exchanges().last().unwrap().input[0],
+                AIAgentInput::UserQuery { query, .. } if query == "queued followup"
+            ));
+        });
+        assert!(completion.try_recv().unwrap().is_none());
+        driver.update(&mut app, |driver, ctx| {
+            driver.unregister_streamer_consumer(ctx)
+        });
+    });
+}
+
+#[test]
+fn prewarmed_handoff_assignment_downloads_snapshot_before_execution() {
+    let mut server = mockito::Server::new();
+    let download = server
+        .mock("GET", "/snapshot")
+        .with_body("snapshot patch")
+        .expect(1)
+        .create();
+    let attachment = TaskAttachment {
+        file_id: "snapshot".into(),
+        filename: "repository.patch".into(),
+        download_url: format!("{}/snapshot", server.url()),
+        mime_type: "text/plain".into(),
+    };
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _handoff = FeatureFlag::OzHandoff.override_enabled(true);
+        let root = tempfile::tempdir().unwrap();
+        let (mut options, mut task, _, _) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                config(),
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: true,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        let server_api = app.read(|ctx| ServerApiProvider::as_ref(ctx).get());
+        let mut ai_client = MockAIClient::new();
+        ai_client
+            .expect_get_handoff_snapshot_attachments()
+            .withf(|task_id| task_id.to_string() == TASK_ID)
+            .times(1)
+            .returning(move |_| Ok(vec![attachment.clone()]));
+        let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = runtime.enter();
+
+        AgentDriverRunner::prepare_execution_task_data(
+            server_api,
+            &ai_client,
+            TASK_ID.parse().unwrap(),
+            HashMap::new(),
+            Ok(Vec::new()),
+            &mut options,
+            &mut task,
+        )
+        .await
+        .unwrap();
+
+        let AgentRunPrompt::ServerSide {
+            attachments_dir: Some(directory),
+            ..
+        } = task.prompt
+        else {
+            panic!("expected handoff attachments");
+        };
+        assert_eq!(
+            std::fs::read(Path::new(&directory).join("handoff/repository.patch")).unwrap(),
+            b"snapshot patch"
+        );
+    });
+    download.assert();
 }

@@ -24,6 +24,7 @@ use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::AgentDriverError;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
@@ -125,6 +126,15 @@ pub(crate) struct TerminalDriverOptions<'a> {
     pub task_id: Option<AmbientAgentTaskId>,
     pub conversation_restoration: Option<ConversationRestorationInNewPaneType>,
     pub team_scope: Option<&'a HeadlessTeamScope>,
+}
+
+pub(super) struct PrewarmedTaskBinding<'a> {
+    pub task_id: AmbientAgentTaskId,
+    pub working_dir: PathBuf,
+    pub team_scope: &'a HeadlessTeamScope,
+    pub share_requests: Vec<ShareRequest>,
+    pub should_share: bool,
+    pub restored_conversation_id: Option<AIConversationId>,
 }
 
 /// Events emitted by [`TerminalDriver`] for [`super::AgentDriver`] to react to.
@@ -377,13 +387,17 @@ impl TerminalDriver {
 
     pub(super) fn bind_prewarmed_task(
         &mut self,
-        task_id: AmbientAgentTaskId,
-        working_dir: PathBuf,
-        team_scope: &HeadlessTeamScope,
-        share_requests: Vec<ShareRequest>,
-        should_share: bool,
+        binding: PrewarmedTaskBinding<'_>,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
+        let PrewarmedTaskBinding {
+            task_id,
+            working_dir,
+            team_scope,
+            share_requests,
+            should_share,
+            restored_conversation_id,
+        } = binding;
         let should_share = sharing_expected(should_share);
         if should_share && !FeatureFlag::CreatingSharedSessions.is_enabled() {
             return Err(AgentDriverError::ShareSessionFailed {
@@ -398,7 +412,7 @@ impl TerminalDriver {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 controller.set_ambient_agent_task_id(Some(task_id), ctx);
                 controller.set_attachments_download_dir(attachments_download_dir(&working_dir));
-                controller.bind_native_prompt_conversation(None, ctx);
+                controller.bind_native_prompt_conversation(restored_conversation_id, ctx);
             });
             terminal
                 .model

@@ -45,11 +45,14 @@ fn prewarmed_binding_updates_controller_and_waits_for_real_sharing() {
         driver.update(&mut app, |driver, ctx| {
             driver
                 .bind_prewarmed_task(
-                    task_id,
-                    working_dir,
-                    &HeadlessTeamScope::Personal,
-                    Vec::new(),
-                    true,
+                    super::PrewarmedTaskBinding {
+                        task_id,
+                        working_dir,
+                        team_scope: &HeadlessTeamScope::Personal,
+                        share_requests: Vec::new(),
+                        should_share: true,
+                        restored_conversation_id: None,
+                    },
                     ctx,
                 )
                 .unwrap();

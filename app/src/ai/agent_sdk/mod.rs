@@ -1989,8 +1989,8 @@ impl AgentDriverRunner {
     /// [`driver::ResumeOptions::ThirdParty`]; each harness owns its server call and error
     /// mapping. Returns `None` if a third-party harness has no resume payload to surface.
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
-    async fn load_conversation_information(
-        foreground: &ModelSpawner<Self>,
+    async fn load_conversation_information<E: Entity>(
+        foreground: &ModelSpawner<E>,
         conversation_id: String,
         harness: &HarnessKind,
     ) -> Result<Option<driver::ResumeOptions>, AgentDriverError> {

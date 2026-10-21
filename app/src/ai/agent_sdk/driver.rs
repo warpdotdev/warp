@@ -704,10 +704,7 @@ pub struct AgentDriverOptions {
     pub mcp_startup_timeout: Option<Duration>,
 }
 
-/// Run options consumed when the driver's terminal session is created.
-///
-/// These have no matching driver state, and a pre-warmed driver already owns its terminal, so
-/// they are split away from the configuration [`AgentDriver::apply_run_configuration`] installs.
+/// Terminal setup for a new session or a pre-warmed assignment.
 struct TerminalLaunchInputs {
     should_share: bool,
     conversation_restoration: Option<ConversationRestorationInNewPaneType>,
@@ -1358,8 +1355,6 @@ impl AgentDriver {
         let idle_on_fail = config.idle_on_fail;
         let working_dir = config.working_dir.clone();
         let task_id = config.task_id;
-        let restored_conversation_id = config.restored_conversation_id;
-        let parent_run_id = config.parent_run_id.clone();
 
         safe_info!(
             safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}"),
@@ -1381,20 +1376,6 @@ impl AgentDriver {
             ctx,
         )?;
         Ok(ctx.add_singleton_model::<Self, _>(move |ctx| {
-            // Sharing starts asynchronously from terminal creation, before run_internal's setup waits.
-            let native_queue_enabled = renders_natively(selected_harness, harness_transport)
-                && (should_share || task_id.is_some());
-            log::info!(
-                "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} transport={harness_transport:?} sharing_requested={should_share} native_queue_enabled={native_queue_enabled}",
-            );
-            if native_queue_enabled {
-                let terminal = terminal_driver.as_ref(ctx).terminal_view().clone();
-                terminal.update(ctx, |terminal, ctx| {
-                    terminal.ai_controller().update(ctx, |controller, ctx| {
-                        controller.bind_native_prompt_conversation(restored_conversation_id, ctx);
-                    });
-                });
-            }
             // Subscribe to TerminalDriver events for task-specific handling.
             ctx.subscribe_to_model(&terminal_driver, |me, _, event, ctx| {
                 me.handle_terminal_driver_event(event, ctx);
@@ -1403,16 +1384,38 @@ impl AgentDriver {
             let mut me = Self::with_terminal(working_dir, terminal_driver);
             me.apply_run_configuration(config, ctx);
 
-            // For a resumed conversation the ID is known up front; register
-            // immediately so the streamer can satisfy the parent gate as soon
-            // as the first child is registered.
-            if let Some(conv_id) = restored_conversation_id {
-                stamp_parent_agent_id_if_some(conv_id, parent_run_id.as_deref(), ctx);
-                register_agent_event_consumer(conv_id, ctx.model_id(), ctx);
-                me.run_conversation_id = Some(conv_id);
-            }
+            me.bind_run_conversation(selected_harness, harness_transport, should_share, ctx);
             me
         }))
+    }
+
+    fn bind_run_conversation(
+        &mut self,
+        selected_harness: Harness,
+        harness_transport: HarnessTransport,
+        should_share: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let task_id = self.task_id;
+        let native_queue_enabled = renders_natively(selected_harness, harness_transport)
+            && (should_share || task_id.is_some());
+        log::info!(
+            "event=driver_queue_configuration task_id={task_id:?} harness={selected_harness} transport={harness_transport:?} sharing_requested={should_share} native_queue_enabled={native_queue_enabled}",
+        );
+        if native_queue_enabled {
+            let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
+            terminal.update(ctx, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.bind_native_prompt_conversation(self.restored_conversation_id, ctx);
+                });
+            });
+        }
+        // Register before execution so the first child can satisfy the parent's gate.
+        if let Some(conversation_id) = self.restored_conversation_id {
+            stamp_parent_agent_id_if_some(conversation_id, self.parent_run_id.as_deref(), ctx);
+            register_agent_event_consumer(conversation_id, ctx.model_id(), ctx);
+            self.run_conversation_id = Some(conversation_id);
+        }
     }
 
     /// Creates the driver around an already-created terminal, with no run configuration applied.
@@ -1464,10 +1467,10 @@ impl AgentDriver {
 
     /// Installs a run's configuration, replacing any configuration already applied.
     ///
-    /// [`TerminalLaunchInputs`] is deliberately absent: those options are consumed when the
-    /// terminal session is created and have no driver state to update. Runtime state that
-    /// outlives configuration — the harness, the output format, and pre-warmed preparation
-    /// results — is left untouched so a standby driver can take an assignment in place.
+    /// [`TerminalLaunchInputs`] is deliberately absent: those options control terminal setup and
+    /// have no driver state to update. Runtime state that outlives configuration — the harness,
+    /// the output format, and pre-warmed preparation results — is left untouched so a standby
+    /// driver can take an assignment in place.
     fn apply_run_configuration(&mut self, config: RunConfiguration, ctx: &mut ModelContext<Self>) {
         let RunConfiguration {
             working_dir,
