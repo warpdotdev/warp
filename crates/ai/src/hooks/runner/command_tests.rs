@@ -199,7 +199,7 @@ wait"#,
     let started = Instant::now();
     let outcome = run(
         &runner(),
-        invocation(dir.path(), "./hook.sh", b"{}", Duration::from_millis(300)),
+        invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(1)),
     );
     assert_eq!(outcome.exit, ProcessExit::TimedOut);
     assert!(
@@ -225,7 +225,7 @@ fn setting_the_cancel_flag_stops_a_running_hook() {
     let invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(30));
     let cancel = invocation.cancel.clone();
     let flipper = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_secs(1));
         cancel.store(true, Ordering::Release);
     });
     let outcome = run(&runner(), invocation);
@@ -302,6 +302,41 @@ printf '{"permission":"allow"}'"#,
     assert_eq!(outcome.exit, ProcessExit::Code(0));
     assert_eq!(outcome.stdout, br#"{"permission":"allow"}"#);
     assert_eq!(outcome.stderr_tail.len(), STDERR_TAIL_LIMIT);
+}
+
+#[test]
+fn a_descendant_that_keeps_the_pipes_open_does_not_turn_an_exit_into_a_timeout() {
+    let dir = TempDir::new().expect("tempdir");
+    write_script(
+        dir.path(),
+        "hook.sh",
+        r#"sleep 5 &
+echo "$!" > "$PWD/child"
+printf '{"agent_message":"no"}'
+exit 2"#,
+    );
+    let started = Instant::now();
+    let outcome = run(
+        &runner(),
+        invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(4)),
+    );
+    assert_eq!(outcome.exit, ProcessExit::Code(2));
+    assert_eq!(outcome.stdout, br#"{"agent_message":"no"}"#);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "the exit was reported after the pipe grace, not the invocation timeout"
+    );
+
+    // The hook's own exit decided the outcome; what it left running is not the runner's to kill.
+    let child = fs::read_to_string(dir.path().join("child"))
+        .expect("the script recorded its child")
+        .trim()
+        .parse::<i32>()
+        .expect("a pid");
+    assert!(
+        process_is_alive(child),
+        "the background child was left alone"
+    );
 }
 
 #[test]

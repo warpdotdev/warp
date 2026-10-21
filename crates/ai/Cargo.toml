@@ -78,6 +78,7 @@ nix.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-fs.workspace = true
+async-process.workspace = true
 arborium.workspace = true
 base64.workspace = true
 command.workspace = true

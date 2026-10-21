@@ -320,6 +320,7 @@ dependencies = [
  "arborium",
  "async-channel",
  "async-fs",
+ "async-process",
  "async-trait",
  "base16ct",
  "base64 0.22.1",

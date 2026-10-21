@@ -229,7 +229,7 @@ fn a_script_that_outlives_its_timeout_is_killed() {
         r#"echo $$ > "$PWD/pid"
 sleep 30
 printf '{"permission":"allow"}'"#,
-        r#", "timeout": 0.3"#,
+        r#", "timeout": 1"#,
     );
     let started = Instant::now();
     let outcome = slice.dispatch("ls");
@@ -258,7 +258,7 @@ printf '{"permission":"allow"}'"#,
 
 #[test]
 fn a_fail_closed_script_that_times_out_denies() {
-    let slice = Slice::new("sleep 30", r#", "timeout": 0.3, "failClosed": true"#);
+    let slice = Slice::new("sleep 30", r#", "timeout": 1, "failClosed": true"#);
     let outcome = slice.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(
