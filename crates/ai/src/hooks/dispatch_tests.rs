@@ -248,8 +248,29 @@ fn defer_is_reported_to_the_messenger_as_unsupported() {
 #[test]
 fn stderr_tail_is_cut_on_a_character_boundary() {
     let text = "é".repeat(300);
-    let cut = truncate_to_boundary(&text, STDERR_TAIL_LOG_LIMIT);
+    let cut = truncate_to_char_boundary(&text, STDERR_TAIL_LOG_LIMIT);
     assert!(cut.len() <= STDERR_TAIL_LOG_LIMIT);
     assert!(cut.chars().all(|c| c == 'é'));
-    assert_eq!(truncate_to_boundary("short", 10), "short");
+    assert_eq!(truncate_to_char_boundary("short", 10), "short");
+}
+
+#[test]
+fn a_binding_whose_input_cannot_be_encoded_follows_its_failure_policy() {
+    let mut binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    binding.capabilities.failure = FailurePolicy::FailOpen;
+    assert_eq!(
+        effects_for_unencodable_input(&binding),
+        HookEffects::default()
+    );
+
+    binding.capabilities.failure = FailurePolicy::FailClosed;
+    let effects = effects_for_unencodable_input(&binding);
+    assert_eq!(effects.verdict, HookVerdict::Deny);
+    assert_eq!(
+        effects.reasons,
+        vec![HookReason {
+            text: INPUT_NOT_ENCODABLE_DENY_REASON.to_owned(),
+            binding: Some(binding.id),
+        }]
+    );
 }

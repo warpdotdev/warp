@@ -6,9 +6,10 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use uuid::Uuid;
 
+use crate::hooks::adapters::DeclaredBinding;
 use crate::hooks::model::{
-    DiagnosticSeverity, HookBindingId, HookDiagnostic, HookEffects, HookEnvelope, MergedEffects,
-    reduce_effects,
+    DiagnosticSeverity, FailurePolicy, HookBindingId, HookDiagnostic, HookEffects, HookEnvelope,
+    HookReason, HookVerdict, MergedEffects, reduce_effects,
 };
 use crate::hooks::notices::{HookMessenger, HookNotice, HookNoticeKind};
 use crate::hooks::registry::{ActiveBinding, RegistrySnapshot};
@@ -16,6 +17,10 @@ use crate::hooks::runner::{HookInvocation, HookRunner, ProcessExit};
 
 /// Longest stderr excerpt written to the log for one invocation.
 const STDERR_TAIL_LOG_LIMIT: usize = 500;
+
+/// Reason reported when a fail-closed hook could not be given its input.
+pub const INPUT_NOT_ENCODABLE_DENY_REASON: &str =
+    "The hook's input could not be prepared, so the hook did not run.";
 
 /// What one hook process did, kept for logs and later diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +32,7 @@ pub struct InvocationRecord {
     pub stderr_tail: String,
 }
 
+/// What one boundary firing produced.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DispatchOutcome {
     pub effects: MergedEffects,
@@ -46,8 +52,9 @@ impl DispatchOutcome {
 
 /// The one call the agent loop makes to run hooks: fire an envelope, get merged effects.
 ///
-/// Bindings run one at a time in priority order. Concurrency, deadlines, and per-binding failure
-/// policy are not applied here yet; the runner enforces the invocation's timeout.
+/// Bindings run one at a time in priority order. Concurrency and deadlines are not applied here
+/// yet; the runner enforces the invocation's timeout. The binding's failure policy is applied
+/// only when its input cannot be encoded; the adapter applies it to process outcomes.
 pub struct HookDispatcher {
     runner: Arc<dyn HookRunner>,
     messenger: Arc<dyn HookMessenger>,
@@ -60,10 +67,6 @@ impl HookDispatcher {
 
     pub fn runner(&self) -> &Arc<dyn HookRunner> {
         &self.runner
-    }
-
-    pub fn messenger(&self) -> &Arc<dyn HookMessenger> {
-        &self.messenger
     }
 
     /// Runs every binding in `pinned` that matches `envelope`. `cancel` belongs to this firing:
@@ -97,9 +100,36 @@ impl HookDispatcher {
                 if cancel.load(Ordering::Acquire) {
                     break;
                 }
-                let (record, effects) =
-                    run_binding(&*runner, &active, &envelope, cancel.clone()).await;
-                invocations.push(record);
+                let mut per_invocation = envelope.clone();
+                per_invocation.invocation_id = Uuid::new_v4();
+                let input = active
+                    .adapter
+                    .encode_input(&active.binding, &per_invocation);
+                let effects = match serde_json::to_vec(&input) {
+                    Ok(stdin) => {
+                        let (record, effects) =
+                            run_binding(&*runner, &active, &per_invocation, stdin, cancel.clone())
+                                .await;
+                        invocations.push(record);
+                        effects
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "hook input could not be encoded: event={} binding={} error={error}",
+                            envelope.boundary(),
+                            active.binding.id
+                        );
+                        messenger.diagnostic(HookDiagnostic {
+                            source: active.binding.id.source.clone(),
+                            severity: DiagnosticSeverity::Error,
+                            message: format!(
+                                "{} did not run: its input could not be encoded ({error})",
+                                active.binding.id
+                            ),
+                        });
+                        effects_for_unencodable_input(&active.binding)
+                    }
+                };
                 ordered.push((active.binding.id.clone(), effects));
             }
 
@@ -115,19 +145,29 @@ impl HookDispatcher {
     }
 }
 
+/// What a binding that never received its input contributes. A fail-closed binding denies,
+/// since it could not evaluate the operation; a fail-open one has no opinion.
+fn effects_for_unencodable_input(binding: &DeclaredBinding) -> HookEffects {
+    match binding.capabilities.failure {
+        FailurePolicy::FailClosed => HookEffects {
+            verdict: HookVerdict::Deny,
+            reasons: vec![HookReason {
+                text: INPUT_NOT_ENCODABLE_DENY_REASON.to_owned(),
+                binding: Some(binding.id.clone()),
+            }],
+            ..Default::default()
+        },
+        FailurePolicy::FailOpen => HookEffects::default(),
+    }
+}
+
 async fn run_binding(
     runner: &dyn HookRunner,
     active: &ActiveBinding,
-    envelope: &HookEnvelope,
+    per_invocation: &HookEnvelope,
+    stdin: Vec<u8>,
     cancel: Arc<AtomicBool>,
 ) -> (InvocationRecord, HookEffects) {
-    let mut per_invocation = envelope.clone();
-    per_invocation.invocation_id = Uuid::new_v4();
-    let input = active
-        .adapter
-        .encode_input(&active.binding, &per_invocation);
-    let stdin = serde_json::to_vec(&input).unwrap_or_default();
-
     let outcome = runner
         .run(HookInvocation {
             binding: active.binding.id.clone(),
@@ -140,10 +180,10 @@ async fn run_binding(
         })
         .await;
 
-    let stderr_tail = truncate_to_boundary(&outcome.stderr_tail, STDERR_TAIL_LOG_LIMIT);
+    let stderr_tail = truncate_to_char_boundary(&outcome.stderr_tail, STDERR_TAIL_LOG_LIMIT);
     log::info!(
         "hook invocation: event={} source={} binding={} exit={:?} duration_ms={} stderr_tail={:?}",
-        envelope.boundary(),
+        per_invocation.boundary(),
         active.binding.id.source,
         active.binding.id,
         outcome.exit,
@@ -190,7 +230,7 @@ fn route_notices(messenger: &dyn HookMessenger, envelope: &HookEnvelope, effects
 }
 
 /// Cuts `text` to at most `limit` bytes without splitting a character.
-fn truncate_to_boundary(text: &str, limit: usize) -> &str {
+fn truncate_to_char_boundary(text: &str, limit: usize) -> &str {
     if text.len() <= limit {
         return text;
     }
