@@ -11,7 +11,9 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// What a cached verdict is keyed by. Action ids are only unique within a conversation, and the
@@ -163,10 +165,14 @@ pub(crate) fn begin_or_lookup(
     };
     let runtime = HookRuntime::handle(ctx);
     let cached = runtime.update(ctx, |runtime, _| {
-        runtime.pre_tool_verdicts.entries.get_mut(&key).map(|entry| {
-            entry.is_user_initiated |= is_user_initiated;
-            entry.state.clone()
-        })
+        runtime
+            .pre_tool_verdicts
+            .entries
+            .get_mut(&key)
+            .map(|entry| {
+                entry.is_user_initiated |= is_user_initiated;
+                entry.state.clone()
+            })
     });
     match cached {
         Some(PreToolHookState::Pending) => return PreToolLookup::Pending { dispatch: None },
