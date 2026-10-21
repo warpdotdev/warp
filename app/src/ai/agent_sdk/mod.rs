@@ -346,6 +346,11 @@ fn run_agent(
                     "unexpected argument '--harness-transport' found"
                 ));
             }
+            if let Some(flag) = first_hook_flag(&args)
+                && !FeatureFlag::AgentHooks.is_enabled()
+            {
+                return Err(anyhow::anyhow!("unexpected argument '{flag}' found"));
+            }
 
             let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
 
@@ -419,7 +424,35 @@ fn run_agent(
     }
 }
 
-/// Build the merged agent configuration from all sources and the Task for the driver.
+/// The first hidden hook flag `args` uses, by its command-line spelling.
+fn first_hook_flag(args: &RunAgentArgs) -> Option<&'static str> {
+    if args.hooks_strict {
+        Some("--hooks-strict")
+    } else if args.hooks_on_ask.is_some() {
+        Some("--hooks-on-ask")
+    } else if !args.hook_dirs.is_empty() {
+        Some("--hook-dir")
+    } else {
+        None
+    }
+}
+
+/// The run's hook settings from the command line and, for a local run, its configuration file.
+fn hook_run_options(
+    args: &RunAgentArgs,
+    file: Option<&config_file::LoadedAgentConfigSnapshotFile>,
+) -> driver::hooks::HookRunOptions {
+    config_file::merge_hook_settings(
+        file,
+        args.hooks_strict,
+        args.hooks_on_ask,
+        args.hook_dirs.clone(),
+        driver::hooks::run_surface_for(args.task_id.is_some()),
+    )
+}
+
+/// Build the merged agent configuration from all sources, the Task for the driver, and the run's
+/// hook settings.
 /// Merge precedence: file < CLI < skill
 fn build_merged_config_and_task(
     args: &RunAgentArgs,
@@ -427,18 +460,20 @@ fn build_merged_config_and_task(
     prompt: &Option<Prompt>,
     local_run_team_scope: Option<&HeadlessTeamScope>,
     ctx: &mut AppContext,
-) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
+) -> anyhow::Result<(AgentConfigSnapshot, Task, driver::hooks::HookRunOptions)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
     // server and individual CLI flags (--model, --mcp, etc.) are the only local overrides.
     // No config file is involved — the worker never passes --file alongside --task-id.
     if args.task_id.is_some() {
-        return build_server_side_task(args, resolved_skill, ctx);
+        let (config, task) = build_server_side_task(args, resolved_skill, ctx)?;
+        return Ok((config, task, hook_run_options(args, None)));
     }
 
     let loaded_file = match args.config_file.file.as_deref() {
-        Some(path) => Some(config_file::load_config_file(path)?),
+        Some(path) => Some(config_file::load_config_file_for_local_run(path)?),
         None => None,
     };
+    let hooks = hook_run_options(args, loaded_file.as_ref());
 
     let cli_mcp_servers = build_mcp_servers_from_specs(&args.all_mcp_specs())?;
 
@@ -542,7 +577,7 @@ fn build_merged_config_and_task(
         harness: harness_kind(args.harness, args.harness_transport.unwrap_or_default())?,
     };
 
-    Ok((merged_config, task))
+    Ok((merged_config, task, hooks))
 }
 
 /// Build the task for server-side prompt resolution (task_id is set).
@@ -783,6 +818,13 @@ fn build_execution_task_and_options(
         mcp_startup_timeout: args
             .and_then(|args| args.mcp_startup_timeout)
             .map(Into::into),
+        hooks: args.map_or_else(
+            || driver::hooks::HookRunOptions {
+                surface: driver::hooks::run_surface_for(true),
+                ..Default::default()
+            },
+            |args| hook_run_options(args, None),
+        ),
     };
     Ok((
         options,
@@ -1578,7 +1620,7 @@ impl AgentDriverRunner {
             remove_repository_origins,
         ) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
-                let (merged_config, task) = build_merged_config_and_task(
+                let (merged_config, task, hooks) = build_merged_config_and_task(
                     &args,
                     &resolved_skill,
                     &prompt_clone,
@@ -1631,6 +1673,7 @@ impl AgentDriverRunner {
                     skip_initial_turn: args.skip_initial_turn,
                     strict_mcp_startup: args.strict_mcp_startup,
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
+                    hooks,
                 };
 
                 Ok((
