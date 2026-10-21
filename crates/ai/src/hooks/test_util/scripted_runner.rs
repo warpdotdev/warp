@@ -9,14 +9,14 @@ use crate::hooks::model::HookBindingId;
 use crate::hooks::runner::{HookInvocation, HookProcessOutcome, HookRunner, ProcessExit};
 
 /// Lets a test hold every scripted invocation open until it decides to let them finish.
-pub struct RunnerGate {
+pub struct RunnerHold {
     sender: Mutex<Option<async_channel::Sender<()>>>,
 }
 
-impl RunnerGate {
+impl RunnerHold {
     /// Lets every waiting and future invocation complete.
     pub fn release(&self) {
-        self.sender.lock().expect("gate lock").take();
+        self.sender.lock().expect("hold lock").take();
     }
 }
 
@@ -26,7 +26,7 @@ pub struct ScriptedRunner {
     outcomes: Mutex<HashMap<HookBindingId, HookProcessOutcome>>,
     default_outcome: Mutex<HookProcessOutcome>,
     invocations: Mutex<Vec<HookInvocation>>,
-    gate: Mutex<Option<async_channel::Receiver<()>>>,
+    hold: Mutex<Option<async_channel::Receiver<()>>>,
 }
 
 impl Default for ScriptedRunner {
@@ -41,16 +41,16 @@ impl ScriptedRunner {
             outcomes: Mutex::new(HashMap::new()),
             default_outcome: Mutex::new(Self::exit_with(0, "")),
             invocations: Mutex::new(Vec::new()),
-            gate: Mutex::new(None),
+            hold: Mutex::new(None),
         }
     }
 
-    /// Makes every invocation from now on wait until the returned gate is released. The
+    /// Makes every invocation from now on wait until the returned hold is released. The
     /// invocation is still recorded as soon as it starts.
-    pub fn hold(&self) -> Arc<RunnerGate> {
+    pub fn hold(&self) -> Arc<RunnerHold> {
         let (sender, receiver) = async_channel::bounded::<()>(1);
-        *self.gate.lock().expect("runner lock") = Some(receiver);
-        Arc::new(RunnerGate {
+        *self.hold.lock().expect("runner lock") = Some(receiver);
+        Arc::new(RunnerHold {
             sender: Mutex::new(Some(sender)),
         })
     }
@@ -102,9 +102,9 @@ impl HookRunner for ScriptedRunner {
             .lock()
             .expect("runner lock")
             .push(invocation);
-        let gate = self.gate.lock().expect("runner lock").clone();
-        match gate {
-            // The sender is only ever dropped, never used, so `recv` returns once the gate is
+        let hold = self.hold.lock().expect("runner lock").clone();
+        match hold {
+            // The sender is only ever dropped, never used, so `recv` returns once the hold is
             // released.
             Some(receiver) => async move {
                 let _ = receiver.recv().await;
