@@ -11,7 +11,9 @@ use std::time::Duration;
 use regex::Regex;
 use serde::{Deserialize, Deserializer};
 
-use super::events::{CursorEvent, CursorEventSpec, DEFAULT_LOOP_LIMIT, LOOP_LIMIT_HOST_CAP};
+use super::events::{
+    CURSOR_EVENTS, CursorEvent, CursorEventSpec, DEFAULT_LOOP_LIMIT, LOOP_LIMIT_HOST_CAP,
+};
 use super::matcher::matches_everything;
 use crate::hooks::adapters::HookConfigError;
 
@@ -153,18 +155,18 @@ pub(super) fn parse_cursor_document(
 
     let mut definitions = Vec::new();
     let mut warnings = Vec::new();
-    for event in CursorEvent::ALL {
-        let Some(entries) = file.hooks.get(event.name()) else {
+    for spec in &CURSOR_EVENTS {
+        let Some(entries) = file.hooks.get(spec.name) else {
             continue;
         };
         let Some(entries) = entries.as_array() else {
             return Err(HookConfigError::Invalid(format!(
                 "{} must be an array of hook definitions",
-                event.name()
+                spec.name
             )));
         };
         for (index, entry) in entries.iter().enumerate() {
-            match validate_definition(event.spec(), index, entry, &mut warnings)? {
+            match validate_definition(spec, index, entry, &mut warnings)? {
                 ValidatedDefinition::Command(definition) => definitions.push(definition),
                 ValidatedDefinition::Skipped(reason) => warnings.push(reason),
             }

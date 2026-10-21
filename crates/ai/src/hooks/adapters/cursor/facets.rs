@@ -1,8 +1,11 @@
-//! Views of an envelope payload for the shell and MCP facets of the tool boundaries. Cursor has
-//! separate events for these, so matching and encoding both need to pull the same pieces out of
-//! Warp's own action and result types.
+//! Views of an envelope payload for the shell and MCP facets of the tool boundaries. A facet is
+//! one vendor event that projects onto a shared boundary and sees only part of its payload
+//! (architecture.md §4.1): Cursor's shell and MCP events sit beside `preToolUse` and
+//! `postToolUse` on `tool.pre` and `tool.result`. Matching and encoding both pull the same pieces
+//! out of Warp's action and result types, so they share these views.
 
 use chrono::{DateTime, Local};
+use rmcp::model::CallToolResult;
 use uuid::Uuid;
 
 use crate::agent::action::AIAgentActionType;
@@ -161,8 +164,16 @@ pub(super) struct McpToolCall<'a> {
     pub server_id: Option<Uuid>,
     pub name: &'a str,
     pub input: &'a serde_json::Value,
-    /// Present on the result boundaries. A cancelled call never ran and is not reported here.
-    pub result: Option<&'a CallMCPToolResult>,
+    /// Present on the result boundaries.
+    pub outcome: Option<McpCallOutcome<'a>>,
+}
+
+/// How an MCP tool call that ran ended. A cancelled call never ran, so the MCP events do not see
+/// it and there is no variant for it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum McpCallOutcome<'a> {
+    Returned(&'a CallToolResult),
+    Failed(&'a str),
 }
 
 pub(super) fn mcp_tool_call(payload: &HookPayload) -> Option<McpToolCall<'_>> {
@@ -184,14 +195,15 @@ pub(super) fn mcp_tool_call(payload: &HookPayload) -> Option<McpToolCall<'_>> {
     else {
         return None;
     };
-    let result = match result {
+    let outcome = match result {
         None => None,
         Some(result) => {
             let AIAgentActionResultType::CallMCPTool(result) = result else {
                 return None;
             };
             match result {
-                CallMCPToolResult::Success { .. } | CallMCPToolResult::Error(_) => Some(result),
+                CallMCPToolResult::Success { result } => Some(McpCallOutcome::Returned(result)),
+                CallMCPToolResult::Error(message) => Some(McpCallOutcome::Failed(message)),
                 CallMCPToolResult::Cancelled => return None,
             }
         }
@@ -200,6 +212,6 @@ pub(super) fn mcp_tool_call(payload: &HookPayload) -> Option<McpToolCall<'_>> {
         server_id: *server_id,
         name,
         input,
-        result,
+        outcome,
     })
 }
