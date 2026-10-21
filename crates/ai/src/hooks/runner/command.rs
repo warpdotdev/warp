@@ -6,12 +6,13 @@
 use std::ffi::OsString;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use command::r#async::Command;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use instant::Instant;
 use warpui_core::r#async::Timer;
 
 use super::{HookInvocation, HookProcessOutcome, HookRunner, PathCapture, ProcessExit};

@@ -6,9 +6,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::executor::block_on;
+use instant::Instant;
 use tempfile::TempDir;
 
 use super::*;

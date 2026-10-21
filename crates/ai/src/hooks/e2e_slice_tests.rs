@@ -8,10 +8,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ai_types::{AIAgentActionId, AIConversationId};
 use futures::executor::block_on;
+use instant::Instant;
 use tempfile::TempDir;
 
 use crate::agent::action::AIAgentActionType;
