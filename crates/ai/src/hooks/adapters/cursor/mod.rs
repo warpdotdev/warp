@@ -50,7 +50,7 @@ impl CursorAdapter {
 
 /// What a `beforeShellExecution` definition may do and how it fails: it is one of Cursor's
 /// permission hooks, so unreadable output denies even when the definition fails open.
-pub(crate) fn shell_permission_capabilities(fail_closed: bool) -> BindingCapabilities {
+fn shell_permission_capabilities(fail_closed: bool) -> BindingCapabilities {
     BindingCapabilities {
         may_produce: HashSet::from([
             EffectKind::Verdict,
@@ -98,20 +98,14 @@ impl HookFormatAdapter for CursorAdapter {
         source: &HookSourceId,
     ) -> Result<ParsedHookConfig, HookConfigError> {
         let (document, parsed) = parse_cursor_file(bytes)?;
-        let warning = |message: String| HookDiagnostic {
-            source: source.clone(),
-            severity: DiagnosticSeverity::Warning,
-            message,
-        };
         let warnings = parsed
-            .unknown_events
-            .iter()
-            .map(|event| {
-                warning(format!(
-                    "{event} hooks are not supported yet; they were skipped"
-                ))
+            .warnings
+            .into_iter()
+            .map(|message| HookDiagnostic {
+                source: source.clone(),
+                severity: DiagnosticSeverity::Warning,
+                message,
             })
-            .chain(parsed.skipped_definitions.into_iter().map(warning))
             .collect();
         Ok(ParsedHookConfig {
             source: source.clone(),
@@ -126,7 +120,7 @@ impl HookFormatAdapter for CursorAdapter {
             Ok(parsed) => parsed,
             Err(error) => {
                 log::error!(
-                    "hook source {} stopped parsing after it was accepted: {error}",
+                    "hook source {} no longer parses, though it was accepted earlier: {error}",
                     config.source
                 );
                 return Vec::new();
@@ -176,7 +170,9 @@ impl HookFormatAdapter for CursorAdapter {
             .unwrap_or_else(|| conversation_id.clone());
         let cwd = envelope.cwd.as_deref().map(|cwd| cwd.to_string_lossy());
         let workspace_roots = if envelope.roots.is_empty() {
-            cwd.iter().map(ToString::to_string).collect::<Vec<_>>()
+            cwd.as_ref()
+                .map(|cwd| vec![cwd.to_string()])
+                .unwrap_or_default()
         } else {
             envelope
                 .roots

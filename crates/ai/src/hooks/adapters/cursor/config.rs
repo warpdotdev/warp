@@ -17,11 +17,9 @@ pub(super) const BEFORE_SHELL_EXECUTION: &str = "beforeShellExecution";
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ParsedCursorFile {
     pub shell_hooks: Vec<ShellHookDefinition>,
-    /// Definitions under a known event that this adapter cannot run, each named with the reason,
-    /// in file order.
-    pub skipped_definitions: Vec<String>,
-    /// Event names in the file that this adapter does not understand yet, in sorted order.
-    pub unknown_events: Vec<String>,
+    /// What the file asked for that this adapter cannot do yet: events it does not understand and
+    /// definitions it cannot run. Each entry is a finished message.
+    pub warnings: Vec<String>,
 }
 
 /// One validated `beforeShellExecution` definition.
@@ -75,7 +73,7 @@ pub(super) fn parse_cursor_file(
     Ok((document, parsed))
 }
 
-/// Validates an already-parsed JSON document.
+/// Reads the definitions out of an already-parsed JSON document.
 pub(super) fn parse_cursor_document(
     document: &serde_json::Value,
 ) -> Result<ParsedCursorFile, HookConfigError> {
@@ -88,11 +86,12 @@ pub(super) fn parse_cursor_document(
     }
 
     let mut shell_hooks = Vec::new();
-    let mut skipped_definitions = Vec::new();
-    let mut unknown_events = Vec::new();
+    let mut warnings = Vec::new();
     for (event, definitions) in &file.hooks {
         if event != BEFORE_SHELL_EXECUTION {
-            unknown_events.push(event.clone());
+            warnings.push(format!(
+                "{event} hooks are not supported yet; they were skipped"
+            ));
             continue;
         }
         let Some(definitions) = definitions.as_array() else {
@@ -103,15 +102,14 @@ pub(super) fn parse_cursor_document(
         for (index, definition) in definitions.iter().enumerate() {
             match validate_definition(event, index, definition)? {
                 ValidatedDefinition::Shell(definition) => shell_hooks.push(definition),
-                ValidatedDefinition::Skipped(reason) => skipped_definitions.push(reason),
+                ValidatedDefinition::Skipped(reason) => warnings.push(reason),
             }
         }
     }
 
     Ok(ParsedCursorFile {
         shell_hooks,
-        skipped_definitions,
-        unknown_events,
+        warnings,
     })
 }
 

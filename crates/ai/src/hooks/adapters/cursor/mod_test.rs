@@ -7,7 +7,7 @@ use super::*;
 use crate::LLMId;
 use crate::agent::action::ReadFilesRequest;
 use crate::hooks::adapters::adapter_for;
-use crate::hooks::model::{CanonicalToolName, HookTurnId};
+use crate::hooks::model::{CanonicalToolName, HookTurnId, TurnStopStatus};
 use crate::hooks::test_util::{test_envelope, test_source_id};
 
 fn shell_action(command: &str) -> AIAgentActionType {
@@ -156,7 +156,7 @@ fn only_shell_commands_match() {
     let turn_stop = test_envelope(
         AIConversationId::new(),
         HookPayload::TurnStop {
-            status: crate::hooks::model::TurnStopStatus::Completed,
+            status: TurnStopStatus::Completed,
             continuation_count: 0,
         },
     );

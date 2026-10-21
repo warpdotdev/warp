@@ -1,7 +1,7 @@
 //! Turns what a `beforeShellExecution` process did into effects. Cursor's rules: exit 2 denies;
-//! exit 0 means "use the JSON on stdout"; any other exit, a timeout, or a crash follows the
-//! definition's failure policy; output that is not a valid decision denies, because this is one of
-//! Cursor's permission hooks.
+//! exit 0 means "use the JSON on stdout"; empty stdout and any other exit, timeout, or crash
+//! follow the definition's failure policy; output that is not a valid decision denies, because
+//! this is one of Cursor's permission hooks; a cancelled hook always denies.
 
 use serde::Deserialize;
 
@@ -29,7 +29,7 @@ pub(super) fn decode_shell_permission_output(
 ) -> HookEffects {
     let decoder = Decoder { binding };
     match &outcome.exit {
-        ProcessExit::Code(2) => decoder.deny_from_exit_code(&outcome.stdout),
+        ProcessExit::Code(2) => decoder.deny_from_exit_two(&outcome.stdout),
         ProcessExit::Code(0) => decoder.decode_success(&outcome.stdout),
         ProcessExit::Code(code) => decoder.failed(&format!("exited with code {code}")),
         ProcessExit::Signal(signal) => decoder.failed(&format!("was killed by signal {signal}")),
@@ -49,7 +49,7 @@ struct Decoder<'a> {
 }
 
 impl Decoder<'_> {
-    fn deny_from_exit_code(&self, stdout: &[u8]) -> HookEffects {
+    fn deny_from_exit_two(&self, stdout: &[u8]) -> HookEffects {
         // Exit 2 may still carry messages; a script that printed nothing or something else gets
         // the default reason.
         let output = parse_output(stdout).unwrap_or_default();
