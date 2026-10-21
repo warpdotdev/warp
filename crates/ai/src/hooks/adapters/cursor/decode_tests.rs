@@ -82,6 +82,11 @@ fn exit_zero_with_a_permission_is_decoded() {
     assert_eq!(deny.verdict, HookVerdict::Deny);
     assert_eq!(reasons(&deny), vec!["no"]);
 
+    let silent_deny = decode(false, ProcessExit::Code(0), r#"{"permission":"deny"}"#);
+    assert_eq!(silent_deny.verdict, HookVerdict::Deny);
+    assert_eq!(reasons(&silent_deny), vec!["Denied by hook ./check.sh."]);
+    assert_eq!(silent_deny.reasons[0].binding, Some(binding(false).id));
+
     let ask = decode(false, ProcessExit::Code(0), r#"{"permission":"ask"}"#);
     assert_eq!(ask.verdict, HookVerdict::Ask);
 }
