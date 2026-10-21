@@ -29,7 +29,7 @@ fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 
 fn invocation(cwd: &Path, command: &str, stdin: &[u8], timeout: Duration) -> HookInvocation {
     HookInvocation {
-        binding: test_binding_id(test_source_id("hooks.json"), "beforeShellExecution", 0),
+        binding: test_binding_id(test_source_id("hooks.json"), "tool.pre", 0),
         command: command.to_owned(),
         cwd: cwd.to_path_buf(),
         env: Vec::new(),
