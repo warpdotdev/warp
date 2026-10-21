@@ -221,10 +221,17 @@ mod unix {
         let runner = CommandHookRunner::new(Arc::new(|| Some(OsString::from("/custom/bin"))))
             .with_home(Some(PathBuf::from("/custom/home")));
         let mut invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10));
-        invocation.env = vec![(
-            OsString::from("HOOK_TEST_VAR"),
-            OsString::from("from-invocation"),
-        )];
+        invocation.env = vec![
+            (
+                OsString::from("HOOK_TEST_VAR"),
+                OsString::from("from-invocation"),
+            ),
+            // The runner's own protected variable cannot be replaced by a raw invocation entry.
+            (
+                OsString::from("WARP_HOOK_PROTOCOL_VERSION"),
+                OsString::from("99"),
+            ),
+        ];
         let outcome = run(&runner, invocation);
         assert_eq!(outcome.exit, ProcessExit::Code(0));
         let lines = String::from_utf8(outcome.stdout).expect("utf-8");
@@ -371,10 +378,13 @@ wait"#,
     #[test]
     fn setting_the_cancel_flag_stops_a_running_hook_and_its_tree() {
         let dir = TempDir::new().expect("tempdir");
+        // The trap prints a decision on the way out; it arrived after the stop request, so it is
+        // not the hook's answer.
         write_script(
             dir.path(),
             "hook.sh",
-            r#"sleep 30 &
+            r#"trap 'printf "{\"permission\":\"allow\"}"; echo late >&2; exit 0' TERM
+sleep 30 &
 echo "$$ $!" > "$PWD/pids"
 wait"#,
         );
@@ -389,6 +399,16 @@ wait"#,
         flipper.join().expect("flipper thread");
         assert_eq!(outcome.exit, ProcessExit::Cancelled);
         assert!(started.elapsed() < Duration::from_millis(500) + HOOK_KILL_GRACE);
+        assert!(
+            outcome.stdout.is_empty(),
+            "output written after the stop request is discarded: {:?}",
+            String::from_utf8_lossy(&outcome.stdout)
+        );
+        assert!(!outcome.stdout_truncated);
+        assert_eq!(
+            outcome.stderr_tail, "late\n",
+            "the stderr tail is kept for the log"
+        );
         for pid in recorded_pids(dir.path()) {
             assert!(wait_until_gone(pid), "process {pid} survived cancellation");
         }
@@ -641,12 +661,20 @@ rm -f "$PWD/running.$$""#,
         let outcomes = block_on(join_all(futures));
         let slow = outcomes.last().expect("the slow hook's outcome");
         assert_eq!(slow.exit, ProcessExit::TimedOut);
-        // It waited about a second for a slot and then had about half a second left to run.
+        // It waited about a second for a slot and then had about half a second left to run. Had
+        // the deadline been taken after the wait, it would have run until about 2.5 s.
         assert!(slow.duration >= timeout);
         assert!(
-            started.elapsed() < timeout + HOOK_KILL_GRACE + Duration::from_secs(1),
-            "the slot wait was not added on top of the timeout"
+            slow.duration > Duration::from_secs(1),
+            "the hook waited for a slot ({:?})",
+            slow.duration
         );
+        assert!(
+            slow.duration < timeout + Duration::from_millis(700),
+            "the slot wait was not added on top of the timeout ({:?})",
+            slow.duration
+        );
+        assert!(started.elapsed() < timeout + HOOK_KILL_GRACE + Duration::from_secs(1));
     }
 
     struct CapturingLogger;
@@ -737,16 +765,50 @@ rm -f "$PWD/running.$$""#,
 mod windows {
     use std::fs;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     use tempfile::TempDir;
 
     use super::*;
 
-    /// Writes a `.cmd` script and returns its path.
+    /// Writes a `.cmd` script with CRLF line endings and returns its path.
     fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
+        let body = body.replace('\n', "\r\n");
         fs::write(&path, format!("@echo off\r\n{body}\r\n")).expect("write script");
         path
+    }
+
+    /// Whether `tasklist` still lists a process with `pid`.
+    fn process_exists(pid: u32) -> bool {
+        let output = command::blocking::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    fn wait_until_gone(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    /// A script line that starts `ping` as a grandchild through PowerShell, records its pid in
+    /// `grandchild.pid`, and waits for it.
+    const START_GRANDCHILD: &str = r#"powershell -NoProfile -Command "$p = Start-Process -FilePath ping -ArgumentList '-n','60','127.0.0.1' -PassThru -WindowStyle Hidden; Set-Content -Path 'grandchild.pid' -Value $p.Id; Wait-Process -Id $p.Id""#;
+
+    fn recorded_grandchild(dir: &Path) -> u32 {
+        fs::read_to_string(dir.join("grandchild.pid"))
+            .expect("the script recorded the grandchild pid")
+            .trim()
+            .parse()
+            .expect("a pid")
     }
 
     #[test]
@@ -813,17 +875,64 @@ mod windows {
     }
 
     #[test]
-    fn a_timeout_ends_the_job_including_a_grandchild() {
+    fn a_script_in_a_directory_with_a_space_runs_with_a_quoted_argument() {
         let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "hook.cmd", "ping -n 60 ********* >NUL");
-        let started = std::time::Instant::now();
+        let spaced = dir.path().join("hook dir");
+        fs::create_dir(&spaced).expect("mkdir");
+        write_script(&spaced, "check.cmd", "echo got:%~1");
+        let command = format!(
+            "\"{}\" \"arg with space\"",
+            spaced.join("check.cmd").display()
+        );
         let outcome = run(
             &runner(),
-            invocation(dir.path(), "hook.cmd", b"{}", Duration::from_secs(1)),
+            invocation(dir.path(), &command, b"{}", Duration::from_secs(10)),
+        );
+        assert_eq!(outcome.exit, ProcessExit::Code(0));
+        assert_eq!(
+            String::from_utf8(outcome.stdout).expect("utf-8").trim(),
+            "got:arg with space"
+        );
+    }
+
+    #[test]
+    fn a_timeout_ends_the_job_including_a_grandchild() {
+        let dir = TempDir::new().expect("tempdir");
+        write_script(dir.path(), "hook.cmd", START_GRANDCHILD);
+        let timeout = Duration::from_secs(3);
+        let started = Instant::now();
+        let outcome = run(
+            &runner(),
+            invocation(dir.path(), "hook.cmd", b"{}", timeout),
         );
         assert_eq!(outcome.exit, ProcessExit::TimedOut);
+        assert!(started.elapsed() < timeout + HOOK_KILL_GRACE + Duration::from_secs(3));
+        let grandchild = recorded_grandchild(dir.path());
         assert!(
-            started.elapsed() < Duration::from_secs(1) + HOOK_KILL_GRACE + Duration::from_secs(3)
+            wait_until_gone(grandchild),
+            "grandchild {grandchild} survived the timeout"
+        );
+    }
+
+    #[test]
+    fn a_grandchild_left_behind_by_a_finished_hook_is_ended_with_the_job() {
+        let dir = TempDir::new().expect("tempdir");
+        // `Start-Process` without `Wait-Process` leaves `ping` running after the script exits.
+        write_script(
+            dir.path(),
+            "hook.cmd",
+            r#"powershell -NoProfile -Command "$p = Start-Process -FilePath ping -ArgumentList '-n','60','127.0.0.1' -PassThru -WindowStyle Hidden; Set-Content -Path 'grandchild.pid' -Value $p.Id"
+exit /b 2"#,
+        );
+        let outcome = run(
+            &runner(),
+            invocation(dir.path(), "hook.cmd", b"{}", Duration::from_secs(30)),
+        );
+        assert_eq!(outcome.exit, ProcessExit::Code(2));
+        let grandchild = recorded_grandchild(dir.path());
+        assert!(
+            wait_until_gone(grandchild),
+            "grandchild {grandchild} outlived the hook"
         );
     }
 }

@@ -26,6 +26,7 @@ thiserror.workspace = true
 win32job = "2.0.2"
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }

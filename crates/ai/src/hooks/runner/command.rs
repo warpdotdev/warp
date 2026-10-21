@@ -53,7 +53,7 @@ const PIPE_GRACE: Duration = Duration::from_secs(1);
 /// How long to wait for a killed hook to be collected before moving on without it.
 const REAP_GRACE: Duration = Duration::from_secs(2);
 
-/// Runs hook commands through the host shell: `sh -c` on Unix, `cmd.exe /C` on Windows. The
+/// Runs hook commands through the host shell: `sh -c` on Unix, `cmd.exe /S /C` on Windows. The
 /// command string is passed to the shell exactly as written in the configuration; payload bytes
 /// only ever travel over stdin.
 pub struct CommandHookRunner {
@@ -66,40 +66,30 @@ pub struct CommandHookRunner {
 #[derive(Clone)]
 struct HostShell {
     program: OsString,
-    command_flag: &'static str,
 }
 
 impl HostShell {
     fn for_this_host() -> Self {
         #[cfg(windows)]
-        {
-            Self {
-                program: OsString::from("cmd.exe"),
-                command_flag: "/C",
-            }
-        }
+        let program = OsString::from("cmd.exe");
         #[cfg(not(windows))]
-        {
-            Self {
-                program: OsString::from("/bin/sh"),
-                command_flag: "-c",
-            }
-        }
+        let program = OsString::from("/bin/sh");
+        Self { program }
     }
 
-    /// The shell invocation for `script`, with the command text appended the way the shell
-    /// expects it: as one argument on Unix, and verbatim on Windows, where `cmd.exe` does not
-    /// follow the quoting rules an argument would be encoded with.
+    /// The shell invocation for `script`, with the command text handed over the way the shell
+    /// expects it. On Unix it is one argument to `-c`. On Windows `cmd.exe` does not follow the
+    /// quoting rules an argument would be encoded with, so the text goes verbatim after `/S /C`,
+    /// wrapped in one pair of quotes that `/S` tells `cmd.exe` to strip and nothing else.
     fn invoke(&self, script: &str) -> Command {
         let mut command = Command::new_in_job(&self.program);
-        command.arg(self.command_flag);
         #[cfg(windows)]
         {
             use command::windows::CommandExt;
-            command.raw_arg(script);
+            command.arg("/S").arg("/C").raw_arg(format!("\"{script}\""));
         }
         #[cfg(not(windows))]
-        command.arg(script);
+        command.arg("-c").arg(script);
         command
     }
 }
@@ -200,6 +190,9 @@ async fn run_once(
             return finish(exit, Captured::default());
         }
     };
+    if invocation.cancel.load(Ordering::Acquire) {
+        return finish(ProcessExit::Cancelled, Captured::default());
+    }
 
     let mut command = shell.invoke(&invocation.command);
     command
@@ -207,6 +200,12 @@ async fn run_once(
         .env_clear()
         .envs(host_environment(&runner_env))
         .envs(invocation.env.iter().map(|(key, value)| (key, value)))
+        // The one protected variable the runner owns is written after the invocation's layer so
+        // nothing handed in can replace it.
+        .env(
+            "WARP_HOOK_PROTOCOL_VERSION",
+            runner_env.protocol_version.to_string(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -248,7 +247,17 @@ async fn run_once(
         }
     };
     pipes.finish_reading(pid).await;
-    finish(exit, pipes.take_captured())
+    let mut captured = pipes.take_captured();
+    match exit {
+        // Anything written after the hook was told to stop is not its decision; only the stderr
+        // tail survives, for the log line.
+        ProcessExit::TimedOut | ProcessExit::Cancelled => {
+            captured.stdout.clear();
+            captured.stdout_truncated = false;
+        }
+        ProcessExit::Code(_) | ProcessExit::Signal(_) | ProcessExit::SpawnFailed(_) => {}
+    }
+    finish(exit, captured)
 }
 
 /// Drives the pipes until the hook exits, the deadline passes, or the cancel flag is set. The
