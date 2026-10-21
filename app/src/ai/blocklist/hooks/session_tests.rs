@@ -5,13 +5,14 @@ use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload};
 use chrono::Local;
 use instant::Instant;
-use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
 use super::*;
+use crate::ai::agent::CancellationReason;
 use crate::ai::blocklist::hooks::prompt;
 use crate::ai::blocklist::hooks::test_utils::{
-    ControllerHarness, controller_harness, exchange_count, hook_test_app, settle,
+    ControllerHarness, controller_harness, exchange_count, hook_test_app,
+    let_background_work_settle, settle,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, RequestInput, ResponseStreamId};
 use crate::ai::llms::LLMId;
@@ -35,28 +36,6 @@ fn prompt_binding() -> DeclaredBinding {
     )
 }
 
-fn send_prompt(app: &mut App, harness: &ControllerHarness, text: &str) -> AIConversationId {
-    let terminal_id = harness.terminal_id();
-    let conversation_id = app.update(|ctx| {
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.start_new_conversation(terminal_id, false, false, false, ctx)
-        })
-    });
-    send_prompt_in(app, harness, conversation_id, text);
-    conversation_id
-}
-
-fn send_prompt_in(
-    app: &mut App,
-    harness: &ControllerHarness,
-    conversation_id: AIConversationId,
-    text: &str,
-) {
-    harness.update_controller(app, |controller, ctx| {
-        controller.send_user_query_in_conversation(text.to_owned(), conversation_id, None, ctx);
-    });
-}
-
 fn session_start_count(harness: &ControllerHarness) -> usize {
     harness
         .hooks
@@ -67,13 +46,6 @@ fn session_start_count(harness: &ControllerHarness) -> usize {
         .count()
 }
 
-async fn let_things_settle(app: &mut App) {
-    for _ in 0..10 {
-        Timer::after(Duration::from_millis(5)).await;
-        app.update(|_| {});
-    }
-}
-
 #[test]
 fn session_start_fires_once_before_a_new_conversations_first_request() {
     App::test((), |mut app| async move {
@@ -81,7 +53,7 @@ fn session_start_fires_once_before_a_new_conversations_first_request() {
         let harness = controller_harness(&mut app);
         app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
 
-        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        let conversation_id = harness.send_prompt(&mut app, "hello");
         settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
         assert_eq!(session_start_count(&harness), 1);
         let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
@@ -97,13 +69,13 @@ fn session_start_fires_once_before_a_new_conversations_first_request() {
         harness.update_controller(&mut app, |controller, ctx| {
             controller.cancel_conversation_progress(
                 conversation_id,
-                crate::ai::agent::CancellationReason::ManuallyCancelled,
+                CancellationReason::ManuallyCancelled,
                 ctx,
             );
         });
-        send_prompt_in(&mut app, &harness, conversation_id, "again");
+        harness.send_prompt_in(&mut app, conversation_id, "again");
         settle(&mut app, |app| exchange_count(app, conversation_id) == 2).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(session_start_count(&harness), 1);
     });
 }
@@ -116,9 +88,9 @@ fn the_first_request_waits_for_the_session_hooks_and_then_goes_out() {
         app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        let conversation_id = harness.send_prompt(&mut app, "hello");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(exchange_count(&app, conversation_id), 0);
 
         hold.release();
@@ -142,7 +114,7 @@ fn a_session_hook_that_fails_or_times_out_adds_nothing_and_does_not_block_furthe
                 .install_bindings(vec![failing, prompt_binding()], ctx)
         });
 
-        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        let conversation_id = harness.send_prompt(&mut app, "hello");
         settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
         let invocations = harness.hooks.runner.invocations();
         assert_eq!(invocations.len(), 2);
@@ -165,7 +137,7 @@ fn a_session_hook_that_fails_or_times_out_adds_nothing_and_does_not_block_furthe
         app.update(|ctx| harness.hooks.install_bindings(vec![slow], ctx));
         let _hold = harness.hooks.runner.hold();
         let started = Instant::now();
-        let slow_conversation = send_prompt(&mut app, &harness, "hello again");
+        let slow_conversation = harness.send_prompt(&mut app, "hello again");
         settle(&mut app, |app| exchange_count(app, slow_conversation) == 1).await;
         assert!(started.elapsed() >= Duration::from_millis(100));
         assert_eq!(session_start_count(&harness), 1);
@@ -188,7 +160,7 @@ fn the_session_environment_reaches_every_later_hook_in_the_conversation() {
                 .install_bindings(vec![session, prompt_binding()], ctx)
         });
 
-        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        let conversation_id = harness.send_prompt(&mut app, "hello");
         settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
         let invocations = harness.hooks.runner.invocations();
         assert_eq!(invocations.len(), 2);
@@ -257,7 +229,7 @@ fn a_conversation_with_exchanges_is_not_a_new_session() {
             )
         });
         assert!(wait.is_none());
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
         assert_eq!(harness.hooks.runner.invocation_count(), 0);
     });
@@ -332,14 +304,14 @@ fn a_newer_prompt_replaces_one_waiting_only_on_the_session_barrier() {
         app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "first");
+        let conversation_id = harness.send_prompt(&mut app, "first");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         assert!(app.read(|ctx| prompt::is_pending(conversation_id, ctx)));
-        send_prompt_in(&mut app, &harness, conversation_id, "second");
+        harness.send_prompt_in(&mut app, conversation_id, "second");
 
         hold.release();
         settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(
             exchange_count(&app, conversation_id),
             1,
@@ -363,19 +335,19 @@ fn cancelling_during_the_session_wait_drops_the_prompt() {
         app.update(|ctx| harness.hooks.install_bindings(vec![session_binding()], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "hello");
+        let conversation_id = harness.send_prompt(&mut app, "hello");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         harness.update_controller(&mut app, |controller, ctx| {
             controller.cancel_conversation_progress(
                 conversation_id,
-                crate::ai::agent::CancellationReason::ManuallyCancelled,
+                CancellationReason::ManuallyCancelled,
                 ctx,
             );
         });
         assert!(!app.read(|ctx| prompt::is_pending(conversation_id, ctx)));
 
         hold.release();
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(exchange_count(&app, conversation_id), 0);
     });
 }
@@ -405,7 +377,7 @@ fn viewer_and_transcript_conversations_do_not_fire_session_start() {
             });
             assert!(wait.is_none());
         }
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
     });
 }

@@ -1,20 +1,18 @@
-use std::time::Duration;
-
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-use ai::hooks::{HookBoundary, HookNoticeKind, HookPayload, PromptProvenance};
-use warpui::r#async::Timer;
+use ai::hooks::{DeclaredBinding, HookBoundary, HookNoticeKind, HookPayload, PromptProvenance};
 use warpui::{App, SingletonEntity};
 
 use super::*;
+use crate::ai::agent::CancellationReason;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::hooks::test_utils::{
-    ControllerHarness, controller_harness, conversation_status, exchange_count, hook_test_app,
-    settle,
+    controller_harness, conversation_status, exchange_count, hook_test_app,
+    let_background_work_settle, settle,
 };
 use crate::features::FeatureFlag;
 
-fn prompt_binding() -> ai::hooks::DeclaredBinding {
+fn prompt_binding() -> DeclaredBinding {
     test_binding(
         test_source_id("prompt"),
         HookBoundary::PromptSubmit,
@@ -27,27 +25,6 @@ fn user_prompt(text: &str) -> SubmittedPrompt {
     SubmittedPrompt {
         text: text.to_owned(),
         provenance: PromptProvenance::User,
-    }
-}
-
-/// Sends a typed prompt through the controller into a fresh conversation of the harness.
-fn send_prompt(app: &mut App, harness: &ControllerHarness, text: &str) -> AIConversationId {
-    let terminal_id = harness.terminal_id();
-    let conversation_id = app.update(|ctx| {
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.start_new_conversation(terminal_id, false, false, false, ctx)
-        })
-    });
-    harness.update_controller(app, |controller, ctx| {
-        controller.send_user_query_in_conversation(text.to_owned(), conversation_id, None, ctx);
-    });
-    conversation_id
-}
-
-async fn let_things_settle(app: &mut App) {
-    for _ in 0..10 {
-        Timer::after(Duration::from_millis(5)).await;
-        app.update(|_| {});
     }
 }
 
@@ -122,7 +99,7 @@ fn prompt_submit_does_not_fire_for_a_shared_session_viewer() {
             });
             assert!(matches!(preparation, TurnPreparation::Ready));
         }
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
     });
 }
@@ -186,10 +163,10 @@ fn a_halting_hook_stops_the_prompt_and_tells_the_person_why() {
         );
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
 
-        let conversation_id = send_prompt(&mut app, &harness, "deploy everything");
+        let conversation_id = harness.send_prompt(&mut app, "deploy everything");
         let status_before = conversation_status(&app, conversation_id);
         settle(&mut app, |_| !harness.hooks.messenger.notices().is_empty()).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
 
         assert_eq!(
             exchange_count(&app, conversation_id),
@@ -218,16 +195,16 @@ fn a_denying_or_asking_hook_halts_the_prompt_too() {
             .hooks
             .runner
             .script(binding.id.clone(), ScriptedRunner::deny_with("denied it"));
-        let denied = send_prompt(&mut app, &harness, "one");
+        let denied = harness.send_prompt(&mut app, "one");
         settle(&mut app, |_| harness.hooks.messenger.notices().len() == 1).await;
 
         harness.hooks.runner.script(
             binding.id.clone(),
             ScriptedRunner::exit_with(0, r#"{"verdict": "ask", "reason": "are you sure"}"#),
         );
-        let asked = send_prompt(&mut app, &harness, "two");
+        let asked = harness.send_prompt(&mut app, "two");
         settle(&mut app, |_| harness.hooks.messenger.notices().len() == 2).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
 
         assert_eq!(exchange_count(&app, denied), 0);
         assert_eq!(exchange_count(&app, asked), 0);
@@ -247,7 +224,7 @@ fn a_hook_with_no_opinion_lets_the_prompt_through_after_it_answers() {
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "go ahead");
+        let conversation_id = harness.send_prompt(&mut app, "go ahead");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         assert_eq!(
             exchange_count(&app, conversation_id),
@@ -276,7 +253,7 @@ fn a_newer_prompt_for_the_same_conversation_replaces_one_still_waiting() {
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "first");
+        let conversation_id = harness.send_prompt(&mut app, "first");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         harness.update_controller(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation(
@@ -290,7 +267,7 @@ fn a_newer_prompt_for_the_same_conversation_replaces_one_still_waiting() {
 
         hold.release();
         settle(&mut app, |app| exchange_count(app, conversation_id) == 1).await;
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(
             exchange_count(&app, conversation_id),
             1,
@@ -314,19 +291,19 @@ fn cancelling_the_conversation_drops_a_waiting_prompt() {
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
         let hold = harness.hooks.runner.hold();
 
-        let conversation_id = send_prompt(&mut app, &harness, "first");
+        let conversation_id = harness.send_prompt(&mut app, "first");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         harness.update_controller(&mut app, |controller, ctx| {
             controller.cancel_conversation_progress(
                 conversation_id,
-                crate::ai::agent::CancellationReason::ManuallyCancelled,
+                CancellationReason::ManuallyCancelled,
                 ctx,
             );
         });
         assert!(!app.read(|ctx| is_pending(conversation_id, ctx)));
 
         hold.release();
-        let_things_settle(&mut app).await;
+        let_background_work_settle(&mut app).await;
         assert_eq!(exchange_count(&app, conversation_id), 0);
     });
 }
@@ -336,7 +313,7 @@ fn with_hooks_off_a_prompt_is_sent_on_the_same_call() {
     App::test((), |mut app| async move {
         let harness = controller_harness(&mut app);
         app.update(|ctx| harness.hooks.install_bindings(vec![prompt_binding()], ctx));
-        let conversation_id = send_prompt(&mut app, &harness, "right away");
+        let conversation_id = harness.send_prompt(&mut app, "right away");
         assert_eq!(exchange_count(&app, conversation_id), 1);
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
         assert_eq!(

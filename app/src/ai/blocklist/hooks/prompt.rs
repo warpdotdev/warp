@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::hooks::{
-    DispatchOutcome, DispatchPolicy, HookBoundary, HookDispatcher, HookEnvelope, HookMessenger,
-    HookNotice, HookNoticeKind, HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
+    DispatchPolicy, HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice,
+    HookNoticeKind, HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -218,7 +218,7 @@ async fn run_prompt_dispatch(
     if let Some(env) = session_env {
         envelope.session_env = env;
     }
-    let outcome: DispatchOutcome = dispatcher
+    let outcome = dispatcher
         .dispatch(envelope, snapshot, policy, cancel.clone())
         .await;
     if outcome.cancelled || cancel.load(Ordering::Acquire) {

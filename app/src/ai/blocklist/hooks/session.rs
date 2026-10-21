@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use ai::hooks::{DispatchOutcome, HookBoundary};
+use ai::hooks::HookBoundary;
 use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::future::{BoxFuture, Shared};
@@ -156,7 +156,7 @@ pub(crate) fn barrier(
             runtime.dispatch_policy(),
             Arc::new(AtomicBool::new(false)),
         );
-        ctx.spawn(dispatch, move |runtime, outcome: DispatchOutcome, _| {
+        ctx.spawn(dispatch, move |runtime, outcome, _| {
             let env = if outcome.cancelled {
                 Vec::new()
             } else {

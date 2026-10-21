@@ -2142,9 +2142,8 @@ impl BlocklistAIHistoryModel {
         }
     }
 
-    /// Marks the stream's exchanges as finished. Returns whether the turn ended with this stream
-    /// (its output queued no actions). The caller marks the conversation successful when it did,
-    /// which lets a stop hook hold that until it has finished.
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the stream's output queued no actions, so the turn ended with it.
     pub fn mark_response_stream_completed_successfully(
         &mut self,
         stream_id: &ResponseStreamId,

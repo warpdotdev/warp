@@ -108,7 +108,7 @@ fn mcp_action(id: &str) -> AIAgentAction {
 }
 
 /// The payload of the last envelope the adapter saw for `action_id`.
-fn last_result_for(harness: &HookTestApp, action_id: &str) -> Option<ai::hooks::HookPayload> {
+fn last_result_for(harness: &HookTestApp, action_id: &str) -> Option<HookPayload> {
     harness
         .hooks
         .adapter
@@ -563,7 +563,7 @@ fn a_long_running_commands_real_exit_is_reported_again_on_its_own_action() {
                 ref command, ref output, exit_code, ..
             }) if command == "sleep 100" && output == "done" && exit_code.value() == 3
         ));
-        assert_eq!(duration, Some(std::time::Duration::from_millis(1500)));
+        assert_eq!(duration, Some(Duration::from_millis(1500)));
         assert_eq!(
             app.read(|ctx| HookRuntime::as_ref(ctx).shell_completions.pending_count()),
             0

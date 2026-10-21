@@ -609,7 +609,7 @@ impl BlocklistAIController {
                         .all(|result| result.result.is_successful())
                         || treat_as_success
                     {
-                        me.finish_turn(*conversation_id, ctx);
+                        me.hold_or_finalize_turn(*conversation_id, ctx);
                         me.start_held_turn_stop(*conversation_id, ctx);
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
@@ -1113,14 +1113,18 @@ impl BlocklistAIController {
     /// Ends a turn that completed: marks the conversation successful, unless a stop hook applies,
     /// in which case the status is held until [`Self::start_held_turn_stop`] has run the hooks
     /// and they have answered.
-    fn finish_turn(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
+    fn hold_or_finalize_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if !hooks::turn::hold_turn(conversation_id, &self.active_session, ctx) {
             self.finalize_turn(conversation_id, ctx);
         }
     }
 
-    /// Runs the stop hooks of a turn [`Self::finish_turn`] held, once the turn's own stream is
-    /// out of the way so a follow-up can be sent.
+    /// Runs the stop hooks of a turn [`Self::hold_or_finalize_turn`] held, once the turn's own
+    /// stream is out of the way so a follow-up can be sent.
     fn start_held_turn_stop(
         &mut self,
         conversation_id: AIConversationId,
@@ -1155,9 +1159,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.has_active_stream_for_conversation(conversation_id, ctx)
-            || hooks::prompt::is_pending(conversation_id, ctx)
-        {
+        if self.turn_in_flight(conversation_id, ctx) {
             return;
         }
         let is_this_surfaces_conversation = self.native_prompt_conversation_id
@@ -1168,27 +1170,28 @@ impl BlocklistAIController {
         if is_this_surfaces_conversation {
             self.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
         }
-        if self.has_active_stream_for_conversation(conversation_id, ctx)
-            || hooks::prompt::is_pending(conversation_id, ctx)
-        {
+        if self.turn_in_flight(conversation_id, ctx) {
             return;
         }
-        if QueuedQueryModel::as_ref(ctx)
-            .queue(conversation_id)
-            .first()
-            .is_some_and(|row| row.origin() == QueuedQueryOrigin::HookFollowUp)
-        {
-            log::warn!(
-                "a stop hook's follow-up for {conversation_id} could not be sent now and stays \
-                 queued until the conversation's next drain"
-            );
-        }
+        hooks::turn::warn_if_follow_up_still_queued(conversation_id, ctx);
         self.finalize_held_turn(conversation_id, ctx);
     }
 
+    /// Whether a turn is under way in `conversation_id`: a prompt waiting to be sent, a stream
+    /// in flight, or actions still pending or running between a stream's end and the request
+    /// that carries their results.
+    fn turn_in_flight(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
+        hooks::prompt::is_pending(conversation_id, ctx)
+            || self.has_active_stream_for_conversation(conversation_id, ctx)
+            || self
+                .action_model
+                .as_ref(ctx)
+                .has_unfinished_actions_for_conversation(conversation_id)
+    }
+
     /// Finalizes a turn whose success was held, unless something else settled the conversation's
-    /// status or started a request in the meantime, and lets in orchestration events that waited
-    /// for the status.
+    /// status or a turn is under way in the meantime, and lets in orchestration events that
+    /// waited for the status.
     fn finalize_held_turn(
         &mut self,
         conversation_id: AIConversationId,
@@ -1197,7 +1200,7 @@ impl BlocklistAIController {
         let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|conversation| conversation.status().is_in_progress());
-        if is_in_progress && !self.has_active_stream_for_conversation(conversation_id, ctx) {
+        if is_in_progress && !self.turn_in_flight(conversation_id, ctx) {
             self.finalize_turn(conversation_id, ctx);
             self.handle_pending_events_ready(conversation_id, ctx);
         }
@@ -4359,7 +4362,7 @@ impl BlocklistAIController {
                     )
                 });
                 if turn_ended {
-                    self.finish_turn(conversation_id, ctx);
+                    self.hold_or_finalize_turn(conversation_id, ctx);
                 }
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)) => {

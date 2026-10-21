@@ -3,7 +3,6 @@ use std::time::Duration;
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload, HookTurnId, PromptProvenance};
 use instant::Instant;
-use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
 use super::*;
@@ -11,8 +10,10 @@ use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{AIAgentInput, CancellationReason, UserQueryMode};
 use crate::ai::blocklist::hooks::prompt::is_pending;
 use crate::ai::blocklist::hooks::test_utils::{
-    HookTestApp, controller_harness, conversation_status, exchange_count, finish_turn_with_text,
-    hook_test_app, let_background_work_settle, record_statuses, settle,
+    HookTestApp, add_messages_event, controller_harness, conversation_status, done_event,
+    exchange_count, finish_turn_with_text, has_unfinished_actions, hook_test_app,
+    let_background_work_settle, record_statuses, root_task_id, settle, shell_tool_call_message,
+    stream_init_event, text_message,
 };
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
@@ -68,13 +69,17 @@ fn latest_user_query(
             .latest_exchange()?
             .input
             .iter()
-            .find_map(|input| match input {
-                AIAgentInput::UserQuery {
+            .find_map(|input| {
+                if let AIAgentInput::UserQuery {
                     query,
                     user_query_mode,
                     ..
-                } => Some((query.clone(), *user_query_mode)),
-                _ => None,
+                } = input
+                {
+                    Some((query.clone(), *user_query_mode))
+                } else {
+                    None
+                }
             })
     })
 }
@@ -377,10 +382,7 @@ fn success_is_not_shown_while_the_stop_hooks_run() {
 
         finish_turn_with_text(&mut app, conversation_id, &stream, "All done.");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
-        for _ in 0..10 {
-            Timer::after(Duration::from_millis(5)).await;
-            app.update(|_| {});
-        }
+        let_background_work_settle(&mut app).await;
         // The run's driver exits on `Success`; nothing may show it while the hooks run.
         assert!(
             !statuses
@@ -809,14 +811,91 @@ fn cancelling_a_held_turn_settles_it_as_cancelled() {
         );
 
         hold.release();
-        for _ in 0..10 {
-            Timer::after(Duration::from_millis(5)).await;
-            app.update(|_| {});
-        }
+        let_background_work_settle(&mut app).await;
         assert_eq!(
             conversation_status(&app, conversation_id),
             Some(ConversationStatus::Cancelled)
         );
         assert!(queued_texts(&app, conversation_id).is_empty());
+    });
+}
+
+#[test]
+fn a_newer_turn_whose_actions_still_run_is_not_finished_under_them() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        let stop = stop_binding(None);
+        harness
+            .hooks
+            .runner
+            .script(stop.id.clone(), continuation("later"));
+        app.update(|ctx| harness.hooks.install_bindings(vec![stop], ctx));
+        let hold = harness.hooks.runner.hold();
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        finish_turn_with_text(&mut app, conversation_id, &stream, "First answer.");
+        settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
+
+        // A newer turn: its request went out and its reply queued a command that waits for
+        // approval, so its stream is gone while the turn is still under way.
+        let second = harness.mock_request(&mut app, conversation_id);
+        let task_id = root_task_id(&app, conversation_id);
+        second.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                add_messages_event(
+                    &task_id,
+                    vec![
+                        text_message(&task_id, "Let me look."),
+                        shell_tool_call_message(&task_id, "ls"),
+                    ],
+                ),
+                ctx,
+            );
+            stream.emit_response_event_for_test(done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        assert!(!harness.update_controller(&mut app, |controller, ctx| {
+            controller.has_active_stream_for_conversation(conversation_id, ctx)
+        }));
+        // The command is pending once its (asynchronous) preprocessing is over.
+        settle(&mut app, |app| {
+            has_unfinished_actions(app, &harness, conversation_id)
+        })
+        .await;
+        let (_recorder, statuses) = record_statuses(&mut app, conversation_id);
+
+        // The earlier turn's hooks answer: the follow-up is queued, and nothing else happens
+        // to the turn under way.
+        hold.release();
+        settle(&mut app, |app| {
+            !app.read(|ctx| HookRuntime::as_ref(ctx).turn_stops.is_held(conversation_id))
+        })
+        .await;
+        let_background_work_settle(&mut app).await;
+        assert!(
+            !statuses
+                .lock()
+                .unwrap()
+                .contains(&ConversationStatus::Success),
+            "{:?}",
+            statuses.lock().unwrap()
+        );
+        assert!(
+            matches!(
+                conversation_status(&app, conversation_id),
+                Some(ConversationStatus::Blocked { .. })
+            ),
+            "the newer turn's command still waits for approval: {:?}",
+            conversation_status(&app, conversation_id)
+        );
+        assert!(
+            has_unfinished_actions(&app, &harness, conversation_id),
+            "the newer turn's command was not cancelled"
+        );
+        assert_eq!(exchange_count(&app, conversation_id), 2, "the follow-up was not sent");
+        let queued = queued_texts(&app, conversation_id);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].0, "later");
     });
 }

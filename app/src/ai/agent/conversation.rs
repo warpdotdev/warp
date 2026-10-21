@@ -2534,9 +2534,8 @@ impl AIConversation {
         Ok(())
     }
 
-    /// Marks the stream's exchanges as finished. Returns whether the turn ended with them: the
-    /// output queued no actions, so nothing more will happen until the next prompt. The caller
-    /// decides when to mark the conversation successful, which lets it wait for stop hooks.
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the exchanges queued no actions, so the turn ended with them.
     pub fn mark_request_completed(
         &mut self,
         stream_id: &ResponseStreamId,
