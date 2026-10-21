@@ -68,28 +68,6 @@ impl HookBoundary {
         }
     }
 
-    /// Whether the boundary runs before an operation and can stop it.
-    pub fn is_pre_execution(&self) -> bool {
-        match self {
-            Self::PromptSubmit
-            | Self::ToolPre
-            | Self::ToolPermissionRequest
-            | Self::FileExposure
-            | Self::SubagentStart => true,
-            Self::SessionStart
-            | Self::SessionEnd
-            | Self::ToolResult
-            | Self::ToolFailure
-            | Self::SubagentStop
-            | Self::TurnStop
-            | Self::TurnInterrupt
-            | Self::CompactionPre
-            | Self::CompactionPost
-            | Self::ResponseComplete
-            | Self::ReasoningComplete => false,
-        }
-    }
-
     /// Whether a verdict from a hook on this boundary can change what the agent does.
     pub fn honors_verdict(&self) -> bool {
         match self {
@@ -338,6 +316,8 @@ pub enum HookPayload {
         action: AIAgentActionType,
         tool_name: CanonicalToolName,
         result: AIAgentActionResultType,
+        /// How long the tool ran, when the caller measured it.
+        duration: Option<Duration>,
     },
     ToolFailure {
         action: AIAgentActionType,
@@ -345,6 +325,8 @@ pub enum HookPayload {
         result: AIAgentActionResultType,
         /// Present when the failure is a cancellation rather than an error result.
         cancellation_reason: Option<String>,
+        /// How long the tool ran before failing, when the caller measured it.
+        duration: Option<Duration>,
     },
     TurnStop {
         status: TurnStopStatus,
