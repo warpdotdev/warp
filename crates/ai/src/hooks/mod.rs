@@ -1,0 +1,38 @@
+//! Agent hooks: user-configured scripts that run at fixed points in the agent loop. This module
+//! holds the canonical model, the format adapters, the registry of active bindings, the trust and
+//! permission policies, and the dispatcher. The interception points that fire boundaries live in
+//! the application crate.
+
+pub mod adapters;
+pub mod dispatch;
+pub mod model;
+pub mod notices;
+pub mod permission;
+pub mod registry;
+pub mod runner;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
+pub mod trust;
+
+pub use adapters::{DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig};
+pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
+pub use model::{
+    BindingCapabilities, CanonicalToolName, CapabilityWarning, ContinuationRequest,
+    DiagnosticSeverity, EffectKind, EmptyOutputPolicy, FailurePolicy, HOOK_PROTOCOL_VERSION,
+    HandlerKind, HookBindingId, HookBoundary, HookDiagnostic, HookEffects, HookEnvelope,
+    HookExecutionHost, HookFormat, HookPayload, HookReason, HookSourceId, HookSourceKind,
+    HookSourceLocation, HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget,
+    MergedEffects, PermissionFacts, RunMetadata, TurnStopStatus, UnsupportedEffect, reduce_effects,
+    validate_capabilities,
+};
+pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
+pub use permission::{
+    HookPermissionPolicy, PermissionDecision, PermissionFloors, WarpPermissionResult,
+};
+pub use registry::{
+    ActiveBinding, BindingScope, HookRegistry, HookRegistryEvent, RegistrySnapshot,
+};
+pub use runner::{
+    HookInvocation, HookProcessOutcome, HookRunner, PathCapture, ProcessExit, UnavailableRunner,
+};
+pub use trust::{CommandExecutionPosture, DenyAllTrustPolicy, TrustDecision, TrustPolicy};
