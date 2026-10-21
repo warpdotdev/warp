@@ -1,5 +1,5 @@
-//! The vertical slice, end to end with real parts: a Cursor `hooks.json` on disk, a real script,
-//! the real registry loader, the real dispatcher, and the real process runner.
+//! End-to-end `beforeShellExecution` dispatch with real parts: a Cursor `hooks.json` on disk, a
+//! real script, the registry loader, the dispatcher, and the process runner.
 
 #![cfg(unix)]
 
@@ -38,10 +38,14 @@ struct Harness {
 }
 
 impl Harness {
-    /// Writes the script body to `./hook.sh`, writes a `hooks.json` whose one
-    /// `beforeShellExecution` definition is `definition` with `command` set to that script, and
-    /// loads the file into the registry.
-    fn new(script_body: &str, mut definition: serde_json::Value) -> Self {
+    fn new(script_body: &str) -> Self {
+        Self::with_definition(script_body, json!({}))
+    }
+
+    /// Writes `script_body` to `./hook.sh`, writes a `hooks.json` whose one
+    /// `beforeShellExecution` entry is `definition` with `command` set to that script, and loads
+    /// the file into the registry.
+    fn with_definition(script_body: &str, mut definition: serde_json::Value) -> Self {
         let dir = TempDir::new().expect("tempdir");
         let script = dir.path().join("hook.sh");
         fs::write(&script, format!("#!/bin/sh\n{script_body}\n")).expect("write script");
@@ -131,7 +135,6 @@ fn a_script_that_exits_two_denies_with_its_agent_message() {
     let harness = Harness::new(
         r#"printf '{"agent_message":"rm is not allowed in this repo","user_message":"Blocked"}'
 exit 2"#,
-        json!({}),
     );
     let outcome = harness.dispatch("rm -rf /tmp/x");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
@@ -149,7 +152,7 @@ exit 2"#,
 
 #[test]
 fn a_script_that_exits_two_silently_denies_with_the_default_reason() {
-    let harness = Harness::new("exit 2", json!({}));
+    let harness = Harness::new("exit 2");
     let outcome = harness.dispatch("rm -rf /tmp/x");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(
@@ -160,7 +163,7 @@ fn a_script_that_exits_two_silently_denies_with_the_default_reason() {
 
 #[test]
 fn a_script_that_prints_allow_allows() {
-    let harness = Harness::new(r#"printf '{"permission":"allow"}'"#, json!({}));
+    let harness = Harness::new(r#"printf '{"permission":"allow"}'"#);
     let outcome = harness.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
     assert!(outcome.effects.reasons.is_empty());
@@ -168,7 +171,7 @@ fn a_script_that_prints_allow_allows() {
 
 #[test]
 fn a_script_that_prints_nothing_has_no_opinion_when_it_fails_open() {
-    let harness = Harness::new("exit 0", json!({}));
+    let harness = Harness::new("exit 0");
     let outcome = harness.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(outcome.invocations.len(), 1, "the hook did run");
@@ -176,7 +179,7 @@ fn a_script_that_prints_nothing_has_no_opinion_when_it_fails_open() {
 
 #[test]
 fn a_script_that_prints_something_other_than_json_denies() {
-    let harness = Harness::new("echo not json", json!({}));
+    let harness = Harness::new("echo not json");
     let outcome = harness.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(
@@ -190,7 +193,7 @@ fn a_script_that_prints_something_other_than_json_denies() {
 
 #[test]
 fn a_fail_closed_script_that_exits_one_denies() {
-    let harness = Harness::new("exit 1", json!({ "failClosed": true }));
+    let harness = Harness::with_definition("exit 1", json!({ "failClosed": true }));
     let outcome = harness.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(
@@ -198,16 +201,13 @@ fn a_fail_closed_script_that_exits_one_denies() {
         vec!["Hook ./hook.sh exited with code 1, so the command was denied."]
     );
 
-    let open = Harness::new("exit 1", json!({}));
+    let open = Harness::new("exit 1");
     assert_eq!(open.dispatch("ls").effects.verdict, HookVerdict::NoOpinion);
 }
 
 #[test]
 fn the_script_receives_cursor_shaped_json_on_stdin() {
-    let harness = Harness::new(
-        r#"cat > "$PWD/stdin.json"; printf '{"permission":"allow"}'"#,
-        json!({}),
-    );
+    let harness = Harness::new(r#"cat > "$PWD/stdin.json"; printf '{"permission":"allow"}'"#);
     let outcome = harness.dispatch("git push --force");
     assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
 
@@ -229,10 +229,7 @@ fn the_script_receives_cursor_shaped_json_on_stdin() {
 
 #[test]
 fn the_hook_runs_in_the_directory_that_holds_the_file() {
-    let harness = Harness::new(
-        r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#,
-        json!({}),
-    );
+    let harness = Harness::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#);
     harness.dispatch("ls");
     let recorded = fs::read_to_string(harness.dir.path().join("cwd.txt")).expect("cwd file");
     assert_eq!(
@@ -243,11 +240,12 @@ fn the_hook_runs_in_the_directory_that_holds_the_file() {
 
 #[test]
 fn a_script_that_outlives_its_timeout_is_killed() {
-    let harness = Harness::new(
+    let harness = Harness::with_definition(
         r#"echo $$ > "$PWD/pid"
 sleep 30
 printf '{"permission":"allow"}'"#,
-        json!({ "timeout": 1 }),
+        // Long enough for the script to record its pid on a loaded machine before the kill.
+        json!({ "timeout": 3 }),
     );
     let started = Instant::now();
     let outcome = harness.dispatch("ls");
@@ -269,7 +267,7 @@ printf '{"permission":"allow"}'"#,
 
 #[test]
 fn a_fail_closed_script_that_times_out_denies() {
-    let harness = Harness::new("sleep 30", json!({ "timeout": 1, "failClosed": true }));
+    let harness = Harness::with_definition("sleep 30", json!({ "timeout": 1, "failClosed": true }));
     let outcome = harness.dispatch("ls");
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(
@@ -280,7 +278,7 @@ fn a_fail_closed_script_that_times_out_denies() {
 
 #[test]
 fn a_matcher_that_does_not_match_leaves_the_command_alone() {
-    let harness = Harness::new("exit 2", json!({ "matcher": "^rm " }));
+    let harness = Harness::with_definition("exit 2", json!({ "matcher": "^rm " }));
     assert_eq!(
         harness.dispatch("ls").effects.verdict,
         HookVerdict::NoOpinion
@@ -293,7 +291,7 @@ fn a_matcher_that_does_not_match_leaves_the_command_alone() {
 
 #[test]
 fn loading_the_same_file_again_replaces_its_bindings() {
-    let mut harness = Harness::new("exit 2", json!({}));
+    let mut harness = Harness::new("exit 2");
     let path = harness.dir.path().join("hooks.json");
     fs::write(
         &path,
