@@ -1,17 +1,22 @@
 use std::path::PathBuf;
 
+use ai::hooks::{ExplicitHookSource, ExplicitSourceScope, HookFormat, HookNoticeKind};
 use ai::skills::parse_skill;
 use anyhow::anyhow;
 use tempfile::TempDir;
+use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
     CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, CloudAgentStartupPresentation, RemoteChildLaunchConfig,
-    classify_cloud_agent_startup_error, prepare_remote_child_launch,
+    CloudAgentStartupIssue, CloudAgentStartupPresentation, PrepareRemoteChildLaunchError,
+    RemoteChildLaunchConfig, classify_cloud_agent_startup_error, prepare_remote_child_launch,
 };
 use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
+use crate::ai::blocklist::hooks::HookRuntime;
+use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
+use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;
@@ -306,6 +311,113 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
         assert!(message.contains("Repository 'missing-repo' not found"));
     });
 }
+
+fn remote_request() -> StartAgentRequest {
+    StartAgentRequest {
+        metadata: Default::default(),
+        id: Default::default(),
+        name: "child".to_string(),
+        prompt: "Run".to_string(),
+        execution_mode: StartAgentExecutionMode::Remote {
+            environment_id: String::new(),
+            skill_references: Vec::new(),
+            model_id: String::new(),
+            computer_use_enabled: false,
+            worker_host: String::new(),
+            harness_type: String::new(),
+            title: String::new(),
+            auth_secret_name: None,
+            runner_id: String::new(),
+            agent_identity_uid: None,
+        },
+        lifecycle_subscription: None,
+        parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+        parent_run_id: Some("parent-run".to_string()),
+        request_team_scope: request_team_scope(),
+    }
+}
+
+/// Installs the hook doubles and records `/hooks/hooks.json` as a source the run was given.
+fn run_with_a_delivered_hook_source(app: &mut App, strict: bool) -> TestHooks {
+    let hooks = app.update(install_test_hooks);
+    HookRuntime::handle(app).update(app, |runtime, _| {
+        runtime.set_delivered_sources(vec![ExplicitHookSource {
+            path: PathBuf::from("/hooks/hooks.json"),
+            format: HookFormat::Cursor,
+            scope: ExplicitSourceScope::Run,
+        }]);
+        runtime.set_strict_policy(StrictHookPolicy { enabled: strict });
+    });
+    hooks
+}
+
+#[test]
+fn a_remote_child_launch_carries_no_hook_sources_and_warns_the_parent() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let hooks = run_with_a_delivered_hook_source(&mut app, false);
+        let request = remote_request();
+        let prepared = app
+            .read(|ctx| {
+                prepare_remote_child_launch(&request, config(""), request_team_scope(), ctx)
+            })
+            .unwrap();
+
+        let wire = serde_json::to_string(&prepared.spawn_request).unwrap();
+        assert!(
+            !wire.contains("hooks"),
+            "the server cannot pass hook sources to the child: {wire}"
+        );
+        let notices = hooks.messenger.notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].conversation_id, request.parent_conversation_id);
+        assert_eq!(notices[0].kind, HookNoticeKind::Warning);
+        assert!(notices[0].text.contains("/hooks/hooks.json"));
+    });
+}
+
+#[test]
+fn a_strict_run_does_not_start_a_remote_child_without_its_hook_sources() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        run_with_a_delivered_hook_source(&mut app, true);
+        let request = remote_request();
+        let error = app
+            .read(|ctx| {
+                prepare_remote_child_launch(&request, config(""), request_team_scope(), ctx)
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            PrepareRemoteChildLaunchError::HookSourcesNotForwarded {
+                sources: vec!["/hooks/hooks.json".to_owned()],
+            }
+        );
+        assert!(error.user_message().contains("strict hook policy"));
+    });
+}
+
+#[test]
+fn a_run_without_hook_sources_launches_remote_children_as_before() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let hooks = app.update(install_test_hooks);
+        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
+            runtime.set_strict_policy(StrictHookPolicy { enabled: true });
+        });
+        let request = remote_request();
+        let prepared = app.read(|ctx| {
+            prepare_remote_child_launch(&request, config(""), request_team_scope(), ctx)
+        });
+        assert!(prepared.is_ok());
+        assert!(hooks.messenger.notices().is_empty());
+    });
+}
+
 #[test]
 fn github_auth_error_is_a_shared_blocker_with_cloud_callback_url() {
     let error = anyhow::Error::new(ClientError {
