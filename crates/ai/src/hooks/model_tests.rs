@@ -156,6 +156,7 @@ fn reduce_keeps_the_first_scalar_and_records_later_ones_as_conflicts() {
         merged.continuation.as_ref().map(|c| c.text.as_str()),
         Some("keep going")
     );
+    assert_eq!(merged.continuation_binding, Some(binding("a", 0)));
     assert_eq!(merged.conflicts.len(), 2);
     assert!(merged.conflicts[0].contains("replacement input"));
     assert!(merged.conflicts[1].contains("continuation"));

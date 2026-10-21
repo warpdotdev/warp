@@ -27,12 +27,14 @@ struct TestHookOutput {
     continuation: Option<String>,
     #[serde(default)]
     replacement_input: Option<serde_json::Value>,
+    #[serde(default)]
+    env: Vec<(String, String)>,
 }
 
 /// An adapter for tests. Matching compares the binding's matcher text to the canonical tool name
 /// exactly; an absent, empty, or `*` matcher matches everything. Decoding treats exit code 2 as a
 /// deny (stdout is the reason), exit code 0 with JSON stdout as a scripted verdict, and anything
-/// else as no opinion.
+/// else as no opinion. A scripted continuation carries the binding's own loop limit.
 #[derive(Default)]
 pub struct RecordingAdapter {
     bindings: Mutex<Vec<DeclaredBinding>>,
@@ -185,11 +187,11 @@ impl HookFormatAdapter for RecordingAdapter {
                     replacement_result: None,
                     model_context: Vec::new(),
                     user_notices: output.notices,
-                    session_env: Vec::new(),
+                    session_env: output.env,
                     halt_turn: output.halt,
                     continuation: output.continuation.map(|text| ContinuationRequest {
                         text,
-                        loop_limit: None,
+                        loop_limit: binding.loop_limit,
                     }),
                     unsupported: Vec::new(),
                 }

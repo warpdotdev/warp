@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use ai::hooks::{
     CanonicalToolName, ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope,
-    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, TurnStopStatus,
+    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, PromptProvenance,
+    TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -102,6 +103,7 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         warp_version: ChannelState::app_version().unwrap_or("unknown").to_owned(),
         protocol_version: HOOK_PROTOCOL_VERSION,
         permission_facts: PermissionFacts::default(),
+        session_env: Vec::new(),
         payload,
     }
 }
@@ -257,6 +259,7 @@ pub(crate) fn cancellation_reason_name(reason: CancellationReason) -> &'static s
 pub(crate) fn envelope_for_prompt_submit(
     text: String,
     attachments_summary: Vec<String>,
+    provenance: PromptProvenance,
     site: &EnvelopeSite<'_>,
     ctx: &AppContext,
 ) -> HookEnvelope {
@@ -265,6 +268,7 @@ pub(crate) fn envelope_for_prompt_submit(
         HookPayload::PromptSubmit {
             text,
             attachments_summary,
+            provenance,
         },
         ctx,
     )

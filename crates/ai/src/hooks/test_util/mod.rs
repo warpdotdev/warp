@@ -123,6 +123,7 @@ pub fn test_envelope(conversation_id: AIConversationId, payload: HookPayload) ->
         warp_version: "test".to_owned(),
         protocol_version: HOOK_PROTOCOL_VERSION,
         permission_facts: PermissionFacts::default(),
+        session_env: Vec::new(),
         payload,
     }
 }

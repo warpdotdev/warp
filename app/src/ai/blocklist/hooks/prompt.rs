@@ -1,3 +1,4 @@
+use ai::hooks::PromptProvenance;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_prompt_submit};
@@ -21,7 +22,13 @@ pub(crate) fn notify_prompt_submit(
         return;
     }
     let site = EnvelopeSite::new(conversation_id, active_session);
-    let envelope = envelope_for_prompt_submit(text.to_owned(), attachments_summary, &site, ctx);
+    let envelope = envelope_for_prompt_submit(
+        text.to_owned(),
+        attachments_summary,
+        PromptProvenance::User,
+        &site,
+        ctx,
+    );
     HookRuntime::as_ref(ctx).dispatch_detached(envelope, ctx);
 }
 

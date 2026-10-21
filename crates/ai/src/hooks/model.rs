@@ -30,6 +30,10 @@ pub const SESSION_END_TIMEOUT: Duration = Duration::from_secs(5);
 /// the source is activated, not run with a shorter deadline.
 pub const HOOK_TIMEOUT_CEILING: Duration = Duration::from_secs(600);
 
+/// Most follow-up prompts stop hooks may add to one turn, counting every stop binding together. A
+/// definition's own `loop_limit` can only lower this.
+pub const HOOK_FOLLOW_UP_CAP: u32 = 8;
+
 /// A moment in the agent loop at which hooks can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookBoundary {
@@ -269,6 +273,39 @@ impl Default for HookTurnId {
     }
 }
 
+/// Identifies one chain of hook follow-ups: the user's prompt that started it and every follow-up
+/// a stop hook queued from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FollowUpChainId(Uuid);
+
+impl FollowUpChainId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for FollowUpChainId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Who wrote the prompt that starts a turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptProvenance {
+    /// A person typed it.
+    User,
+    /// A stop hook asked for it as a follow-up to the turn that just ended.
+    HookFollowUp {
+        binding: HookBindingId,
+        chain_id: FollowUpChainId,
+    },
+}
+
 /// What Warp's own permission check knows at the time the boundary fires.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionFacts {
@@ -303,6 +340,8 @@ pub struct HookEnvelope {
     /// Version of the stdin and stdout JSON contract scripts see; see [`HOOK_PROTOCOL_VERSION`].
     pub protocol_version: u32,
     pub permission_facts: PermissionFacts,
+    /// Variables the conversation's `session.start` hooks asked to set for later hooks.
+    pub session_env: Vec<(String, String)>,
     pub payload: HookPayload,
 }
 
@@ -329,6 +368,7 @@ pub enum HookPayload {
     PromptSubmit {
         text: String,
         attachments_summary: Vec<String>,
+        provenance: PromptProvenance,
     },
     ToolPre {
         action: AIAgentActionType,
@@ -555,6 +595,8 @@ pub struct MergedEffects {
     pub session_env: Vec<(String, String)>,
     pub halt_turn: bool,
     pub continuation: Option<ContinuationRequest>,
+    /// The binding whose continuation was kept.
+    pub continuation_binding: Option<HookBindingId>,
     pub conflicts: Vec<String>,
     pub unsupported: Vec<UnsupportedEffect>,
 }
@@ -574,7 +616,6 @@ pub fn reduce_effects(ordered: Vec<(HookBindingId, HookEffects)>) -> MergedEffec
     let mut winning_severity: Option<u8> = None;
     let mut replacement_input_binding: Option<HookBindingId> = None;
     let mut replacement_result_binding: Option<HookBindingId> = None;
-    let mut continuation_binding: Option<HookBindingId> = None;
 
     for (binding, effects) in ordered {
         match effects.verdict.severity() {
@@ -623,7 +664,7 @@ pub fn reduce_effects(ordered: Vec<(HookBindingId, HookEffects)>) -> MergedEffec
         merge_scalar(
             effects.continuation,
             &mut merged.continuation,
-            &mut continuation_binding,
+            &mut merged.continuation_binding,
             &binding,
             "continuation",
             &mut merged.conflicts,
