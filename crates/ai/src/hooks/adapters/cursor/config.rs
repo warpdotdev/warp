@@ -4,6 +4,8 @@
 //! that cannot be understood is an error.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use regex::Regex;
@@ -33,11 +35,56 @@ pub(super) struct ParsedDefinition {
     /// Position in the event's array, counting definitions that were skipped.
     pub index: usize,
     pub command: String,
-    pub matcher: Option<String>,
+    pub matcher: Option<ParsedMatcher>,
     pub timeout: Duration,
     pub fail_closed: bool,
     /// The continuation cap after Warp's host cap, for events that may request a follow-up.
     pub loop_limit: Option<u32>,
+}
+
+impl ParsedDefinition {
+    pub(super) fn matcher_text(&self) -> Option<&str> {
+        self.matcher.as_ref().map(ParsedMatcher::text)
+    }
+}
+
+/// A definition's `matcher`, compiled once while the file is validated so activation can reuse
+/// it.
+#[derive(Clone)]
+pub(super) enum ParsedMatcher {
+    /// `""` or `"*"`, which match everything and are not regexes.
+    Everything(String),
+    Pattern(Arc<Regex>),
+}
+
+impl ParsedMatcher {
+    pub(super) fn text(&self) -> &str {
+        match self {
+            Self::Everything(text) => text,
+            Self::Pattern(regex) => regex.as_str(),
+        }
+    }
+}
+
+impl PartialEq for ParsedMatcher {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Everything(a), Self::Everything(b)) => a == b,
+            (Self::Pattern(a), Self::Pattern(b)) => a.as_str() == b.as_str(),
+            (Self::Everything(_), Self::Pattern(_)) | (Self::Pattern(_), Self::Everything(_)) => {
+                false
+            }
+        }
+    }
+}
+
+impl fmt::Debug for ParsedMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Everything(text) => f.debug_tuple("Everything").field(text).finish(),
+            Self::Pattern(regex) => f.debug_tuple("Pattern").field(&regex.as_str()).finish(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,16 +247,19 @@ fn validate_definition(
 
     let matcher = match raw.matcher {
         None => None,
-        Some(pattern) if matches_everything(&pattern) => Some(pattern),
+        Some(pattern) if matches_everything(&pattern) => Some(ParsedMatcher::Everything(pattern)),
         Some(pattern) => {
-            if let Err(error) = Regex::new(&pattern) {
-                return Ok(ValidatedDefinition::Skipped(format!(
-                    "{event}[{index}]: matcher is not a valid regex ({error}); this hook was \
-                     skipped"
-                )));
-            }
+            let regex = match Regex::new(&pattern) {
+                Ok(regex) => regex,
+                Err(error) => {
+                    return Ok(ValidatedDefinition::Skipped(format!(
+                        "{event}[{index}]: matcher is not a valid regex ({error}); this hook \
+                         was skipped"
+                    )));
+                }
+            };
             if spec.has_matcher_target() {
-                Some(pattern)
+                Some(ParsedMatcher::Pattern(Arc::new(regex)))
             } else {
                 warnings.push(format!(
                     "{event}[{index}]: {event} has no matcher target, so the matcher was ignored"

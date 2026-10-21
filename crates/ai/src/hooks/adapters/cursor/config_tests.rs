@@ -64,15 +64,15 @@ fn the_full_config_parses_every_event_with_its_options() {
             .expect("parsed")
     };
     let pre_tool = by_event(CursorEvent::PreToolUse);
-    assert_eq!(pre_tool.matcher.as_deref(), Some("Shell|Write"));
+    assert_eq!(pre_tool.matcher_text(), Some("Shell|Write"));
     assert_eq!(pre_tool.timeout, Duration::from_secs(20));
     assert!(pre_tool.fail_closed);
     assert_eq!(
-        by_event(CursorEvent::PostToolUseFailure).matcher.as_deref(),
+        by_event(CursorEvent::PostToolUseFailure).matcher_text(),
         Some("")
     );
     assert_eq!(
-        by_event(CursorEvent::SubagentStop).matcher.as_deref(),
+        by_event(CursorEvent::SubagentStop).matcher_text(),
         Some("*")
     );
     assert_eq!(by_event(CursorEvent::SubagentStop).loop_limit, Some(3));
@@ -240,7 +240,7 @@ fn a_matcher_that_does_not_compile_skips_only_its_definition() {
     assert_eq!(parsed.definitions.len(), 1);
     assert_eq!(parsed.definitions[0].index, 1);
     assert_eq!(parsed.definitions[0].command, "./hooks/second.sh");
-    assert_eq!(parsed.definitions[0].matcher.as_deref(), Some("^rm "));
+    assert_eq!(parsed.definitions[0].matcher_text(), Some("^rm "));
     assert_eq!(parsed.warnings.len(), 1);
     assert!(
         parsed.warnings[0].starts_with("beforeShellExecution[0]: matcher is not a valid regex"),
@@ -255,7 +255,7 @@ fn match_all_matchers_are_kept_without_compiling() {
     for matcher in ["", "*"] {
         let text = shell_file(&format!(r#"{{ "command": "x", "matcher": "{matcher}" }}"#));
         let parsed = parse(&text).expect("match-all matchers are accepted");
-        assert_eq!(parsed.definitions[0].matcher.as_deref(), Some(matcher));
+        assert_eq!(parsed.definitions[0].matcher_text(), Some(matcher));
         assert!(parsed.warnings.is_empty());
     }
 }
@@ -270,8 +270,8 @@ fn a_matcher_on_an_event_without_a_target_is_ignored_with_a_warning() {
     )
     .expect("parses");
     assert_eq!(parsed.definitions.len(), 2);
-    assert_eq!(parsed.definitions[0].matcher, None);
-    assert_eq!(parsed.definitions[1].matcher.as_deref(), Some("*"));
+    assert_eq!(parsed.definitions[0].matcher_text(), None);
+    assert_eq!(parsed.definitions[1].matcher_text(), Some("*"));
     assert_eq!(
         parsed.warnings,
         vec!["sessionStart[0]: sessionStart has no matcher target, so the matcher was ignored"]

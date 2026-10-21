@@ -12,12 +12,14 @@ use crate::agent::action_result::{
     AIAgentActionResultType, CallMCPToolResult, ReadFilesResult, RequestCommandOutputResult,
     RequestFileEditsResult,
 };
+use crate::hooks::adapters::cursor::config::parse_cursor_file;
 use crate::hooks::adapters::cursor::events::CursorEvent;
 use crate::hooks::adapters::cursor::test_support::{
     binding_for, completed_shell, fixture_envelope, mcp_action, shell_action, tool_failure,
     tool_pre, tool_result,
 };
 use crate::hooks::model::{HookPayload, TurnStopStatus};
+use crate::hooks::test_util::test_source_id;
 
 fn binding_with_matcher(event: CursorEvent, matcher: Option<&str>) -> DeclaredBinding {
     let mut binding = binding_for(event, false);
@@ -381,12 +383,55 @@ fn events_warp_does_not_fire_yet_never_match_even_on_their_boundary() {
 }
 
 #[test]
-fn compiled_matchers_are_cached_per_pattern() {
+fn compiled_matchers_are_installed_per_source_and_replaced_on_reload() {
     let cache = MatcherCache::default();
-    let first = cache.get("^git ").expect("compiles");
-    let second = cache.get("^git ").expect("compiles");
-    assert!(Arc::ptr_eq(&first, &second));
-    assert!(cache.get("(").is_none());
+    let source = test_source_id("hooks.json");
+    let (_, parsed) = parse_cursor_file(
+        br#"{ "version": 1, "hooks": { "beforeShellExecution": [
+            { "command": "a", "matcher": "^git " },
+            { "command": "b", "matcher": "^rm " },
+            { "command": "c", "matcher": "*" }
+        ] } }"#,
+    )
+    .expect("parses");
+    cache.install(&source, &parsed.definitions);
+    assert_eq!(
+        cache.pattern_count(&source),
+        2,
+        "match-all matchers are not regexes"
+    );
+
+    let installed = match &parsed.definitions[0].matcher {
+        Some(ParsedMatcher::Pattern(regex)) => regex.clone(),
+        other => panic!("expected a compiled pattern, got {other:?}"),
+    };
+    let looked_up = cache.get(&source, "^git ").expect("installed");
+    assert!(
+        Arc::ptr_eq(&installed, &looked_up),
+        "the regex compiled while parsing is the one matching uses"
+    );
+
+    let (_, reloaded) = parse_cursor_file(
+        br#"{ "version": 1, "hooks": { "beforeShellExecution": [
+            { "command": "a", "matcher": "^cargo " }
+        ] } }"#,
+    )
+    .expect("parses");
+    cache.install(&source, &reloaded.definitions);
+    assert_eq!(
+        cache.pattern_count(&source),
+        1,
+        "a reload replaces the source's entries"
+    );
+
+    let other = test_source_id("other.json");
+    assert_eq!(cache.pattern_count(&other), 0);
+    let on_demand = cache.get(&other, "^git ").expect("compiles on first use");
+    assert!(Arc::ptr_eq(
+        &on_demand,
+        &cache.get(&other, "^git ").expect("cached")
+    ));
+    assert!(cache.get(&other, "(").is_none());
 }
 
 #[test]

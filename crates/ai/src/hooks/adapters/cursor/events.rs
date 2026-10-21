@@ -140,6 +140,10 @@ pub(super) struct CursorEventSpec {
     pub may_produce: &'static [EffectKind],
     pub malformed_output: MalformedOutputPolicy,
     pub empty_output: EmptyOutputPolicy,
+    /// Cursor documents `user_message` on this event as shown only when the hook denies, so on
+    /// an allow it is dropped. The shell and MCP hooks document it as "shown in client" with no
+    /// such condition.
+    pub user_message_on_deny_only: bool,
     /// What a Warp-written reason calls the thing a block stops, as in "the command was denied".
     pub subject: &'static str,
 }
@@ -220,6 +224,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::SessionEnv, EffectKind::ModelContext],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the session",
     },
     CursorEventSpec {
@@ -232,6 +237,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the session",
     },
     CursorEventSpec {
@@ -254,6 +260,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         ],
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: true,
         subject: "the tool call",
     },
     CursorEventSpec {
@@ -266,6 +273,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::ReplacementResult, EffectKind::ModelContext],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the tool result",
     },
     CursorEventSpec {
@@ -278,6 +286,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::ModelContext],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the tool result",
     },
     CursorEventSpec {
@@ -290,6 +299,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: PERMISSION_EFFECTS,
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: true,
         subject: "the subagent",
     },
     CursorEventSpec {
@@ -302,6 +312,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::Continuation],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the subagent",
     },
     CursorEventSpec {
@@ -314,6 +325,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: PERMISSION_EFFECTS,
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: false,
         subject: "the command",
     },
     CursorEventSpec {
@@ -326,6 +338,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the command",
     },
     CursorEventSpec {
@@ -338,6 +351,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: PERMISSION_EFFECTS,
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: false,
         subject: "the MCP tool call",
     },
     CursorEventSpec {
@@ -350,6 +364,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the MCP tool call",
     },
     CursorEventSpec {
@@ -362,6 +377,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: PERMISSION_EFFECTS,
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: true,
         subject: "the file read",
     },
     CursorEventSpec {
@@ -374,6 +390,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the file edit",
     },
     CursorEventSpec {
@@ -386,6 +403,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::HaltTurn, EffectKind::UserNotice],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: false,
         subject: "the prompt",
     },
     CursorEventSpec {
@@ -398,6 +416,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::UserNotice],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the compaction",
     },
     CursorEventSpec {
@@ -410,6 +429,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::Continuation],
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the turn",
     },
     CursorEventSpec {
@@ -422,6 +442,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the response",
     },
     CursorEventSpec {
@@ -434,6 +455,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the reasoning",
     },
     CursorEventSpec {
@@ -446,6 +468,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: &[EffectKind::Verdict],
         malformed_output: MalformedOutputPolicy::Deny,
         empty_output: EmptyOutputPolicy::FollowFailurePolicy,
+        user_message_on_deny_only: false,
         subject: "the file read",
     },
     CursorEventSpec {
@@ -458,6 +481,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the file edit",
     },
     CursorEventSpec {
@@ -470,6 +494,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         may_produce: NO_EFFECTS,
         malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
         empty_output: EmptyOutputPolicy::NoOpinion,
+        user_message_on_deny_only: false,
         subject: "the workspace",
     },
 ];
@@ -494,7 +519,7 @@ pub(super) fn declare_bindings(
                 boundary,
                 vendor_event: spec.name.to_owned(),
                 capabilities: spec.capabilities(definition.fail_closed),
-                matcher: definition.matcher.clone(),
+                matcher: definition.matcher_text().map(str::to_owned),
                 command: definition.command.clone(),
                 timeout: definition.timeout,
                 loop_limit: definition.loop_limit,
