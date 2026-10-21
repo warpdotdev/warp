@@ -122,6 +122,12 @@ enum ResolvedMcpSpec {
     Skipped,
 }
 
+enum PreparedMcpSpec<'a> {
+    Uuid(&'a Uuid),
+    WellKnown(&'a str),
+    EphemeralInstallations(Vec<TemplatableMCPServerInstallation>),
+}
+
 /// Why an [`await_model_event`] wait resolved without a value.
 #[derive(Debug)]
 enum ModelEventWaitError {
@@ -734,14 +740,21 @@ impl AgentDriver {
         let resolutions = specs
             .iter()
             .map(|spec| {
-                Self::resolve_mcp_spec(
+                let spec = match spec {
+                    MCPSpec::Uuid(uuid) => PreparedMcpSpec::Uuid(uuid),
+                    MCPSpec::WellKnown(id) => PreparedMcpSpec::WellKnown(id),
+                    MCPSpec::Json(json_str) => PreparedMcpSpec::EphemeralInstallations(
+                        Self::installations_from_user_mcp_json(json_str)?,
+                    ),
+                };
+                Ok(Self::resolve_mcp_spec(
                     spec,
                     local_installed_uuids,
                     managed_mcp_client.as_ref(),
                     task_id,
-                )
+                ))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, AgentDriverError>>()?;
         let mut outcomes = stream::iter(resolutions).buffered(MCP_SPEC_RESOLVE_CONCURRENCY);
 
         while let Some(outcome) = outcomes.next().await {
@@ -758,16 +771,16 @@ impl AgentDriver {
     }
 
     async fn resolve_mcp_spec(
-        spec: &MCPSpec,
+        spec: PreparedMcpSpec<'_>,
         local_installed_uuids: &HashSet<Uuid>,
         managed_mcp_client: &dyn ManagedMcpClient,
         task_id: Option<AmbientAgentTaskId>,
     ) -> Result<ResolvedMcpSpec, AgentDriverError> {
         match spec {
-            MCPSpec::Uuid(uuid) if local_installed_uuids.contains(uuid) => {
+            PreparedMcpSpec::Uuid(uuid) if local_installed_uuids.contains(uuid) => {
                 Ok(ResolvedMcpSpec::LocalUuid(*uuid))
             }
-            MCPSpec::Uuid(uuid) => {
+            PreparedMcpSpec::Uuid(uuid) => {
                 let client_config = with_bounded_retry_using(
                     &format!("resolve managed MCP server '{uuid}'"),
                     MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
@@ -790,7 +803,7 @@ impl AgentDriver {
                     message: err.to_string(),
                 })
             }
-            MCPSpec::WellKnown(id) => {
+            PreparedMcpSpec::WellKnown(id) => {
                 // Persisted specs may outlive the flag that enabled them.
                 if !FeatureFlag::WellKnownMcpIds.is_enabled() {
                     log::warn!(
@@ -803,7 +816,7 @@ impl AgentDriver {
                     &format!("resolve well-known MCP server '{id}'"),
                     MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
                     is_transient_graphql_or_http_error,
-                    || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
+                    || managed_mcp_client.create_managed_mcp_client_config(id.to_string()),
                 )
                 .await
                 {
@@ -825,8 +838,9 @@ impl AgentDriver {
                     }
                 }
             }
-            MCPSpec::Json(json_str) => Self::installations_from_user_mcp_json(json_str)
-                .map(ResolvedMcpSpec::EphemeralInstallations),
+            PreparedMcpSpec::EphemeralInstallations(installations) => {
+                Ok(ResolvedMcpSpec::EphemeralInstallations(installations))
+            }
         }
     }
 

@@ -432,6 +432,29 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 }
 
 #[test]
+fn managed_resolver_rejects_invalid_json_before_network_calls() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config().never();
+    let specs = [
+        MCPSpec::Uuid(Uuid::new_v4()),
+        MCPSpec::WellKnown("linear".to_string()),
+        MCPSpec::Json(r#"{"valid":{"command":"valid"}}"#.to_string()),
+        MCPSpec::Json("invalid JSON".to_string()),
+    ];
+
+    let error = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, AgentDriverError::MCPJsonParseError(_)));
+}
+
+#[test]
 fn managed_resolver_preserves_spec_order_when_responses_arrive_out_of_order() {
     let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
     let managed_uuid = Uuid::new_v4();
