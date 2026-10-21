@@ -757,15 +757,24 @@ mod failure_policy {
         assert_eq!(run(&h, true).effects.verdict, HookVerdict::Deny);
     }
 
-    /// The adapter reports a control field the event does not define without reading its
-    /// value, so the refusal names the field's purpose and does not claim the hook asked for
-    /// anything: `continue: true` is not a request to stop the turn.
+    /// A control field the event does not define is refused by naming the field's purpose, not
+    /// by claiming what the hook asked for; and a value that asks for nothing (`continue: true`,
+    /// which Claude-shaped output carries as a matter of course) is not refused at all.
     #[test]
     fn a_field_the_event_does_not_accept_is_refused_in_its_own_words() {
         let h = cursor_harness(FAIL_OPEN);
         h.runner.script(
             h.bindings[0].id.clone(),
             ScriptedRunner::exit_with(0, r#"{"permission":"allow","continue":true}"#),
+        );
+        let outcome = run(&h, false);
+        assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
+        assert!(outcome.effects.reasons.is_empty());
+        assert!(outcome.effects.unsupported.is_empty());
+
+        h.runner.script(
+            h.bindings[0].id.clone(),
+            ScriptedRunner::exit_with(0, r#"{"permission":"allow","continue":false}"#),
         );
         let outcome = run(&h, false);
         assert_eq!(outcome.effects.verdict, HookVerdict::Deny);

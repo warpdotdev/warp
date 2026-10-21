@@ -30,8 +30,9 @@ pub const INPUT_NOT_ENCODABLE_DENY_REASON: &str =
 /// Run-wide choices the caller makes for every dispatch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DispatchPolicy {
-    /// The strict hook policy: every evaluation failure of a hook that can block becomes a
-    /// block, and schema-accepted `ask` values the vendor would ignore are honored.
+    /// The strict hook policy: every evaluation failure of a hook that runs before an operation
+    /// denies the operation, and schema-accepted `ask` values the vendor would ignore are
+    /// honored.
     pub strict: bool,
 }
 
@@ -397,27 +398,9 @@ fn refusal_words(asked: &[&str], returned: &[&str]) -> String {
     parts.join(", and ")
 }
 
-/// Applies the phase's limits to what one binding asked for. A control effect that cannot be
-/// honored is never dropped silently: before an operation it blocks the operation, with a reason
-/// that names the binding and the effect; afterwards it is reported. Model context, which this
-/// phase cannot deliver, is observational and only logged.
-fn refuse_unhonorable_effects(
-    binding: &DeclaredBinding,
-    boundary: HookBoundary,
-    surface: HookSurface,
-    policy: DispatchPolicy,
-    mut effects: HookEffects,
-) -> HookEffects {
-    if !effects.model_context.is_empty() {
-        log::info!(
-            "hook {} returned model context, which cannot be delivered yet; it was dropped",
-            binding.id
-        );
-    }
-    let refusal = refusal_for(boundary);
-
-    // Fields the adapter refused to apply because the event does not define them. They are
-    // already in `unsupported`; here they only add words to the refusal reason.
+/// The words a refusal reason uses for the fields the adapter refused because the event does
+/// not define them. They are already in `unsupported`; this only names them.
+fn returned_field_words(effects: &HookEffects) -> Vec<&'static str> {
     let mut returned = Vec::new();
     for words in effects
         .unsupported
@@ -428,9 +411,18 @@ fn refuse_unhonorable_effects(
             returned.push(words);
         }
     }
+    returned
+}
 
-    // Channels the adapter did fill that this boundary cannot honor in this phase.
-    let mut unhonorable: Vec<(EffectKind, &'static str)> = Vec::new();
+/// The channels `effects` filled that this boundary cannot honor in this phase, each with the
+/// words a refusal reason uses for it.
+fn unhonorable_channels(
+    effects: &HookEffects,
+    refusal: &Refusal,
+    surface: HookSurface,
+    policy: DispatchPolicy,
+) -> Vec<(EffectKind, &'static str)> {
+    let mut unhonorable = Vec::new();
     if effects.replacement_input.is_some() {
         unhonorable.push((EffectKind::ReplacementInput, "rewrite the input"));
     }
@@ -455,7 +447,7 @@ fn refuse_unhonorable_effects(
     }
     // `reduce_effects` reports a deferral it ignores, which is the vendor's "warn and ignore"
     // behavior for an interactive surface. On a headless surface nobody could resume the action
-    // later, and under the strict policy every unsupported control output blocks, so before an
+    // later, and under the strict policy every unsupported control output denies, so before an
     // operation the deferral is refused instead.
     if effects.verdict == HookVerdict::Defer
         && (surface.is_headless() || policy.strict)
@@ -463,6 +455,29 @@ fn refuse_unhonorable_effects(
     {
         unhonorable.push((EffectKind::Verdict, "defer the action for later"));
     }
+    unhonorable
+}
+
+/// Applies the phase's limits to what one binding asked for. A control effect that cannot be
+/// honored is never dropped silently: before an operation it denies the operation, with a reason
+/// that names the binding and the effect; afterwards it is reported. Model context, which this
+/// phase cannot deliver, is observational and only logged.
+fn refuse_unhonorable_effects(
+    binding: &DeclaredBinding,
+    boundary: HookBoundary,
+    surface: HookSurface,
+    policy: DispatchPolicy,
+    mut effects: HookEffects,
+) -> HookEffects {
+    if !effects.model_context.is_empty() {
+        log::info!(
+            "hook {} returned model context, which cannot be delivered yet; it was dropped",
+            binding.id
+        );
+    }
+    let refusal = refusal_for(boundary);
+    let returned = returned_field_words(&effects);
+    let unhonorable = unhonorable_channels(&effects, &refusal, surface, policy);
 
     let reported = effects
         .unsupported

@@ -3,6 +3,9 @@ use crate::hooks::model::{HookReason, HookVerdict, MergedEffects};
 /// Text used when a hook denies without saying why.
 pub const DEFAULT_DENY_REASON: &str = "An agent hook denied this action.";
 
+/// Text used when a hook asks for confirmation without saying why.
+pub const DEFAULT_ASK_REASON: &str = "An agent hook asked for confirmation before this action.";
+
 /// Text used when a hook asks for a rewrite, which cannot be honored yet. Running the original
 /// input instead would silently drop a control effect, so the action is denied.
 pub const REWRITE_UNSUPPORTED_DENY_REASON: &str = "An agent hook asked to rewrite this action. \
@@ -123,7 +126,8 @@ impl PermissionDecision {
 /// an ask adds a confirmation step (or denies where nobody can confirm), a deferral is refused
 /// where nobody could resume it, and an allow or no opinion changes nothing. No verdict can turn
 /// a confirmation or a denial into execution, so the floors Warp's check established are never
-/// crossed; they are checked here so that stays true when loosening is added later.
+/// crossed. The floors are inputs already so that bounded loosening, when it is added, has named
+/// facts to consult in this one place; nothing reads them yet.
 pub struct HookPermissionPolicy;
 
 impl HookPermissionPolicy {
@@ -134,6 +138,10 @@ impl HookPermissionPolicy {
         run: RunFacts,
     ) -> PermissionDecision {
         let warp_alone = warp.decision_without_hooks();
+        // Before an operation the dispatcher already turns a rewrite request into a denial that
+        // names the binding, so effects that came through it never reach this branch. It is a
+        // backstop for effects that did not, because a rewrite must never be run as if it had
+        // been honored.
         let decision = if merged.replacement_input.is_some() && merged.verdict != HookVerdict::Deny
         {
             PermissionDecision::Deny {
@@ -150,12 +158,14 @@ impl HookPermissionPolicy {
                         .unwrap_or_else(|| default_reason(merged, DEFAULT_DENY_REASON)),
                     cause: DenyCause::Hook,
                 },
-                HookVerdict::Ask => Self::compose_ask(merged, warp, run, warp_alone.clone()),
+                HookVerdict::Ask => {
+                    Self::compose_ask(merged, run, warp.is_user_initiated, warp_alone.clone())
+                }
                 HookVerdict::Defer => {
                     // Interactive surfaces follow the vendor's "warn and ignore" rule for a
                     // deferral, unless the strict policy turns every unsupported control output
                     // into a denial.
-                    if run.headless || run.is_strict {
+                    if run.is_headless || run.is_strict {
                         PermissionDecision::Deny {
                             reason: default_reason(merged, DEFERRAL_UNSUPPORTED_DENY_REASON),
                             cause: DenyCause::DeferralUnsupported,
@@ -184,11 +194,11 @@ impl HookPermissionPolicy {
     /// have come from a person on such a surface.
     fn compose_ask(
         merged: &MergedEffects,
-        warp: WarpPermissionResult,
         run: RunFacts,
+        is_user_initiated: bool,
         warp_alone: PermissionDecision,
     ) -> PermissionDecision {
-        if run.headless {
+        if run.is_headless {
             let text = match verdict_reason(merged) {
                 Some(reason) => format!(
                     "{APPROVAL_UNAVAILABLE_PREFIX} ({}) and this run has no one to ask.",
@@ -204,7 +214,7 @@ impl HookPermissionPolicy {
                 cause: DenyCause::ApprovalUnavailable,
             };
         }
-        if warp.is_user_initiated {
+        if is_user_initiated {
             return warp_alone;
         }
         PermissionDecision::RequireConfirmation {
@@ -215,9 +225,6 @@ impl HookPermissionPolicy {
         }
     }
 }
-
-/// Text used when a hook asks for confirmation without saying why.
-pub const DEFAULT_ASK_REASON: &str = "An agent hook asked for confirmation before this action.";
 
 /// The reason the winning binding gave for its verdict, or failing that the first reason any
 /// binding gave.

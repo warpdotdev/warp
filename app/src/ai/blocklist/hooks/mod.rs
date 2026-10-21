@@ -39,7 +39,7 @@ use repo_metadata::repositories::{
 use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use self::pre_tool::{HeadlessAskBehavior, PreToolVerdictCache};
+use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
 use self::strict_policy::StrictHookPolicy;
 use crate::ai::agent::AIAgentActionId;
@@ -52,6 +52,20 @@ use crate::features::FeatureFlag;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use crate::terminal::local_shell::LocalShellState;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+
+/// What a hook's `ask` does on a surface with no one to ask. Like [`StrictHookPolicy`], it is
+/// run configuration a launcher sets on the runtime; there is no setting for it.
+// Only the run's launcher, which is later work, selects anything but the default.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HeadlessAskBehavior {
+    /// The action is denied with a reason that tells the model approval was unavailable.
+    #[default]
+    DenyWithReason,
+    /// The action is denied the same way, and the runtime also announces the refusal so the
+    /// run's owner can end the run.
+    FailRun,
+}
 
 /// Something the hook runtime did that the owner of the run may want to act on.
 // No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is

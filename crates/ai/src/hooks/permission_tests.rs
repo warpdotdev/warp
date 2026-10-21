@@ -55,10 +55,10 @@ fn all_floors() -> Vec<PermissionFloors> {
 
 fn all_runs() -> Vec<RunFacts> {
     let mut runs = Vec::new();
-    for headless in [false, true] {
+    for is_headless in [false, true] {
         for is_strict in [false, true] {
             runs.push(RunFacts {
-                headless,
+                is_headless,
                 is_strict,
             });
         }
@@ -80,7 +80,7 @@ fn interactive() -> RunFacts {
 
 fn headless() -> RunFacts {
     RunFacts {
-        headless: true,
+        is_headless: true,
         is_strict: false,
     }
 }
@@ -131,7 +131,7 @@ fn the_policy_only_ever_tightens_warps_decision() {
                     // Ask: a confirmation step where someone can answer and the user has not
                     // already approved; a denial where nobody can.
                     if verdict == HookVerdict::Ask {
-                        match (run.headless, warp.is_user_initiated) {
+                        match (run.is_headless, warp.is_user_initiated) {
                             (true, _) => assert!(
                                 matches!(
                                     &decision,
@@ -155,7 +155,7 @@ fn the_policy_only_ever_tightens_warps_decision() {
                     // Defer: denied where nobody can resume it or under the strict policy,
                     // ignored otherwise.
                     if verdict == HookVerdict::Defer {
-                        if run.headless || run.is_strict {
+                        if run.is_headless || run.is_strict {
                             assert!(
                                 matches!(
                                     decision,
@@ -376,7 +376,7 @@ fn defer_is_ignored_interactively_and_denied_headless_or_under_the_strict_policy
     for run in [
         headless(),
         RunFacts {
-            headless: false,
+            is_headless: false,
             is_strict: true,
         },
     ] {

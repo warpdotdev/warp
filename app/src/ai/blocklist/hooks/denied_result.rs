@@ -18,10 +18,9 @@ pub(crate) const DENIED_BY_HOOK_PREFIX: &str = "Denied by agent hook: ";
 ///
 /// A shell command has a result made for this, which carries the reason as a denial. Most other
 /// families have an error or denied variant with free text on the wire, and the reason travels
-/// there with [`DENIED_BY_HOOK_PREFIX`] in front. The remaining families have no text slot: the
-/// shell write, read, and handoff actions, the project and code review actions, the two
-/// suggestion actions, and waiting for events. Those finish with their cancelled or rejected
-/// result, and the reason reaches only the user, through the denial notice.
+/// there with [`DENIED_BY_HOOK_PREFIX`] in front. A family with no text slot finishes with its
+/// cancelled or rejected result, and the reason reaches only the user, through the denial
+/// notice.
 pub(crate) fn denied_result_for(
     action: &AIAgentActionType,
     reason: &str,
