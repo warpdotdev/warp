@@ -1,65 +1,101 @@
-//! Turns what a `beforeShellExecution` process did into effects. Cursor's rules: exit 2 denies;
-//! exit 0 means "use the JSON on stdout"; empty stdout and any other exit, timeout, or crash
-//! follow the definition's failure policy; output that is not a valid decision denies, because
-//! this is one of Cursor's permission hooks; a cancelled hook always denies.
+//! Turns what a hook process did into effects under Cursor's rules. Exit 2 blocks on any event
+//! that can block; exit 0 means "read the JSON on stdout" and each event honors only the fields
+//! Cursor documents for it; empty stdout, output that does not fit the event, and every other way
+//! a process can end follow the binding's policies. Under the strict hook policy every failure
+//! of a hook that can block becomes a block, and a `preToolUse` `ask` is honored instead of
+//! ignored.
 
-use serde::Deserialize;
+use serde_json::{Map, Value};
 
-use crate::hooks::adapters::DeclaredBinding;
+use super::events::{ControlEffect, CursorEvent, CursorEventSpec};
+use crate::hooks::adapters::{DecodePolicy, DeclaredBinding};
 use crate::hooks::model::{
-    EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason, HookVerdict, MalformedOutputPolicy,
+    ContinuationRequest, EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason, HookVerdict,
+    MalformedOutputPolicy,
 };
 use crate::hooks::runner::{HookProcessOutcome, ProcessExit};
 
-/// The fields Cursor documents for a `beforeShellExecution` response.
-#[derive(Debug, Default, Deserialize)]
-struct ShellHookOutput {
-    #[serde(default)]
-    permission: Option<String>,
-    #[serde(default)]
-    user_message: Option<String>,
-    #[serde(default)]
-    agent_message: Option<String>,
-}
-
-/// Decodes `outcome` for `binding`, which must be a `beforeShellExecution` binding.
-pub(super) fn decode_shell_permission_output(
+/// Decodes `outcome` for `binding`, a definition of `spec`'s event.
+pub(super) fn decode_output(
+    spec: &CursorEventSpec,
     binding: &DeclaredBinding,
     outcome: &HookProcessOutcome,
+    policy: &DecodePolicy,
 ) -> HookEffects {
-    let decoder = Decoder { binding };
+    let decoder = Decoder {
+        spec,
+        binding,
+        control: spec.control(),
+        strict: policy.strict && spec.control() != ControlEffect::None,
+    };
     match &outcome.exit {
-        ProcessExit::Code(2) => decoder.deny_from_exit_two(&outcome.stdout),
+        ProcessExit::Code(2) => decoder.blocked_by_exit_two(&outcome.stdout),
         ProcessExit::Code(0) => decoder.decode_success(&outcome.stdout),
         ProcessExit::Code(code) => decoder.failed(&format!("exited with code {code}")),
         ProcessExit::Signal(signal) => decoder.failed(&format!("was killed by signal {signal}")),
         ProcessExit::TimedOut => decoder.failed("timed out"),
         ProcessExit::SpawnFailed(error) => decoder.failed(&format!("could not start: {error}")),
-        // A cancelled hook never evaluated the command. Its verdict is normally discarded by the
-        // caller; if it is ever applied, it must not read as permission.
-        ProcessExit::Cancelled => decoder.deny(format!(
-            "Hook {} was cancelled before it finished.",
-            decoder.binding.command
-        )),
+        // A cancelled hook never evaluated the operation. Its verdict is normally discarded by
+        // the caller; if it is ever applied, it must not read as permission.
+        ProcessExit::Cancelled => decoder.closed("was cancelled before it finished"),
     }
 }
 
+/// Output that does not fit the event's documented schema.
+struct Malformed;
+
+type Decoded = Result<HookEffects, Malformed>;
+
 struct Decoder<'a> {
+    spec: &'a CursorEventSpec,
     binding: &'a DeclaredBinding,
+    control: ControlEffect,
+    /// The strict hook policy applies to this binding: it can block, and the setting is on.
+    strict: bool,
 }
 
 impl Decoder<'_> {
-    fn deny_from_exit_two(&self, stdout: &[u8]) -> HookEffects {
+    fn failure_policy(&self) -> FailurePolicy {
+        if self.strict {
+            FailurePolicy::FailClosed
+        } else {
+            self.binding.capabilities.failure
+        }
+    }
+
+    fn malformed_output_policy(&self) -> MalformedOutputPolicy {
+        if self.strict {
+            MalformedOutputPolicy::Deny
+        } else {
+            self.binding.capabilities.malformed_output
+        }
+    }
+
+    fn blocked_by_exit_two(&self, stdout: &[u8]) -> HookEffects {
         // Exit 2 may still carry messages; a script that printed nothing or something else gets
         // the default reason.
-        let output = parse_output(stdout).unwrap_or_default();
-        let mut effects = self.verdict_effects(HookVerdict::Deny, &output);
-        if effects.reasons.is_empty() {
-            effects
-                .reasons
-                .push(self.reason(format!("Denied by hook {} (exit 2).", self.binding.command)));
+        let output = parse_object(stdout).unwrap_or_default();
+        match self.control {
+            ControlEffect::Verdict => {
+                let (agent_message, user_message) =
+                    self.permission_messages(&output).unwrap_or((None, None));
+                let mut effects = self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
+                if effects.reasons.is_empty() {
+                    effects.reasons.push(self.reason(format!(
+                        "Denied by hook {} (exit 2).",
+                        self.binding.command
+                    )));
+                }
+                effects
+            }
+            ControlEffect::HaltTurn => {
+                let message = text_field(&output, "user_message").ok().flatten();
+                self.halt(message.unwrap_or_else(|| {
+                    format!("Blocked by hook {} (exit 2).", self.binding.command)
+                }))
+            }
+            ControlEffect::None => self.failed("exited with code 2"),
         }
-        effects
     }
 
     fn decode_success(&self, stdout: &[u8]) -> HookEffects {
@@ -69,32 +105,151 @@ impl Decoder<'_> {
                 EmptyOutputPolicy::FollowFailurePolicy => self.failed("printed no decision"),
             };
         }
-        let Some(output) = parse_output(stdout) else {
+        let Some(output) = parse_object(stdout) else {
             return self.malformed();
         };
-        let verdict = match output.permission.as_deref() {
-            Some("allow") => HookVerdict::Allow,
-            Some("deny") => HookVerdict::Deny,
-            Some("ask") => HookVerdict::Ask,
-            // Cursor says a response that does not match the event's schema blocks a permission
-            // hook. A missing or unknown `permission` is read that way rather than as consent.
-            Some(_) | None => return self.malformed(),
+        self.log_undocumented_fields(&output);
+        let decoded = match self.spec.event {
+            CursorEvent::SessionStart => self.decode_session_start(&output),
+            CursorEvent::PreToolUse
+            | CursorEvent::SubagentStart
+            | CursorEvent::BeforeShellExecution
+            | CursorEvent::BeforeMcpExecution
+            | CursorEvent::BeforeReadFile
+            | CursorEvent::BeforeTabFileRead => self.decode_permission(&output),
+            CursorEvent::PostToolUse => self.decode_post_tool_use(&output),
+            CursorEvent::PostToolUseFailure => self.decode_additional_context(&output),
+            CursorEvent::SubagentStop | CursorEvent::Stop => self.decode_follow_up(&output),
+            CursorEvent::BeforeSubmitPrompt => self.decode_before_submit_prompt(&output),
+            CursorEvent::PreCompact => self.decode_pre_compact(&output),
+            // Cursor documents no output for these, or output Warp cannot use.
+            CursorEvent::SessionEnd
+            | CursorEvent::AfterShellExecution
+            | CursorEvent::AfterMcpExecution
+            | CursorEvent::AfterFileEdit
+            | CursorEvent::AfterAgentResponse
+            | CursorEvent::AfterAgentThought
+            | CursorEvent::AfterTabFileEdit
+            | CursorEvent::WorkspaceOpen => Ok(HookEffects::default()),
         };
-        let mut effects = self.verdict_effects(verdict, &output);
-        if verdict == HookVerdict::Deny && effects.reasons.is_empty() {
-            effects
-                .reasons
-                .push(self.reason(format!("Denied by hook {}.", self.binding.command)));
+        decoded.unwrap_or_else(|Malformed| self.malformed())
+    }
+
+    fn decode_permission(&self, output: &Map<String, Value>) -> Decoded {
+        let claude = self.claude_output(output)?;
+        let permission = text_field(output, "permission")?
+            .or_else(|| claude.as_ref().and_then(|claude| claude.permission_decision.clone()));
+        let Some(permission) = permission else {
+            return Err(Malformed);
+        };
+        let (agent_message, user_message) = self.permission_messages(output)?;
+        let user_message = user_message.or_else(|| {
+            claude
+                .as_ref()
+                .and_then(|claude| claude.permission_decision_reason.clone())
+        });
+
+        let mut effects = match permission.as_str() {
+            "allow" => self.verdict_effects(HookVerdict::Allow, agent_message, user_message),
+            "deny" => {
+                let mut effects =
+                    self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
+                if effects.reasons.is_empty() {
+                    effects
+                        .reasons
+                        .push(self.reason(format!("Denied by hook {}.", self.binding.command)));
+                }
+                effects
+            }
+            "ask" => self.ask_effects(agent_message, user_message)?,
+            // Cursor says a response that does not match the event's schema blocks a permission
+            // hook. An unknown value is read that way rather than as consent.
+            _ => return Err(Malformed),
+        };
+
+        if self.spec.event == CursorEvent::PreToolUse {
+            let updated_input = object_field(output, "updated_input")?
+                .or_else(|| claude.and_then(|claude| claude.updated_input));
+            effects.replacement_input = updated_input.map(Value::Object);
         }
-        effects
+        Ok(effects)
+    }
+
+    /// What `permission: "ask"` means depends on the event: Cursor honors it on the shell and
+    /// MCP hooks, ignores it on `preToolUse` (unless Warp's strict policy is on), treats it as a
+    /// denial on `subagentStart`, and does not accept it at all on the file-read hooks.
+    fn ask_effects(&self, agent_message: Option<String>, user_message: Option<String>) -> Decoded {
+        match self.spec.event {
+            CursorEvent::BeforeShellExecution | CursorEvent::BeforeMcpExecution => {
+                Ok(self.verdict_effects(HookVerdict::Ask, agent_message, user_message))
+            }
+            CursorEvent::PreToolUse => {
+                if self.strict {
+                    return Ok(self.verdict_effects(HookVerdict::Ask, agent_message, user_message));
+                }
+                log::info!(
+                    "hook {} answered ask on preToolUse, which Cursor does not enforce; it was \
+                     ignored",
+                    self.binding.id
+                );
+                Ok(self.verdict_effects(HookVerdict::NoOpinion, agent_message, user_message))
+            }
+            CursorEvent::SubagentStart => {
+                let mut effects = self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
+                effects.reasons.insert(
+                    0,
+                    self.reason(format!(
+                        "Hook {} answered ask, which subagentStart treats as deny.",
+                        self.binding.command
+                    )),
+                );
+                Ok(effects)
+            }
+            CursorEvent::BeforeReadFile | CursorEvent::BeforeTabFileRead => Err(Malformed),
+            CursorEvent::SessionStart
+            | CursorEvent::SessionEnd
+            | CursorEvent::PostToolUse
+            | CursorEvent::PostToolUseFailure
+            | CursorEvent::SubagentStop
+            | CursorEvent::AfterShellExecution
+            | CursorEvent::AfterMcpExecution
+            | CursorEvent::AfterFileEdit
+            | CursorEvent::BeforeSubmitPrompt
+            | CursorEvent::PreCompact
+            | CursorEvent::Stop
+            | CursorEvent::AfterAgentResponse
+            | CursorEvent::AfterAgentThought
+            | CursorEvent::AfterTabFileEdit
+            | CursorEvent::WorkspaceOpen => Err(Malformed),
+        }
+    }
+
+    /// The `agent_message` and `user_message` the event documents, when present and non-empty.
+    /// A field the event does not document is left alone here and reported as undocumented.
+    fn permission_messages(
+        &self,
+        output: &Map<String, Value>,
+    ) -> Result<(Option<String>, Option<String>), Malformed> {
+        let read = |field: &str| {
+            if self.spec.documented_output.contains(&field) {
+                text_field(output, field)
+            } else {
+                Ok(None)
+            }
+        };
+        Ok((read("agent_message")?, read("user_message")?))
     }
 
     /// Effects for a decided verdict. On a deny, `agent_message` (or `user_message` when there is
-    /// no agent message) becomes the reason the model reads. A `user_message` that is not already
-    /// the reason is delivered as a user notice. On other verdicts the messages are observational.
-    fn verdict_effects(&self, verdict: HookVerdict, output: &ShellHookOutput) -> HookEffects {
-        let agent_message = output.agent_message.as_deref().and_then(non_empty_text);
-        let user_message = output.user_message.as_deref().and_then(non_empty_text);
+    /// no agent message) becomes the reason the model reads, and a `user_message` that is not
+    /// already the reason is delivered as a user notice. On any other verdict `user_message` is a
+    /// notice and `agent_message` has no documented meaning, so it is logged and dropped.
+    fn verdict_effects(
+        &self,
+        verdict: HookVerdict,
+        agent_message: Option<String>,
+        user_message: Option<String>,
+    ) -> HookEffects {
         let mut effects = HookEffects {
             verdict,
             ..Default::default()
@@ -111,40 +266,181 @@ impl Decoder<'_> {
                 (None, None) => {}
             },
             HookVerdict::Allow | HookVerdict::Ask | HookVerdict::NoOpinion | HookVerdict::Defer => {
-                effects.model_context.extend(agent_message);
                 effects.user_notices.extend(user_message);
+                if agent_message.is_some() {
+                    log::info!(
+                        "hook {} set agent_message without denying; Cursor sends it to the agent \
+                         only on a denial, so it was ignored",
+                        self.binding.id
+                    );
+                }
             }
         }
         effects
     }
 
-    fn malformed(&self) -> HookEffects {
-        match self.binding.capabilities.malformed_output {
-            MalformedOutputPolicy::Deny => self.deny(format!(
-                "Hook {} printed output that is not a valid permission decision, so the command \
-                 was denied.",
-                self.binding.command
-            )),
-            MalformedOutputPolicy::FollowFailurePolicy => {
-                self.failed("printed output that is not a valid permission decision")
+    fn decode_session_start(&self, output: &Map<String, Value>) -> Decoded {
+        let mut effects = HookEffects::default();
+        if let Some(env) = output.get("env") {
+            let Some(env) = env.as_object() else {
+                return Err(Malformed);
+            };
+            for (key, value) in env {
+                let Some(value) = value.as_str() else {
+                    return Err(Malformed);
+                };
+                effects.session_env.push((key.clone(), value.to_owned()));
+            }
+        }
+        effects
+            .model_context
+            .extend(text_field(output, "additional_context")?);
+        Ok(effects)
+    }
+
+    fn decode_post_tool_use(&self, output: &Map<String, Value>) -> Decoded {
+        let mut effects = self.decode_additional_context(output)?;
+        effects.replacement_result =
+            object_field(output, "updated_mcp_tool_output")?.map(Value::Object);
+        Ok(effects)
+    }
+
+    fn decode_additional_context(&self, output: &Map<String, Value>) -> Decoded {
+        let mut effects = HookEffects::default();
+        effects
+            .model_context
+            .extend(text_field(output, "additional_context")?);
+        Ok(effects)
+    }
+
+    /// `followup_message`, or the Claude shapes Cursor translates: `decision: "block"` with a
+    /// `reason`, flat or under `hookSpecificOutput`. An empty message is no follow-up.
+    fn decode_follow_up(&self, output: &Map<String, Value>) -> Decoded {
+        let claude = self.claude_output(output)?;
+        let decision = text_field(output, "decision")?
+            .or_else(|| claude.as_ref().and_then(|claude| claude.decision.clone()));
+        let reason = text_field(output, "reason")?
+            .or_else(|| claude.as_ref().and_then(|claude| claude.reason.clone()));
+        let follow_up = match text_field(output, "followup_message")? {
+            Some(text) => Some(text),
+            None if decision.as_deref() == Some("block") => reason,
+            None => None,
+        };
+        let mut effects = HookEffects::default();
+        effects.continuation = follow_up.map(|text| ContinuationRequest {
+            text,
+            loop_limit: self.binding.loop_limit,
+        });
+        Ok(effects)
+    }
+
+    fn decode_before_submit_prompt(&self, output: &Map<String, Value>) -> Decoded {
+        let Some(proceed) = bool_field(output, "continue")? else {
+            return Err(Malformed);
+        };
+        let user_message = text_field(output, "user_message")?;
+        if proceed {
+            let mut effects = HookEffects::default();
+            effects.user_notices.extend(user_message);
+            return Ok(effects);
+        }
+        Ok(self.halt(user_message.unwrap_or_else(|| {
+            format!("Blocked by hook {}.", self.binding.command)
+        })))
+    }
+
+    fn decode_pre_compact(&self, output: &Map<String, Value>) -> Decoded {
+        let mut effects = HookEffects::default();
+        effects
+            .user_notices
+            .extend(text_field(output, "user_message")?);
+        Ok(effects)
+    }
+
+    /// Claude's nested response shape, which Cursor accepts on `preToolUse`, `stop`, and
+    /// `subagentStop`. Elsewhere the key is undocumented and ignored.
+    fn claude_output(&self, output: &Map<String, Value>) -> Result<Option<ClaudeOutput>, Malformed> {
+        if !self
+            .spec
+            .documented_output
+            .contains(&"hookSpecificOutput")
+        {
+            return Ok(None);
+        }
+        let Some(nested) = output.get("hookSpecificOutput") else {
+            return Ok(None);
+        };
+        let Some(nested) = nested.as_object() else {
+            return Err(Malformed);
+        };
+        Ok(Some(ClaudeOutput {
+            permission_decision: text_field(nested, "permissionDecision")?,
+            permission_decision_reason: text_field(nested, "permissionDecisionReason")?,
+            updated_input: object_field(nested, "updatedInput")?,
+            decision: text_field(nested, "decision")?,
+            reason: text_field(nested, "reason")?,
+        }))
+    }
+
+    fn log_undocumented_fields(&self, output: &Map<String, Value>) {
+        for field in output.keys() {
+            if !self.spec.documented_output.contains(&field.as_str()) {
+                log::warn!(
+                    "hook {} returned {field}, which {} does not use; it was ignored",
+                    self.binding.id,
+                    self.spec.name
+                );
             }
         }
     }
 
-    /// What a hook that did not produce a decision contributes, by the binding's failure policy.
+    fn malformed(&self) -> HookEffects {
+        let what_happened = match self.control {
+            ControlEffect::Verdict => "printed output that is not a valid permission decision",
+            ControlEffect::HaltTurn => "printed output that is not a valid response",
+            ControlEffect::None => "printed output that does not fit the event",
+        };
+        match self.malformed_output_policy() {
+            MalformedOutputPolicy::Deny => self.closed(what_happened),
+            MalformedOutputPolicy::FollowFailurePolicy => self.failed(what_happened),
+        }
+    }
+
+    /// What a hook that did not produce a decision contributes, by the failure policy.
     fn failed(&self, what_happened: &str) -> HookEffects {
-        match self.binding.capabilities.failure {
+        match self.failure_policy() {
             FailurePolicy::FailOpen => HookEffects::default(),
-            FailurePolicy::FailClosed => self.deny(format!(
-                "Hook {} {what_happened}, so the command was denied.",
-                self.binding.command
+            FailurePolicy::FailClosed => self.closed(what_happened),
+        }
+    }
+
+    /// The fail-closed outcome for this event: a denial where the event decides permission, a
+    /// halted prompt where it decides submission, and nothing where it only observes.
+    fn closed(&self, what_happened: &str) -> HookEffects {
+        let command = &self.binding.command;
+        match self.control {
+            ControlEffect::Verdict => self.deny(format!(
+                "Hook {command} {what_happened}, so {} was denied.",
+                self.spec.subject
             )),
+            ControlEffect::HaltTurn => self.halt(format!(
+                "Hook {command} {what_happened}, so the prompt was not sent."
+            )),
+            ControlEffect::None => HookEffects::default(),
         }
     }
 
     fn deny(&self, reason: String) -> HookEffects {
         HookEffects {
             verdict: HookVerdict::Deny,
+            reasons: vec![self.reason(reason)],
+            ..Default::default()
+        }
+    }
+
+    fn halt(&self, reason: String) -> HookEffects {
+        HookEffects {
+            halt_turn: true,
             reasons: vec![self.reason(reason)],
             ..Default::default()
         }
@@ -158,19 +454,59 @@ impl Decoder<'_> {
     }
 }
 
-/// Parses stdout as a Cursor response object. Anything that is not a JSON object with the
-/// documented field types is `None`.
-fn parse_output(stdout: &[u8]) -> Option<ShellHookOutput> {
-    let value: serde_json::Value = serde_json::from_slice(stdout).ok()?;
-    if !value.is_object() {
-        return None;
+/// The fields of Claude's `hookSpecificOutput` object that Cursor translates.
+struct ClaudeOutput {
+    permission_decision: Option<String>,
+    permission_decision_reason: Option<String>,
+    updated_input: Option<Map<String, Value>>,
+    decision: Option<String>,
+    reason: Option<String>,
+}
+
+/// Parses stdout as a JSON object. Anything else, including stdout that is not UTF-8, is `None`.
+fn parse_object(stdout: &[u8]) -> Option<Map<String, Value>> {
+    match serde_json::from_slice(stdout).ok()? {
+        Value::Object(object) => Some(object),
+        Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Array(_) => None,
     }
-    serde_json::from_value(value).ok()
+}
+
+/// A string field, cleaned for display. A present field that is not a string is malformed; an
+/// empty or whitespace-only string counts as absent.
+fn text_field(output: &Map<String, Value>, field: &str) -> Result<Option<String>, Malformed> {
+    match output.get(field) {
+        None => Ok(None),
+        Some(Value::String(text)) => Ok(clean_text(text)),
+        Some(_) => Err(Malformed),
+    }
+}
+
+fn bool_field(output: &Map<String, Value>, field: &str) -> Result<Option<bool>, Malformed> {
+    match output.get(field) {
+        None => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(Malformed),
+    }
+}
+
+fn object_field(
+    output: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<Map<String, Value>>, Malformed> {
+    match output.get(field) {
+        None => Ok(None),
+        Some(Value::Object(object)) => Ok(Some(object.clone())),
+        Some(_) => Err(Malformed),
+    }
 }
 
 /// Trims the text and removes control characters (other than newlines and tabs) so a script
 /// cannot put terminal escape sequences into a reason or notice. Empty results are dropped.
-fn non_empty_text(text: &str) -> Option<String> {
+fn clean_text(text: &str) -> Option<String> {
     let cleaned = text
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
