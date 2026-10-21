@@ -115,7 +115,12 @@ fn last_result_for(harness: &HookTestApp, action_id: &str) -> Option<ai::hooks::
         .encoded_envelopes()
         .into_iter()
         .rev()
-        .find(|envelope| envelope.action_id.as_ref().is_some_and(|id| id.to_string() == action_id))
+        .find(|envelope| {
+            envelope
+                .action_id
+                .as_ref()
+                .is_some_and(|id| id.to_string() == action_id)
+        })
         .map(|envelope| envelope.payload)
 }
 
@@ -389,8 +394,16 @@ fn a_tool_that_ran_is_a_result_whatever_it_returned_and_one_that_did_not_is_a_fa
         let block = BlockId::new();
         let shell = shell_action("shell", "make");
         let cases: Vec<(AIAgentAction, AIAgentActionResultType, HookBoundary)> = vec![
-            (shell.clone(), completed("make", &block, 1), HookBoundary::ToolResult),
-            (shell.clone(), completed("make", &block, 130), HookBoundary::ToolResult),
+            (
+                shell.clone(),
+                completed("make", &block, 1),
+                HookBoundary::ToolResult,
+            ),
+            (
+                shell.clone(),
+                completed("make", &block, 130),
+                HookBoundary::ToolResult,
+            ),
             (
                 shell.clone(),
                 AIAgentActionResultType::RequestCommandOutput(

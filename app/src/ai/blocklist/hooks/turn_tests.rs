@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload, PromptProvenance};
+use instant::Instant;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
@@ -68,7 +69,10 @@ fn a_follow_up_is_queued_behind_a_persons_prompt_with_the_hooks_provenance() {
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
                 queue.append(
                     harness.conversation_id,
-                    QueuedQuery::new("the person's".to_owned(), QueuedQueryOrigin::AutoQueueToggle),
+                    QueuedQuery::new(
+                        "the person's".to_owned(),
+                        QueuedQueryOrigin::AutoQueueToggle,
+                    ),
                     ctx,
                 );
             });
@@ -268,7 +272,10 @@ fn nothing_is_held_without_a_stop_binding() {
         let held =
             app.update(|ctx| hold_turn(harness.conversation_id, &harness.active_session, ctx));
         assert!(!held);
-        assert!(app.update(|ctx| start_turn_stop(harness.conversation_id, ctx)).is_none());
+        assert!(
+            app.update(|ctx| start_turn_stop(harness.conversation_id, ctx))
+                .is_none()
+        );
         assert_eq!(harness.hooks.runner.invocation_count(), 0);
     });
 }
@@ -315,7 +322,7 @@ fn a_hold_that_times_out_finalizes_without_the_hooks() {
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
         let _hold = harness.hooks.runner.hold();
 
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         assert_eq!(
             stop_round(&mut app, &harness).await,
             TurnStopResolution::Finalize
@@ -344,7 +351,10 @@ fn success_is_not_shown_while_the_stop_hooks_run() {
         }
         // The run's driver exits on `Success`; nothing may show it while the hooks run.
         assert!(
-            !statuses.lock().unwrap().contains(&ConversationStatus::Success),
+            !statuses
+                .lock()
+                .unwrap()
+                .contains(&ConversationStatus::Success),
             "{:?}",
             statuses.lock().unwrap()
         );
@@ -377,8 +387,17 @@ fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
             .hooks
             .runner
             .script(stop.id.clone(), continuation("and then do this"));
-        let prompt = test_binding(test_source_id("prompt"), HookBoundary::PromptSubmit, 0, None);
-        app.update(|ctx| harness.hooks.install_bindings(vec![stop.clone(), prompt], ctx));
+        let prompt = test_binding(
+            test_source_id("prompt"),
+            HookBoundary::PromptSubmit,
+            0,
+            None,
+        );
+        app.update(|ctx| {
+            harness
+                .hooks
+                .install_bindings(vec![stop.clone(), prompt], ctx)
+        });
         let (conversation_id, stream) = harness.mock_stream(&mut app);
         let (_recorder, statuses) = record_statuses(&mut app, conversation_id);
 
@@ -448,7 +467,10 @@ fn a_persons_prompt_during_the_hold_takes_over_and_the_follow_up_waits_behind_it
         let queued = queued_texts(&app, conversation_id);
         assert_eq!(queued[0].0, "later");
         assert!(
-            !statuses.lock().unwrap().contains(&ConversationStatus::Success),
+            !statuses
+                .lock()
+                .unwrap()
+                .contains(&ConversationStatus::Success),
             "the newer turn owns the status"
         );
         assert_eq!(exchange_count(&app, conversation_id), 2);

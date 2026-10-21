@@ -26,8 +26,7 @@ use crate::terminal::model::session::active_session::ActiveSession;
 pub(crate) const DEFAULT_HALT_REASON: &str = "An agent hook stopped this prompt from being sent.";
 
 /// Reason a prompt is halted with when a hook asked for a confirmation nobody can give.
-pub(crate) const ASK_UNAVAILABLE_HALT_REASON: &str =
-    "An agent hook asked for confirmation before sending this prompt, which is not available for \
+pub(crate) const ASK_UNAVAILABLE_HALT_REASON: &str = "An agent hook asked for confirmation before sending this prompt, which is not available for \
      prompts, so the prompt was not sent.";
 
 /// A prompt someone wrote, as opposed to an input Warp built (a tool result, a resume, the server

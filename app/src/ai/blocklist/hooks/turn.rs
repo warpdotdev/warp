@@ -333,7 +333,9 @@ fn follow_up_for(
             messenger.diagnostic(HookDiagnostic {
                 source: binding.source.clone(),
                 severity: DiagnosticSeverity::Warning,
-                message: format!("{binding} asked for a follow-up but {refusal}; the turn ends here"),
+                message: format!(
+                    "{binding} asked for a follow-up but {refusal}; the turn ends here"
+                ),
             });
             None
         }
