@@ -22,6 +22,21 @@ pub struct DeclaredBinding {
     /// The command line (or prompt text, for prompt handlers) to run.
     pub command: String,
     pub timeout: Duration,
+    /// How many hook-requested continuations this definition may start in one chain, as the
+    /// source declared it after the host cap was applied. `None` means the definition does not
+    /// limit itself and only the host cap applies. Only meaningful for bindings that may produce
+    /// a continuation.
+    pub loop_limit: Option<u32>,
+}
+
+/// Runtime choices that change how an adapter reads a hook's output. They come from Warp's own
+/// settings rather than from the source, so they are passed per decode instead of being stored
+/// on the binding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DecodePolicy {
+    /// The "strict hook policy" setting: honor schema-accepted `ask` values the vendor would
+    /// otherwise ignore, and treat every evaluation failure of a hook that can block as a block.
+    pub strict: bool,
 }
 
 /// A source that parsed successfully. The adapter keeps the validated document so bindings can be
@@ -66,9 +81,13 @@ pub trait HookFormatAdapter: Send + Sync {
     -> serde_json::Value;
 
     /// Turns what the process did into typed effects, applying the vendor's exit-code and
-    /// malformed-output rules.
-    fn decode_output(&self, binding: &DeclaredBinding, outcome: &HookProcessOutcome)
-    -> HookEffects;
+    /// malformed-output rules under `policy`.
+    fn decode_output(
+        &self,
+        binding: &DeclaredBinding,
+        outcome: &HookProcessOutcome,
+        policy: &DecodePolicy,
+    ) -> HookEffects;
 }
 
 /// One entry in the adapter table.

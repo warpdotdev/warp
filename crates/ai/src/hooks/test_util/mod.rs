@@ -84,6 +84,7 @@ pub fn test_binding(
         matcher: matcher.map(str::to_owned),
         command: format!("test-hook-{index}"),
         timeout: boundary.default_timeout(),
+        loop_limit: None,
     }
 }
 

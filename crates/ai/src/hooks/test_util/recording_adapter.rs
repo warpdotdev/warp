@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::hooks::adapters::{
-    DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 use crate::hooks::model::{
     ContinuationRequest, HookEffects, HookEnvelope, HookFormat, HookPayload, HookReason,
@@ -37,6 +37,7 @@ struct TestHookOutput {
 pub struct RecordingAdapter {
     bindings: Mutex<Vec<DeclaredBinding>>,
     encoded: Mutex<Vec<HookEnvelope>>,
+    decode_policies: Mutex<Vec<DecodePolicy>>,
 }
 
 impl RecordingAdapter {
@@ -48,12 +49,18 @@ impl RecordingAdapter {
         Self {
             bindings: Mutex::new(bindings),
             encoded: Mutex::new(Vec::new()),
+            decode_policies: Mutex::new(Vec::new()),
         }
     }
 
     /// Every envelope passed to `encode_input`, in order.
     pub fn encoded_envelopes(&self) -> Vec<HookEnvelope> {
         self.encoded.lock().expect("adapter lock").clone()
+    }
+
+    /// The policy passed to each `decode_output` call, in order.
+    pub fn decode_policies(&self) -> Vec<DecodePolicy> {
+        self.decode_policies.lock().expect("adapter lock").clone()
     }
 
     pub fn encoded_count(&self) -> usize {
@@ -132,7 +139,12 @@ impl HookFormatAdapter for RecordingAdapter {
         &self,
         binding: &DeclaredBinding,
         outcome: &HookProcessOutcome,
+        policy: &DecodePolicy,
     ) -> HookEffects {
+        self.decode_policies
+            .lock()
+            .expect("adapter lock")
+            .push(*policy);
         let stdout = String::from_utf8_lossy(&outcome.stdout).trim().to_owned();
         let reason = |text: String| HookReason {
             text,
