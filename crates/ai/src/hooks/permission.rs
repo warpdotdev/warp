@@ -36,7 +36,7 @@ impl WarpPermissionResult {
 pub struct RunFacts {
     /// No one can answer a confirmation request: an Oz run, a command-line run, or a hidden
     /// local child.
-    pub headless: bool,
+    pub is_headless: bool,
     /// The strict hook policy is on for this run.
     pub is_strict: bool,
 }
