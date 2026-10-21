@@ -10,11 +10,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ai::hooks::{
-    CommandExecutionPosture, DiagnosticSeverity, ExplicitHookSource, HookDiagnostic,
-    HookMessenger, HookNotice, HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation,
-    HookSurface, LogOnlyMessenger, RunMetadata, StaticTrustPolicy, TrustDecision,
-    TrustPolicy as _, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value, resolve_hook_dirs,
-    sources_for_hook_dirs,
+    CommandExecutionPosture, DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookMessenger,
+    HookNotice, HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface,
+    LogOnlyMessenger, RunMetadata, StaticTrustPolicy, TrustDecision, TrustPolicy as _,
+    WARP_HOOK_DIRS_ENV, parse_hook_dirs_value, resolve_hook_dirs, sources_for_hook_dirs,
 };
 use anyhow::Context as _;
 use futures::FutureExt as _;
