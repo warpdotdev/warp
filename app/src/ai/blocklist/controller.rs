@@ -847,8 +847,10 @@ impl BlocklistAIController {
             input_query.input_query,
             InputQueryType::UserSubmittedQueryFromInput { .. }
         );
-        // Hooks see the prompt as the user typed it, including any mode prefix.
-        let submitted_prompt = is_user_submitted_prompt.then(|| query.clone());
+        // Hooks see the prompt as the user typed it, including any mode prefix. The copy is only
+        // made when a hook could fire, so the inactive path adds nothing beyond the check.
+        let submitted_prompt =
+            (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx)).then(|| query.clone());
         let (query, user_query_mode) = extract_user_query_mode(query);
 
         // Attribute /orchestrate queries to the slash-command entry surface.
