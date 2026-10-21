@@ -21,12 +21,12 @@ use std::sync::atomic::AtomicBool;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
+use ai::hooks::{
+    CommandExecutionPosture, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner,
+    HookSurface, RegistrySnapshot, RunMetadata,
+};
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
-use ai::hooks::{
-    CommandExecutionPosture, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry,
-    HookRunner, HookSurface, RegistrySnapshot, RunMetadata,
-};
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use parking_lot::Mutex;
 #[cfg(feature = "local_fs")]
@@ -96,15 +96,18 @@ impl HookRuntime {
         if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
             return;
         }
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, _, event, ctx| {
-            if let BlocklistAIHistoryEvent::AppendedExchange {
-                terminal_surface_id,
-                ..
-            } = event
-            {
-                me.pin_for_run(Some(*terminal_surface_id), ctx);
-            }
-        });
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::AppendedExchange {
+                    terminal_surface_id,
+                    ..
+                } = event
+                {
+                    me.pin_for_run(Some(*terminal_surface_id), ctx);
+                }
+            },
+        );
     }
 
     #[cfg(feature = "local_fs")]
@@ -137,8 +140,7 @@ impl HookRuntime {
                 watcher.set_trust_inputs(surface, posture, ctx);
             });
         }
-        let revision =
-            HookRegistry::change(&self.registry, ctx, |registry| registry.pin(posture));
+        let revision = HookRegistry::change(&self.registry, ctx, |registry| registry.pin(posture));
         log::info!(
             "hook registry pinned for the run: surface={surface:?} posture={posture:?} \
              revision={revision}"
@@ -342,7 +344,9 @@ fn posture_for_scopes(
 /// Folds the execute-commands settings seen through each scope into one posture: a setting that
 /// needs approval anywhere wins, then one that could not be read, and only all-allow
 /// auto-approves. No settings at all is unknown.
-fn posture_from_settings(settings: impl IntoIterator<Item = ActionPermission>) -> CommandExecutionPosture {
+fn posture_from_settings(
+    settings: impl IntoIterator<Item = ActionPermission>,
+) -> CommandExecutionPosture {
     settings
         .into_iter()
         .map(|setting| match setting {

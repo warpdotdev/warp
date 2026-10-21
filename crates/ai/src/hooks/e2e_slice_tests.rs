@@ -313,7 +313,11 @@ fn a_missing_or_invalid_file_is_reported_and_activates_nothing() {
     let mut registry = HookRegistry::new();
     let missing = dir.path().join("hooks.json");
     let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
-    assert_eq!(failures.len(), 1, "a missing file is a failure the caller sees");
+    assert_eq!(
+        failures.len(),
+        1,
+        "a missing file is a failure the caller sees"
+    );
     assert_eq!(failures[0].severity, DiagnosticSeverity::Error);
     assert!(registry.snapshot().is_empty());
 
@@ -329,7 +333,9 @@ fn a_missing_or_invalid_file_is_reported_and_activates_nothing() {
             .snapshot()
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error
-                && diagnostic.message.contains("is not active"))
+            .any(
+                |diagnostic| diagnostic.severity == DiagnosticSeverity::Error
+                    && diagnostic.message.contains("is not active")
+            )
     );
 }

@@ -133,7 +133,11 @@ fn the_first_appended_exchange_pins_the_registry_once() {
         assert_eq!(first.posture, CommandExecutionPosture::Unknown);
 
         append_exchange(&mut app, harness.terminal_view_id, harness.conversation_id);
-        assert_eq!(pinned(&app), Some(first), "a later exchange changes nothing");
+        assert_eq!(
+            pinned(&app),
+            Some(first),
+            "a later exchange changes nothing"
+        );
         assert_eq!(
             app.read(|ctx| HookRegistry::as_ref(ctx).revision()),
             first.revision
@@ -223,7 +227,11 @@ mod discovery {
             // The test app runs as the desktop app, which leaves cloud-prepared roots alone.
             detect_root(&mut app, &root, RepoDetectionSource::CloudEnvironmentPrep);
             detect_root(&mut app, &root, RepoDetectionSource::ProjectRulesIndexing);
-            detect_root(&mut app, &root, RepoDetectionSource::CodeReviewInitialization);
+            detect_root(
+                &mut app,
+                &root,
+                RepoDetectionSource::CodeReviewInitialization,
+            );
 
             assert_eq!(
                 app.read(|ctx| HookRegistry::as_ref(ctx).revision()),

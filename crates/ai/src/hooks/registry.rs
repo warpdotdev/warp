@@ -327,16 +327,19 @@ impl HookRegistry {
         })
     }
 
-    /// Applies `change` to the registry behind `handle` and tells subscribers which revision it
-    /// produced.
+    /// Applies `change` to the registry behind `handle` and, when it published a new snapshot,
+    /// tells subscribers which revision it produced.
     pub fn change(
         handle: &ModelHandle<Self>,
         ctx: &mut impl UpdateModel,
         change: impl FnOnce(&mut Self) -> u64,
     ) -> u64 {
         handle.update(ctx, |registry, ctx| {
+            let before = registry.revision;
             let revision = change(registry);
-            ctx.emit(HookRegistryEvent::SnapshotChanged { revision });
+            if revision != before {
+                ctx.emit(HookRegistryEvent::SnapshotChanged { revision });
+            }
             revision
         })
     }
@@ -543,7 +546,10 @@ impl HookRegistry {
                 HookSourceKind::RunDelivered
                 | HookSourceKind::FactoryAgent
                 | HookSourceKind::FactoryWide => {
-                    vec![(BindingScope::Everywhere, working_directory_for(source, None))]
+                    vec![(
+                        BindingScope::Everywhere,
+                        working_directory_for(source, None),
+                    )]
                 }
             };
             for (scope, working_directory) in placements {

@@ -109,12 +109,7 @@ impl Harness {
             });
         });
         let watcher = app.add_model(|ctx| {
-            HookConfigWatcher::new_without_filesystem_events(
-                registry.clone(),
-                trust,
-                surface,
-                ctx,
-            )
+            HookConfigWatcher::new_without_filesystem_events(registry.clone(), trust, surface, ctx)
         });
         Self {
             registry,
@@ -167,7 +162,10 @@ fn adding_a_root_loads_its_hook_file_scoped_to_that_root() {
         assert_eq!(snapshot.revision, 1);
         assert_eq!(snapshot.bindings.len(), 1);
         let binding = &snapshot.bindings[0];
-        assert_eq!(binding.binding.id.source.kind, HookSourceKind::ProjectCursorFile);
+        assert_eq!(
+            binding.binding.id.source.kind,
+            HookSourceKind::ProjectCursorFile
+        );
         assert_eq!(binding.working_directory, root.path);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
         assert_eq!(snapshot.protected_paths, vec![root.hooks_file()]);
@@ -312,9 +310,9 @@ fn removing_a_root_withdraws_its_source() {
         let root = Root::with_hooks(VALID);
         let harness = Harness::activating(&mut app);
         harness.add_root(&mut app, &root.path);
-        harness
-            .watcher
-            .update(&mut app, |watcher, ctx| watcher.remove_root(&root.path, ctx));
+        harness.watcher.update(&mut app, |watcher, ctx| {
+            watcher.remove_root(&root.path, ctx)
+        });
         assert!(harness.snapshot(&app).is_empty());
         assert_eq!(
             harness
@@ -351,9 +349,7 @@ fn trust_is_decided_again_from_the_posture_when_the_run_starts() {
         });
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
         assert_eq!(
-            harness
-                .watcher
-                .read(&app, |watcher, _| watcher.posture()),
+            harness.watcher.read(&app, |watcher, _| watcher.posture()),
             CommandExecutionPosture::AutoApproves
         );
 
@@ -382,7 +378,11 @@ fn a_root_added_after_the_posture_is_known_uses_it() {
         let root = Root::with_hooks(VALID);
         let harness = Harness::new(&mut app, Arc::new(StaticTrustPolicy), HookSurface::OzRun);
         harness.watcher.update(&mut app, |watcher, ctx| {
-            watcher.set_trust_inputs(HookSurface::OzRun, CommandExecutionPosture::AutoApproves, ctx)
+            watcher.set_trust_inputs(
+                HookSurface::OzRun,
+                CommandExecutionPosture::AutoApproves,
+                ctx,
+            )
         });
         harness.add_root(&mut app, &root.path);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);

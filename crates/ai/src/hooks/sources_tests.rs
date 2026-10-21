@@ -210,10 +210,7 @@ mod loading {
         std::os::unix::fs::symlink(dir.path(), link_dir.path().join("linked")).expect("symlink");
         let mut registry = HookRegistry::new();
         load_explicit_sources(
-            &sources_for_hook_dirs(&[
-                dir.path().to_path_buf(),
-                link_dir.path().join("linked"),
-            ]),
+            &sources_for_hook_dirs(&[dir.path().to_path_buf(), link_dir.path().join("linked")]),
             &mut registry,
         );
         assert_eq!(registry.snapshot().bindings.len(), 1);

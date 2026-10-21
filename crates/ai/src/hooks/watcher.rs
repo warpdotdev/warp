@@ -190,10 +190,12 @@ mod native {
         fn load_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
             let path = root.join(PROJECT_CURSOR_HOOKS_PATH);
             let previous = self.roots.get(root).cloned().flatten();
-            let current = dunce::canonicalize(&path).ok().map(|canonical| HookSourceId {
-                kind: HookSourceKind::ProjectCursorFile,
-                location: HookSourceLocation::CanonicalPath(canonical),
-            });
+            let current = dunce::canonicalize(&path)
+                .ok()
+                .map(|canonical| HookSourceId {
+                    kind: HookSourceKind::ProjectCursorFile,
+                    location: HookSourceLocation::CanonicalPath(canonical),
+                });
 
             if let Some(previous) = &previous
                 && current.as_ref() != Some(previous)

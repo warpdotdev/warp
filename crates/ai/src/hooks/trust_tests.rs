@@ -97,9 +97,11 @@ fn project_files_stay_inert_on_interactive_surfaces_even_when_commands_auto_appr
     let policy = StaticTrustPolicy;
     let source = test_source_id_of_kind("project", HookSourceKind::ProjectCursorFile);
     for surface in [HookSurface::Gui, HookSurface::Tui, HookSurface::LocalChild] {
-        let decision =
-            policy.may_activate(&source, surface, CommandExecutionPosture::AutoApproves);
-        assert!(matches!(decision, TrustDecision::Inert { .. }), "{surface:?}");
+        let decision = policy.may_activate(&source, surface, CommandExecutionPosture::AutoApproves);
+        assert!(
+            matches!(decision, TrustDecision::Inert { .. }),
+            "{surface:?}"
+        );
     }
 }
 

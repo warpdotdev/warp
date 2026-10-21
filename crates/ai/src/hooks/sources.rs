@@ -61,7 +61,13 @@ pub fn parse_hook_dirs_value(value: &str) -> Vec<PathBuf> {
 /// meaning does not depend on the process's own current directory.
 pub fn resolve_hook_dirs(base: &Path, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     dirs.into_iter()
-        .map(|dir| if dir.is_absolute() { dir } else { base.join(dir) })
+        .map(|dir| {
+            if dir.is_absolute() {
+                dir
+            } else {
+                base.join(dir)
+            }
+        })
         .collect()
 }
 

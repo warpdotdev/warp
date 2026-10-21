@@ -2097,8 +2097,16 @@ mod protected_hook_paths {
             allow_code_diffs(&state, &mut app);
             let source = install_hook_source(&mut app);
 
-            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
-            assert!(is_protected(&write_permission(&state, &source.script, &app)));
+            assert!(is_protected(&write_permission(
+                &state,
+                &source.hooks_file,
+                &app
+            )));
+            assert!(is_protected(&write_permission(
+                &state,
+                &source.script,
+                &app
+            )));
             let other = write_permission(&state, &source.other_file, &app);
             assert!(
                 matches!(
@@ -2119,8 +2127,16 @@ mod protected_hook_paths {
             let state = initialize_permissions_test_sandboxed(&mut app);
             let source = install_hook_source(&mut app);
 
-            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
-            assert!(is_protected(&write_permission(&state, &source.script, &app)));
+            assert!(is_protected(&write_permission(
+                &state,
+                &source.hooks_file,
+                &app
+            )));
+            assert!(is_protected(&write_permission(
+                &state,
+                &source.script,
+                &app
+            )));
             let mcp = write_permission(&state, &PathBuf::from("/project/.warp/.mcp.json"), &app);
             assert!(
                 matches!(
@@ -2144,7 +2160,11 @@ mod protected_hook_paths {
                 history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
             });
 
-            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
+            assert!(is_protected(&write_permission(
+                &state,
+                &source.hooks_file,
+                &app
+            )));
             let other = write_permission(&state, &source.other_file, &app);
             assert!(
                 matches!(

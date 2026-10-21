@@ -12,7 +12,8 @@ use crate::hooks::test_util::{
     RecordingAdapter, active_binding, test_binding, test_source_id, test_source_id_of_kind,
 };
 
-const VALID: &str = r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#;
+const VALID: &str =
+    r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#;
 const VALID_TWO: &str = r#"{ "version": 1, "hooks": { "beforeShellExecution": [
     { "command": "./hook.sh" }, { "command": "./other.sh", "matcher": "rm" } ] } }"#;
 const MALFORMED: &str = "{ not json";
@@ -200,8 +201,12 @@ fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale(
     assert!(status.loaded && !status.stale);
     assert_eq!(status.active_bindings, 1);
 
-    let second =
-        registry.upsert_source(update(&source, MALFORMED, Some(root), TrustDecision::Activate));
+    let second = registry.upsert_source(update(
+        &source,
+        MALFORMED,
+        Some(root),
+        TrustDecision::Activate,
+    ));
     assert_eq!(second, 2);
     assert_eq!(
         tool_pre_bindings(&registry, "/repo/src").len(),
@@ -216,8 +221,12 @@ fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale(
         "{errors:?}"
     );
 
-    let third =
-        registry.upsert_source(update(&source, VALID_TWO, Some(root), TrustDecision::Activate));
+    let third = registry.upsert_source(update(
+        &source,
+        VALID_TWO,
+        Some(root),
+        TrustDecision::Activate,
+    ));
     assert_eq!(third, 3);
     assert_eq!(tool_pre_bindings(&registry, "/repo/src").len(), 2);
     assert!(!registry.source_status(&source).expect("known source").stale);
@@ -282,10 +291,19 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
             revision: 2,
         })
     );
-    assert!(registry.source_status(&source).expect("known source").pinned);
+    assert!(
+        registry
+            .source_status(&source)
+            .expect("known source")
+            .pinned
+    );
 
-    let revision =
-        registry.upsert_source(update(&source, VALID_TWO, Some(root), TrustDecision::Activate));
+    let revision = registry.upsert_source(update(
+        &source,
+        VALID_TWO,
+        Some(root),
+        TrustDecision::Activate,
+    ));
     assert_eq!(revision, 3, "the revision still moves on");
     assert_eq!(
         tool_pre_bindings(&registry, "/repo").len(),
@@ -300,8 +318,12 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
     );
 
     // A second identical change does not pile up diagnostics, but still bumps the revision.
-    let again =
-        registry.upsert_source(update(&source, VALID_TWO, Some(root), TrustDecision::Activate));
+    let again = registry.upsert_source(update(
+        &source,
+        VALID_TWO,
+        Some(root),
+        TrustDecision::Activate,
+    ));
     assert_eq!(again, 4);
     assert_eq!(self::warnings(&registry).len(), 1);
 }
@@ -390,7 +412,12 @@ fn the_revision_only_moves_forward_through_every_kind_of_change() {
     let mut last = 0;
     for revision in [
         registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate)),
-        registry.upsert_source(update(&source, MALFORMED, Some(root), TrustDecision::Activate)),
+        registry.upsert_source(update(
+            &source,
+            MALFORMED,
+            Some(root),
+            TrustDecision::Activate,
+        )),
         registry.set_trust(&source, inert()),
         registry.record_read_failure(&source, "gone"),
         registry.remove_source(&source),
