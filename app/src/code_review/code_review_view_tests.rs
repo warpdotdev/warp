@@ -29,6 +29,8 @@ use crate::code_review::comments::{
     PendingImportedReviewCommentTarget, attach_pending_imported_comments,
 };
 use crate::code_review::diff_size_limits::DiffSize;
+#[cfg(unix)]
+use crate::code_review::diff_state::LocalDiffStateModel;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::git_repo_model::GitRepoModels;
@@ -400,6 +402,49 @@ fn test_relocate_comments_empty_input() {
             );
             assert_eq!(fallbacks, 0, "Empty input should have no fallbacks");
         });
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_editor_displays_link_target_without_a_backing_file() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "link", "");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("target"), "code\n".repeat(3000)).unwrap();
+        std::fs::create_dir(dir.path().join("directory")).unwrap();
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.active_repo.as_mut().unwrap().repo_path =
+                LocalOrRemotePath::Local(dir.path().to_path_buf());
+            for target in ["target", "directory", "missing"] {
+                std::os::unix::fs::symlink(target, dir.path().join("link")).unwrap();
+                let mut file_diff = test.state.file_states["link"].file_diff.clone();
+                file_diff.status = GitFileStatus::Untracked;
+                file_diff.hunks = Arc::new(
+                    LocalDiffStateModel::parse_diff_hunks(&format!("@@ -0,0 +1 @@\n+{target}\n"))
+                        .unwrap(),
+                );
+                let file = FileDiffAndContent {
+                    file_diff,
+                    content_at_head: Some(String::new()),
+                };
+                let editor = view
+                    .create_code_review_model_with_global_buffer(&file, ctx)
+                    .expect("symlinks should have a diff editor");
+                let local_editor = editor.editor().as_ref(ctx);
+                assert!(local_editor.file_id().is_none());
+                assert_eq!(
+                    local_editor.editor().as_ref(ctx).text(ctx).as_str(),
+                    format!("{target}\n")
+                );
+                std::fs::remove_file(dir.path().join("link")).unwrap();
+            }
+        });
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("target")).unwrap(),
+            "code\n".repeat(3000)
+        );
     });
 }
 

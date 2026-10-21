@@ -3003,10 +3003,14 @@ impl CodeReviewView {
         // Skip editor creation for binary files or files without content (e.g., pure renames)
         if file.file_diff.is_binary || file.content_at_head.is_none() {
             None
-        } else if matches!(file.file_diff.status, GitFileStatus::Deleted) {
-            // For deleted files, the file doesn't exist on disk anymore, so we can't use
-            // GlobalBufferModel. Instead, use the non-global buffer approach which directly
-            // populates the editor with content_at_head.
+        } else if matches!(file.file_diff.status, GitFileStatus::Deleted)
+            || repo_path
+                .join(&file.file_diff.file_path)
+                .to_local_path()
+                .is_some_and(|path| path.is_symlink())
+        {
+            // A global buffer would follow symlinks and show the referent instead of Git's
+            // link target path. Deleted files also have no backing file to load.
             self.create_code_review_model(file, ctx)
         } else {
             let self_handle = ctx.handle();
@@ -3423,11 +3427,10 @@ impl CodeReviewView {
             let version = ContentVersion::new();
             let diff_deltas = Self::convert_hunks_to_diff_deltas(&file.file_diff.hunks);
 
-            // For deleted files, we need to populate the buffer directly since the file
-            // doesn't exist on disk and can't be loaded via GlobalBufferModel.
             let is_deleted_file = matches!(file.file_diff.status, GitFileStatus::Deleted);
 
             code_editor_view.update(ctx, |local_editor, ctx| {
+                let populate_buffer = is_deleted_file || local_editor.file_id().is_none();
                 // Preserve cursor position for non-initial setups (when refreshing diffs)
                 let saved_selections = if !is_initial_setup {
                     Some(Self::capture_cursor_position(
@@ -3440,9 +3443,7 @@ impl CodeReviewView {
 
                 let mut range = None;
 
-                // When global buffer is enabled (and file is not deleted), we only need to set the base to the content at HEAD.
-                // For deleted files or when global buffer is disabled, we need to populate the buffer directly.
-                if is_deleted_file {
+                if populate_buffer {
                     let line_count = file_content.lines().count();
                     range = Some(calculate_hidden_lines(
                         &diff_deltas,
@@ -3454,7 +3455,7 @@ impl CodeReviewView {
                     local_editor.reset_with_state(state, ctx);
                 }
                 #[cfg(not(target_family = "wasm"))]
-                if !is_deleted_file {
+                if !populate_buffer {
                     // We only want to recompute diff is the file is loaded. If not, we can rely on the file load event
                     // for diff computation.
                     let file_loaded = local_editor.file_loaded(ctx);
@@ -3465,8 +3466,7 @@ impl CodeReviewView {
                 }
 
                 local_editor.editor().update(ctx, |editor, ctx| {
-                    // When global buffer is enabled (and file is not deleted), hidden line configuration is handed off to the model itself.
-                    if is_deleted_file {
+                    if populate_buffer {
                         if let Some(range) = range {
                             editor.model.update(ctx, |model, ctx| {
                                 model.set_hidden_lines(range, ctx);
@@ -3485,7 +3485,7 @@ impl CodeReviewView {
                     }
 
                     if is_initial_setup {
-                        if FeatureFlag::CodeReviewSaveChanges.is_enabled() {
+                        if !populate_buffer && FeatureFlag::CodeReviewSaveChanges.is_enabled() {
                             editor.set_interaction_state(InteractionState::Editable, ctx);
                         } else {
                             editor.set_interaction_state(InteractionState::Selectable, ctx);

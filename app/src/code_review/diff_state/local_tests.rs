@@ -456,3 +456,104 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_line_counts_use_target_paths_without_reading_referents() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("text.txt"), "code\n".repeat(3000)).unwrap();
+    std::fs::write(dir.path().join("binary.bin"), [0, 1, 2]).unwrap();
+    std::fs::create_dir(dir.path().join("directory")).unwrap();
+
+    for (target, expected) in [
+        ("text.txt", 1),
+        ("binary.bin", 1),
+        ("directory", 1),
+        ("missing", 1),
+        ("missing\nwith newline", 2),
+        ("missing\n", 1),
+    ] {
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        let count = LocalDiffStateModel::num_lines_in_file_if_non_binary(&link)
+            .await
+            .unwrap();
+        assert_eq!(count, Some(expected), "target: {target:?}");
+        std::fs::remove_file(link).unwrap();
+    }
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[tokio::test]
+async fn symlink_diff_and_metadata_match_git_before_and_after_staging() {
+    let repo = tempfile::tempdir().unwrap();
+    let targets = tempfile::tempdir().unwrap();
+    std::fs::write(targets.path().join("file"), "code\n".repeat(3000)).unwrap();
+    std::fs::create_dir(targets.path().join("directory")).unwrap();
+    run_git_command(repo.path(), &["init", "-b", "main"])
+        .await
+        .unwrap();
+    run_git_command(
+        repo.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+        ],
+    )
+    .await
+    .unwrap();
+
+    for target in ["file", "directory", "missing"] {
+        std::os::unix::fs::symlink(targets.path().join(target), repo.path().join(target)).unwrap();
+    }
+
+    for staged in [false, true] {
+        if staged {
+            run_git_command(repo.path(), &["add", "."]).await.unwrap();
+        }
+        let metadata = diff_metadata_against_head(repo.path()).await.unwrap();
+        assert_eq!(metadata.aggregate_stats.files_changed, 3);
+        assert_eq!(metadata.aggregate_stats.total_additions, 3);
+        assert_eq!(metadata.aggregate_stats.total_deletions, 0);
+        let branch_metadata =
+            LocalDiffStateModel::diff_metadata_against_specific_branch(repo.path(), "main")
+                .await
+                .unwrap();
+        assert_eq!(branch_metadata.aggregate_stats.files_changed, 3);
+        assert_eq!(branch_metadata.aggregate_stats.total_additions, 3);
+        assert_eq!(branch_metadata.aggregate_stats.total_deletions, 0);
+
+        let status = if staged {
+            GitFileStatus::New
+        } else {
+            GitFileStatus::Untracked
+        };
+        for target in ["file", "directory", "missing"] {
+            let baseline =
+                LocalDiffStateModel::get_file_content_at_head(repo.path(), target, &status).await;
+            assert_eq!(baseline, Some(String::new()), "target: {target}");
+            let diff =
+                LocalDiffStateModel::get_file_diff(repo.path(), target, &status, false, None)
+                    .await
+                    .unwrap();
+            assert!(!diff.is_binary);
+            let additions: Vec<_> = diff
+                .hunks
+                .iter()
+                .flat_map(|hunk| &hunk.lines)
+                .filter(|line| line.line_type == DiffLineType::Add)
+                .collect();
+            assert_eq!(additions.len(), 1, "target: {target}");
+            assert_eq!(
+                additions[0].text,
+                targets.path().join(target).to_str().unwrap()
+            );
+        }
+    }
+}
