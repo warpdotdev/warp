@@ -678,7 +678,10 @@ mod hooks {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
-        use ai::hooks::{HookFormat, HookRegistry, HookSourceKind};
+        use ai::hooks::{
+            ExplicitHookSource, ExplicitSourceScope, HookFormat, HookRegistry,
+            load_explicit_sources,
+        };
         use tempfile::TempDir;
         use warpui::{App, SingletonEntity};
 
@@ -711,15 +714,17 @@ mod hooks {
 
                 app.update(|ctx| {
                     HookRuntime::install_command_runner(ctx);
-                    HookRegistry::handle(ctx)
-                        .update(ctx, |registry, _| {
-                            registry.install_explicit_source(
-                                &hooks_json,
-                                HookFormat::Cursor,
-                                HookSourceKind::RunDelivered,
-                            )
-                        })
-                        .expect("the file loads");
+                    let failures = HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                        load_explicit_sources(
+                            &[ExplicitHookSource {
+                                path: hooks_json.clone(),
+                                format: HookFormat::Cursor,
+                                scope: ExplicitSourceScope::Run,
+                            }],
+                            registry,
+                        )
+                    });
+                    assert!(failures.is_empty(), "the file loads: {failures:?}");
                 });
                 let (executor, events) = build_executor(&mut app, &harness);
                 let shell = shell_action("id-shell", "rm -rf build");

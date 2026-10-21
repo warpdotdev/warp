@@ -158,7 +158,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
             adapter.clone(),
             BindingScope::Everywhere,
         )],
-        diagnostics: Vec::new(),
+        ..Default::default()
     });
     let envelope = fixture_envelope(tool_result(
         shell_action("cargo test"),
