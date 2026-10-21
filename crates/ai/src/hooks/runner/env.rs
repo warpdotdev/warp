@@ -10,12 +10,13 @@ use std::path::PathBuf;
 
 use crate::hooks::model::HookFormat;
 
-/// Variables Warp's own process may carry that a hook must not inherit: every credential Warp
-/// reads from its own environment (the CLI API key, the workload token a cloud run uses to fetch
-/// its secrets and forge credentials, and the tracing token), and the session identity and
-/// shell-bootstrap switches an enclosing Warp terminal exports to the shells it starts (present
-/// when Warp itself was launched from inside a Warp tab). A credential Warp learns to read from
-/// its environment belongs here.
+/// Variables Warp's own process may carry that a hook must not inherit: every Warp-owned
+/// credential Warp reads from its own environment (the CLI API key, the workload token a cloud
+/// run uses to fetch its secrets and forge credentials, and the tracing token), and the session
+/// identity and shell-bootstrap switches an enclosing Warp terminal exports to the shells it
+/// starts (present when Warp itself was launched from inside a Warp tab). A Warp-owned credential
+/// Warp learns to read from its environment belongs here; third-party keys a worker injected
+/// (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) pass through, as they do to the agent's own shell.
 pub const HOST_SCRUB_LIST: &[&str] = &[
     "WARP_API_KEY",
     "WARP_WORKLOAD_TOKEN",
