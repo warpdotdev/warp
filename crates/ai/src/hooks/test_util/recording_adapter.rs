@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::hooks::adapters::{
-    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 use crate::hooks::model::{
     ContinuationRequest, HookEffects, HookEnvelope, HookFormat, HookPayload, HookReason,

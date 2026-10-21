@@ -6,7 +6,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use uuid::Uuid;
 
-use crate::hooks::adapters::{DecodePolicy, DeclaredBinding};
+use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
 use crate::hooks::model::{
     DiagnosticSeverity, FailurePolicy, HookBindingId, HookDiagnostic, HookEffects, HookEnvelope,
     HookReason, HookVerdict, MergedEffects, reduce_effects,
