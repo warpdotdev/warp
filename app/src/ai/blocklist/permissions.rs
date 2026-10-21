@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use ai::hooks::HookRegistry;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use warp_completer::parsers::simple::{command_without_leading_env_vars, decompose_command};
@@ -776,9 +777,7 @@ impl BlocklistAIPermissions {
         scope: &impl TeamScope,
         ctx: &AppContext,
     ) -> FileWritePermission {
-        if !AppExecutionMode::as_ref(ctx).is_sandboxed()
-            && let Some(denied) = check_protected_write_paths(paths)
-        {
+        if let Some(denied) = check_protected_write_paths(paths, ctx) {
             return denied;
         }
 
@@ -1242,18 +1241,42 @@ fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> S
 
 /// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected.
 /// Returns `None` if no paths are protected.
-fn check_protected_write_paths(paths: &[PathBuf]) -> Option<FileWritePermission> {
+fn check_protected_write_paths(paths: &[PathBuf], ctx: &AppContext) -> Option<FileWritePermission> {
     // MCP configs can inject arbitrary context into the agent, so local edits require approval.
-    if paths
-        .iter()
-        .any(|p| mcp_provider_from_file_path(p).is_some())
-    {
+    // A sandboxed run owns its checkout, so there they follow the profile.
+    let touches_mcp_config = !AppExecutionMode::as_ref(ctx).is_sandboxed()
+        && paths
+            .iter()
+            .any(|p| mcp_provider_from_file_path(p).is_some());
+    // Hook files and the scripts they name run as code before the agent's own permission check,
+    // so the agent may not rewrite them mid-run anywhere, including in a sandbox.
+    if touches_mcp_config || touches_hook_source(paths, ctx) {
         Some(FileWritePermission::Denied(
             FileWritePermissionDeniedReason::ProtectedPath,
         ))
     } else {
         None
     }
+}
+
+/// Whether any of `paths` is a hook configuration file or a script one names. Paths are compared
+/// after resolving symlinks when the file exists, so a different spelling of the same file does
+/// not slip past. This is an agent file-edit guard only; shell commands can still change these
+/// files.
+fn touches_hook_source(paths: &[PathBuf], ctx: &AppContext) -> bool {
+    if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<HookRegistry>() {
+        return false;
+    }
+    let protected = HookRegistry::as_ref(ctx).protected_paths();
+    if protected.is_empty() {
+        return false;
+    }
+    paths.iter().any(|path| {
+        let resolved = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
+        protected
+            .iter()
+            .any(|candidate| candidate == &resolved || candidate == path)
+    })
 }
 
 impl Entity for BlocklistAIPermissions {

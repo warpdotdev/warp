@@ -1993,3 +1993,196 @@ fn test_denylist_matches_multiline_commands() {
         });
     })
 }
+
+/// Hook configuration files and the scripts they name are protected write paths everywhere,
+/// including sandboxed runs, where the MCP config exemption still applies.
+#[cfg(not(target_family = "wasm"))]
+mod protected_hook_paths {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use ai::hooks::{
+        HookFormat, HookRegistry, HookSourceId, HookSourceKind, HookSourceLocation, SourceUpdate,
+        TrustDecision,
+    };
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::features::FeatureFlag;
+
+    struct HookSourceOnDisk {
+        _dir: TempDir,
+        hooks_file: PathBuf,
+        script: PathBuf,
+        other_file: PathBuf,
+    }
+
+    /// Writes a run-delivered `hooks.json` naming `./hook.sh` and loads it into a registry
+    /// registered on `app`.
+    fn install_hook_source(app: &mut App) -> HookSourceOnDisk {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let hooks_file = root.join("hooks.json");
+        let script = root.join("hook.sh");
+        let other_file = root.join("README.md");
+        fs::write(
+            &hooks_file,
+            r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#,
+        )
+        .expect("write hooks.json");
+        fs::write(&script, "#!/bin/sh\nexit 0\n").expect("write script");
+        fs::write(&other_file, "notes").expect("write readme");
+
+        app.add_singleton_model(|_| HookRegistry::new());
+        let bytes = fs::read(&hooks_file).expect("read");
+        let source = HookSourceId {
+            kind: HookSourceKind::RunDelivered,
+            location: HookSourceLocation::CanonicalPath(hooks_file.clone()),
+        };
+        HookRegistry::handle(app).update(app, |registry, _| {
+            registry.upsert_source(SourceUpdate {
+                source,
+                format: HookFormat::Cursor,
+                bytes: &bytes,
+                project_root: None,
+                trust: TrustDecision::Activate,
+            });
+        });
+        HookSourceOnDisk {
+            _dir: dir,
+            hooks_file,
+            script,
+            other_file,
+        }
+    }
+
+    fn allow_code_diffs(state: &PermissionsTestState, app: &mut App) {
+        state.profile_model.update(app, |model, ctx| {
+            model.set_apply_code_diffs(
+                model.active_profile(Some(state.terminal_view_id), ctx).id(),
+                &ActionPermission::AlwaysAllow,
+                ctx,
+            );
+        });
+    }
+
+    fn write_permission(
+        state: &PermissionsTestState,
+        path: &PathBuf,
+        app: &App,
+    ) -> FileWritePermission {
+        state.permissions.read(app, |permissions, ctx| {
+            permissions.can_write_files(
+                &state.convo_id,
+                std::slice::from_ref(path),
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            )
+        })
+    }
+
+    fn is_protected(permission: &FileWritePermission) -> bool {
+        matches!(
+            permission,
+            FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+        )
+    }
+
+    #[test]
+    fn hook_files_and_their_scripts_are_protected_even_when_writes_auto_approve() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let state = initialize_permissions_test(&mut app);
+            allow_code_diffs(&state, &mut app);
+            let source = install_hook_source(&mut app);
+
+            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
+            assert!(is_protected(&write_permission(&state, &source.script, &app)));
+            let other = write_permission(&state, &source.other_file, &app);
+            assert!(
+                matches!(
+                    other,
+                    FileWritePermission::Allowed(
+                        FileWritePermissionAllowedReason::AutowriteSettingEnabled
+                    )
+                ),
+                "a file beside the hook file is not protected, got {other:?}"
+            );
+        })
+    }
+
+    #[test]
+    fn hook_files_stay_protected_in_sandboxed_runs_while_mcp_configs_are_not() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let state = initialize_permissions_test_sandboxed(&mut app);
+            let source = install_hook_source(&mut app);
+
+            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
+            assert!(is_protected(&write_permission(&state, &source.script, &app)));
+            let mcp = write_permission(&state, &PathBuf::from("/project/.warp/.mcp.json"), &app);
+            assert!(
+                matches!(
+                    mcp,
+                    FileWritePermission::Allowed(
+                        FileWritePermissionAllowedReason::AutowriteSettingEnabled
+                    )
+                ),
+                "the MCP config exemption in a sandbox is unchanged, got {mcp:?}"
+            );
+        })
+    }
+
+    #[test]
+    fn hook_files_stay_protected_when_the_conversation_auto_approves() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let state = initialize_permissions_test_sandboxed(&mut app);
+            let source = install_hook_source(&mut app);
+            state.history.update(&mut app, |history, ctx| {
+                history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+            });
+
+            assert!(is_protected(&write_permission(&state, &source.hooks_file, &app)));
+            let other = write_permission(&state, &source.other_file, &app);
+            assert!(
+                matches!(
+                    other,
+                    FileWritePermission::Allowed(FileWritePermissionAllowedReason::RunToCompletion)
+                ),
+                "auto-approve still covers other files, got {other:?}"
+            );
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_file_reached_through_a_symlink_is_still_protected() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let state = initialize_permissions_test(&mut app);
+            allow_code_diffs(&state, &mut app);
+            let source = install_hook_source(&mut app);
+            let link_dir = TempDir::new().expect("tempdir");
+            let link = link_dir.path().join("elsewhere.json");
+            std::os::unix::fs::symlink(&source.hooks_file, &link).expect("symlink");
+
+            assert!(is_protected(&write_permission(&state, &link, &app)));
+        })
+    }
+
+    #[test]
+    fn hook_files_are_not_protected_when_the_flag_is_off() {
+        App::test((), |mut app| async move {
+            let state = initialize_permissions_test(&mut app);
+            allow_code_diffs(&state, &mut app);
+            let source = install_hook_source(&mut app);
+            assert!(!is_protected(&write_permission(
+                &state,
+                &source.hooks_file,
+                &app
+            )));
+        })
+    }
+}

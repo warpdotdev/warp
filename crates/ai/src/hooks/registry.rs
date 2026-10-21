@@ -262,6 +262,10 @@ pub struct HookRegistry {
     sources: IndexMap<HookSourceId, SourceState>,
     revision: u64,
     pinned: Option<PinnedRun>,
+    /// Bindings a test installed directly. They ride along with every snapshot the sources
+    /// produce, so pinning or reloading a source does not drop them.
+    #[cfg(any(test, feature = "test-util"))]
+    installed_for_test: (Vec<ActiveBinding>, Vec<HookDiagnostic>),
 }
 
 impl Default for HookRegistry {
@@ -277,6 +281,8 @@ impl HookRegistry {
             sources: IndexMap::new(),
             revision: 0,
             pinned: None,
+            #[cfg(any(test, feature = "test-util"))]
+            installed_for_test: (Vec::new(), Vec::new()),
         }
     }
 
@@ -450,22 +456,16 @@ impl HookRegistry {
         revision
     }
 
-    /// Replaces the active set with the given bindings and bumps the revision.
+    /// Replaces the test-installed bindings, which sit beside whatever the sources produce, and
+    /// bumps the revision.
     #[cfg(any(test, feature = "test-util"))]
     pub fn install_snapshot_for_test(
         &mut self,
         bindings: Vec<ActiveBinding>,
         diagnostics: Vec<HookDiagnostic>,
     ) -> u64 {
-        self.revision += 1;
-        self.snapshot = Arc::new(RegistrySnapshot {
-            revision: self.revision,
-            bindings,
-            diagnostics,
-            project_roots: Vec::new(),
-            protected_paths: Vec::new(),
-        });
-        self.revision
+        self.installed_for_test = (bindings, diagnostics);
+        self.rebuild()
     }
 
     fn note_change_after_pin(&mut self, source: &HookSourceId, what: &str) {
@@ -574,6 +574,12 @@ impl HookRegistry {
                     working_directory: working_directory.clone(),
                 }));
             }
+        }
+
+        #[cfg(any(test, feature = "test-util"))]
+        {
+            bindings.extend(self.installed_for_test.0.iter().cloned());
+            diagnostics.extend(self.installed_for_test.1.iter().cloned());
         }
 
         self.snapshot = Arc::new(RegistrySnapshot {

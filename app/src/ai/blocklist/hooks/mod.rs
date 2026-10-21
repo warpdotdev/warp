@@ -21,21 +21,34 @@ use std::sync::atomic::AtomicBool;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
+#[cfg(feature = "local_fs")]
+use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
 use ai::hooks::{
-    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, RegistrySnapshot,
-    RunMetadata,
+    CommandExecutionPosture, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry,
+    HookRunner, HookSurface, RegistrySnapshot, RunMetadata,
 };
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use parking_lot::Mutex;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+#[cfg(feature = "local_fs")]
+use repo_metadata::Repository;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::{
+    DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
+};
+use warp_core::execution_mode::AppExecutionMode;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::execution_profiles::ActionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::features::FeatureFlag;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use crate::terminal::local_shell::LocalShellState;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Process-wide hook state shared by every conversation and surface.
 pub struct HookRuntime {
@@ -45,6 +58,10 @@ pub struct HookRuntime {
     run_metadata: Option<RunMetadata>,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
+    /// Created when the first project root is detected, so a process that never visits a
+    /// repository starts no file watcher.
+    #[cfg(feature = "local_fs")]
+    config_watcher: Option<ModelHandle<HookConfigWatcher>>,
     #[cfg(test)]
     observed_terminal_results: Vec<tool_result::ObservedTerminalResult>,
 }
@@ -55,6 +72,9 @@ impl HookRuntime {
         messenger: Arc<dyn HookMessenger>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        Self::subscribe_to_run_start(ctx);
+        #[cfg(feature = "local_fs")]
+        Self::subscribe_to_detected_repositories(ctx);
         Self {
             registry: HookRegistry::handle(ctx),
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
@@ -62,9 +82,118 @@ impl HookRuntime {
             run_metadata: None,
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
+            #[cfg(feature = "local_fs")]
+            config_watcher: None,
             #[cfg(test)]
             observed_terminal_results: Vec::new(),
         }
+    }
+
+    /// The run starts when its first request goes out, which is when the first exchange is
+    /// appended to a conversation. That is the latest moment before any tool can run, and it
+    /// comes after a command-line run has applied its profile.
+    fn subscribe_to_run_start(ctx: &mut ModelContext<Self>) {
+        if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
+            return;
+        }
+        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, _, event, ctx| {
+            if let BlocklistAIHistoryEvent::AppendedExchange {
+                terminal_surface_id,
+                ..
+            } = event
+            {
+                me.pin_for_run(Some(*terminal_surface_id), ctx);
+            }
+        });
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn subscribe_to_detected_repositories(ctx: &mut ModelContext<Self>) {
+        if !ctx.has_singleton_model::<DetectedRepositories>() {
+            return;
+        }
+        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
+            let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
+            me.watch_detected_root(repository, *source, ctx);
+        });
+    }
+
+    /// Fixes the active hook set for the rest of the run. The command execution posture is read
+    /// here, once, from the profile active for `terminal_view_id`; project files are trusted
+    /// against it and the registry is pinned. Later calls do nothing.
+    pub fn pin_for_run(
+        &mut self,
+        terminal_view_id: Option<EntityId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::AgentHooks.is_enabled() || self.registry.as_ref(ctx).pinned().is_some() {
+            return;
+        }
+        let posture = command_execution_posture(terminal_view_id, ctx);
+        let surface = self.surface(ctx);
+        #[cfg(feature = "local_fs")]
+        if let Some(watcher) = &self.config_watcher {
+            watcher.update(ctx, |watcher, ctx| {
+                watcher.set_trust_inputs(surface, posture, ctx);
+            });
+        }
+        let revision =
+            HookRegistry::change(&self.registry, ctx, |registry| registry.pin(posture));
+        log::info!(
+            "hook registry pinned for the run: surface={surface:?} posture={posture:?} \
+             revision={revision}"
+        );
+    }
+
+    /// The surface this process fires boundaries from.
+    pub fn surface(&self, ctx: &AppContext) -> HookSurface {
+        envelope::surface(self.run_metadata.is_some(), ctx)
+    }
+
+    /// Starts watching a detected repository's hook file when the surface watches roots found
+    /// the way this one was. Roots from rule indexing and code review are not where the agent's
+    /// session is, so only navigation and cloud preparation count.
+    #[cfg(feature = "local_fs")]
+    fn watch_detected_root(
+        &mut self,
+        repository: &ModelHandle<Repository>,
+        source: RepoDetectionSource,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::AgentHooks.is_enabled() {
+            return;
+        }
+        let is_cloud_prepared_root = match source {
+            RepoDetectionSource::CloudEnvironmentPrep => true,
+            RepoDetectionSource::TerminalNavigation => false,
+            RepoDetectionSource::ProjectRulesIndexing
+            | RepoDetectionSource::CodeReviewInitialization => return,
+        };
+        let surface = self.surface(ctx);
+        if !watch_matrix(surface, is_cloud_prepared_root) {
+            return;
+        }
+        let Some(root) = repository.as_ref(ctx).root_dir().to_local_path() else {
+            return;
+        };
+        let watcher = self.config_watcher(surface, ctx);
+        watcher.update(ctx, |watcher, ctx| watcher.add_root(&root, ctx));
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn config_watcher(
+        &mut self,
+        surface: HookSurface,
+        ctx: &mut ModelContext<Self>,
+    ) -> ModelHandle<HookConfigWatcher> {
+        self.config_watcher
+            .get_or_insert_with(|| {
+                let registry = HookRegistry::handle(ctx);
+                ctx.add_model(|ctx| {
+                    HookConfigWatcher::new(registry, Arc::new(StaticTrustPolicy), surface, ctx)
+                })
+            })
+            .clone()
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
@@ -169,6 +298,75 @@ impl Entity for HookRuntime {
 
 impl SingletonEntity for HookRuntime {}
 
+/// Whether the run already lets the agent execute commands without asking, read from the
+/// execute-commands setting of the profile active for `terminal_view_id` through every open
+/// window's team policy, so a workspace rule that tightens the profile is seen. The
+/// per-conversation auto-approve toggle does not count: it is one user's choice for one
+/// conversation, not the run's configuration. Without a window there is no team policy to read
+/// through, so the posture is unknown.
+fn command_execution_posture(
+    terminal_view_id: Option<EntityId>,
+    ctx: &AppContext,
+) -> CommandExecutionPosture {
+    if !ctx.has_singleton_model::<UserWorkspaces>() {
+        return CommandExecutionPosture::Unknown;
+    }
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let scopes = ctx
+        .window_ids()
+        .map(|window_id| workspaces.team_context_for_window_operation(window_id))
+        .collect::<Vec<_>>();
+    posture_for_scopes(terminal_view_id, &scopes, ctx)
+}
+
+/// The strictest posture the active profile has under any of `scopes`.
+fn posture_for_scopes(
+    terminal_view_id: Option<EntityId>,
+    scopes: &[impl TeamScope],
+    ctx: &AppContext,
+) -> CommandExecutionPosture {
+    if !ctx.has_singleton_model::<BlocklistAIPermissions>()
+        || !ctx.has_singleton_model::<AIExecutionProfilesModel>()
+        || !ctx.has_singleton_model::<AppExecutionMode>()
+    {
+        return CommandExecutionPosture::Unknown;
+    }
+    let permissions = BlocklistAIPermissions::as_ref(ctx);
+    posture_from_settings(
+        scopes
+            .iter()
+            .map(|scope| permissions.get_execute_commands_setting(terminal_view_id, scope, ctx)),
+    )
+}
+
+/// Folds the execute-commands settings seen through each scope into one posture: a setting that
+/// needs approval anywhere wins, then one that could not be read, and only all-allow
+/// auto-approves. No settings at all is unknown.
+fn posture_from_settings(settings: impl IntoIterator<Item = ActionPermission>) -> CommandExecutionPosture {
+    settings
+        .into_iter()
+        .map(|setting| match setting {
+            ActionPermission::AlwaysAllow => CommandExecutionPosture::AutoApproves,
+            ActionPermission::AlwaysAsk | ActionPermission::AgentDecides => {
+                CommandExecutionPosture::RequiresApproval
+            }
+            ActionPermission::Unknown => CommandExecutionPosture::Unknown,
+        })
+        .reduce(|current, next| match (current, next) {
+            (CommandExecutionPosture::RequiresApproval, _)
+            | (_, CommandExecutionPosture::RequiresApproval) => {
+                CommandExecutionPosture::RequiresApproval
+            }
+            (CommandExecutionPosture::Unknown, _) | (_, CommandExecutionPosture::Unknown) => {
+                CommandExecutionPosture::Unknown
+            }
+            (CommandExecutionPosture::AutoApproves, CommandExecutionPosture::AutoApproves) => {
+                CommandExecutionPosture::AutoApproves
+            }
+        })
+        .unwrap_or(CommandExecutionPosture::Unknown)
+}
+
 // Driver checks. Unknown conversations fail every check.
 
 /// Whether this client drives `conversation_id`'s turns.
@@ -196,3 +394,7 @@ fn driver_check(
             .conversation(&conversation_id)
             .is_some_and(|conversation| check(conversation.driver()))
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
