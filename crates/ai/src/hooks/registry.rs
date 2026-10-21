@@ -168,15 +168,58 @@ struct ParsedSource {
     diagnostics: Vec<HookDiagnostic>,
 }
 
+/// How the latest load of a source went.
+enum LoadState {
+    /// Heard about, never loaded.
+    Unloaded,
+    Loaded(ParsedSource),
+    /// The latest load failed; the earlier valid parse stays in effect.
+    Stale {
+        last_valid: ParsedSource,
+        failure: HookDiagnostic,
+    },
+    /// No load has ever succeeded.
+    Failed(HookDiagnostic),
+}
+
+impl LoadState {
+    /// The state after a load that did not produce a valid parse.
+    fn after_failed_load(self, source: &HookSourceId, error: &str) -> Self {
+        match self {
+            Self::Loaded(last_valid) | Self::Stale { last_valid, .. } => Self::Stale {
+                failure: load_failure(source, true, error),
+                last_valid,
+            },
+            Self::Unloaded | Self::Failed(_) => Self::Failed(load_failure(source, false, error)),
+        }
+    }
+
+    fn last_valid(&self) -> Option<&ParsedSource> {
+        match self {
+            Self::Loaded(parsed)
+            | Self::Stale {
+                last_valid: parsed, ..
+            } => Some(parsed),
+            Self::Unloaded | Self::Failed(_) => None,
+        }
+    }
+
+    fn failure(&self) -> Option<&HookDiagnostic> {
+        match self {
+            Self::Stale { failure, .. } | Self::Failed(failure) => Some(failure),
+            Self::Unloaded | Self::Loaded(_) => None,
+        }
+    }
+
+    fn is_stale(&self) -> bool {
+        matches!(self, Self::Stale { .. })
+    }
+}
+
 struct SourceState {
-    /// Roots a project file was found under, or the root its path implies when none was given.
-    /// Empty for explicit sources.
+    /// Roots a project file was found under. Empty for explicit sources.
     project_roots: BTreeSet<PathBuf>,
-    last_valid: Option<ParsedSource>,
-    /// Whether the latest load failed after an earlier one succeeded.
-    stale: bool,
-    /// The latest load failure, kept until a load succeeds.
-    failure: Option<HookDiagnostic>,
+    load: LoadState,
     trust: TrustDecision,
     /// Whether the source was present when the run was pinned.
     pinned: bool,
@@ -188,9 +231,7 @@ impl SourceState {
     fn new(trust: TrustDecision) -> Self {
         Self {
             project_roots: BTreeSet::new(),
-            last_valid: None,
-            stale: false,
-            failure: None,
+            load: LoadState::Unloaded,
             trust,
             pinned: false,
             changes_after_pin: Vec::new(),
@@ -224,22 +265,22 @@ impl SourceState {
 
     /// Records the outcome of one load.
     fn apply(&mut self, source: &HookSourceId, parsed: Result<ParsedSource, HookConfigError>) {
-        match parsed {
-            Ok(parsed) => {
-                self.last_valid = Some(parsed);
-                self.stale = false;
-                self.failure = None;
-            }
-            Err(error) => {
-                self.stale = self.last_valid.is_some();
-                self.failure = Some(load_failure(source, self.stale, &error.to_string()));
-            }
-        }
+        let load = std::mem::replace(&mut self.load, LoadState::Unloaded);
+        self.load = match parsed {
+            Ok(parsed) => LoadState::Loaded(parsed),
+            Err(error) => load.after_failed_load(source, &error.to_string()),
+        };
+    }
+
+    /// Records that the source could not be read at all.
+    fn apply_read_failure(&mut self, source: &HookSourceId, message: &str) {
+        let load = std::mem::replace(&mut self.load, LoadState::Unloaded);
+        self.load = load.after_failed_load(source, message);
     }
 
     fn diagnostics(&self, source: &HookSourceId) -> Vec<HookDiagnostic> {
         let mut diagnostics = Vec::new();
-        if let Some(parsed) = &self.last_valid {
+        if let Some(parsed) = self.load.last_valid() {
             diagnostics.extend(parsed.config.warnings.iter().cloned());
             diagnostics.extend(parsed.diagnostics.iter().cloned());
             if let TrustDecision::Inert { reason } = &self.trust {
@@ -250,9 +291,39 @@ impl SourceState {
                 });
             }
         }
-        diagnostics.extend(self.failure.iter().cloned());
+        diagnostics.extend(self.load.failure().cloned());
         diagnostics.extend(self.changes_after_pin.iter().cloned());
         diagnostics
+    }
+}
+
+/// Where one loaded source's bindings apply and the directory its hooks run in.
+struct Placement {
+    scope: BindingScope,
+    /// `None` when the source has no directory to run in, which keeps its definitions inactive.
+    working_directory: Option<PathBuf>,
+}
+
+/// A project file applies under each root it was found under and runs in that root; an explicit
+/// source applies everywhere and runs in the directory that holds it.
+fn placements(source: &HookSourceId, state: &SourceState) -> Vec<Placement> {
+    match source.kind {
+        HookSourceKind::ProjectCursorFile => state
+            .project_roots
+            .iter()
+            .map(|root| Placement {
+                scope: BindingScope::Root(root.clone()),
+                working_directory: working_directory_for(source, Some(root)),
+            })
+            .collect(),
+        HookSourceKind::RunDelivered
+        | HookSourceKind::FactoryAgent
+        | HookSourceKind::FactoryWide => {
+            vec![Placement {
+                scope: BindingScope::Everywhere,
+                working_directory: working_directory_for(source, None),
+            }]
+        }
     }
 }
 
@@ -378,8 +449,8 @@ impl HookRegistry {
     pub fn source_status(&self, source: &HookSourceId) -> Option<SourceStatus> {
         let state = self.sources.get(source)?;
         Some(SourceStatus {
-            loaded: state.last_valid.is_some(),
-            stale: state.stale,
+            loaded: state.load.last_valid().is_some(),
+            stale: state.load.is_stale(),
             trust: state.trust.clone(),
             pinned: state.pinned,
             active_bindings: self
@@ -460,17 +531,6 @@ impl HookRegistry {
             project_root,
             trust,
         } = update;
-        let root = match source.kind {
-            // A project file loaded without a detected root belongs to the root its path
-            // implies, the parent of its `.cursor` directory.
-            HookSourceKind::ProjectCursorFile => {
-                project_root.or_else(|| working_directory_for(&source, None))
-            }
-            HookSourceKind::RunDelivered
-            | HookSourceKind::FactoryAgent
-            | HookSourceKind::FactoryWide => None,
-        };
-
         if self.pinned.is_some() {
             if self.sources.contains_key(&source) {
                 self.note_change_after_pin(&source, "changed");
@@ -478,7 +538,7 @@ impl HookRegistry {
             }
             let parsed = parse_source(&source, format, bytes);
             let mut state = SourceState::found_after_pin(source.kind);
-            state.project_roots.extend(root);
+            state.project_roots.extend(project_root);
             state.apply(&source, parsed);
             self.sources.insert(source.clone(), state);
             self.note_change_after_pin(&source, "was found");
@@ -486,12 +546,12 @@ impl HookRegistry {
         }
 
         let parsed = parse_source(&source, format, bytes);
-        self.project_roots.extend(root.clone());
+        self.project_roots.extend(project_root.clone());
         let state = self
             .sources
             .entry(source.clone())
             .or_insert_with(|| SourceState::new(trust.clone()));
-        state.project_roots.extend(root);
+        state.project_roots.extend(project_root);
         state.trust = trust;
         state.apply(&source, parsed);
         self.rebuild()
@@ -504,12 +564,10 @@ impl HookRegistry {
             self.note_change_after_pin(source, "could not be read");
             return self.rebuild();
         }
-        let state = self
-            .sources
+        self.sources
             .entry(source.clone())
-            .or_insert_with(SourceState::unloaded);
-        state.stale = state.last_valid.is_some();
-        state.failure = Some(load_failure(source, state.stale, message));
+            .or_insert_with(SourceState::unloaded)
+            .apply_read_failure(source, message);
         self.rebuild()
     }
 
@@ -651,7 +709,7 @@ impl HookRegistry {
             .sources
             .iter()
             .filter(|(source, state)| {
-                state.last_valid.is_some()
+                state.load.last_valid().is_some()
                     && match source.kind {
                         HookSourceKind::ProjectCursorFile => false,
                         HookSourceKind::RunDelivered
@@ -671,28 +729,8 @@ impl HookRegistry {
             if let HookSourceLocation::CanonicalPath(path) = &source.location {
                 protected_paths.insert(path.clone());
             }
-            let Some(parsed) = &state.last_valid else {
+            let Some(parsed) = state.load.last_valid() else {
                 continue;
-            };
-            let placements: Vec<(BindingScope, Option<PathBuf>)> = match source.kind {
-                HookSourceKind::ProjectCursorFile => state
-                    .project_roots
-                    .iter()
-                    .map(|root| {
-                        (
-                            BindingScope::Root(root.clone()),
-                            working_directory_for(source, Some(root)),
-                        )
-                    })
-                    .collect(),
-                HookSourceKind::RunDelivered
-                | HookSourceKind::FactoryAgent
-                | HookSourceKind::FactoryWide => {
-                    vec![(
-                        BindingScope::Everywhere,
-                        working_directory_for(source, None),
-                    )]
-                }
             };
             let runs_as_explicit_source = source.kind == HookSourceKind::ProjectCursorFile
                 && match &source.location {
@@ -708,8 +746,8 @@ impl HookRegistry {
                     ),
                 });
             }
-            for (scope, working_directory) in placements {
-                let Some(working_directory) = working_directory else {
+            for placement in placements(source, state) {
+                let Some(working_directory) = placement.working_directory else {
                     diagnostics.push(HookDiagnostic {
                         source: source.clone(),
                         severity: DiagnosticSeverity::Error,
@@ -731,7 +769,7 @@ impl HookRegistry {
                 bindings.extend(parsed.bindings.iter().map(|binding| ActiveBinding {
                     binding: binding.clone(),
                     adapter: parsed.adapter.clone(),
-                    scope: scope.clone(),
+                    scope: placement.scope.clone(),
                     host: HookExecutionHost::Local,
                     working_directory: working_directory.clone(),
                 }));

@@ -102,15 +102,13 @@ mod native {
             }
         }
 
-        pub fn surface(&self) -> HookSurface {
-            self.surface
-        }
-
+        #[cfg(any(test, feature = "test-util"))]
         pub fn posture(&self) -> CommandExecutionPosture {
             self.posture
         }
 
         /// The roots being watched.
+        #[cfg(any(test, feature = "test-util"))]
         pub fn roots(&self) -> impl Iterator<Item = &Path> {
             self.roots.keys().map(PathBuf::as_path)
         }
@@ -124,7 +122,9 @@ mod native {
             }
             self.roots.insert(root.clone(), None);
             self.fs_watcher.update(ctx, |fs_watcher, _| {
-                std::mem::drop(fs_watcher.register_path(
+                // The path is registered on send; the future only reports completion, and the
+                // watcher logs its own failures.
+                drop(fs_watcher.register_path(
                     &root,
                     hook_file_filter(&root),
                     RecursiveMode::Recursive,
@@ -143,7 +143,7 @@ mod native {
                 return;
             };
             self.fs_watcher.update(ctx, |fs_watcher, _| {
-                std::mem::drop(fs_watcher.unregister_path(&root));
+                drop(fs_watcher.unregister_path(&root));
             });
             if let Some(source) = source {
                 HookRegistry::change(&self.registry, ctx, |registry| {
@@ -196,12 +196,11 @@ mod native {
         fn load_root(&mut self, root: &Path, ctx: &mut ModelContext<Self>) {
             let path = root.join(PROJECT_CURSOR_HOOKS_PATH);
             let previous = self.roots.get(root).cloned().flatten();
-            let current = dunce::canonicalize(&path)
-                .ok()
-                .map(|canonical| HookSourceId {
-                    kind: HookSourceKind::ProjectCursorFile,
-                    location: HookSourceLocation::CanonicalPath(canonical),
-                });
+            let canonical = dunce::canonicalize(&path).ok();
+            let current = canonical.clone().map(|canonical| HookSourceId {
+                kind: HookSourceKind::ProjectCursorFile,
+                location: HookSourceLocation::CanonicalPath(canonical),
+            });
 
             if let Some(previous) = &previous
                 && current.as_ref() != Some(previous)
@@ -210,13 +209,9 @@ mod native {
                     registry.remove_source_root(previous, root)
                 });
             }
-            if let Some(source) = &current {
+            if let (Some(source), Some(canonical)) = (&current, &canonical) {
                 let trust = self.trust.may_activate(source, self.surface, self.posture);
-                let canonical = match &source.location {
-                    HookSourceLocation::CanonicalPath(canonical) => canonical.clone(),
-                    HookSourceLocation::Named(name) => PathBuf::from(name),
-                };
-                match fs::read(&canonical) {
+                match fs::read(canonical) {
                     Ok(bytes) => {
                         HookRegistry::change(&self.registry, ctx, |registry| {
                             registry.upsert_source(SourceUpdate {

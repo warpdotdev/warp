@@ -8,6 +8,18 @@ pub enum CommandExecutionPosture {
     Unknown,
 }
 
+impl CommandExecutionPosture {
+    /// The more cautious of two postures: needing approval beats not knowing, which beats
+    /// auto-approving.
+    pub fn strictest(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::RequiresApproval, _) | (_, Self::RequiresApproval) => Self::RequiresApproval,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::AutoApproves, Self::AutoApproves) => Self::AutoApproves,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustDecision {
     Activate,
@@ -45,10 +57,12 @@ impl TrustPolicy for DenyAllTrustPolicy {
 }
 
 /// The posture rule as a fixed table. Sources delivered with the run were chosen by whoever
-/// configured the run, so they activate everywhere. A project file activates only in a headless
-/// run whose execution profile already auto-approves command execution, where the agent could
-/// run the repository's scripts on its own anyway. On interactive surfaces a project file stays
-/// inert until the per-root approval flow exists.
+/// configured the run, so they activate everywhere; their loader activates them without asking
+/// this table, and the rows are here so the table is complete and says the same thing. Only
+/// project files are decided here: one activates only in a headless run whose execution profile
+/// already auto-approves command execution, where the agent could run the repository's scripts
+/// on its own anyway. On interactive surfaces a project file stays inert until the per-root
+/// approval flow exists, and a local child waits for its parent's approved set.
 pub struct StaticTrustPolicy;
 
 impl TrustPolicy for StaticTrustPolicy {
@@ -81,7 +95,16 @@ impl TrustPolicy for StaticTrustPolicy {
                         reason: "the run's command execution posture is not known yet".to_owned(),
                     },
                 },
-                HookSurface::LocalChild | HookSurface::Gui | HookSurface::Tui => match posture {
+                HookSurface::LocalChild => match posture {
+                    CommandExecutionPosture::AutoApproves
+                    | CommandExecutionPosture::RequiresApproval
+                    | CommandExecutionPosture::Unknown => TrustDecision::Inert {
+                        reason: "a local child runs under its parent's approved project hooks, \
+                                 which do not exist yet"
+                            .to_owned(),
+                    },
+                },
+                HookSurface::Gui | HookSurface::Tui => match posture {
                     CommandExecutionPosture::AutoApproves
                     | CommandExecutionPosture::RequiresApproval
                     | CommandExecutionPosture::Unknown => TrustDecision::Inert {

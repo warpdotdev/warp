@@ -1,6 +1,7 @@
 //! Sources named by whoever configured the run: hook directories passed through `WARP_HOOK_DIRS`,
 //! `hooks` entries in the run's configuration file, and factory definitions. They are approved by
-//! construction, so they activate without consulting the trust policy.
+//! construction, so they activate without consulting the trust policy. The file-name constants
+//! both project and explicit sources share live here too.
 
 use std::path::{Path, PathBuf};
 

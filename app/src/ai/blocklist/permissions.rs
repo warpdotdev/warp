@@ -126,8 +126,8 @@ pub enum FileWritePermissionDeniedReason {
     AlwaysAskEnabled,
     Inconclusive,
     AgentDecided,
-    /// The path is a system-protected file (e.g. an MCP config) that requires explicit approval
-    /// in local sessions regardless of autonomy settings.
+    /// The path is a protected file that needs explicit approval regardless of autonomy
+    /// settings: an MCP config outside a sandbox, or a hook file or a script it names anywhere.
     ProtectedPath,
 }
 
@@ -1242,15 +1242,15 @@ fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> S
 /// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected.
 /// Returns `None` if no paths are protected.
 fn check_protected_write_paths(paths: &[PathBuf], ctx: &AppContext) -> Option<FileWritePermission> {
-    // MCP configs can inject arbitrary context into the agent, so local edits require approval.
+    // MCP configs can inject arbitrary context into the agent, so edits to them need approval.
     // A sandboxed run owns its checkout, so there they follow the profile.
-    let touches_mcp_config = !AppExecutionMode::as_ref(ctx).is_sandboxed()
-        && paths
-            .iter()
-            .any(|p| mcp_provider_from_file_path(p).is_some());
+    let sandboxed = AppExecutionMode::as_ref(ctx).is_sandboxed();
+    let touches_mcp_config = paths
+        .iter()
+        .any(|p| mcp_provider_from_file_path(p).is_some());
     // Hook files and the scripts they name run as code before the agent's own permission check,
-    // so the agent may not rewrite them mid-run anywhere, including in a sandbox.
-    if touches_mcp_config || touches_hook_source(paths, ctx) {
+    // so edits to them need approval everywhere, including in a sandbox.
+    if (touches_mcp_config && !sandboxed) || touches_hook_source(paths, ctx) {
         Some(FileWritePermission::Denied(
             FileWritePermissionDeniedReason::ProtectedPath,
         ))

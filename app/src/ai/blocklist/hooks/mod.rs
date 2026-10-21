@@ -2,7 +2,9 @@
 //! boundaries) and exposes the function the agent loop calls at that moment. Every entry point
 //! starts with [`HookRuntime::is_active`], or [`HookRuntime::is_installed`] when it only clears
 //! state, and returns early when hooks are off or nothing is configured, so the inactive path
-//! adds no work beyond that check.
+//! adds no work beyond that check. `HookRuntime` also wires discovery: it hands detected
+//! repository roots to the hook file watcher and pins the active set when the run's first
+//! request goes out.
 
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
@@ -58,8 +60,6 @@ pub struct HookRuntime {
     run_metadata: Option<RunMetadata>,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
-    /// Created when the first project root is detected, so a process that never visits a
-    /// repository starts no file watcher.
     #[cfg(feature = "local_fs")]
     config_watcher: Option<ModelHandle<HookConfigWatcher>>,
     #[cfg(test)]
@@ -188,12 +188,13 @@ impl HookRuntime {
         let Some(root) = repository.as_ref(ctx).root_dir().to_local_path() else {
             return;
         };
-        let watcher = self.config_watcher(surface, ctx);
+        let watcher = self.config_watcher_or_start(surface, ctx);
         watcher.update(ctx, |watcher, ctx| watcher.add_root(&root, ctx));
     }
 
+    /// The watcher, started on first use so a process that never visits a repository runs none.
     #[cfg(feature = "local_fs")]
-    fn config_watcher(
+    fn config_watcher_or_start(
         &mut self,
         surface: HookSurface,
         ctx: &mut ModelContext<Self>,
@@ -337,6 +338,7 @@ fn posture_for_scopes(
     scopes: &[impl TeamScope],
     ctx: &AppContext,
 ) -> CommandExecutionPosture {
+    // Everything get_execute_commands_setting reads; a test app may register only some of it.
     if !ctx.has_singleton_model::<BlocklistAIPermissions>()
         || !ctx.has_singleton_model::<AIExecutionProfilesModel>()
         || !ctx.has_singleton_model::<AppExecutionMode>()
@@ -359,26 +361,19 @@ fn posture_from_settings(
 ) -> CommandExecutionPosture {
     settings
         .into_iter()
-        .map(|setting| match setting {
-            ActionPermission::AlwaysAllow => CommandExecutionPosture::AutoApproves,
-            ActionPermission::AlwaysAsk | ActionPermission::AgentDecides => {
-                CommandExecutionPosture::RequiresApproval
-            }
-            ActionPermission::Unknown => CommandExecutionPosture::Unknown,
-        })
-        .reduce(|current, next| match (current, next) {
-            (CommandExecutionPosture::RequiresApproval, _)
-            | (_, CommandExecutionPosture::RequiresApproval) => {
-                CommandExecutionPosture::RequiresApproval
-            }
-            (CommandExecutionPosture::Unknown, _) | (_, CommandExecutionPosture::Unknown) => {
-                CommandExecutionPosture::Unknown
-            }
-            (CommandExecutionPosture::AutoApproves, CommandExecutionPosture::AutoApproves) => {
-                CommandExecutionPosture::AutoApproves
-            }
-        })
+        .map(posture_for_setting)
+        .reduce(CommandExecutionPosture::strictest)
         .unwrap_or(CommandExecutionPosture::Unknown)
+}
+
+fn posture_for_setting(setting: ActionPermission) -> CommandExecutionPosture {
+    match setting {
+        ActionPermission::AlwaysAllow => CommandExecutionPosture::AutoApproves,
+        ActionPermission::AlwaysAsk | ActionPermission::AgentDecides => {
+            CommandExecutionPosture::RequiresApproval
+        }
+        ActionPermission::Unknown => CommandExecutionPosture::Unknown,
+    }
 }
 
 // Driver checks. Unknown conversations fail every check.

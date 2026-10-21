@@ -23,6 +23,15 @@ const POSTURES: [CommandExecutionPosture; 3] = [
 ];
 
 #[test]
+fn strictest_prefers_requires_approval_then_unknown_then_auto_approves() {
+    use CommandExecutionPosture::*;
+    assert_eq!(AutoApproves.strictest(AutoApproves), AutoApproves);
+    assert_eq!(AutoApproves.strictest(Unknown), Unknown);
+    assert_eq!(Unknown.strictest(RequiresApproval), RequiresApproval);
+    assert_eq!(RequiresApproval.strictest(AutoApproves), RequiresApproval);
+}
+
+#[test]
 fn deny_all_keeps_every_source_inert() {
     let policy = DenyAllTrustPolicy;
     for surface in SURFACES {
