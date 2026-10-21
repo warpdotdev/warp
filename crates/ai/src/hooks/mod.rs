@@ -6,7 +6,7 @@
 pub mod adapters;
 pub mod dispatch;
 #[cfg(all(test, feature = "local_fs"))]
-mod e2e_slice_tests;
+mod e2e_tests;
 pub mod model;
 pub mod notices;
 pub mod permission;
