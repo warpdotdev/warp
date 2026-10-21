@@ -43,12 +43,30 @@ fn cursor_hook() -> HookIdentity {
         run_id: None,
         user_email: None,
         remote: false,
-        session_env: Vec::new(),
     }
 }
 
+fn session(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
 fn build(runner: RunnerEnvironment, hook: HookIdentity) -> Vec<(OsString, OsString)> {
-    build_environment(EnvironmentInput { runner, hook })
+    build_with_session(runner, hook, Vec::new())
+}
+
+fn build_with_session(
+    runner: RunnerEnvironment,
+    hook: HookIdentity,
+    session_env: Vec<(String, String)>,
+) -> Vec<(OsString, OsString)> {
+    build_environment(EnvironmentInput {
+        runner,
+        hook,
+        session_env,
+    })
 }
 
 #[test]
@@ -192,16 +210,15 @@ fn path_and_home_come_from_the_runner_when_it_has_them() {
 
 #[test]
 fn the_hook_session_environment_is_applied_but_cannot_touch_protected_names() {
-    let mut hook = cursor_hook();
-    hook.session_env = vec![
-        ("WARP_PROJECT_DIR".to_owned(), "/hijacked".to_owned()),
-        ("WARP_HOOK_PROTOCOL_VERSION".to_owned(), "99".to_owned()),
-        ("CURSOR_VERSION".to_owned(), "9.9.9".to_owned()),
-        ("MY_TOKEN".to_owned(), "from-session-start".to_owned()),
-        ("PATH".to_owned(), "/session/bin".to_owned()),
-        ("TERM".to_owned(), "dumb".to_owned()),
-    ];
-    let variables = build(runner(), hook);
+    let session_env = session(&[
+        ("WARP_PROJECT_DIR", "/hijacked"),
+        ("WARP_HOOK_PROTOCOL_VERSION", "99"),
+        ("CURSOR_VERSION", "9.9.9"),
+        ("MY_TOKEN", "from-session-start"),
+        ("PATH", "/session/bin"),
+        ("TERM", "dumb"),
+    ]);
+    let variables = build_with_session(runner(), cursor_hook(), session_env);
     assert_eq!(value_of(&variables, "WARP_PROJECT_DIR"), Some("/work/repo"));
     assert_eq!(
         value_of(&variables, "WARP_HOOK_PROTOCOL_VERSION"),
@@ -219,15 +236,14 @@ fn the_hook_session_environment_is_applied_but_cannot_touch_protected_names() {
 
 #[test]
 fn a_session_variable_the_operating_system_would_reject_is_dropped() {
-    let mut hook = cursor_hook();
-    hook.session_env = vec![
-        (String::new(), "empty name".to_owned()),
-        ("A=B".to_owned(), "equals in name".to_owned()),
-        ("NUL\0NAME".to_owned(), "nul in name".to_owned()),
-        ("NUL_VALUE".to_owned(), "a\0b".to_owned()),
-        ("FINE".to_owned(), "kept".to_owned()),
-    ];
-    let variables = invocation_environment(&hook);
+    let session_env = session(&[
+        ("", "empty name"),
+        ("A=B", "equals in name"),
+        ("NUL\0NAME", "nul in name"),
+        ("NUL_VALUE", "a\0b"),
+        ("FINE", "kept"),
+    ]);
+    let variables = invocation_environment(&cursor_hook(), &session_env);
     let names = names_of(&variables);
     assert!(!names.contains(&""));
     assert!(!names.contains(&"A=B"));
@@ -239,12 +255,11 @@ fn a_session_variable_the_operating_system_would_reject_is_dropped() {
 fn every_name_appears_once() {
     let mut runner = runner();
     runner.variables.push(var("PATH", "/dup/bin"));
-    let mut hook = cursor_hook();
-    hook.session_env = vec![
-        ("TERM".to_owned(), "a".to_owned()),
-        ("TERM".to_owned(), "b".to_owned()),
-    ];
-    let variables = build(runner, hook);
+    let variables = build_with_session(
+        runner,
+        cursor_hook(),
+        session(&[("TERM", "a"), ("TERM", "b")]),
+    );
     let mut names = names_of(&variables);
     let total = names.len();
     names.sort_unstable();
@@ -257,13 +272,14 @@ fn every_name_appears_once() {
 fn the_two_layers_compose_to_the_whole_policy() {
     let runner = runner();
     let hook = cursor_hook();
+    let session_env = session(&[("MY_TOKEN", "from-session-start")]);
     let mut composed = host_environment(&runner);
-    let invocation = invocation_environment(&hook);
+    let invocation = invocation_environment(&hook, &session_env);
     for (name, value) in invocation {
         composed.retain(|(existing, _)| *existing != name);
         composed.push((name, value));
     }
-    let mut whole = build(runner, hook);
+    let mut whole = build_with_session(runner, hook, session_env);
     composed.sort();
     whole.sort();
     assert_eq!(composed, whole);
@@ -275,7 +291,7 @@ fn protected_names_cover_everything_the_policy_sets_itself() {
     hook.run_id = Some("run".to_owned());
     hook.user_email = Some("dev@example.com".to_owned());
     hook.remote = true;
-    let set_by_policy = invocation_environment(&hook);
+    let set_by_policy = invocation_environment(&hook, &[]);
     for (name, _) in set_by_policy {
         let name = name.to_str().expect("utf-8");
         assert!(PROTECTED_NAMES.contains(&name), "{name} is not protected");
@@ -319,16 +335,12 @@ mod subprocess {
 
         let runner = CommandHookRunner::new(Arc::new(|| Some(OsString::from("/captured/bin"))))
             .with_home(Some(PathBuf::from("/custom/home")));
-        let mut hook = cursor_hook();
-        hook.session_env = vec![
-            ("FROM_SESSION".to_owned(), "yes".to_owned()),
-            ("WARP_PROJECT_DIR".to_owned(), "/hijacked".to_owned()),
-        ];
+        let session_env = session(&[("FROM_SESSION", "yes"), ("WARP_PROJECT_DIR", "/hijacked")]);
         let outcome = block_on(runner.run(HookInvocation {
             binding: test_binding_id(test_source_id("hooks.json"), "sessionStart", 0),
             command: "./env.sh".to_owned(),
             cwd: dir.path().to_path_buf(),
-            env: invocation_environment(&hook),
+            env: invocation_environment(&cursor_hook(), &session_env),
             stdin: b"{}".to_vec(),
             timeout: Duration::from_secs(10),
             cancel: Arc::new(AtomicBool::new(false)),

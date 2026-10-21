@@ -132,22 +132,22 @@ pub fn init() {
     }
 }
 
+/// Exit code the processes in a terminated job report; nonzero so an ended child is never mistaken
+/// for a successful one.
+const TERMINATED_EXIT_CODE: u32 = 1;
+
 /// A Job Object that holds one spawned process and everything it starts. The job is created with
 /// kill-on-close and no breakaway, so the whole tree ends when the job is terminated or when the
 /// last handle to it closes, including when this process exits without running destructors.
 ///
 /// Unlike [`JobObject`], the handle is owned and closed on drop, which is what a job scoped to one
-/// short-lived child wants.
+/// short-lived child wants. It calls the `windows` crate directly because `win32job::Job` has no
+/// way to terminate a job.
 #[derive(Debug)]
 pub struct ProcessJob {
     // Kept as an integer so the job can travel with a `Send` future; `HANDLE` wraps a raw pointer.
     handle: isize,
 }
-
-// SAFETY: a job handle is a kernel object reference with no thread affinity; every use goes
-// through Win32 calls that are safe to make from any thread.
-unsafe impl Send for ProcessJob {}
-unsafe impl Sync for ProcessJob {}
 
 impl ProcessJob {
     /// Creates a job and assigns the process with id `pid` to it. The caller must still hold the
@@ -179,7 +179,7 @@ impl ProcessJob {
     /// Ends every process in the job now.
     pub fn terminate(&self) -> io::Result<()> {
         // SAFETY: the handle is a live job handle owned by `self`.
-        unsafe { TerminateJobObject(self.handle(), 1) }.map_err(Into::into)
+        unsafe { TerminateJobObject(self.handle(), TERMINATED_EXIT_CODE) }.map_err(Into::into)
     }
 
     /// How many processes in the job are still running.

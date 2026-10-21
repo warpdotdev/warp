@@ -23,7 +23,18 @@ fn eventually(mut condition: impl FnMut() -> bool) -> bool {
 mod unix {
     use futures_lite::io::{AsyncBufReadExt, BufReader};
 
+    use super::super::killpg_says_gone;
     use super::*;
+
+    #[test]
+    fn only_esrch_means_the_group_is_gone() {
+        assert!(!killpg_says_gone(0, None));
+        assert!(killpg_says_gone(-1, Some(libc::ESRCH)));
+        // The group exists but holds a process this user cannot signal: still a live tree.
+        assert!(!killpg_says_gone(-1, Some(libc::EPERM)));
+        assert!(!killpg_says_gone(-1, Some(libc::EINVAL)));
+        assert!(!killpg_says_gone(-1, None));
+    }
 
     fn process_exists(pid: i32) -> bool {
         // SAFETY: signal 0 only checks that the pid exists.

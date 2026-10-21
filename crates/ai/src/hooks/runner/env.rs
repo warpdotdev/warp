@@ -1,9 +1,7 @@
-//! The environment a hook process runs in. It is built in two layers so the two parties that know
-//! the inputs can each contribute theirs: the runner supplies the host layer (its own process
-//! environment under the scrub policy, the home directory, the captured login shell `PATH`, and
-//! the protocol version), and the dispatcher supplies the per-invocation layer (the hook-session
-//! variables and the protected identity variables, which are set last so nothing can override
-//! them). [`build_environment`] is the whole policy in one call.
+//! The environment a hook process runs in. It is built in two layers because two parties know the
+//! inputs: the runner knows its host, the dispatcher knows the hook and the run. The dispatcher's
+//! layer is applied second, and the protected names in it cannot be overridden by anything before
+//! it. [`build_environment`] is the whole policy in one call.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -12,7 +10,7 @@ use crate::hooks::model::HookFormat;
 
 /// Variables Warp's own process may carry that a hook must not inherit: every Warp-owned
 /// credential Warp reads from its own environment (the CLI API key, the workload token a cloud
-/// run uses to fetch its secrets and forge credentials, and the tracing token), and the session
+/// run uses to fetch its secrets and git-host credentials, and the tracing token), and the session
 /// identity and shell-bootstrap switches an enclosing Warp terminal exports to the shells it
 /// starts (present when Warp itself was launched from inside a Warp tab). A Warp-owned credential
 /// Warp learns to read from its environment belongs here; third-party keys a worker injected
@@ -73,7 +71,7 @@ pub struct RunnerEnvironment {
     pub protocol_version: u32,
 }
 
-/// What one invocation knows about the hook and the run it belongs to.
+/// Who the hook is and which run it belongs to.
 #[derive(Debug, Clone)]
 pub struct HookIdentity {
     /// The format of the hook's source. Vendor aliases follow it, not where the file lives.
@@ -84,8 +82,6 @@ pub struct HookIdentity {
     pub user_email: Option<String>,
     /// Whether the run's workspace is remote from the user's machine.
     pub remote: bool,
-    /// Variables earlier hooks in this conversation asked to set for later ones.
-    pub session_env: Vec<(String, String)>,
 }
 
 /// Everything [`build_environment`] needs.
@@ -93,12 +89,14 @@ pub struct HookIdentity {
 pub struct EnvironmentInput {
     pub runner: RunnerEnvironment,
     pub hook: HookIdentity,
+    /// Variables earlier hooks in this conversation asked to set for later ones.
+    pub session_env: Vec<(String, String)>,
 }
 
 /// The complete environment for one hook process: the host layer, then the invocation layer.
 pub fn build_environment(input: EnvironmentInput) -> Vec<(OsString, OsString)> {
     let mut variables = host_environment(&input.runner);
-    for (name, value) in invocation_environment(&input.hook) {
+    for (name, value) in invocation_environment(&input.hook, &input.session_env) {
         set(&mut variables, name, value);
     }
     variables
@@ -113,15 +111,15 @@ pub fn host_environment(runner: &RunnerEnvironment) -> Vec<(OsString, OsString)>
         .filter(|(name, _)| !is_scrubbed(name) && !is_protected(name))
         .cloned()
         .collect::<Vec<_>>();
+    let mut put = |name: &str, value: OsString| set(&mut variables, name.into(), value);
     if let Some(home) = &runner.home {
-        set(&mut variables, "HOME".into(), home.clone().into_os_string());
+        put("HOME", home.clone().into_os_string());
     }
     if let Some(path) = &runner.login_path {
-        set(&mut variables, "PATH".into(), path.clone());
+        put("PATH", path.clone());
     }
-    set(
-        &mut variables,
-        "WARP_HOOK_PROTOCOL_VERSION".into(),
+    put(
+        "WARP_HOOK_PROTOCOL_VERSION",
         runner.protocol_version.to_string().into(),
     );
     variables
@@ -129,9 +127,13 @@ pub fn host_environment(runner: &RunnerEnvironment) -> Vec<(OsString, OsString)>
 
 /// The invocation layer: the hook-session variables, then the protected identity variables and
 /// the format's aliases. A session variable with a protected or unusable name is dropped.
-pub fn invocation_environment(hook: &HookIdentity) -> Vec<(OsString, OsString)> {
+pub fn invocation_environment(
+    hook: &HookIdentity,
+    session_env: &[(String, String)],
+) -> Vec<(OsString, OsString)> {
     let mut variables = Vec::new();
-    for (name, value) in &hook.session_env {
+    let mut put = |name: &str, value: OsString| set(&mut variables, name.into(), value);
+    for (name, value) in session_env {
         if is_protected(OsStr::new(name)) {
             log::warn!("hook-session variable {name} was ignored: Warp sets it");
             continue;
@@ -140,49 +142,33 @@ pub fn invocation_environment(hook: &HookIdentity) -> Vec<(OsString, OsString)> 
             log::warn!("hook-session variable {name:?} was ignored: not a valid variable");
             continue;
         }
-        set(&mut variables, name.into(), value.into());
+        put(name, value.into());
     }
 
     let project_dir = hook.project_dir.clone().into_os_string();
-    set(
-        &mut variables,
-        "WARP_PROJECT_DIR".into(),
-        project_dir.clone(),
-    );
-    set(
-        &mut variables,
-        "WARP_VERSION".into(),
-        hook.warp_version.clone().into(),
-    );
+    put("WARP_PROJECT_DIR", project_dir.clone());
+    put("WARP_VERSION", hook.warp_version.clone().into());
     if let Some(run_id) = &hook.run_id {
-        set(&mut variables, "WARP_RUN_ID".into(), run_id.into());
+        put("WARP_RUN_ID", run_id.into());
     }
     if let Some(email) = &hook.user_email {
-        set(&mut variables, "WARP_USER_EMAIL".into(), email.into());
+        put("WARP_USER_EMAIL", email.into());
     }
     if hook.remote {
-        set(&mut variables, "WARP_CODE_REMOTE".into(), "true".into());
+        put("WARP_CODE_REMOTE", "true".into());
     }
 
     match hook.format {
         HookFormat::Cursor => {
-            set(
-                &mut variables,
-                "CURSOR_PROJECT_DIR".into(),
-                project_dir.clone(),
-            );
-            set(
-                &mut variables,
-                "CURSOR_VERSION".into(),
-                hook.warp_version.clone().into(),
-            );
+            put("CURSOR_PROJECT_DIR", project_dir.clone());
+            put("CURSOR_VERSION", hook.warp_version.clone().into());
             if let Some(email) = &hook.user_email {
-                set(&mut variables, "CURSOR_USER_EMAIL".into(), email.into());
+                put("CURSOR_USER_EMAIL", email.into());
             }
             if hook.remote {
-                set(&mut variables, "CURSOR_CODE_REMOTE".into(), "true".into());
+                put("CURSOR_CODE_REMOTE", "true".into());
             }
-            set(&mut variables, "CLAUDE_PROJECT_DIR".into(), project_dir);
+            put("CLAUDE_PROJECT_DIR", project_dir);
         }
     }
     variables
@@ -208,8 +194,8 @@ fn is_usable_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('=') && !name.contains('\0')
 }
 
-/// Replaces any existing variable called `name`, so every name appears once and the last writer
-/// wins regardless of the order the layers were applied in.
+/// Replaces any existing variable called `name`, so the list never holds a name twice and callers
+/// do not depend on `Command::envs` keeping the last duplicate.
 fn set(variables: &mut Vec<(OsString, OsString)>, name: OsString, value: OsString) {
     variables.retain(|(existing, _)| !names_match(existing, &name.to_string_lossy()));
     variables.push((name, value));
