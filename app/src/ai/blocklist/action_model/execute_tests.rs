@@ -406,7 +406,10 @@ mod hooks {
             let_background_work_settle(&mut app).await;
             assert_eq!(harness.hooks.adapter.encoded_count(), 0);
             assert_eq!(harness.hooks.runner.invocation_count(), 0);
-            assert!(app.read(|ctx| cached_state(&shell.id, ctx)).is_none());
+            assert!(
+                app.read(|ctx| cached_state(harness.conversation_id, &shell.id, ctx))
+                    .is_none()
+            );
             assert!(app.read(|ctx| tool_result::observed_terminal_results(ctx).is_empty()));
         });
     }
@@ -481,7 +484,7 @@ mod hooks {
             );
             assert_eq!(reason_of(&first), Some(NotExecutedReason::WaitingOnHooks));
             assert!(matches!(
-                app.read(|ctx| cached_state(&shell.id, ctx)),
+                app.read(|ctx| cached_state(harness.conversation_id, &shell.id, ctx)),
                 Some(PreToolHookState::Pending)
             ));
 
@@ -491,7 +494,7 @@ mod hooks {
             })
             .await;
             assert!(matches!(
-                app.read(|ctx| cached_state(&shell.id, ctx)),
+                app.read(|ctx| cached_state(harness.conversation_id, &shell.id, ctx)),
                 Some(PreToolHookState::Resolved(_))
             ));
             assert_eq!(
@@ -657,7 +660,7 @@ mod hooks {
             assert_eq!(reason_of(&first), Some(NotExecutedReason::WaitingOnHooks));
             settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
             let cancel = app
-                .read(|ctx| pre_tool::cancel_flag(&shell.id, ctx))
+                .read(|ctx| pre_tool::cancel_flag(harness.conversation_id, &shell.id, ctx))
                 .expect("the dispatch has a cancel flag");
 
             app.update(|ctx| pre_tool::cancel_all_for_conversation(harness.conversation_id, ctx));
@@ -665,7 +668,10 @@ mod hooks {
 
             gate.release();
             let_background_work_settle(&mut app).await;
-            assert!(app.read(|ctx| cached_state(&shell.id, ctx)).is_none());
+            assert!(
+                app.read(|ctx| cached_state(harness.conversation_id, &shell.id, ctx))
+                    .is_none()
+            );
             assert!(
                 events.borrow().is_empty(),
                 "no verdict event and no execution after cancellation: {:?}",
