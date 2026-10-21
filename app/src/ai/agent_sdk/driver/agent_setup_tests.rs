@@ -7,6 +7,10 @@ use tempfile::TempDir;
 use warpui::App;
 
 use super::super::AgentDriverOptions;
+use super::super::cloud_provider::{
+    CloudProvider, CloudProviderSetupError, Result as ProviderResult,
+};
+use super::super::environment::WorkspaceConfiguration;
 use super::super::terminal::TerminalDriver;
 use super::*;
 use crate::server::server_api::ai::MockAIClient;
@@ -92,6 +96,65 @@ fn resource_preparation_rejects_a_consumed_workspace() {
         .await
         .unwrap_err();
         assert!(matches!(error, AgentDriverError::InvalidRuntimeState));
+    });
+}
+
+#[test]
+fn standby_provider_setup_precedes_workspace_preparation() {
+    struct FailingProvider;
+    impl CloudProvider for FailingProvider {
+        fn env_vars(&self) -> ProviderResult<HashMap<OsString, OsString>> {
+            Ok(HashMap::new())
+        }
+
+        fn setup(
+            &mut self,
+            spawner: ModelSpawner<TerminalDriver>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ProviderResult<()>> + Send + '_>>
+        {
+            Box::pin(async move {
+                spawner.spawn(|_, _| ()).await.unwrap();
+                Err(CloudProviderSetupError::new(
+                    "test",
+                    anyhow::anyhow!("provider setup failed"),
+                ))
+            })
+        }
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let root = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx);
+            driver.cloud_providers = vec![Box::new(FailingProvider)];
+            let mut workspace = WorkspaceConfiguration::default();
+            workspace.setup_commands = vec!["must-not-run".into()];
+            driver.workspace = Some(WorkspaceState::Pending(workspace));
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let error = AgentDriver::prepare_resources(
+            &foreground,
+            Vec::new(),
+            GlobalSkillResolution {
+                specs: Vec::new(),
+                repos: Vec::new(),
+            },
+            &setup_events,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            AgentDriverError::CloudProviderSetupFailed(_)
+        ));
     });
 }
 

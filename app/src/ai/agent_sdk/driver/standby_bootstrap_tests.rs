@@ -134,7 +134,8 @@ fn verify_standby_bootstrap() {
                             "mcpServersJson": "{}",
                             "skills": [],
                             "factorySkillDirs": [],
-                            "computerUseEnabled": false
+                            "computerUseEnabled": false,
+                            "providers": null
                         },
                         "environmentVariables": [
                             {"name": "STANDBY_TEST_ENV", "value": "prepared"}

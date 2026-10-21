@@ -273,6 +273,7 @@ impl SetupStep {
             | Self::EnvironmentResolution
             | Self::SkillRepoClone
             | Self::TerminalBootstrap
+            | Self::CloudProviderSetup
             | Self::McpServerStartup
             | Self::AgentProfileConfiguration
             | Self::GlobalSkillResolution
@@ -292,9 +293,6 @@ impl SetupStep {
             // git credentials through task-keyed APIs even though the server resolves both
             // from agent-scoped inputs. `AgentCredentialsFetch` is the pre-warmed equivalent.
             Self::TaskDataFetch
-            // Provider credentials are time-boxed well below a standby's lifetime, so they
-            // must be minted fresh for the run rather than pre-warmed.
-            | Self::CloudProviderSetup
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading

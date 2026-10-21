@@ -8,6 +8,7 @@ use warpui::App;
 
 use super::environment_preparation::{FILE_ENV, MODE_ENV, PreparationPolicy};
 use super::*;
+use crate::ai::cloud_environments::{AwsProviderConfig, GcpProviderConfig, ProvidersConfig};
 use crate::server::server_api::prewarmed_sandbox::PrewarmedSandboxControlEvent;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -74,7 +75,31 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
         });
         let driver = app
             .add_model(|ctx| AgentDriver::new_for_test(root.path().into(), terminal_driver, ctx));
-        let spawner = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let (spawner, credential_paths) = driver.update(&mut app, |driver, ctx| {
+            driver.cloud_providers = cloud_provider::load_providers(
+                &ProvidersConfig {
+                    aws: Some(AwsProviderConfig {
+                        role_arn: "arn:aws:iam::123:role/Standby".into(),
+                    }),
+                    gcp: Some(GcpProviderConfig {
+                        project_number: "123".into(),
+                        workload_identity_federation_pool_id: "pool".into(),
+                        workload_identity_federation_provider_id: "provider".into(),
+                        service_account_email: None,
+                    }),
+                },
+                None,
+            )
+            .unwrap();
+            let mut vars = HashMap::new();
+            cloud_provider::collect_env_vars(&driver.cloud_providers, &mut vars).unwrap();
+            let paths = [
+                PathBuf::from(&vars[OsStr::new("AWS_WEB_IDENTITY_TOKEN_FILE")]),
+                PathBuf::from(&vars[OsStr::new("GOOGLE_APPLICATION_CREDENTIALS")]),
+            ];
+            assert!(paths.iter().all(|path| path.exists()));
+            (ctx.spawner(), paths)
+        });
         let mut unsupported = config();
         unsupported.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
         let error = AgentDriver::prepare_prewarmed_assignment(
@@ -87,6 +112,7 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
         .await
         .unwrap_err();
         assert!(matches!(error, AgentDriverError::ConfigBuildFailed(_)));
+        assert!(credential_paths.iter().all(|path| !path.exists()));
     });
     report.assert();
 }
