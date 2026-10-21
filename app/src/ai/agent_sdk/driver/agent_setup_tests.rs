@@ -458,6 +458,34 @@ fn a_configured_source_inside_a_repository_follows_the_rule_for_project_hooks() 
 }
 
 #[test]
+fn a_hook_directory_is_not_held_back_when_the_config_file_names_the_same_file() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let repo = working_dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write_hooks_file(&repo.join("hooks"));
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hook_dirs = vec![repo.join("hooks")];
+            driver.hook_options.configured_sources = vec![ExplicitHookSource {
+                path: repo.join("hooks/hooks.json"),
+                format: HookFormat::Cursor,
+                scope: ExplicitSourceScope::Run,
+            }];
+            driver.hook_options.strict = true;
+            driver.load_hook_sources_for_run(ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(messenger.diagnostics().is_empty());
+        assert_eq!(loaded_hook_sources(&app).len(), 1);
+    });
+}
+
+#[test]
 fn hook_sources_are_not_loaded_when_hooks_are_off() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(false);

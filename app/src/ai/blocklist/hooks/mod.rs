@@ -24,9 +24,9 @@ use std::time::Duration;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    CommandExecutionPosture, DispatchPolicy, ExplicitHookSource, HookDispatcher, HookEnvelope,
-    HookMessenger, HookRegistry, HookRunner, HookSurface, HookTurnId, RegistrySnapshot,
-    RunMetadata,
+    CommandExecutionPosture, DispatchPolicy, ExplicitHookSource, HookDiagnostic, HookDispatcher,
+    HookEnvelope, HookMessenger, HookRegistry, HookRegistryEvent, HookRunner, HookSourceKind,
+    HookSurface, HookTurnId, RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
@@ -119,6 +119,9 @@ pub struct HookRuntime {
     run: Option<RunIdentity>,
     /// The explicit sources the run was configured with, whether or not each one loaded.
     delivered_sources: Vec<ExplicitHookSource>,
+    /// The diagnostics already known when the run pinned, plus those reported since. `None`
+    /// until the run pins.
+    diagnostics_seen_since_pin: Option<Vec<HookDiagnostic>>,
     strict_policy: StrictHookPolicy,
     headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
@@ -142,6 +145,7 @@ impl HookRuntime {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         Self::subscribe_to_run_start(ctx);
+        Self::subscribe_to_registry_changes(ctx);
         #[cfg(feature = "local_fs")]
         Self::subscribe_to_detected_repositories(ctx);
         Self {
@@ -150,6 +154,7 @@ impl HookRuntime {
             messenger,
             run: None,
             delivered_sources: Vec::new(),
+            diagnostics_seen_since_pin: None,
             strict_policy: StrictHookPolicy::default(),
             headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
@@ -222,6 +227,33 @@ impl HookRuntime {
         );
     }
 
+    /// After the run pins, a repository's hook file that is found, changed, or broken can no
+    /// longer take effect; the registry records why, and this reports it through the messenger so
+    /// the run's output says so too.
+    fn subscribe_to_registry_changes(ctx: &mut ModelContext<Self>) {
+        ctx.subscribe_to_model(&HookRegistry::handle(ctx), |me, _, event, ctx| match event {
+            HookRegistryEvent::SnapshotChanged { .. } => me.report_project_diagnostics(ctx),
+        });
+    }
+
+    fn report_project_diagnostics(&mut self, ctx: &AppContext) {
+        let Some(seen) = self.diagnostics_seen_since_pin.as_mut() else {
+            return;
+        };
+        for diagnostic in &self.registry.as_ref(ctx).snapshot().diagnostics {
+            let is_project_file = match diagnostic.source.kind {
+                HookSourceKind::ProjectCursorFile => true,
+                HookSourceKind::RunDelivered
+                | HookSourceKind::FactoryAgent
+                | HookSourceKind::FactoryWide => false,
+            };
+            if is_project_file && !seen.contains(diagnostic) {
+                self.messenger.diagnostic(diagnostic.clone());
+                seen.push(diagnostic.clone());
+            }
+        }
+    }
+
     /// Drops everything remembered about a conversation that no longer exists. A dispatch still
     /// running for it is told to stop.
     fn forget_conversation(&mut self, conversation_id: AIConversationId) {
@@ -288,6 +320,8 @@ impl HookRuntime {
             });
         }
         let revision = HookRegistry::change(&self.registry, ctx, |registry| registry.pin(posture));
+        self.diagnostics_seen_since_pin =
+            Some(self.registry.as_ref(ctx).snapshot().diagnostics.clone());
         log::info!(
             "hook registry pinned for the run: surface={surface:?} posture={posture:?} \
              revision={revision}"

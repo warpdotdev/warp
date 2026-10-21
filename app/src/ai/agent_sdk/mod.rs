@@ -346,10 +346,15 @@ fn run_agent(
                     "unexpected argument '--harness-transport' found"
                 ));
             }
-            if let Some(flag) = first_hook_flag(&args)
-                && !FeatureFlag::AgentHooks.is_enabled()
-            {
-                return Err(anyhow::anyhow!("unexpected argument '{flag}' found"));
+            if let Some(flag) = first_hook_flag(&args) {
+                if !FeatureFlag::AgentHooks.is_enabled() {
+                    return Err(anyhow::anyhow!("unexpected argument '{flag}' found"));
+                }
+                if args.harness != Harness::Oz {
+                    return Err(anyhow::anyhow!(
+                        "'{flag}' applies only to the oz harness; other harnesses run their own hooks"
+                    ));
+                }
             }
 
             let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
@@ -473,6 +478,16 @@ fn build_merged_config_and_task(
         Some(path) => Some(config_file::load_config_file_for_local_run(path)?),
         None => None,
     };
+    if args.harness != Harness::Oz
+        && loaded_file
+            .as_ref()
+            .is_some_and(|loaded| loaded.file.has_hook_settings())
+    {
+        return Err(anyhow::anyhow!(
+            "`hooks`, `hooks_strict`, and `hooks_on_ask` apply only to the oz harness; other \
+             harnesses run their own hooks"
+        ));
+    }
     let hooks = hook_run_options(args, loaded_file.as_ref());
 
     let cli_mcp_servers = build_mcp_servers_from_specs(&args.all_mcp_specs())?;
