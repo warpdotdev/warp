@@ -327,6 +327,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
+ "command",
  "computer_use",
  "derivative",
  "dirs 6.0.0",
