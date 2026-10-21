@@ -415,11 +415,11 @@ impl Decoder<'_> {
     }
 
     /// Fields the event does not document. One that names an effect Cursor defines on some other
-    /// event is a control effect the binding cannot produce, so it is reported for the source's
-    /// diagnostics; anything else is only logged.
+    /// event, and whose value asks for that effect, is a control effect the binding cannot
+    /// produce, so it is reported for the source's diagnostics; anything else is only logged.
     fn report_undocumented_fields(&self, output: &Map<String, Value>) -> Vec<UnsupportedEffect> {
         let mut unsupported = Vec::new();
-        for field in output.keys() {
+        for (field, value) in output {
             if self.spec.documented_output.contains(&field.as_str()) {
                 continue;
             }
@@ -431,6 +431,15 @@ impl Decoder<'_> {
                 );
                 continue;
             };
+            if asks_for_nothing(field, value) {
+                log::info!(
+                    "hook {} returned {field}: {value}, which {} does not use and which asks for \
+                     nothing; it was ignored",
+                    self.binding.id,
+                    self.spec.name
+                );
+                continue;
+            }
             let reason = if effect == EffectKind::ReplacementInput
                 && self.control == ControlEffect::Verdict
             {
@@ -540,6 +549,23 @@ fn control_effect_of_field(field: &str) -> Option<EffectKind> {
         "continue" => Some(EffectKind::HaltTurn),
         "followup_message" | "decision" => Some(EffectKind::Continuation),
         _ => None,
+    }
+}
+
+/// Whether a control field carries the value that means "nothing to do" on the events that
+/// define it: `continue: true`, `permission: "allow"`, a `decision` other than `"block"`, or an
+/// empty `followup_message`. Claude-shaped output routinely carries `continue: true`, and a
+/// hook that copies it onto an event that does not define the field has not asked for anything.
+/// A rewrite, a result replacement, and Claude's nested object always ask for something.
+fn asks_for_nothing(field: &str, value: &Value) -> bool {
+    match field {
+        "continue" => value == &Value::Bool(true),
+        "permission" => value == &Value::String("allow".to_owned()),
+        "decision" => value.as_str().is_some_and(|decision| decision != "block"),
+        "followup_message" => value
+            .as_str()
+            .is_some_and(|message| clean_text(message).is_none()),
+        _ => false,
     }
 }
 

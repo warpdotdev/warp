@@ -725,6 +725,63 @@ fn control_fields_an_event_does_not_document_are_reported_and_the_rest_logged() 
     );
 }
 
+/// A control field the event does not define is reported only when its value asks for
+/// something. Claude-shaped output carries `continue: true` as a matter of course; a hook that
+/// copies it onto a shell hook has not asked to stop anything, and the dispatcher would
+/// otherwise deny the command for it.
+#[test]
+fn undocumented_control_fields_whose_values_ask_for_nothing_are_only_logged() {
+    let allow_with_continue = decode(
+        CursorEvent::BeforeShellExecution,
+        false,
+        OK,
+        r#"{"permission":"allow","continue":true}"#,
+    );
+    assert_eq!(allow_with_continue.verdict, HookVerdict::Allow);
+    assert!(allow_with_continue.unsupported.is_empty());
+
+    let no_op_values = decode(
+        CursorEvent::AfterShellExecution,
+        false,
+        OK,
+        r#"{"permission":"allow","continue":true,"decision":"approve","followup_message":" "}"#,
+    );
+    assert_eq!(no_op_values, HookEffects::default());
+
+    let asking_values = decode(
+        CursorEvent::AfterShellExecution,
+        false,
+        OK,
+        r#"{"permission":"deny","continue":false,"decision":"block","followup_message":"again"}"#,
+    );
+    assert_eq!(asking_values.verdict, HookVerdict::NoOpinion);
+    let mut reported = asking_values
+        .unsupported
+        .iter()
+        .map(|entry| entry.effect)
+        .collect::<Vec<_>>();
+    reported.sort();
+    reported.dedup();
+    assert_eq!(
+        reported,
+        vec![
+            EffectKind::Verdict,
+            EffectKind::HaltTurn,
+            EffectKind::Continuation
+        ]
+    );
+
+    // A value of the wrong type is not the no-op value; it is reported like any other request.
+    let wrong_type = decode(
+        CursorEvent::AfterShellExecution,
+        false,
+        OK,
+        r#"{"continue":"true"}"#,
+    );
+    assert_eq!(wrong_type.unsupported.len(), 1);
+    assert_eq!(wrong_type.unsupported[0].effect, EffectKind::HaltTurn);
+}
+
 // Context and environment.
 
 #[test]
