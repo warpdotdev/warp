@@ -385,9 +385,13 @@ pub trait PrewarmedSandboxClient: 'static + Send + Sync {
 
 impl ServerApi {
     fn prewarmed_sandbox_url(sandbox_id: &str, action: &str) -> String {
+        let origin = if action == "ws" {
+            ChannelState::prewarmed_sandbox_control_url()
+        } else {
+            ChannelState::server_root_url()
+        };
         format!(
-            "{}/internal/prewarmed-sandboxes/{}/{action}",
-            ChannelState::server_root_url(),
+            "{origin}/internal/prewarmed-sandboxes/{}/{action}",
             urlencoding::encode(sandbox_id),
         )
     }

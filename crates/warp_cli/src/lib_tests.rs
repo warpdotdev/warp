@@ -3476,6 +3476,47 @@ fn agent_run_cloud_standby_requires_standby_id() {
     assert!(Args::try_parse_from(["warp", "agent", "run-cloud-standby"]).is_err());
 }
 
+#[test]
+#[serial_test::serial]
+fn agent_run_cloud_standby_control_url_uses_env_and_flag_precedence() {
+    let previous = set_env_var(
+        PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV,
+        "https://platform.warp.dev",
+    );
+    for (extra_args, expected) in [
+        (vec![], "https://platform.warp.dev"),
+        (
+            vec!["--prewarmed-sandbox-control-url", "http://localhost:8082"],
+            "http://localhost:8082",
+        ),
+    ] {
+        let args = Args::try_parse_from(
+            [
+                "warp",
+                "agent",
+                "run-cloud-standby",
+                "--standby-id",
+                "sandbox",
+            ]
+            .into_iter()
+            .chain(extra_args),
+        )
+        .unwrap();
+        let Some(Command::CommandLine(command)) = args.command else {
+            panic!("expected a CLI command");
+        };
+        let CliCommand::Agent(AgentCommand::RunCloudStandby(standby_args)) = command.as_ref()
+        else {
+            panic!("expected run-cloud-standby");
+        };
+        assert_eq!(
+            standby_args.prewarmed_sandbox_control_url.as_deref(),
+            Some(expected)
+        );
+    }
+    restore_env_var(PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV, previous);
+}
+
 /// The Namespace worker launches the standby with `--server-root-url`, which the subcommand
 /// does not declare because it is a global flag.
 #[test]

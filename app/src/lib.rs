@@ -1604,6 +1604,11 @@ pub(crate) fn initialize_app(
     } = launch_mode
     {
         server_api.set_prewarmed_sandbox_id(args.standby_id.clone());
+        if let Some(url) = &args.prewarmed_sandbox_control_url
+            && let Err(e) = ChannelState::override_prewarmed_sandbox_control_url(url.clone())
+        {
+            eprintln!("Error: Invalid pre-warmed sandbox control URL: {e:#}");
+        }
     }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]

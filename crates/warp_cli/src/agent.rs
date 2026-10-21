@@ -481,6 +481,13 @@ pub struct RunCloudStandbyArgs {
     /// UID of the pre-warmed sandbox row this container was allocated for.
     #[arg(long = "standby-id", value_name = "ID")]
     pub standby_id: String,
+    /// Override the pre-warmed sandbox control origin.
+    #[arg(
+        long = "prewarmed-sandbox-control-url",
+        hide = true,
+        env = "WARP_PREWARMED_SANDBOX_CONTROL_URL"
+    )]
+    pub prewarmed_sandbox_control_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
