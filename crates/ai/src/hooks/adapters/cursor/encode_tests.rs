@@ -59,6 +59,8 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         CursorEvent::BeforeMcpExecution => {
             tool_pre(mcp_action("write_file", json!({ "path": "notes.txt" })))
         }
+        // An MCP error result reaches the adapter as `tool.failure` until PR 7 reroutes finished
+        // calls to `tool.result`; the encoder reads both payloads the same way.
         CursorEvent::AfterMcpExecution => tool_result(
             mcp_action("write_file", json!({ "path": "notes.txt" })),
             AIAgentActionResultType::CallMCPTool(CallMCPToolResult::Error(
@@ -99,13 +101,30 @@ fn encode(event: CursorEvent, payload: HookPayload) -> Value {
     encode_input(event.spec(), &fixture_envelope(payload))
 }
 
+/// Cursor sends some fields as JSON text inside a string. Their key order is a serializer
+/// detail, so they are compared as parsed JSON.
+fn with_nested_json_parsed(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        for key in ["tool_input", "tool_output", "result_json"] {
+            let parsed = object
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|text| serde_json::from_str::<Value>(text).ok());
+            if let Some(parsed) = parsed {
+                object.insert(key.to_owned(), parsed);
+            }
+        }
+    }
+    value
+}
+
 #[test]
 fn every_phase_1_event_encodes_exactly_its_fixture() {
     for fixture in &EVENT_FIXTURES {
         let encoded = encode(fixture.event, fixture_payload(fixture.event));
         assert_eq!(
-            encoded,
-            json(fixture.stdin),
+            with_nested_json_parsed(encoded),
+            with_nested_json_parsed(json(fixture.stdin)),
             "{} stdin differs from fixtures/{}/stdin.json",
             fixture.event.name(),
             fixture.event.name()
@@ -121,6 +140,27 @@ fn generation_id_is_the_turn_id_once_one_exists() {
     let input = encode_input(CursorEvent::BeforeShellExecution.spec(), &envelope);
     assert_eq!(input["generation_id"], turn.as_uuid().to_string());
     assert_eq!(input["conversation_id"], FIXTURE_CONVERSATION_ID);
+}
+
+#[test]
+fn generation_id_falls_back_to_the_conversation_id_before_a_turn_exists() {
+    let mut envelope = fixture_envelope(HookPayload::SessionStart {
+        is_background_agent: false,
+    });
+    envelope.turn_id = None;
+    for event in [
+        CursorEvent::SessionStart,
+        CursorEvent::BeforeShellExecution,
+        CursorEvent::Stop,
+    ] {
+        let input = encode_input(event.spec(), &envelope);
+        assert_eq!(
+            input["generation_id"],
+            FIXTURE_CONVERSATION_ID,
+            "{}: the key is always present and never a made-up value",
+            event.name()
+        );
+    }
 }
 
 #[test]

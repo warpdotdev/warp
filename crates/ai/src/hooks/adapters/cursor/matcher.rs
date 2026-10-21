@@ -6,35 +6,58 @@ use std::sync::{Arc, Mutex};
 
 use regex::Regex;
 
+use super::config::{ParsedDefinition, ParsedMatcher};
 use super::events::{CursorEventSpec, MatchedValue};
 use super::facets::{finished_shell_command, mcp_tool_call, pending_shell_command};
 use crate::hooks::adapters::DeclaredBinding;
-use crate::hooks::model::HookEnvelope;
+use crate::hooks::model::{HookEnvelope, HookSourceId};
 
-/// Compiled matchers by pattern text. Patterns were validated when the file was parsed, so each
-/// one compiles once here and never per envelope.
+/// Compiled matchers, by source and then by pattern text. A source's entries are replaced each
+/// time it is activated, so a reload does not accumulate patterns, and nothing compiles per
+/// envelope.
 #[derive(Default)]
 pub(super) struct MatcherCache {
-    compiled: Mutex<HashMap<String, Arc<Regex>>>,
+    by_source: Mutex<HashMap<HookSourceId, HashMap<String, Arc<Regex>>>>,
 }
 
 impl MatcherCache {
-    /// Compiles `pattern` now so the first envelope does not pay for it. A pattern that does not
-    /// compile was already skipped at parse time, so nothing is reported here.
-    pub(super) fn precompile(&self, pattern: &str) {
-        if !matches_everything(pattern) {
-            self.get(pattern);
-        }
+    /// Replaces `source`'s entries with the matchers compiled while its definitions were parsed.
+    pub(super) fn install(&self, source: &HookSourceId, definitions: &[ParsedDefinition]) {
+        let compiled = definitions
+            .iter()
+            .filter_map(|definition| match &definition.matcher {
+                Some(ParsedMatcher::Pattern(regex)) => {
+                    Some((regex.as_str().to_owned(), regex.clone()))
+                }
+                Some(ParsedMatcher::Everything(_)) | None => None,
+            })
+            .collect();
+        self.by_source
+            .lock()
+            .expect("matcher cache lock")
+            .insert(source.clone(), compiled);
     }
 
-    fn get(&self, pattern: &str) -> Option<Arc<Regex>> {
-        let mut compiled = self.compiled.lock().expect("matcher cache lock");
+    /// The compiled form of `pattern` for a binding of `source`. A binding that was not installed
+    /// (one built directly rather than declared from a file) is compiled on first use.
+    fn get(&self, source: &HookSourceId, pattern: &str) -> Option<Arc<Regex>> {
+        let mut by_source = self.by_source.lock().expect("matcher cache lock");
+        let compiled = by_source.entry(source.clone()).or_default();
         if let Some(regex) = compiled.get(pattern) {
             return Some(regex.clone());
         }
         let regex = Arc::new(Regex::new(pattern).ok()?);
         compiled.insert(pattern.to_owned(), regex.clone());
         Some(regex)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pattern_count(&self, source: &HookSourceId) -> usize {
+        self.by_source
+            .lock()
+            .expect("matcher cache lock")
+            .get(source)
+            .map_or(0, HashMap::len)
     }
 }
 
@@ -62,7 +85,7 @@ pub(super) fn binding_matches(
         None => true,
         Some(pattern) if matches_everything(pattern) => true,
         Some(pattern) => cache
-            .get(pattern)
+            .get(&binding.id.source, pattern)
             .is_some_and(|regex| regex.is_match(value)),
     }
 }

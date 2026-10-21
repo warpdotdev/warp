@@ -1,13 +1,22 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+use futures::executor::block_on;
+
 use super::*;
 use crate::hooks::adapters::adapter_for;
 use crate::hooks::adapters::cursor::events::CursorEvent;
 use crate::hooks::adapters::cursor::test_support::{
-    FULL_CONFIG, INVALID_MATCHER, event_fixture, fixture_envelope, json, outcome, shell_action,
-    tool_pre,
+    FULL_CONFIG, INVALID_MATCHER, completed_shell, event_fixture, fixture_envelope, json, outcome,
+    shell_action, tool_pre, tool_result,
 };
+use crate::hooks::dispatch::HookDispatcher;
 use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
+use crate::hooks::registry::{BindingScope, RegistrySnapshot};
 use crate::hooks::runner::ProcessExit;
-use crate::hooks::test_util::{test_binding, test_source_id};
+use crate::hooks::test_util::{
+    RecordingMessenger, ScriptedRunner, active_binding, test_binding, test_source_id,
+};
 
 fn parsed(text: &str) -> ParsedHookConfig {
     CursorAdapter::new()
@@ -126,6 +135,55 @@ fn a_binding_declared_under_an_unknown_event_never_fires() {
             &DecodePolicy::default()
         ),
         HookEffects::default()
+    );
+}
+
+#[test]
+fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
+    let adapter = Arc::new(CursorAdapter::new());
+    let config = parsed(event_fixture(CursorEvent::AfterShellExecution).hooks);
+    let binding = adapter.bindings(&config).remove(0);
+
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"permission":"deny","additional_context":"ctx"}"#),
+    );
+    let messenger = Arc::new(RecordingMessenger::new());
+    let dispatcher = HookDispatcher::new(runner, messenger.clone());
+    let snapshot = Arc::new(RegistrySnapshot {
+        revision: 1,
+        bindings: vec![active_binding(
+            binding.clone(),
+            adapter.clone(),
+            BindingScope::Everywhere,
+        )],
+        diagnostics: Vec::new(),
+    });
+    let envelope = fixture_envelope(tool_result(
+        shell_action("cargo test"),
+        completed_shell("cargo test", "ok", 0),
+        None,
+    ));
+
+    let outcome =
+        block_on(dispatcher.dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false))));
+    assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
+    assert_eq!(outcome.effects.unsupported.len(), 1);
+
+    let diagnostics = messenger.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].source, binding.id.source);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("afterShellExecution does not use permission; it was ignored"),
+        "{}",
+        diagnostics[0].message
+    );
+    assert!(
+        messenger.notices().is_empty(),
+        "additional_context is only logged"
     );
 }
 

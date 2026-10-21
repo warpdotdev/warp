@@ -404,53 +404,72 @@ fn allow_deny_and_their_messages_decode_on_every_permission_event() {
             r#"{"permission":"allow","user_message":"ok","agent_message":"remember to lint"}"#,
         );
         assert_eq!(allow_with_messages.verdict, HookVerdict::Allow);
-        assert_eq!(allow_with_messages.user_notices, vec!["ok"]);
+        let expected_notices: Vec<&str> = if event == CursorEvent::PreToolUse {
+            // Cursor documents preToolUse's user_message as shown only when denied.
+            vec![]
+        } else {
+            vec!["ok"]
+        };
+        assert_eq!(
+            allow_with_messages.user_notices,
+            expected_notices,
+            "{}",
+            event.name()
+        );
         assert!(
             allow_with_messages.model_context.is_empty(),
             "agent_message has no documented meaning outside a denial"
         );
+        assert!(allow_with_messages.unsupported.is_empty());
     }
 }
 
 #[test]
 fn ask_means_something_different_on_each_event() {
+    // An ask degrades to a denial on a surface with no one to ask, so its messages are kept the
+    // way a denial's are: the agent message is the reason the model reads.
     let honored = decode(
         CursorEvent::BeforeShellExecution,
         false,
         OK,
-        r#"{"permission":"ask","user_message":"Please confirm."}"#,
+        r#"{"permission":"ask","user_message":"Please confirm.","agent_message":"Needs sign-off."}"#,
     );
     assert_eq!(honored.verdict, HookVerdict::Ask);
+    assert_eq!(reasons(&honored), vec!["Needs sign-off."]);
     assert_eq!(honored.user_notices, vec!["Please confirm."]);
-    assert_eq!(
-        decode(
-            CursorEvent::BeforeMcpExecution,
-            false,
-            OK,
-            r#"{"permission":"ask"}"#
-        )
-        .verdict,
-        HookVerdict::Ask
+    let user_only = decode(
+        CursorEvent::BeforeMcpExecution,
+        false,
+        OK,
+        r#"{"permission":"ask","user_message":"Please confirm."}"#,
     );
+    assert_eq!(user_only.verdict, HookVerdict::Ask);
+    assert_eq!(reasons(&user_only), vec!["Please confirm."]);
+    assert!(user_only.user_notices.is_empty());
 
     let ignored = decode(
         CursorEvent::PreToolUse,
         false,
         OK,
-        r#"{"permission":"ask"}"#,
+        r#"{"permission":"ask","user_message":"Please confirm."}"#,
     );
     assert_eq!(
         ignored.verdict,
         HookVerdict::NoOpinion,
         "Cursor does not enforce ask on preToolUse"
     );
+    assert!(
+        ignored.user_notices.is_empty() && ignored.reasons.is_empty(),
+        "a message meant for a denial is not shown for an ask that is ignored"
+    );
     let strict = decode_with(
         &binding_for(CursorEvent::PreToolUse, false),
         OK,
-        r#"{"permission":"ask"}"#,
+        r#"{"permission":"ask","agent_message":"Needs sign-off."}"#,
         &STRICT,
     );
     assert_eq!(strict.verdict, HookVerdict::Ask);
+    assert_eq!(reasons(&strict), vec!["Needs sign-off."]);
 
     let subagent = decode(
         CursorEvent::SubagentStart,
@@ -490,7 +509,7 @@ fn ask_means_something_different_on_each_event() {
 }
 
 #[test]
-fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
+fn updated_input_becomes_a_replacement_on_every_permission_event() {
     let effects = decode(
         CursorEvent::PreToolUse,
         false,
@@ -502,6 +521,10 @@ fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
         effects.replacement_input,
         Some(json!({ "command": "npm ci" }))
     );
+    assert!(
+        effects.unsupported.is_empty(),
+        "preToolUse documents updated_input"
+    );
 
     let not_an_object = decode(
         CursorEvent::PreToolUse,
@@ -511,6 +534,8 @@ fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
     );
     assert_eq!(not_an_object.verdict, HookVerdict::Deny);
 
+    // Cursor documents no rewrite on the other permission hooks, but a rewrite request can never
+    // be dropped silently, so it is carried for the permission policy to deny and reported.
     for event in [
         CursorEvent::BeforeShellExecution,
         CursorEvent::BeforeMcpExecution,
@@ -524,30 +549,92 @@ fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
         assert_eq!(effects.verdict, HookVerdict::Allow, "{}", event.name());
         assert_eq!(
             effects.replacement_input,
-            None,
-            "{} does not document updated_input",
+            Some(json!({ "command": "npm ci" })),
+            "{}",
             event.name()
+        );
+        assert_eq!(effects.unsupported.len(), 1);
+        assert_eq!(effects.unsupported[0].effect, EffectKind::ReplacementInput);
+        assert_eq!(effects.unsupported[0].binding, binding_for(event, false).id);
+        assert_eq!(
+            effects.unsupported[0].reason,
+            format!(
+                "{} does not document updated_input, and a rewrite cannot be honored, so {} was \
+                 denied instead of rewritten",
+                event.name(),
+                subject(event)
+            )
         );
     }
 }
 
 #[test]
-fn fields_an_event_does_not_document_are_ignored() {
+fn control_fields_an_event_does_not_document_are_reported_and_the_rest_logged() {
+    let unsupported = |effects: &HookEffects| {
+        effects
+            .unsupported
+            .iter()
+            .map(|entry| (entry.effect, entry.reason.clone()))
+            .collect::<Vec<_>>()
+    };
+
     let shell = decode(
         CursorEvent::AfterShellExecution,
         true,
         OK,
         r#"{"permission":"deny","followup_message":"again","additional_context":"ctx"}"#,
     );
-    assert_eq!(shell, HookEffects::default());
+    assert_eq!(shell.verdict, HookVerdict::NoOpinion);
+    assert!(shell.continuation.is_none() && shell.model_context.is_empty());
+    assert_eq!(
+        unsupported(&shell),
+        vec![
+            (
+                EffectKind::Continuation,
+                "afterShellExecution does not use followup_message; it was ignored".to_owned()
+            ),
+            (
+                EffectKind::Verdict,
+                "afterShellExecution does not use permission; it was ignored".to_owned()
+            ),
+        ],
+        "additional_context is observational and only logged"
+    );
+    assert_eq!(
+        shell.unsupported[0].binding,
+        binding_for(CursorEvent::AfterShellExecution, true).id
+    );
 
     let stop = decode(
         CursorEvent::Stop,
         true,
         OK,
-        r#"{"permission":"deny","additional_context":"ctx"}"#,
+        r#"{"continue":false,"followup_message":"again"}"#,
     );
-    assert_eq!(stop, HookEffects::default());
+    assert!(!stop.halt_turn, "continue: false means nothing on stop");
+    assert_eq!(
+        stop.continuation.as_ref().map(|c| c.text.as_str()),
+        Some("again")
+    );
+    assert_eq!(
+        unsupported(&stop),
+        vec![(
+            EffectKind::HaltTurn,
+            "stop does not use continue; it was ignored".to_owned()
+        )]
+    );
+    for policy in [&DEFAULT, &STRICT] {
+        let stop = decode_with(
+            &binding_for(CursorEvent::Stop, true),
+            OK,
+            r#"{"continue":false}"#,
+            policy,
+        );
+        assert!(!stop.halt_turn);
+        assert_eq!(stop.verdict, HookVerdict::NoOpinion);
+        assert!(stop.continuation.is_none());
+        assert_eq!(stop.unsupported.len(), 1);
+    }
 
     let pre_tool = decode(
         CursorEvent::PreToolUse,
@@ -558,6 +645,14 @@ fn fields_an_event_does_not_document_are_ignored() {
     assert_eq!(pre_tool.verdict, HookVerdict::Allow);
     assert!(pre_tool.continuation.is_none());
     assert!(pre_tool.session_env.is_empty());
+    assert_eq!(
+        unsupported(&pre_tool),
+        vec![(
+            EffectKind::Continuation,
+            "preToolUse does not use followup_message; it was ignored".to_owned()
+        )],
+        "env is observational and only logged"
+    );
 
     let session = decode(
         CursorEvent::SessionStart,
@@ -565,10 +660,30 @@ fn fields_an_event_does_not_document_are_ignored() {
         OK,
         r#"{"continue":false,"user_message":"ignored","permission":"deny"}"#,
     );
+    assert_eq!(session.verdict, HookVerdict::NoOpinion);
+    assert!(session.user_notices.is_empty() && session.session_env.is_empty());
     assert_eq!(
-        session,
-        HookEffects::default(),
-        "sessionStart accepts continue and user_message and ignores them"
+        unsupported(&session),
+        vec![(
+            EffectKind::Verdict,
+            "sessionStart does not use permission; it was ignored".to_owned()
+        )],
+        "continue and user_message are documented as accepted and ignored on sessionStart"
+    );
+
+    let claude_elsewhere = decode(
+        CursorEvent::BeforeShellExecution,
+        false,
+        OK,
+        r#"{"permission":"allow","hookSpecificOutput":{"permissionDecision":"deny"}}"#,
+    );
+    assert_eq!(claude_elsewhere.verdict, HookVerdict::Allow);
+    assert_eq!(
+        unsupported(&claude_elsewhere),
+        vec![(
+            EffectKind::Verdict,
+            "beforeShellExecution does not use hookSpecificOutput; it was ignored".to_owned()
+        )]
     );
 }
 
@@ -871,16 +986,138 @@ fn control_characters_are_removed_from_messages() {
 }
 
 #[test]
-fn every_documented_stdout_fixture_decodes_without_a_failure() {
+fn warp_written_reasons_clean_the_configured_command() {
+    let mut binding = binding_for(CursorEvent::BeforeShellExecution, true);
+    binding.command = "\u{1b}[31m./check.sh\u{1b}[0m".to_owned();
+    let effects = decode_with(&binding, ProcessExit::Code(2), "", &DEFAULT);
+    assert_eq!(
+        reasons(&effects),
+        vec!["Denied by hook [31m./check.sh[0m (exit 2)."]
+    );
+    let effects = decode_with(&binding, ProcessExit::TimedOut, "", &DEFAULT);
+    assert_eq!(
+        reasons(&effects),
+        vec!["Hook [31m./check.sh[0m timed out, so the command was denied."]
+    );
+
+    binding.command = "\u{7}".to_owned();
+    let effects = decode_with(&binding, ProcessExit::Code(2), "", &DEFAULT);
+    assert_eq!(
+        reasons(&effects),
+        vec![format!("Denied by hook {} (exit 2).", binding.id)],
+        "a command with no printable text is named by its binding"
+    );
+}
+
+#[test]
+fn decision_words_are_compared_as_written() {
+    for permission in [
+        r#"" allow""#,
+        r#""allow ""#,
+        r#""allow\u0007""#,
+        r#""Allow""#,
+    ] {
+        let effects = decode(
+            CursorEvent::BeforeShellExecution,
+            false,
+            OK,
+            &format!(r#"{{"permission":{permission}}}"#),
+        );
+        assert_eq!(effects.verdict, HookVerdict::Deny, "{permission}");
+        assert!(reasons(&effects)[0].contains("not a valid permission decision"));
+    }
+    let effects = decode(
+        CursorEvent::Stop,
+        false,
+        OK,
+        r#"{"decision":" block","reason":"more"}"#,
+    );
+    assert!(effects.continuation.is_none());
+    let effects = decode(
+        CursorEvent::PreToolUse,
+        false,
+        OK,
+        r#"{"hookSpecificOutput":{"permissionDecision":"deny "}}"#,
+    );
+    assert!(reasons(&effects)[0].contains("not a valid permission decision"));
+}
+
+/// The effects each `stdout.json` fixture decodes to, with the binding's own reason attached
+/// where the fixture produces one.
+fn expected_fixture_effects(event: CursorEvent) -> HookEffects {
+    let reason = |text: &str| HookReason {
+        text: text.to_owned(),
+        binding: Some(binding_for(event, true).id),
+    };
+    match event {
+        CursorEvent::SessionStart => HookEffects {
+            session_env: vec![("CI".to_owned(), "1".to_owned())],
+            model_context: vec!["This project uses pnpm, not npm.".to_owned()],
+            ..Default::default()
+        },
+        CursorEvent::PreToolUse => HookEffects {
+            verdict: HookVerdict::Allow,
+            replacement_input: Some(json!({ "command": "npm ci" })),
+            ..Default::default()
+        },
+        CursorEvent::PostToolUse => HookEffects {
+            replacement_result: Some(json!({ "modified": "output" })),
+            model_context: vec!["Test coverage report attached.".to_owned()],
+            ..Default::default()
+        },
+        CursorEvent::PostToolUseFailure => HookEffects {
+            model_context: vec![
+                "Tests time out on CI runners. Retry with --maxWorkers=2.".to_owned(),
+            ],
+            ..Default::default()
+        },
+        CursorEvent::BeforeShellExecution => HookEffects {
+            verdict: HookVerdict::Deny,
+            reasons: vec![reason("Push without --force, or open a pull request.")],
+            user_notices: vec!["Force pushes are blocked in this repository.".to_owned()],
+            ..Default::default()
+        },
+        CursorEvent::BeforeMcpExecution => HookEffects {
+            verdict: HookVerdict::Ask,
+            reasons: vec![reason("The user must confirm file writes through MCP.")],
+            user_notices: vec!["This MCP tool writes files.".to_owned()],
+            ..Default::default()
+        },
+        CursorEvent::BeforeSubmitPrompt => HookEffects {
+            halt_turn: true,
+            reasons: vec![reason("Prompts must not contain credentials.")],
+            ..Default::default()
+        },
+        CursorEvent::Stop => HookEffects {
+            continuation: Some(ContinuationRequest {
+                text: "Now run the full test suite.".to_owned(),
+                loop_limit: Some(5),
+            }),
+            ..Default::default()
+        },
+        CursorEvent::AfterShellExecution
+        | CursorEvent::AfterMcpExecution
+        | CursorEvent::AfterAgentResponse
+        | CursorEvent::AfterAgentThought => HookEffects::default(),
+        CursorEvent::SessionEnd
+        | CursorEvent::SubagentStart
+        | CursorEvent::SubagentStop
+        | CursorEvent::BeforeReadFile
+        | CursorEvent::AfterFileEdit
+        | CursorEvent::PreCompact
+        | CursorEvent::BeforeTabFileRead
+        | CursorEvent::AfterTabFileEdit
+        | CursorEvent::WorkspaceOpen => panic!("{} has no fixture", event.name()),
+    }
+}
+
+#[test]
+fn every_documented_stdout_fixture_decodes_to_its_expected_effects() {
     for fixture in &EVENT_FIXTURES {
-        let effects = decode(fixture.event, true, OK, fixture.stdout);
-        let failed = effects
-            .reasons
-            .iter()
-            .any(|reason| reason.text.starts_with("Hook ./check.sh"));
-        assert!(
-            !failed,
-            "{} stdout fixture was read as a failure: {effects:?}",
+        assert_eq!(
+            decode(fixture.event, true, OK, fixture.stdout),
+            expected_fixture_effects(fixture.event),
+            "{}",
             fixture.event.name()
         );
     }

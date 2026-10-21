@@ -1,17 +1,19 @@
 //! Turns what a hook process did into effects under Cursor's rules. Exit 2 blocks on any event
 //! that can block; exit 0 means "read the JSON on stdout" and each event honors only the fields
 //! Cursor documents for it; empty stdout, output that does not fit the event, and every other way
-//! a process can end follow the binding's policies. Under the strict hook policy every failure
-//! of a hook that can block becomes a block, and a `preToolUse` `ask` is honored instead of
-//! ignored.
+//! a process can end follow the binding's policies. A field that asks for an effect the event
+//! cannot produce is reported rather than applied, except a rewrite request on a permission
+//! hook, which denies the action because a rewrite can never be dropped silently. Under the
+//! strict hook policy every failure of a hook that can block becomes a block, and a `preToolUse`
+//! `ask` is honored instead of ignored.
 
 use serde_json::{Map, Value};
 
 use super::events::{ControlEffect, CursorEvent, CursorEventSpec};
 use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
 use crate::hooks::model::{
-    ContinuationRequest, EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason, HookVerdict,
-    MalformedOutputPolicy,
+    ContinuationRequest, EffectKind, EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason,
+    HookVerdict, MalformedOutputPolicy, UnsupportedEffect,
 };
 use crate::hooks::runner::{HookProcessOutcome, ProcessExit};
 
@@ -82,20 +84,27 @@ impl Decoder<'_> {
                 let mut effects =
                     self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
                 if effects.reasons.is_empty() {
-                    effects.reasons.push(
-                        self.reason(format!("Denied by hook {} (exit 2).", self.binding.command)),
-                    );
+                    effects
+                        .reasons
+                        .push(self.reason(format!("Denied by hook {} (exit 2).", self.command())));
                 }
                 effects
             }
             ControlEffect::HaltTurn => {
                 let message = text_field(&output, "user_message").ok().flatten();
-                self.halt(message.unwrap_or_else(|| {
-                    format!("Blocked by hook {} (exit 2).", self.binding.command)
-                }))
+                self.halt(
+                    message
+                        .unwrap_or_else(|| format!("Blocked by hook {} (exit 2).", self.command())),
+                )
             }
             ControlEffect::None => self.failed("exited with code 2"),
         }
+    }
+
+    /// The configured command, cleaned the way hook messages are, for Warp-written reasons. A
+    /// command that is nothing but control characters is named by its binding id instead.
+    fn command(&self) -> String {
+        clean_text(&self.binding.command).unwrap_or_else(|| self.binding.id.to_string())
     }
 
     fn decode_success(&self, stdout: &[u8]) -> HookEffects {
@@ -108,7 +117,7 @@ impl Decoder<'_> {
         let Some(output) = parse_object(stdout) else {
             return self.malformed();
         };
-        self.log_undocumented_fields(&output);
+        let unsupported = self.report_undocumented_fields(&output);
         let decoded = match self.spec.event {
             CursorEvent::SessionStart => self.decode_session_start(&output),
             CursorEvent::PreToolUse
@@ -132,12 +141,14 @@ impl Decoder<'_> {
             | CursorEvent::AfterTabFileEdit
             | CursorEvent::WorkspaceOpen => Ok(HookEffects::default()),
         };
-        decoded.unwrap_or_else(|Malformed| self.malformed())
+        let mut effects = decoded.unwrap_or_else(|Malformed| self.malformed());
+        effects.unsupported = unsupported;
+        effects
     }
 
     fn decode_permission(&self, output: &Map<String, Value>) -> Decoded {
         let claude = self.claude_output(output)?;
-        let permission = text_field(output, "permission")?.or_else(|| {
+        let permission = raw_text_field(output, "permission")?.or_else(|| {
             claude
                 .as_ref()
                 .and_then(|claude| claude.permission_decision.clone())
@@ -160,7 +171,7 @@ impl Decoder<'_> {
                 if effects.reasons.is_empty() {
                     effects
                         .reasons
-                        .push(self.reason(format!("Denied by hook {}.", self.binding.command)));
+                        .push(self.reason(format!("Denied by hook {}.", self.command())));
                 }
                 effects
             }
@@ -170,11 +181,16 @@ impl Decoder<'_> {
             _ => return Err(Malformed),
         };
 
-        if self.spec.event == CursorEvent::PreToolUse {
-            let updated_input = object_field(output, "updated_input")?
-                .or_else(|| claude.and_then(|claude| claude.updated_input));
-            effects.replacement_input = updated_input.map(Value::Object);
-        }
+        // A rewrite is carried on every permission hook, not only `preToolUse` where Cursor
+        // documents it, because the permission policy denies an action whose input a hook asked
+        // to change and cannot be honored; dropping the request would run the original input
+        // against the hook's intent. Claude's nested spelling counts only where Cursor reads it.
+        let updated_input = object_field(output, "updated_input")?.or_else(|| {
+            (self.spec.event == CursorEvent::PreToolUse)
+                .then(|| claude.and_then(|claude| claude.updated_input))
+                .flatten()
+        });
+        effects.replacement_input = updated_input.map(Value::Object);
         Ok(effects)
     }
 
@@ -204,7 +220,7 @@ impl Decoder<'_> {
                     0,
                     self.reason(format!(
                         "Hook {} answered ask, which subagentStart treats as deny.",
-                        self.binding.command
+                        self.command()
                     )),
                 );
                 Ok(effects)
@@ -244,10 +260,12 @@ impl Decoder<'_> {
         Ok((read("agent_message")?, read("user_message")?))
     }
 
-    /// Effects for a decided verdict. On a deny, `agent_message` (or `user_message` when there is
-    /// no agent message) becomes the reason the model reads, and a `user_message` that is not
-    /// already the reason is delivered as a user notice. On any other verdict `user_message` is a
-    /// notice and `agent_message` has no documented meaning, so it is logged and dropped.
+    /// Effects for a decided verdict. On a deny, and on an ask (which a surface with no one to
+    /// ask turns into a denial), `agent_message` (or `user_message` when there is no agent
+    /// message) becomes the reason the model reads, and a `user_message` that is not already the
+    /// reason is delivered as a user notice. On any other verdict `user_message` is a notice
+    /// unless the event documents it as deny-only, and `agent_message` has no documented meaning,
+    /// so it is logged and dropped.
     fn verdict_effects(
         &self,
         verdict: HookVerdict,
@@ -259,7 +277,7 @@ impl Decoder<'_> {
             ..Default::default()
         };
         match verdict {
-            HookVerdict::Deny => match (agent_message, user_message) {
+            HookVerdict::Deny | HookVerdict::Ask => match (agent_message, user_message) {
                 (Some(agent), Some(user)) => {
                     effects.reasons.push(self.reason(agent));
                     effects.user_notices.push(user);
@@ -269,8 +287,19 @@ impl Decoder<'_> {
                 }
                 (None, None) => {}
             },
-            HookVerdict::Allow | HookVerdict::Ask | HookVerdict::NoOpinion | HookVerdict::Defer => {
-                effects.user_notices.extend(user_message);
+            HookVerdict::Allow | HookVerdict::NoOpinion | HookVerdict::Defer => {
+                if self.spec.user_message_on_deny_only {
+                    if user_message.is_some() {
+                        log::info!(
+                            "hook {} set user_message without denying; {} shows it only on a \
+                             denial, so it was ignored",
+                            self.binding.id,
+                            self.spec.name
+                        );
+                    }
+                } else {
+                    effects.user_notices.extend(user_message);
+                }
                 if agent_message.is_some() {
                     log::info!(
                         "hook {} set agent_message without denying; Cursor sends it to the agent \
@@ -321,7 +350,7 @@ impl Decoder<'_> {
     /// `reason`, flat or under `hookSpecificOutput`. An empty message is no follow-up.
     fn decode_follow_up(&self, output: &Map<String, Value>) -> Decoded {
         let claude = self.claude_output(output)?;
-        let decision = text_field(output, "decision")?
+        let decision = raw_text_field(output, "decision")?
             .or_else(|| claude.as_ref().and_then(|claude| claude.decision.clone()));
         let reason = text_field(output, "reason")?
             .or_else(|| claude.as_ref().and_then(|claude| claude.reason.clone()));
@@ -349,9 +378,8 @@ impl Decoder<'_> {
             effects.user_notices.extend(user_message);
             return Ok(effects);
         }
-        Ok(self.halt(
-            user_message.unwrap_or_else(|| format!("Blocked by hook {}.", self.binding.command)),
-        ))
+        Ok(self
+            .halt(user_message.unwrap_or_else(|| format!("Blocked by hook {}.", self.command()))))
     }
 
     fn decode_pre_compact(&self, output: &Map<String, Value>) -> Decoded {
@@ -378,24 +406,49 @@ impl Decoder<'_> {
             return Err(Malformed);
         };
         Ok(Some(ClaudeOutput {
-            permission_decision: text_field(nested, "permissionDecision")?,
+            permission_decision: raw_text_field(nested, "permissionDecision")?,
             permission_decision_reason: text_field(nested, "permissionDecisionReason")?,
             updated_input: object_field(nested, "updatedInput")?,
-            decision: text_field(nested, "decision")?,
+            decision: raw_text_field(nested, "decision")?,
             reason: text_field(nested, "reason")?,
         }))
     }
 
-    fn log_undocumented_fields(&self, output: &Map<String, Value>) {
+    /// Fields the event does not document. One that names an effect Cursor defines on some other
+    /// event is a control effect the binding cannot produce, so it is reported for the source's
+    /// diagnostics; anything else is only logged.
+    fn report_undocumented_fields(&self, output: &Map<String, Value>) -> Vec<UnsupportedEffect> {
+        let mut unsupported = Vec::new();
         for field in output.keys() {
-            if !self.spec.documented_output.contains(&field.as_str()) {
+            if self.spec.documented_output.contains(&field.as_str()) {
+                continue;
+            }
+            let Some(effect) = control_effect_of_field(field) else {
                 log::warn!(
                     "hook {} returned {field}, which {} does not use; it was ignored",
                     self.binding.id,
                     self.spec.name
                 );
-            }
+                continue;
+            };
+            let reason = if effect == EffectKind::ReplacementInput
+                && self.control == ControlEffect::Verdict
+            {
+                format!(
+                    "{} does not document updated_input, and a rewrite cannot be honored, so {} \
+                     was denied instead of rewritten",
+                    self.spec.name, self.spec.subject
+                )
+            } else {
+                format!("{} does not use {field}; it was ignored", self.spec.name)
+            };
+            unsupported.push(UnsupportedEffect {
+                binding: self.binding.id.clone(),
+                effect,
+                reason,
+            });
         }
+        unsupported
     }
 
     fn malformed(&self) -> HookEffects {
@@ -421,7 +474,7 @@ impl Decoder<'_> {
     /// The fail-closed outcome for this event: a denial where the event decides permission, a
     /// halted prompt where it decides submission, and nothing where it only observes.
     fn closed(&self, what_happened: &str) -> HookEffects {
-        let command = &self.binding.command;
+        let command = self.command();
         match self.control {
             ControlEffect::Verdict => self.deny(format!(
                 "Hook {command} {what_happened}, so {} was denied.",
@@ -477,12 +530,35 @@ fn parse_object(stdout: &[u8]) -> Option<Map<String, Value>> {
     }
 }
 
+/// The output keys that carry a control effect on the events Cursor defines them for. On an
+/// event that does not define one, the hook is asking for an effect the binding cannot produce.
+fn control_effect_of_field(field: &str) -> Option<EffectKind> {
+    match field {
+        "permission" | "hookSpecificOutput" => Some(EffectKind::Verdict),
+        "updated_input" => Some(EffectKind::ReplacementInput),
+        "updated_mcp_tool_output" => Some(EffectKind::ReplacementResult),
+        "continue" => Some(EffectKind::HaltTurn),
+        "followup_message" | "decision" => Some(EffectKind::Continuation),
+        _ => None,
+    }
+}
+
 /// A string field, cleaned for display. A present field that is not a string is malformed; an
 /// empty or whitespace-only string counts as absent.
 fn text_field(output: &Map<String, Value>, field: &str) -> Result<Option<String>, Malformed> {
     match output.get(field) {
         None => Ok(None),
         Some(Value::String(text)) => Ok(clean_text(text)),
+        Some(_) => Err(Malformed),
+    }
+}
+
+/// A string field compared as written. Used for the fields that name a decision, so a value
+/// that only cleans up to a known word is still a schema mismatch.
+fn raw_text_field(output: &Map<String, Value>, field: &str) -> Result<Option<String>, Malformed> {
+    match output.get(field) {
+        None => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
         Some(_) => Err(Malformed),
     }
 }
