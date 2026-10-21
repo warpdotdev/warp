@@ -384,6 +384,43 @@ mod hooks {
     }
 
     #[test]
+    fn executing_an_unedited_run_agents_request_reuses_the_verdict() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(&mut app);
+            let binding = install_hook(&harness, &mut app, "Task", 0, r#"{"verdict":"allow"}"#);
+            let model = action_model(&mut app, &harness);
+            let action = run_agents_action("orchestrate", "same plan");
+            let action_id = action.id.clone();
+
+            queue_until_blocked_with_verdict(&mut app, &harness, &model, action).await;
+            assert_eq!(tool_pre_inputs_seen(&harness), vec!["same plan"]);
+
+            // If the hook ran again it would deny, so a denial would reveal a second dispatch.
+            harness
+                .hooks
+                .runner
+                .script(binding.id, ScriptedRunner::deny_with("not that plan"));
+            model.update(&mut app, |model, ctx| {
+                model.execute_run_agents(&action_id, run_agents_request("same plan"), ctx)
+            });
+            assert!(
+                model.read(&app, |model, _| {
+                    model
+                        .get_action_status(&action_id)
+                        .is_some_and(|status| status.is_running())
+                }),
+                "the cached allow and the user's approval start the action"
+            );
+            assert_eq!(
+                tool_pre_inputs_seen(&harness),
+                vec!["same plan"],
+                "the same request does not run the hook again"
+            );
+        });
+    }
+
+    #[test]
     fn cancelling_the_conversation_while_a_verdict_is_pending_drops_it() {
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);

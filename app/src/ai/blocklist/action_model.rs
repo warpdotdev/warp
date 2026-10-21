@@ -748,15 +748,18 @@ impl BlocklistAIActionModel {
             );
             return;
         };
-        if !matches!(action.action, AIAgentActionType::RunAgents(_)) {
+        let AIAgentActionType::RunAgents(current_request) = &mut action.action else {
             log::warn!(
                 "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents"
             );
             return;
+        };
+        let request_changed = **current_request != request;
+        **current_request = request;
+        // A hook verdict for the request the hooks saw no longer applies to an edited one.
+        if request_changed {
+            pre_tool::invalidate(conversation_id, action_id, ctx);
         }
-        action.action = AIAgentActionType::RunAgents(Box::new(request));
-        // The request may differ from the one the hooks saw, so their verdict no longer applies.
-        pre_tool::invalidate(conversation_id, action_id, ctx);
         self.execute_action(action_id, conversation_id, ctx);
     }
 
