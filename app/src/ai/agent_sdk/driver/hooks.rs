@@ -228,7 +228,9 @@ impl AgentDriver {
     }
 
     /// Fixes the run's hook set before its first request. The explicit sources and the
-    /// repositories environment preparation registered are all known by now.
+    /// repositories environment preparation registered are all known by now. What the registry
+    /// found wrong with, or held back from, the repositories' own hook files is reported then;
+    /// explicit sources were reported when they loaded.
     pub(super) fn pin_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
         if !HookRuntime::is_installed(ctx) {
             return;
@@ -237,6 +239,16 @@ impl AgentDriver {
         HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
             runtime.pin_for_run(Some(terminal_view_id), ctx);
         });
+        let runtime = HookRuntime::as_ref(ctx);
+        let messenger = runtime.messenger();
+        for diagnostic in &runtime.snapshot(ctx).diagnostics {
+            match diagnostic.source.kind {
+                HookSourceKind::ProjectCursorFile => messenger.diagnostic(diagnostic.clone()),
+                HookSourceKind::RunDelivered
+                | HookSourceKind::FactoryAgent
+                | HookSourceKind::FactoryWide => {}
+            }
+        }
     }
 
     /// Ends the run as a failure when a hook asks for confirmation and the run is configured to
