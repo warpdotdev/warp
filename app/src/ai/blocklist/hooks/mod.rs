@@ -14,18 +14,18 @@ pub(crate) mod test_utils;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
-#[cfg(feature = "local_fs")]
+#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-#[cfg(feature = "local_fs")]
+#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
     HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, RegistrySnapshot,
     RunMetadata,
 };
-#[cfg(feature = "local_fs")]
+#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use parking_lot::Mutex;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -100,9 +100,8 @@ impl HookRuntime {
     }
 
     /// Installs the runner that spawns hook processes. Hooks get the login shell's PATH once it
-    /// has been captured; until then, and on surfaces with no local shell, they inherit this
-    /// process's PATH.
-    #[cfg(feature = "local_fs")]
+    /// has been captured; until then they inherit this process's PATH.
+    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
     pub fn install_command_runner(ctx: &mut AppContext) {
         let login_shell_path: Arc<Mutex<Option<OsString>>> = Arc::default();
         let captured = login_shell_path.clone();
@@ -114,29 +113,20 @@ impl HookRuntime {
     }
 
     /// Starts the interactive shell capture, which is only worth its cost when hooks can run.
-    #[cfg(feature = "local_fs")]
+    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
     fn capture_login_shell_path(
         login_shell_path: Arc<Mutex<Option<OsString>>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
-        {
-            if !FeatureFlag::AgentHooks.is_enabled()
-                || !ctx.has_singleton_model::<LocalShellState>()
-            {
-                return;
-            }
-            let capture = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
-                shell_state.get_interactive_path_env_var(ctx)
-            });
-            ctx.spawn(capture, move |_, path, _| {
-                *login_shell_path.lock() = path.map(OsString::from);
-            });
+        if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<LocalShellState>() {
+            return;
         }
-        #[cfg(not(all(not(target_family = "wasm"), feature = "local_tty")))]
-        {
-            let _ = (login_shell_path, ctx);
-        }
+        let capture = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+            shell_state.get_interactive_path_env_var(ctx)
+        });
+        ctx.spawn(capture, move |_, path, _| {
+            *login_shell_path.lock() = path.map(OsString::from);
+        });
     }
 
     // No production caller yet: later work installs a surface-specific messenger and run metadata
