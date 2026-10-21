@@ -27,6 +27,7 @@ pub struct HookInvocation {
     pub cancel: Arc<AtomicBool>,
 }
 
+/// How a hook process ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessExit {
     Code(i32),

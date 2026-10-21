@@ -18,8 +18,9 @@ pub use adapters::{DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHo
 pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CanonicalToolName, CapabilityWarning, ContinuationRequest,
-    DiagnosticSeverity, EffectKind, EmptyOutputPolicy, FailurePolicy, HOOK_PROTOCOL_VERSION,
-    HandlerKind, HookBindingId, HookBoundary, HookDiagnostic, HookEffects, HookEnvelope,
+    DiagnosticSeverity, ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy,
+    HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId, HookBoundary, HookDiagnostic, HookEffects,
+    HookEnvelope,
     HookExecutionHost, HookFormat, HookPayload, HookReason, HookSourceId, HookSourceKind,
     HookSourceLocation, HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget,
     MergedEffects, PermissionFacts, RunMetadata, TurnStopStatus, UnsupportedEffect, reduce_effects,

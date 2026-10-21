@@ -134,6 +134,7 @@ impl HookRegistry {
     }
 }
 
+/// Emitted when a loader installs a new snapshot.
 pub enum HookRegistryEvent {
     SnapshotChanged { revision: u64 },
 }

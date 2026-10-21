@@ -69,6 +69,7 @@ pub trait HookFormatAdapter: Send + Sync {
     -> HookEffects;
 }
 
+/// One entry in the adapter table.
 pub struct HookAdapterDefinition {
     pub format: HookFormat,
     pub adapter: Arc<dyn HookFormatAdapter>,
@@ -77,6 +78,7 @@ pub struct HookAdapterDefinition {
 /// Every known format adapter. Formats are added here as their adapters land.
 pub static HOOK_ADAPTER_DEFINITIONS: LazyLock<Vec<HookAdapterDefinition>> = LazyLock::new(Vec::new);
 
+/// The adapter for `format`, if one is registered.
 pub fn adapter_for(format: HookFormat) -> Option<Arc<dyn HookFormatAdapter>> {
     HOOK_ADAPTER_DEFINITIONS
         .iter()
