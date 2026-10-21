@@ -416,13 +416,10 @@ fn collect_observations_reads_text_reasoning_and_splits_from_client_actions() {
                 | HookPayload::ToolFailure { .. }
                 | HookPayload::TurnStop { .. } => "other".to_owned(),
             })
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
         assert_eq!(
             kinds,
-            std::collections::HashSet::from([
-                "text:t1:Hi".to_owned(),
-                "reasoning:r1:hm".to_owned()
-            ])
+            HashSet::from(["text:t1:Hi".to_owned(), "reasoning:r1:hm".to_owned()])
         );
         assert!(encoded.iter().all(|e| e.conversation_id == conversation_id));
     });

@@ -1098,7 +1098,9 @@ mod hooks {
     use crate::ai::agent::AIAgentInput;
     use crate::ai::agent::conversation::AIConversationId;
     use crate::ai::blocklist::BlocklistAIHistoryModel;
-    use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks, settle};
+    use crate::ai::blocklist::hooks::testing::{
+        TestHooks, install_test_hooks, let_background_work_settle, settle,
+    };
     use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
     /// Hooks installed for every boundary the controller fires, so a missing call shows up as a
@@ -1244,10 +1246,7 @@ mod hooks {
                     );
                 });
             });
-            for _ in 0..10 {
-                warpui::r#async::Timer::after(std::time::Duration::from_millis(5)).await;
-                app.update(|_| {});
-            }
+            let_background_work_settle(&mut app).await;
             assert_eq!(fired(&hooks).len(), 1, "{:?}", fired(&hooks));
         });
     }
@@ -1337,10 +1336,7 @@ mod hooks {
             });
 
             settle(&mut app, |_| !fired(&hooks).is_empty()).await;
-            for _ in 0..10 {
-                warpui::r#async::Timer::after(std::time::Duration::from_millis(5)).await;
-                app.update(|_| {});
-            }
+            let_background_work_settle(&mut app).await;
             assert_eq!(
                 fired(&hooks),
                 vec![(conversation_id, "response.complete:Let me look.".to_owned())],
