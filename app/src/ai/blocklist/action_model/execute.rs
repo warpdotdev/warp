@@ -663,53 +663,14 @@ impl BlocklistAIActionExecutor {
                 &PermissionFloors::default(),
             )
         {
-            let result = match &action.action {
-                AIAgentActionType::RequestCommandOutput { command, .. } => {
-                    AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::HookDenied {
-                            command: command.clone(),
-                            reason: reason.text.clone(),
-                        },
-                    )
-                }
-                AIAgentActionType::WriteToLongRunningShellCommand { .. }
-                | AIAgentActionType::ReadFiles(_)
-                | AIAgentActionType::UploadArtifact(_)
-                | AIAgentActionType::SearchCodebase(_)
-                | AIAgentActionType::RequestFileEdits { .. }
-                | AIAgentActionType::Grep { .. }
-                | AIAgentActionType::FileGlob { .. }
-                | AIAgentActionType::FileGlobV2 { .. }
-                | AIAgentActionType::ReadMCPResource { .. }
-                | AIAgentActionType::CallMCPTool { .. }
-                | AIAgentActionType::SuggestNewConversation { .. }
-                | AIAgentActionType::SuggestPrompt(_)
-                | AIAgentActionType::InitProject
-                | AIAgentActionType::OpenCodeReview
-                | AIAgentActionType::ReadDocuments(_)
-                | AIAgentActionType::EditDocuments(_)
-                | AIAgentActionType::CreateDocuments(_)
-                | AIAgentActionType::ReadShellCommandOutput { .. }
-                | AIAgentActionType::UseComputer(_)
-                | AIAgentActionType::InsertCodeReviewComments { .. }
-                | AIAgentActionType::RequestComputerUse(_)
-                | AIAgentActionType::StartRecording { .. }
-                | AIAgentActionType::StopRecording { .. }
-                | AIAgentActionType::ReadSkill(_)
-                | AIAgentActionType::FetchConversation { .. }
-                | AIAgentActionType::SendMessageToAgent { .. }
-                | AIAgentActionType::TransferShellCommandControlToUser { .. }
-                | AIAgentActionType::AskUserQuestion { .. }
-                | AIAgentActionType::RunAgents(_)
-                | AIAgentActionType::WaitForEvents { .. } => action.action.cancelled_result(),
-            };
+            let result = pre_tool::denied_result(&action.action, &reason.text);
             HookRuntime::as_ref(ctx).messenger().notify(HookNotice {
                 conversation_id,
                 action_id: Some(action.id.clone()),
                 kind: HookNoticeKind::Denied,
                 text: reason.text,
             });
-            self.finish_without_executing(action, result, conversation_id, ctx);
+            self.finish_sync(action, result, conversation_id, ctx);
             return TryExecuteResult::ExecutedSync;
         }
 
@@ -731,7 +692,7 @@ impl BlocklistAIActionExecutor {
                         command: command.clone(),
                     },
                 );
-                self.finish_without_executing(action, result, conversation_id, ctx);
+                self.finish_sync(action, result, conversation_id, ctx);
                 return TryExecuteResult::ExecutedSync;
             }
         }
@@ -924,15 +885,14 @@ impl BlocklistAIActionExecutor {
                 TryExecuteResult::ExecutedAsync
             }
             AnyActionExecution::Sync(action_result) => {
-                self.finish_without_executing(action_clone, action_result, conversation_id, ctx);
+                self.finish_sync(action_clone, action_result, conversation_id, ctx);
                 TryExecuteResult::ExecutedSync
             }
         }
     }
 
-    /// Reports a result for an action that produced it without running asynchronously: a
-    /// synchronous executor, a denylist match, or a hook denial.
-    fn finish_without_executing(
+    /// Reports a result that is already known, with no asynchronous work to wait for.
+    fn finish_sync(
         &mut self,
         action: AIAgentAction,
         result: AIAgentActionResultType,
