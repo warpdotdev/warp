@@ -1,11 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use ai::hooks::ExplicitHookSource;
 use anyhow::Context as _;
 use serde_json::{Map, Value};
+use warp_cli::agent::HooksOnAsk;
 use warp_cli::mcp::MCPSpec;
 use warp_core::features::FeatureFlag;
 
+use super::driver::hooks::HookRunOptions;
 use crate::ai::ambient_agents::AgentConfigSnapshot;
+use crate::ai::blocklist::hooks::RunSurface;
 
 /// A strict, file-based representation of `AgentConfigSnapshot`.
 ///
@@ -32,14 +36,56 @@ pub struct AgentConfigSnapshotFile {
     pub host: Option<String>,
     #[serde(default)]
     pub computer_use_enabled: Option<bool>,
+    /// Hook sources to load for the run. Only `warp agent run` accepts them.
+    #[serde(default)]
+    pub hooks: Option<Vec<HookSourceEntry>>,
+    /// Turns on the strict hook policy for the run.
+    #[serde(default)]
+    pub hooks_strict: Option<bool>,
+    /// What a hook's `ask` does in the run: `deny` (the default) or `fail_run`.
+    #[serde(default)]
+    pub hooks_on_ask: Option<String>,
+}
+
+impl AgentConfigSnapshotFile {
+    fn has_hook_settings(&self) -> bool {
+        self.hooks.is_some() || self.hooks_strict.is_some() || self.hooks_on_ask.is_some()
+    }
+}
+
+/// One hook source named by the configuration file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookSourceEntry {
+    /// A directory holding a `hooks.json`. A relative path is resolved against the directory the
+    /// configuration file is in.
+    pub path: String,
+    /// The file's format. Only `cursor` is supported, and it is the default.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Who delivered the source, which decides its merge priority: `run` (the default),
+    /// `factory_agent`, or `factory_wide`.
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+/// The hook settings a configuration file asked for, validated, with source paths made absolute.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfiguredHooks {
+    pub sources: Vec<ExplicitHookSource>,
+    pub strict: Option<bool>,
+    pub on_ask: Option<HooksOnAsk>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoadedAgentConfigSnapshotFile {
     pub file: AgentConfigSnapshotFile,
+    pub hooks: ConfiguredHooks,
 }
 
-/// Load an `AgentConfigSnapshotFile` from disk.
+/// Load an `AgentConfigSnapshotFile` from disk for a command that does not run an agent locally.
+/// Hook settings are rejected: they apply only to `warp agent run`, and a cloud run never reads
+/// this file.
 ///
 /// Parsing rules:
 /// - `.json` => JSON
@@ -47,6 +93,35 @@ pub struct LoadedAgentConfigSnapshotFile {
 /// - otherwise: try JSON, then YAML
 #[cfg(not(target_family = "wasm"))]
 pub fn load_config_file(path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
+    let loaded = load_config_file_allowing_hooks(path)?;
+    if loaded.file.has_hook_settings() {
+        anyhow::bail!(
+            "`hooks`, `hooks_strict`, and `hooks_on_ask` in config file '{}' apply only to \
+             `agent run`; remove them for this command",
+            path.display()
+        );
+    }
+    Ok(loaded)
+}
+
+/// Load an `AgentConfigSnapshotFile` from disk for `warp agent run`, which accepts hook settings
+/// when agent hooks are enabled.
+#[cfg(not(target_family = "wasm"))]
+pub fn load_config_file_for_local_run(
+    path: &Path,
+) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
+    let loaded = load_config_file_allowing_hooks(path)?;
+    if loaded.file.has_hook_settings() && !FeatureFlag::AgentHooks.is_enabled() {
+        anyhow::bail!(
+            "Config file '{}' sets hook options, but agent hooks are not enabled in this build",
+            path.display()
+        );
+    }
+    Ok(loaded)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn load_config_file_allowing_hooks(path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file '{}'", path.display()))?;
 
@@ -75,7 +150,12 @@ pub fn load_config_file(path: &Path) -> anyhow::Result<LoadedAgentConfigSnapshot
             .with_context(|| format!("Invalid mcp_servers in '{}'", path.display()))?;
     }
 
-    Ok(LoadedAgentConfigSnapshotFile { file })
+    let config_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let config_dir = config_path.parent().unwrap_or(Path::new(""));
+    let hooks = validate_hooks(&file, config_dir)
+        .with_context(|| format!("Invalid hook settings in '{}'", path.display()))?;
+
+    Ok(LoadedAgentConfigSnapshotFile { file, hooks })
 }
 
 /// WASM builds don't use CLI command execution / local file access.
@@ -84,6 +164,99 @@ pub fn load_config_file(_path: &Path) -> anyhow::Result<LoadedAgentConfigSnapsho
     Err(anyhow::anyhow!(
         "Config files are not supported in WASM builds"
     ))
+}
+
+/// WASM builds don't use CLI command execution / local file access.
+#[cfg(target_family = "wasm")]
+pub fn load_config_file_for_local_run(
+    path: &Path,
+) -> anyhow::Result<LoadedAgentConfigSnapshotFile> {
+    load_config_file(path)
+}
+
+/// Checks the file's hook settings and resolves each source against `config_dir`.
+#[cfg(not(target_family = "wasm"))]
+fn validate_hooks(
+    file: &AgentConfigSnapshotFile,
+    config_dir: &Path,
+) -> anyhow::Result<ConfiguredHooks> {
+    use ai::hooks::{ExplicitSourceScope, sources_for_hook_dirs};
+
+    const SUPPORTED_HOOK_FORMATS: &str = "cursor";
+    const SUPPORTED_HOOK_SCOPES: &str = "run, factory_agent, factory_wide";
+    const SUPPORTED_HOOKS_ON_ASK: &str = "deny, fail_run";
+
+    let mut sources = Vec::new();
+    for (index, entry) in file.hooks.iter().flatten().enumerate() {
+        let path = entry.path.trim();
+        if path.is_empty() {
+            anyhow::bail!("hooks[{index}].path must not be empty");
+        }
+        match entry.format.as_deref().map(str::trim) {
+            None | Some("cursor") => {}
+            Some(other) => anyhow::bail!(
+                "hooks[{index}].format must be one of: {SUPPORTED_HOOK_FORMATS} (got '{other}')"
+            ),
+        }
+        let scope = match entry.scope.as_deref().map(str::trim) {
+            None | Some("run") => ExplicitSourceScope::Run,
+            Some("factory_agent") => ExplicitSourceScope::FactoryAgent,
+            Some("factory_wide") => ExplicitSourceScope::FactoryWide,
+            Some(other) => anyhow::bail!(
+                "hooks[{index}].scope must be one of: {SUPPORTED_HOOK_SCOPES} (got '{other}')"
+            ),
+        };
+        let dir = PathBuf::from(shellexpand::tilde(path).into_owned());
+        let dir = if dir.is_absolute() {
+            dir
+        } else {
+            config_dir.join(dir)
+        };
+        sources.extend(
+            sources_for_hook_dirs(&[dir])
+                .into_iter()
+                .map(|source| ExplicitHookSource { scope, ..source }),
+        );
+    }
+    let on_ask = match file.hooks_on_ask.as_deref().map(str::trim) {
+        None => None,
+        Some("deny") => Some(HooksOnAsk::Deny),
+        Some("fail_run") => Some(HooksOnAsk::FailRun),
+        Some(other) => {
+            anyhow::bail!("hooks_on_ask must be one of: {SUPPORTED_HOOKS_ON_ASK} (got '{other}')")
+        }
+    };
+    Ok(ConfiguredHooks {
+        sources,
+        strict: file.hooks_strict,
+        on_ask,
+    })
+}
+
+/// The hook settings for one `warp agent run`, from the configuration file and the command line.
+/// The command line wins: `--hooks-on-ask` replaces the file's value, and `--hooks-strict` turns
+/// the strict policy on whatever the file says (the flag cannot turn it off, so a file can only
+/// be made stricter from the command line). `--hook-dir` entries are kept apart from the file's
+/// sources because they resolve against the run's working directory, like `WARP_HOOK_DIRS`.
+pub fn merge_hook_settings(
+    file: Option<&LoadedAgentConfigSnapshotFile>,
+    cli_strict: bool,
+    cli_on_ask: Option<HooksOnAsk>,
+    cli_hook_dirs: Vec<PathBuf>,
+    surface: RunSurface,
+) -> HookRunOptions {
+    let configured = file.map(|loaded| &loaded.hooks);
+    HookRunOptions {
+        configured_sources: configured
+            .map(|hooks| hooks.sources.clone())
+            .unwrap_or_default(),
+        extra_dirs: cli_hook_dirs,
+        strict: cli_strict || configured.and_then(|hooks| hooks.strict).unwrap_or(false),
+        on_ask: cli_on_ask
+            .or_else(|| configured.and_then(|hooks| hooks.on_ask))
+            .unwrap_or_default(),
+        surface,
+    }
 }
 
 fn parse_json(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {
@@ -96,7 +269,7 @@ fn parse_yaml(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {
 }
 
 fn supported_keys_context() -> String {
-    "Supported keys: name, environment_id, runner_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
+    "Supported keys: name, environment_id, runner_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled, hooks, hooks_strict, hooks_on_ask".to_string()
 }
 
 /// Convert an unwrapped `mcp_servers` map into runtime MCP specs for AgentDriver.
