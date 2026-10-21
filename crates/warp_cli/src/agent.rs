@@ -721,7 +721,7 @@ pub struct RunAgentArgs {
     #[arg(long = "hooks-strict", hide = true)]
     pub hooks_strict: bool,
 
-    /// What a hook's `ask` does in this run, where nobody is there to answer it.
+    /// Choose how to handle a hook's `ask` in a headless run (`deny` or `fail-run`).
     #[arg(long = "hooks-on-ask", value_name = "BEHAVIOR", hide = true)]
     pub hooks_on_ask: Option<HooksOnAsk>,
 

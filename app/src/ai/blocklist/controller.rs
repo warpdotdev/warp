@@ -3739,9 +3739,8 @@ impl BlocklistAIController {
         );
     }
 
-    /// Finalizes a conversation as a terminal failure because an agent hook ended the run, the
-    /// same way a shell exit does: in-flight work is stopped and the conversation is moved to
-    /// `Error` with `message`, so the run reports `FAILED` with the hook's reason.
+    /// Finalizes `conversation_id` as a terminal `Error` with `message` because an agent hook
+    /// ended the run.
     pub fn fail_conversation_due_to_hook(
         &mut self,
         conversation_id: AIConversationId,

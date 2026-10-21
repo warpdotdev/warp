@@ -576,8 +576,8 @@ pub mod text {
 
     /// Report a problem with one of the run's hook sources, as one line.
     pub fn hook_diagnostic<W: Write>(
-        severity: &str,
         source: &str,
+        severity: &str,
         message: &str,
         w: &mut W,
     ) -> io::Result<()> {
@@ -1433,12 +1433,12 @@ pub mod json {
         message: &str,
         w: &mut W,
     ) -> io::Result<()> {
-        let record = JsonMessage::HookDiagnostic {
+        let message = JsonMessage::HookDiagnostic {
             source,
             severity,
             message,
         };
-        write_message(&record, w)
+        write_message(&message, w)
     }
 }
 

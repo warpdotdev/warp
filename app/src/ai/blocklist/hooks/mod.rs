@@ -341,8 +341,7 @@ impl HookRuntime {
         self.run.as_ref().map(|run| run.surface)
     }
 
-    /// The command execution posture of the profile active for `terminal_view_id`, read the same
-    /// way [`Self::pin_for_run`] reads it.
+    /// The command execution posture of the profile active for `terminal_view_id`.
     pub(crate) fn command_execution_posture(
         terminal_view_id: Option<EntityId>,
         ctx: &AppContext,
@@ -495,8 +494,6 @@ impl HookRuntime {
         self.run = run;
     }
 
-    /// Records the explicit sources the run was configured with, so launches that start other
-    /// runs can tell whether those sources would be missing there.
     pub(crate) fn set_delivered_sources(&mut self, sources: Vec<ExplicitHookSource>) {
         self.delivered_sources = sources;
     }

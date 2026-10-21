@@ -585,7 +585,7 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
 /// waits until the working directory's repository is known, and loads the explicit sources from
 /// `WARP_HOOK_DIRS`, `--hook-dir`, and the configuration file. Fails only when a source cannot be
 /// loaded and the run uses the strict hook policy; otherwise each problem is a diagnostic.
-pub(crate) async fn load_hook_sources(
+pub(crate) async fn setup_hooks_for_run(
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<(), AgentDriverError> {
     let detection = foreground

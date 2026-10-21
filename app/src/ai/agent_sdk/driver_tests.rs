@@ -1857,7 +1857,7 @@ fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
         let (driver, _terminal, hooks) = driver_with_hooks(&mut app, &working_dir);
 
         let loaded = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("early")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("early")];
             driver.load_hook_sources_for_run(ctx)
         });
         assert!(loaded.is_ok(), "{loaded:?}");
@@ -1881,7 +1881,7 @@ fn explicit_sources_load_before_the_run_pins_and_later_ones_cannot_join() {
         });
 
         let late = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("late")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("late")];
             driver.load_hook_sources_for_run(ctx)
         });
         assert!(late.is_ok());

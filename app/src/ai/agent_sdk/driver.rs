@@ -801,7 +801,6 @@ struct RunConfiguration {
     workspace: environment::WorkspaceConfiguration,
     skill_dirs: Vec<PathBuf>,
     skill_reference_dirs: Vec<PathBuf>,
-    hook_dirs: Vec<PathBuf>,
     hook_options: hooks::HookRunOptions,
     computer_use_config: Option<(bool, Option<LLMId>)>,
     third_party_harness_model_config: Option<HarnessModelConfig>,
@@ -856,7 +855,7 @@ fn split_run_options(
         skip_initial_turn,
         strict_mcp_startup,
         mcp_startup_timeout,
-        hooks: hook_options,
+        hooks: mut hook_options,
     } = options;
     if !working_dir.is_absolute() {
         return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
@@ -966,9 +965,9 @@ fn split_run_options(
         .definition_skill_dirs
         .clone()
         .unwrap_or_else(|| skill_dirs.clone());
-    let hook_dirs = hooks::hook_dirs(
+    hook_options.hook_dirs = hooks::hook_dirs(
         hooks::hook_dirs_env_value(&env_vars).as_deref(),
-        &hook_options.extra_dirs,
+        &hook_options.hook_dirs,
     );
     Ok((
         TerminalLaunchInputs {
@@ -998,7 +997,6 @@ fn split_run_options(
             workspace,
             skill_dirs,
             skill_reference_dirs,
-            hook_dirs,
             hook_options,
             computer_use_config,
             third_party_harness_model_config,
@@ -1116,8 +1114,6 @@ pub struct AgentDriver {
     /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
     /// Set once skill references add generated folders, which rely on folder order.
     skill_dirs_first_name_wins: bool,
-    /// Hook directories from `WARP_HOOK_DIRS` and `--hook-dir`, as written.
-    hook_dirs: Vec<PathBuf>,
     hook_options: hooks::HookRunOptions,
     factory_repository_contract: bool,
     computer_use_configured: bool,
@@ -1655,11 +1651,13 @@ impl AgentDriver {
             skill_dirs: parse_skills_dirs_env(),
             skill_reference_dirs: Vec::new(),
             skill_dirs_first_name_wins: false,
-            hook_dirs: hooks::hook_dirs(
-                hooks::hook_dirs_env_value(&HashMap::new()).as_deref(),
-                &[],
-            ),
-            hook_options: hooks::HookRunOptions::default(),
+            hook_options: hooks::HookRunOptions {
+                hook_dirs: hooks::hook_dirs(
+                    hooks::hook_dirs_env_value(&HashMap::new()).as_deref(),
+                    &[],
+                ),
+                ..Default::default()
+            },
             factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1762,7 +1760,6 @@ impl AgentDriver {
         self.skill_dirs = skill_dirs;
         self.skill_reference_dirs = skill_reference_dirs;
         self.skill_dirs_first_name_wins = false;
-        self.hook_dirs = hook_dirs;
         self.hook_options = hook_options;
         self.third_party_harness_model_config = third_party_harness_model_config;
         self.team_scope = team_scope;
@@ -2606,7 +2603,10 @@ impl AgentDriver {
                 if factory_repository_contract {
                     agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
                 }
-                agent_setup::load_hook_sources(&foreground).await?;
+                // After `prepare_workspace` registered the cloned repositories and before
+                // `execute_run` pins the registry, so project and explicit sources are both
+                // present when the hook set is fixed.
+                agent_setup::setup_hooks_for_run(&foreground).await?;
             }
 
             let (
@@ -3995,7 +3995,8 @@ impl AgentDriver {
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
         // An Oz run's first prompt is resolved server-side, so no prompt hook marks the start of
-        // the run on the client; the hook set is pinned here instead, before any request.
+        // the run on the client. Pin here, after `prepare_workspace` and `setup_hooks_for_run`
+        // have filled the registry and before the first request goes out.
         self.pin_hooks_for_run(ctx);
         self.subscribe_to_hook_runtime_events(ctx);
 
