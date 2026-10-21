@@ -59,6 +59,7 @@ impl ScriptedRunner {
         HookProcessOutcome {
             exit: ProcessExit::Code(code),
             stdout: stdout.as_bytes().to_vec(),
+            stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::from_millis(1),
         }
