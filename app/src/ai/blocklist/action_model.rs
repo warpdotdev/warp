@@ -65,6 +65,7 @@ use crate::ai::agent::{
     RequestCommandOutputResult,
 };
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
+use crate::ai::blocklist::hooks::{pre_tool, tool_result};
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -289,6 +290,13 @@ impl BlocklistAIActionModel {
                 cancellation_reason,
             } => {
                 me.handle_action_result(*conversation_id, result.clone(), *cancellation_reason, ctx)
+            }
+            BlocklistAIActionExecutorEvent::HookVerdictResolved {
+                action_id,
+                conversation_id,
+                is_user_initiated,
+            } => {
+                me.resume_action_after_hooks(action_id, *conversation_id, *is_user_initiated, ctx);
             }
             BlocklistAIActionExecutorEvent::InitProject(id) => {
                 ctx.emit(BlocklistAIActionEvent::InitProject(id.clone()))
@@ -852,21 +860,49 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if reason.needs_confirmation() {
-            ctx.emit(BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(
-                action.id.clone(),
-            ));
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                let blocked_action_user_friendly_str = action.action.user_friendly_name();
-                history_model.update_conversation_status(
-                    self.terminal_view_id,
-                    conversation_id,
-                    ConversationStatus::Blocked {
-                        blocked_action: format!("{blocked_action_user_friendly_str:?}"),
-                    },
-                    ctx,
-                );
-            });
+        match reason {
+            NotExecutedReason::NeedsConfirmation => {
+                ctx.emit(BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(
+                    action.id.clone(),
+                ));
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    let blocked_action_user_friendly_str = action.action.user_friendly_name();
+                    history_model.update_conversation_status(
+                        self.terminal_view_id,
+                        conversation_id,
+                        ConversationStatus::Blocked {
+                            blocked_action: format!("{blocked_action_user_friendly_str:?}"),
+                        },
+                        ctx,
+                    );
+                });
+            }
+            NotExecutedReason::NotReady
+            | NotExecutedReason::WaitingOnSharer
+            | NotExecutedReason::WaitingOnHooks => {}
+        }
+    }
+
+    /// Tries a queued action again now that its pre-tool hook verdict is known. An action that
+    /// was cancelled in the meantime is no longer queued and nothing happens.
+    fn resume_action_after_hooks(
+        &mut self,
+        action_id: &AIAgentActionId,
+        conversation_id: AIConversationId,
+        is_user_initiated: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let is_queued = self
+            .pending_actions
+            .get(&conversation_id)
+            .is_some_and(|queue| queue.iter().any(|action| &action.id == action_id));
+        if !is_queued {
+            return;
+        }
+        if is_user_initiated {
+            self.execute_action(action_id, conversation_id, ctx);
+        } else {
+            self.try_to_execute_available_actions(conversation_id, ctx);
         }
     }
 
@@ -1192,6 +1228,8 @@ impl BlocklistAIActionModel {
             }
         }
 
+        pre_tool::cancel_all_for_conversation(conversation_id, ctx);
+
         let Some(actions_to_cancel) = self.pending_actions.get_mut(&conversation_id) else {
             return;
         };
@@ -1267,6 +1305,15 @@ impl BlocklistAIActionModel {
             &cancelled_result,
             ctx,
         );
+        let active_session = self.executor.as_ref(ctx).active_session().clone();
+        tool_result::observe_terminal_result(
+            &pending_action,
+            &cancelled_result,
+            reason,
+            conversation_id,
+            &active_session,
+            ctx,
+        );
         let result = Arc::new(AIAgentActionResult {
             id: pending_action.id,
             task_id: pending_action.task_id,
@@ -1337,6 +1384,8 @@ impl BlocklistAIActionModel {
             return;
         };
 
+        // The command text may have changed, so any hook verdict for the old text is stale.
+        pre_tool::invalidate(action_id, ctx);
         self.execute_action(action_id, conversation_id, ctx);
     }
 
@@ -1367,6 +1416,7 @@ impl BlocklistAIActionModel {
         self.executor.update(ctx, |executor, ctx| {
             executor.discard_action_state(&action_id, ctx);
         });
+        pre_tool::invalidate(&action_id, ctx);
 
         // If a command action entered long-running mode (returned a snapshot), cancel all other
         // pending RequestCommandOutput actions. Only one command can be active at a time, and the
