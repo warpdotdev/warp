@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use warpui_core::{Entity, SingletonEntity};
 
+use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};
 #[cfg(feature = "local_fs")]
 use crate::hooks::adapters::{HookConfigError, adapter_for};
-use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};
 #[cfg(feature = "local_fs")]
 use crate::hooks::model::{
     DiagnosticSeverity, HookFormat, HookSourceId, HookSourceKind, HookSourceLocation,
@@ -155,16 +155,21 @@ impl HookRegistry {
         format: HookFormat,
         kind: HookSourceKind,
     ) -> Result<(), HookConfigError> {
-        let unreadable =
-            |error: std::io::Error| HookConfigError::Unreadable(format!("{}: {error}", path.display()));
+        let unreadable = |error: std::io::Error| {
+            HookConfigError::Unreadable(format!("{}: {error}", path.display()))
+        };
         let canonical_path = std::fs::canonicalize(path).map_err(unreadable)?;
         let bytes = std::fs::read(&canonical_path).map_err(unreadable)?;
-        let working_directory = canonical_path
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| {
-                HookConfigError::Unreadable(format!("{} has no parent directory", path.display()))
-            })?;
+        let working_directory =
+            canonical_path
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| {
+                    HookConfigError::Unreadable(format!(
+                        "{} has no parent directory",
+                        path.display()
+                    ))
+                })?;
         let adapter = adapter_for(format).ok_or_else(|| {
             HookConfigError::Invalid(format!("no adapter is registered for {format:?}"))
         })?;

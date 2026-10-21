@@ -122,7 +122,10 @@ async fn run_once(
         command.env("PATH", path);
     }
     command
-        .env("WARP_HOOK_PROTOCOL_VERSION", HOOK_PROTOCOL_VERSION.to_string())
+        .env(
+            "WARP_HOOK_PROTOCOL_VERSION",
+            HOOK_PROTOCOL_VERSION.to_string(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

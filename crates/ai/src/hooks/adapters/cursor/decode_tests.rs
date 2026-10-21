@@ -38,7 +38,10 @@ fn reasons(effects: &HookEffects) -> Vec<&str> {
 fn exit_two_denies_with_the_default_reason_when_nothing_is_printed() {
     let effects = decode(false, ProcessExit::Code(2), "");
     assert_eq!(effects.verdict, HookVerdict::Deny);
-    assert_eq!(reasons(&effects), vec!["Denied by hook ./check.sh (exit 2)."]);
+    assert_eq!(
+        reasons(&effects),
+        vec!["Denied by hook ./check.sh (exit 2)."]
+    );
     assert_eq!(effects.reasons[0].binding, Some(binding(false).id));
     assert!(effects.user_notices.is_empty());
 }
@@ -59,7 +62,10 @@ fn exit_two_uses_the_printed_agent_message_as_the_reason() {
 fn exit_two_with_unreadable_stdout_still_denies_with_the_default_reason() {
     let effects = decode(false, ProcessExit::Code(2), "not json");
     assert_eq!(effects.verdict, HookVerdict::Deny);
-    assert_eq!(reasons(&effects), vec!["Denied by hook ./check.sh (exit 2)."]);
+    assert_eq!(
+        reasons(&effects),
+        vec!["Denied by hook ./check.sh (exit 2)."]
+    );
 }
 
 #[test]

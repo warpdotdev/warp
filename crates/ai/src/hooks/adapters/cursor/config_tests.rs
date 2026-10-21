@@ -67,7 +67,10 @@ fn a_file_with_no_hooks_object_has_no_bindings() {
 
 #[test]
 fn invalid_json_is_a_parse_error() {
-    assert!(matches!(parse("{ not json"), Err(HookConfigError::Parse(_))));
+    assert!(matches!(
+        parse("{ not json"),
+        Err(HookConfigError::Parse(_))
+    ));
 }
 
 #[test]
@@ -84,8 +87,9 @@ fn a_missing_or_zero_version_is_invalid() {
 
 #[test]
 fn a_definition_without_a_command_is_invalid() {
-    let error = parse(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "timeout": 5 } ] } }"#)
-        .expect_err("rejects");
+    let error =
+        parse(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "timeout": 5 } ] } }"#)
+            .expect_err("rejects");
     let HookConfigError::Invalid(message) = error else {
         panic!("expected an invalid-config error, got {error:?}");
     };
@@ -109,7 +113,10 @@ fn a_prompt_hook_is_rejected() {
     let HookConfigError::Invalid(message) = error else {
         panic!("expected an invalid-config error, got {error:?}");
     };
-    assert!(message.contains("prompt hooks are not supported"), "{message}");
+    assert!(
+        message.contains("prompt hooks are not supported"),
+        "{message}"
+    );
 }
 
 #[test]

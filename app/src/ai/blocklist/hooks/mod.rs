@@ -121,7 +121,8 @@ impl HookRuntime {
     ) {
         #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
         {
-            if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<LocalShellState>()
+            if !FeatureFlag::AgentHooks.is_enabled()
+                || !ctx.has_singleton_model::<LocalShellState>()
             {
                 return;
             }
