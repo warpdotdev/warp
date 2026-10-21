@@ -194,3 +194,43 @@ fn a_document_that_stopped_parsing_yields_no_bindings() {
     config.document = json(r#"{ "version": 2 }"#);
     assert!(adapter.bindings(&config).is_empty());
 }
+
+#[test]
+fn bindings_reuse_what_parse_kept_and_a_fresh_adapter_reads_the_document_again() {
+    let text = r#"{ "version": 1, "hooks": { "beforeShellExecution": [
+        { "command": "a", "matcher": "^git " },
+        { "command": "b", "matcher": "^rm " }
+    ] } }"#;
+    let source = test_source_id("hooks.json");
+
+    let adapter = CursorAdapter::new();
+    let config = adapter.parse(text.as_bytes(), &source).expect("parses");
+    assert_eq!(
+        adapter.sources.pattern_count(&source),
+        2,
+        "parse keeps the compiled matchers"
+    );
+    assert_eq!(
+        adapter
+            .sources
+            .definitions(&source, &config.document)
+            .map(|d| d.len()),
+        Some(2)
+    );
+    let bindings = adapter.bindings(&config);
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(adapter.sources.pattern_count(&source), 2);
+
+    let fresh = CursorAdapter::new();
+    assert_eq!(fresh.sources.definitions(&source, &config.document), None);
+    assert_eq!(
+        fresh.bindings(&config),
+        bindings,
+        "an adapter that did not parse the document declares the same bindings from it"
+    );
+    assert_eq!(
+        fresh.sources.pattern_count(&source),
+        2,
+        "and keeps that parse for matching"
+    );
+}

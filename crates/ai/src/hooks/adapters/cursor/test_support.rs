@@ -24,12 +24,13 @@ pub(super) const UNKNOWN_EVENT: &str = include_str!("fixtures/unknown_event.json
 pub(super) const PROMPT_HOOK: &str = include_str!("fixtures/prompt_hook.json");
 pub(super) const CLAUDE_SHAPE_OUTPUT: &str = include_str!("fixtures/claude_shape_output.json");
 
-/// The checked-in files for one event: its `hooks.json`, the stdin Warp encodes for
-/// [`fixture_envelope`], and a documented stdout.
+/// The checked-in fixture files for one Phase 1 event.
 pub(super) struct EventFixture {
     pub event: CursorEvent,
     pub hooks: &'static str,
+    /// The stdin Warp encodes for [`fixture_envelope`].
     pub stdin: &'static str,
+    /// A stdout sample Cursor documents for the event.
     pub stdout: &'static str,
 }
 
@@ -172,7 +173,6 @@ pub(super) fn binding_for(event: CursorEvent, fail_closed: bool) -> DeclaredBind
         .expect("the event has a boundary")
 }
 
-/// The bindings a `hooks.json` text declares, in order.
 pub(super) fn bindings_from(text: &str) -> Vec<DeclaredBinding> {
     let (_, parsed) = parse_cursor_file(text.as_bytes()).expect("parses");
     declare_bindings(&parsed.definitions, &test_source_id("hooks.json"))

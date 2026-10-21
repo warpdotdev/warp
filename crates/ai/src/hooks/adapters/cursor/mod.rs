@@ -1,8 +1,7 @@
 //! The adapter for Cursor's `hooks.json` format. It reads every option and all 21 event names,
-//! declares a binding with capabilities and failure semantics for each definition, matches,
-//! encodes the stdin payload Cursor documents for the events Warp fires, and decodes output
-//! under Cursor's exit-code and schema rules. Events Warp does not fire are parsed, reported,
-//! and never matched.
+//! declares a binding with capabilities and failure semantics for each definition, matches, encodes
+//! the stdin payload Cursor documents for the events Warp fires, and decodes output under Cursor's
+//! exit-code and schema rules. Events Warp does not fire are parsed, reported, and never matched.
 
 mod config;
 mod decode;
@@ -10,12 +9,13 @@ mod encode;
 mod events;
 mod facets;
 mod matcher;
+mod sources;
 #[cfg(test)]
 mod test_support;
 
-use self::config::{parse_cursor_document, parse_cursor_file};
+use self::config::{ParsedDefinition, parse_cursor_document, parse_cursor_file};
 use self::events::CursorEvent;
-use self::matcher::MatcherCache;
+use self::sources::SourceCache;
 use crate::hooks::adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
@@ -26,12 +26,29 @@ use crate::hooks::runner::HookProcessOutcome;
 
 #[derive(Default)]
 pub struct CursorAdapter {
-    matchers: MatcherCache,
+    sources: SourceCache,
 }
 
 impl CursorAdapter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn reparse(&self, config: &ParsedHookConfig) -> Option<Vec<ParsedDefinition>> {
+        match parse_cursor_document(&config.document) {
+            Ok(parsed) => {
+                self.sources
+                    .remember(&config.source, &config.document, &parsed.definitions);
+                Some(parsed.definitions)
+            }
+            Err(error) => {
+                log::error!(
+                    "hook source {} no longer parses, though it was accepted earlier: {error}",
+                    config.source
+                );
+                None
+            }
+        }
     }
 }
 
@@ -60,6 +77,8 @@ impl HookFormatAdapter for CursorAdapter {
         source: &HookSourceId,
     ) -> Result<ParsedHookConfig, HookConfigError> {
         let (document, parsed) = parse_cursor_file(bytes)?;
+        self.sources
+            .remember(source, &document, &parsed.definitions);
         let warnings = parsed
             .warnings
             .into_iter()
@@ -77,25 +96,22 @@ impl HookFormatAdapter for CursorAdapter {
         })
     }
 
+    /// Declares bindings from the definitions `parse` kept for the source. A document this
+    /// adapter did not parse (another adapter instance did, or the registry changed it) is read
+    /// again.
     fn bindings(&self, config: &ParsedHookConfig) -> Vec<DeclaredBinding> {
-        match parse_cursor_document(&config.document) {
-            Ok(parsed) => {
-                self.matchers.install(&config.source, &parsed.definitions);
-                events::declare_bindings(&parsed.definitions, &config.source)
-            }
-            Err(error) => {
-                log::error!(
-                    "hook source {} no longer parses, though it was accepted earlier: {error}",
-                    config.source
-                );
-                Vec::new()
-            }
-        }
+        let definitions = self
+            .sources
+            .definitions(&config.source, &config.document)
+            .or_else(|| self.reparse(config));
+        definitions
+            .map(|definitions| events::declare_bindings(&definitions, &config.source))
+            .unwrap_or_default()
     }
 
     fn matches(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> bool {
         event_of(binding).is_some_and(|event| {
-            matcher::binding_matches(&self.matchers, event.spec(), binding, envelope)
+            matcher::binding_matches(&self.sources, event.spec(), binding, envelope)
         })
     }
 

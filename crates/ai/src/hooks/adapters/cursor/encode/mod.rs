@@ -23,7 +23,6 @@ use crate::agent::action_result::{
 };
 use crate::hooks::model::{HookEnvelope, HookPayload, TurnStopStatus};
 
-/// The JSON object a hook on `spec`'s event receives on stdin for `envelope`.
 pub(super) fn encode_input(spec: &CursorEventSpec, envelope: &HookEnvelope) -> Value {
     let mut input = common_fields(spec, envelope);
     match spec.event {
@@ -355,8 +354,8 @@ fn serialized<T: Serialize>(field: &str, value: &T) -> Value {
     })
 }
 
-/// Inserts `value` only when present. Optional fields go through this rather than `json!`, which
-/// would write `null` for a missing value; an arm with no optional field can use `json!` directly.
+/// Inserts `value` only when present, so an optional field is omitted rather than written as
+/// `null`.
 fn insert_some(fields: &mut Map<String, Value>, key: &str, value: Option<impl Serialize>) {
     if let Some(value) = value {
         fields.insert(key.to_owned(), serialized(key, &value));

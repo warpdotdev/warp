@@ -12,13 +12,13 @@ use crate::agent::action_result::{
     AIAgentActionResultType, AnyFileContent, AskUserQuestionAnswerItem, AskUserQuestionResult,
     CallMCPToolResult, CreateDocumentsResult, DocumentContext, EditDocumentsResult,
     FetchConversationResult, FileContext, FileGlobResult, FileGlobV2Result, GrepResult,
-    InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
-    ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
-    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, ScreenshotSource,
-    SearchCodebaseResult, SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
-    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
-    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
-    WriteToLongRunningShellCommandResult,
+    InsertReviewCommentsResult, LrcActivity, ReadDocumentsResult, ReadFilesResult,
+    ReadMCPResourceResult, ReadShellCommandOutputResult, ReadSkillResult,
+    RequestCommandOutputResult, RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult,
+    ScreenshotSource, SearchCodebaseResult, SendMessageToAgentResult, StartRecordingResult,
+    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
+    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
+    WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
 
 /// A JSON object describing a result, tagged with the variant it came from. Binary payloads are
@@ -111,15 +111,14 @@ pub(super) fn result_view(result: &AIAgentActionResultType) -> Value {
                 is_alt_screen_active,
                 is_preempted,
                 activity,
-            } => json!({
-                "kind": "snapshot",
-                "block_id": serialized("block_id", block_id),
-                "grid_contents": grid_contents,
-                "cursor": cursor,
-                "is_alt_screen_active": is_alt_screen_active,
-                "is_preempted": is_preempted,
-                "activity": serialized("activity", activity),
-            }),
+            } => pty_snapshot_view(
+                block_id,
+                grid_contents,
+                cursor,
+                *is_alt_screen_active,
+                *is_preempted,
+                activity,
+            ),
             WriteToLongRunningShellCommandResult::CommandFinished {
                 block_id,
                 output,
@@ -463,15 +462,14 @@ pub(super) fn result_view(result: &AIAgentActionResultType) -> Value {
                 is_alt_screen_active,
                 is_preempted,
                 activity,
-            } => json!({
-                "kind": "snapshot",
-                "block_id": serialized("block_id", block_id),
-                "grid_contents": grid_contents,
-                "cursor": cursor,
-                "is_alt_screen_active": is_alt_screen_active,
-                "is_preempted": is_preempted,
-                "activity": serialized("activity", activity),
-            }),
+            } => pty_snapshot_view(
+                block_id,
+                grid_contents,
+                cursor,
+                *is_alt_screen_active,
+                *is_preempted,
+                activity,
+            ),
             TransferShellCommandControlToUserResult::CommandFinished {
                 block_id,
                 output,
@@ -545,6 +543,25 @@ pub(super) fn result_view(result: &AIAgentActionResultType) -> Value {
 
 fn error_view(error: &str) -> Value {
     json!({ "kind": "error", "error": error })
+}
+
+fn pty_snapshot_view(
+    block_id: &BlockId,
+    grid_contents: &str,
+    cursor: &str,
+    is_alt_screen_active: bool,
+    is_preempted: bool,
+    activity: &Option<LrcActivity>,
+) -> Value {
+    json!({
+        "kind": "snapshot",
+        "block_id": serialized("block_id", block_id),
+        "grid_contents": grid_contents,
+        "cursor": cursor,
+        "is_alt_screen_active": is_alt_screen_active,
+        "is_preempted": is_preempted,
+        "activity": serialized("activity", activity),
+    })
 }
 
 fn finished_command_view(
