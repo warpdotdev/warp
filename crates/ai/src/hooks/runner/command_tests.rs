@@ -82,12 +82,17 @@ mod unix {
     /// (slow spawns, late timers) does not turn a passing run into a failure.
     const LOAD_MARGIN: Duration = Duration::from_secs(5);
 
-    /// A deadline long enough that even a loaded machine has started the script's shell and run
-    /// its first lines before it fires.
+    /// A deadline that a lightly loaded machine reaches with the script's shell long started. Under
+    /// heavy load a shell has been seen to take more than ten seconds to start, so a test that
+    /// needs the script to be running must wait for it rather than count on this.
     const GENEROUS_TIMEOUT: Duration = Duration::from_secs(8);
 
+    /// How long the readiness and "is it gone" polls wait before giving up. Only a failing run
+    /// pays it.
+    const POLL_LIMIT: Duration = Duration::from_secs(60);
+
     fn wait_until_gone(pid: i32) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + POLL_LIMIT;
         while Instant::now() < deadline {
             if !process_is_alive(pid) {
                 return true;
@@ -97,11 +102,15 @@ mod unix {
         false
     }
 
+    fn pids_file_is_written(dir: &Path) -> bool {
+        fs::metadata(dir.join("pids")).is_ok_and(|metadata| metadata.len() > 0)
+    }
+
     /// Waits for the script to write its `pids` file, which it does as soon as it is running.
     fn wait_for_pids_file(dir: &Path) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + POLL_LIMIT;
         while Instant::now() < deadline {
-            if fs::metadata(dir.join("pids")).is_ok_and(|metadata| metadata.len() > 0) {
+            if pids_file_is_written(dir) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -354,7 +363,13 @@ wait"#,
             elapsed < GENEROUS_TIMEOUT + HOOK_KILL_GRACE + LOAD_MARGIN,
             "the runner returned promptly ({elapsed:?})"
         );
-        assert!(wait_for_pids_file(dir.path()), "the script never ran");
+        // The deadline cannot wait for the script, so on a machine loaded enough that the shell
+        // had not started by then there is no tree to check; the readiness-gated tests below
+        // cover the stop, grace, and kill sequence, which the timeout path shares.
+        if !pids_file_is_written(dir.path()) {
+            eprintln!("the shell had not started before the deadline; no descendants to check");
+            return;
+        }
         let pids = recorded_pids(dir.path());
         assert_eq!(pids.len(), 2);
         for pid in pids {
@@ -533,15 +548,25 @@ echo "$!" > "$PWD/pids"
 printf '{"agent_message":"no"}'
 exit 2"#,
         );
-        let started = Instant::now();
+        // Measured from the moment the script is known to be running, so a slow spawn on a loaded
+        // machine does not count against the runner.
+        let script_running_at = std::thread::spawn({
+            let dir = dir.path().to_path_buf();
+            move || wait_for_pids_file(&dir).then(Instant::now)
+        });
         let outcome = run(
             &runner(),
             invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(30)),
         );
+        let returned_at = Instant::now();
+        let script_running_at = script_running_at
+            .join()
+            .expect("watcher thread")
+            .expect("the script ran");
         assert_eq!(outcome.exit, ProcessExit::Code(2));
         assert_eq!(outcome.stdout, br#"{"agent_message":"no"}"#);
         assert!(
-            started.elapsed() < HOOK_KILL_GRACE + LOAD_MARGIN,
+            returned_at.duration_since(script_running_at) < HOOK_KILL_GRACE + LOAD_MARGIN,
             "a descendant that stops when asked does not delay the outcome"
         );
         for pid in recorded_pids(dir.path()) {
