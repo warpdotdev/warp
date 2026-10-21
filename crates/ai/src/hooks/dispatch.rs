@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::{BoxFuture, join_all};
+use instant::Instant;
 use uuid::Uuid;
 
 use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
