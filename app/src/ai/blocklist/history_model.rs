@@ -23,8 +23,8 @@ use warp_multi_agent_api::response_event::stream_finished::{
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::controller::response_stream::ResponseStreamId;
+use super::RequestInput;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
-use super::{RequestInput, hooks};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -1453,10 +1453,6 @@ impl BlocklistAIHistoryModel {
             terminal_surface_id,
         });
 
-        if !is_viewing_shared_session && !is_cli_agent_transcript {
-            hooks::session::notify_session_start(new_conversation_id, ctx);
-        }
-
         new_conversation_id
     }
 
@@ -2146,19 +2142,27 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Marks the stream's exchanges as finished. Returns whether the turn ended with this stream
+    /// (its output queued no actions). The caller marks the conversation successful when it did,
+    /// which lets a stop hook hold that until it has finished.
     pub fn mark_response_stream_completed_successfully(
         &mut self,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-            return;
+            return false;
         };
-        if let Err(e) = conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
-            log::warn!("Failed to mark exchange as completed: {e}");
-        }
+        let turn_ended = match conversation.mark_request_completed(stream_id, terminal_surface_id, ctx)
+        {
+            Ok(turn_ended) => turn_ended,
+            Err(e) => {
+                log::warn!("Failed to mark exchange as completed: {e}");
+                false
+            }
+        };
 
         // If this conversation doesn't have server metadata yet, and it has a server conversation token,
         // fetch the metadata from the server.
@@ -2176,7 +2180,7 @@ impl BlocklistAIHistoryModel {
                 .in_flight_server_metadata_fetches
                 .insert(conversation_id)
             {
-                return;
+                return turn_ended;
             }
 
             let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -2212,6 +2216,7 @@ impl BlocklistAIHistoryModel {
                 },
             );
         }
+        turn_ended
     }
 
     pub fn set_exchange_time_to_first_token(

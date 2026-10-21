@@ -199,7 +199,30 @@ impl BlocklistAIController {
         query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if query_id.is_none() && !self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx) {
+        self.dispatch_queued_warp_agent_prompt_inner(conversation_id, query_id, false, ctx);
+    }
+
+    pub(super) fn dispatch_queued_warp_agent_prompt_after_turn_stop(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.dispatch_queued_warp_agent_prompt_inner(conversation_id, None, true, ctx);
+    }
+
+    fn dispatch_queued_warp_agent_prompt_inner(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: Option<QueuedQueryId>,
+        after_turn_stop: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let can_dispatch = if after_turn_stop {
+            self.can_dispatch_queued_warp_agent_prompt_after_turn_stop(conversation_id, ctx)
+        } else {
+            self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx)
+        };
+        if query_id.is_none() && !can_dispatch {
             return;
         }
         let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
