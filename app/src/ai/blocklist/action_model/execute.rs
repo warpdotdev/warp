@@ -692,6 +692,12 @@ impl BlocklistAIActionExecutor {
             match decision {
                 PermissionDecision::Deny { reason, .. } => {
                     let result = denied_result_for(&action.action, &reason.text);
+                    send_run_agents_completed_telemetry(
+                        conversation_id,
+                        &action.action,
+                        &result,
+                        ctx,
+                    );
                     self.finish_sync(action, result, conversation_id, ctx);
                     return TryExecuteResult::ExecutedSync;
                 }
@@ -1093,9 +1099,10 @@ impl BlocklistAIActionExecutor {
         }
     }
 
-    /// Runs Warp's own permission check for `input`. When `with_floors` is set, it also names
-    /// the facts that check established which no hook may loosen. Only the shell, file edit, and
-    /// MCP families have floors; every other family has none.
+    /// Runs Warp's own permission check for `input`. When `with_floors` is set and the check did
+    /// not auto-execute, it also names the facts behind that answer which no hook may loosen. An
+    /// action Warp executes has nothing to loosen, so it has no floors; neither has any family
+    /// other than the shell, file edit, and MCP ones.
     fn permission_facts(
         &self,
         input: ExecuteActionInput,
@@ -1103,8 +1110,8 @@ impl BlocklistAIActionExecutor {
         ctx: &mut ModelContext<Self>,
     ) -> ExecutorPermissionFacts {
         let can_auto_execute = self.should_autoexecute(input, ctx);
-        let floors = if with_floors {
-            self.permission_floors(input, can_auto_execute, ctx)
+        let floors = if with_floors && !can_auto_execute {
+            self.permission_floors(input, ctx)
         } else {
             PermissionFloors::default()
         };
@@ -1114,13 +1121,14 @@ impl BlocklistAIActionExecutor {
         }
     }
 
-    /// The floors for `input`, read from the same permission functions the per-family
-    /// `should_autoexecute` checks call, so a denylist bypass or a sandbox exemption is applied
-    /// exactly as Warp applies it.
+    /// The floors for an `input` Warp did not auto-execute, read from the same permission
+    /// functions the per-family `should_autoexecute` checks call, so a denylist bypass or a
+    /// sandbox exemption is applied exactly as Warp applies it. The functions are called again
+    /// here rather than read from the executor that ran them; where that executor answered
+    /// before reaching them, the floors still describe the settings and lists as they stand.
     fn permission_floors(
         &self,
         input: ExecuteActionInput,
-        can_auto_execute: bool,
         ctx: &ModelContext<Self>,
     ) -> PermissionFloors {
         let permissions = BlocklistAIPermissions::as_ref(ctx);
@@ -1132,15 +1140,24 @@ impl BlocklistAIActionExecutor {
                 is_risky,
                 ..
             } => {
+                let scope = (self.team_context_resolver)(ctx);
                 let Some(escape_char) = self
                     .active_session
                     .as_ref(ctx)
                     .shell_type(ctx)
                     .map(|shell| ShellFamily::from(shell).escape_char())
                 else {
-                    return PermissionFloors::default();
+                    // Without a shell type the command cannot be taken apart for the denylist
+                    // and Warp does not auto-execute it; the setting is still a fact.
+                    return PermissionFloors {
+                        always_ask_setting: permissions.get_execute_commands_setting(
+                            terminal_view_id,
+                            &scope,
+                            ctx,
+                        ) == ActionPermission::AlwaysAsk,
+                        ..Default::default()
+                    };
                 };
-                let scope = (self.team_context_resolver)(ctx);
                 match permissions.can_autoexecute_command(
                     &input.conversation_id,
                     command,
@@ -1207,12 +1224,7 @@ impl BlocklistAIActionExecutor {
             }
             AIAgentActionType::CallMCPTool {
                 server_id, name, ..
-            } => self.mcp_floors(
-                server_id.as_ref(),
-                McpLookup::Tool { name },
-                can_auto_execute,
-                ctx,
-            ),
+            } => self.mcp_floors(server_id.as_ref(), McpLookup::Tool { name }, ctx),
             AIAgentActionType::ReadMCPResource {
                 server_id,
                 name,
@@ -1223,7 +1235,6 @@ impl BlocklistAIActionExecutor {
                     name,
                     uri: uri.as_deref(),
                 },
-                can_auto_execute,
                 ctx,
             ),
             AIAgentActionType::WriteToLongRunningShellCommand { .. }
@@ -1264,7 +1275,6 @@ impl BlocklistAIActionExecutor {
         &self,
         server_id: Option<&uuid::Uuid>,
         lookup: McpLookup<'_>,
-        can_auto_execute: bool,
         ctx: &ModelContext<Self>,
     ) -> PermissionFloors {
         let permissions = BlocklistAIPermissions::as_ref(ctx);
@@ -1286,9 +1296,8 @@ impl BlocklistAIActionExecutor {
                 .get_mcp_denylist(ctx, terminal_view_id)
                 .contains(&template)
         });
-        let always_ask_setting = !can_auto_execute
-            && permissions.get_mcp_permissions_setting(ctx, terminal_view_id)
-                == ActionPermission::AlwaysAsk;
+        let always_ask_setting = permissions.get_mcp_permissions_setting(ctx, terminal_view_id)
+            == ActionPermission::AlwaysAsk;
         PermissionFloors {
             mcp_server_denylisted,
             always_ask_setting,
@@ -1302,7 +1311,6 @@ impl BlocklistAIActionExecutor {
         &self,
         _server_id: Option<&uuid::Uuid>,
         _lookup: McpLookup<'_>,
-        _can_auto_execute: bool,
         _ctx: &ModelContext<Self>,
     ) -> PermissionFloors {
         PermissionFloors::default()

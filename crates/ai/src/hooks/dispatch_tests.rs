@@ -103,6 +103,7 @@ fn no_bindings_is_no_opinion_without_touching_the_runner() {
     let h = harness();
     let outcome = dispatch(&h, shell_envelope(), Vec::new());
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
+    assert!(!outcome.cancelled, "nothing to run is a real no opinion");
     assert!(outcome.invocations.is_empty());
     assert_eq!(outcome.registry_revision, 7);
     assert_eq!(h.runner.invocation_count(), 0);
@@ -387,6 +388,10 @@ fn cancelling_a_running_dispatch_discards_the_partial_result() {
     );
 
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
+    assert!(
+        outcome.cancelled,
+        "a cancelled firing says so, so no caller reads it as permission"
+    );
     assert_eq!(
         outcome.invocations.len(),
         3,
@@ -424,6 +429,7 @@ fn a_cancel_flag_set_before_dispatch_runs_nothing() {
         cancel.clone(),
     ));
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
+    assert!(outcome.cancelled);
     assert!(outcome.invocations.is_empty());
     assert_eq!(h.runner.invocation_count(), 0);
     assert!(cancel.load(Ordering::Acquire));
@@ -579,6 +585,35 @@ fn defer_is_ignored_with_a_diagnostic_on_an_interactive_surface() {
 }
 
 #[test]
+fn defer_denies_under_the_strict_policy_on_an_interactive_surface() {
+    let h = harness();
+    let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    h.runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"defer"}"#),
+    );
+    let mut envelope = shell_envelope();
+    envelope.surface = HookSurface::Gui;
+    let outcome = block_on(h.dispatcher.dispatch(
+        envelope,
+        snapshot(vec![active_binding(
+            binding.clone(),
+            h.adapter.clone(),
+            BindingScope::Everywhere,
+        )]),
+        DispatchPolicy { strict: true },
+        not_cancelled(),
+    ));
+    assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+    assert_eq!(outcome.effects.verdict_binding, Some(binding.id));
+    assert!(
+        outcome.effects.reasons[0]
+            .text
+            .contains("defer the action for later")
+    );
+}
+
+#[test]
 fn defer_after_the_fact_is_only_reported_even_when_headless() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolResult, 0, None);
@@ -720,6 +755,30 @@ mod failure_policy {
         h.runner
             .script(h.bindings[0].id.clone(), ScriptedRunner::exit_with(2, ""));
         assert_eq!(run(&h, true).effects.verdict, HookVerdict::Deny);
+    }
+
+    /// The adapter reports a control field the event does not define without reading its
+    /// value, so the refusal names the field's purpose and does not claim the hook asked for
+    /// anything: `continue: true` is not a request to stop the turn.
+    #[test]
+    fn a_field_the_event_does_not_accept_is_refused_in_its_own_words() {
+        let h = cursor_harness(FAIL_OPEN);
+        h.runner.script(
+            h.bindings[0].id.clone(),
+            ScriptedRunner::exit_with(0, r#"{"permission":"allow","continue":true}"#),
+        );
+        let outcome = run(&h, false);
+        assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+        let reason = &outcome.effects.reasons[0].text;
+        assert!(
+            reason.contains(
+                "returned a field that controls whether the turn continues, which this event \
+                 does not accept"
+            ),
+            "{reason}"
+        );
+        assert!(!reason.contains("stop the turn"), "{reason}");
+        assert!(reason.ends_with("so the action was denied."), "{reason}");
     }
 }
 

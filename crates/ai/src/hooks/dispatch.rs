@@ -51,14 +51,18 @@ pub struct DispatchOutcome {
     pub effects: MergedEffects,
     pub invocations: Vec<InvocationRecord>,
     pub registry_revision: u64,
+    /// The firing was cancelled, so `effects` is not a verdict: nothing that ran was merged.
+    /// A caller that would proceed on no opinion must check this first.
+    pub cancelled: bool,
 }
 
 impl DispatchOutcome {
-    fn no_opinion(registry_revision: u64) -> Self {
+    fn no_opinion(registry_revision: u64, cancelled: bool) -> Self {
         Self {
             effects: MergedEffects::no_opinion(),
             invocations: Vec::new(),
             registry_revision,
+            cancelled,
         }
     }
 }
@@ -110,8 +114,13 @@ impl HookDispatcher {
             has_distinct_sources(&matching),
             "the registry handed the dispatcher the same binding twice"
         );
-        if matching.is_empty() || cancel.load(Ordering::Acquire) {
-            return futures::future::ready(DispatchOutcome::no_opinion(registry_revision)).boxed();
+        if matching.is_empty() {
+            return futures::future::ready(DispatchOutcome::no_opinion(registry_revision, false))
+                .boxed();
+        }
+        if cancel.load(Ordering::Acquire) {
+            return futures::future::ready(DispatchOutcome::no_opinion(registry_revision, true))
+                .boxed();
         }
 
         let runner = self.runner.clone();
@@ -142,6 +151,7 @@ impl HookDispatcher {
                         &active.binding,
                         envelope.boundary(),
                         envelope.surface,
+                        policy,
                         effects,
                     ),
                 ));
@@ -159,6 +169,7 @@ impl HookDispatcher {
                     effects: MergedEffects::no_opinion(),
                     invocations,
                     registry_revision,
+                    cancelled: true,
                 };
             }
 
@@ -177,6 +188,7 @@ impl HookDispatcher {
                 effects,
                 invocations,
                 registry_revision,
+                cancelled: false,
             }
         }
         .boxed()
@@ -349,17 +361,40 @@ fn refusal_for(boundary: HookBoundary) -> Refusal {
     }
 }
 
-/// What a hook asked for through an effect it may not produce here, in the words a refusal
-/// reason uses. `None` for effects that only inform someone and never block anything.
-fn control_effect_words(kind: EffectKind) -> Option<&'static str> {
+/// The kind of output field a control effect travels in, in the words a refusal reason uses
+/// for a field the adapter refused because the event does not define it. The adapter reports
+/// such a field without reading its value, so the words name the field's purpose and do not
+/// claim what the hook asked for. `None` for effects that only inform someone and never block
+/// anything.
+fn control_field_words(kind: EffectKind) -> Option<&'static str> {
     match kind {
-        EffectKind::Verdict => Some("decide permission through a field this event does not accept"),
-        EffectKind::ReplacementInput => Some("rewrite the input"),
-        EffectKind::ReplacementResult => Some("replace the result"),
-        EffectKind::HaltTurn => Some("stop the turn"),
-        EffectKind::Continuation => Some("continue the turn"),
+        EffectKind::Verdict => Some("a field that decides permission"),
+        EffectKind::ReplacementInput => Some("a field that rewrites the input"),
+        EffectKind::ReplacementResult => Some("a field that replaces the result"),
+        EffectKind::HaltTurn => Some("a field that controls whether the turn continues"),
+        EffectKind::Continuation => Some("a field that asks for a follow-up"),
         EffectKind::ModelContext | EffectKind::UserNotice | EffectKind::SessionEnv => None,
     }
+}
+
+/// What a hook asked for and why the boundary refused it, in the words a refusal reason uses.
+/// `asked` names channels the hook filled that cannot be honored here; `returned` names fields
+/// the event does not accept.
+fn refusal_words(asked: &[&str], returned: &[&str]) -> String {
+    let mut parts = Vec::with_capacity(2);
+    if !asked.is_empty() {
+        parts.push(format!(
+            "asked to {}, which is not supported here",
+            asked.join(" and ")
+        ));
+    }
+    if !returned.is_empty() {
+        parts.push(format!(
+            "returned {}, which this event does not accept",
+            returned.join(" and ")
+        ));
+    }
+    parts.join(", and ")
 }
 
 /// Applies the phase's limits to what one binding asked for. A control effect that cannot be
@@ -370,6 +405,7 @@ fn refuse_unhonorable_effects(
     binding: &DeclaredBinding,
     boundary: HookBoundary,
     surface: HookSurface,
+    policy: DispatchPolicy,
     mut effects: HookEffects,
 ) -> HookEffects {
     if !effects.model_context.is_empty() {
@@ -382,11 +418,16 @@ fn refuse_unhonorable_effects(
 
     // Fields the adapter refused to apply because the event does not define them. They are
     // already in `unsupported`; here they only add words to the refusal reason.
-    let mut asked = effects
+    let mut returned = Vec::new();
+    for words in effects
         .unsupported
         .iter()
-        .filter_map(|unsupported| control_effect_words(unsupported.effect))
-        .collect::<Vec<_>>();
+        .filter_map(|unsupported| control_field_words(unsupported.effect))
+    {
+        if !returned.contains(&words) {
+            returned.push(words);
+        }
+    }
 
     // Channels the adapter did fill that this boundary cannot honor in this phase.
     let mut unhonorable: Vec<(EffectKind, &'static str)> = Vec::new();
@@ -414,9 +455,10 @@ fn refuse_unhonorable_effects(
     }
     // `reduce_effects` reports a deferral it ignores, which is the vendor's "warn and ignore"
     // behavior for an interactive surface. On a headless surface nobody could resume the action
-    // later, so before an operation the deferral is refused instead.
+    // later, and under the strict policy every unsupported control output blocks, so before an
+    // operation the deferral is refused instead.
     if effects.verdict == HookVerdict::Defer
-        && surface.is_headless()
+        && (surface.is_headless() || policy.strict)
         && !matches!(refusal, Refusal::ReportOnly)
     {
         unhonorable.push((EffectKind::Verdict, "defer the action for later"));
@@ -427,9 +469,10 @@ fn refuse_unhonorable_effects(
         .iter()
         .map(|unsupported| unsupported.effect)
         .collect::<HashSet<_>>();
+    let mut asked = Vec::new();
     for (kind, words) in &unhonorable {
         if !asked.contains(words) {
-            asked.push(words);
+            asked.push(*words);
         }
         if !reported.contains(kind) {
             effects.unsupported.push(UnsupportedEffect {
@@ -440,30 +483,22 @@ fn refuse_unhonorable_effects(
         }
     }
 
-    if asked.is_empty() {
+    if asked.is_empty() && returned.is_empty() {
         return effects;
     }
-    let asked = asked.join(" and ");
+    let words = refusal_words(&asked, &returned);
     match refusal {
         Refusal::DenyAction => {
             effects.verdict = HookVerdict::Deny;
             effects.reasons.push(HookReason {
-                text: format!(
-                    "Hook {} asked to {asked}, which is not supported here, so the action was \
-                     denied.",
-                    binding.id
-                ),
+                text: format!("Hook {} {words}, so the action was denied.", binding.id),
                 binding: Some(binding.id.clone()),
             });
         }
         Refusal::HaltPrompt => {
             effects.halt_turn = true;
             effects.reasons.push(HookReason {
-                text: format!(
-                    "Hook {} asked to {asked}, which is not supported here, so the prompt was \
-                     not sent.",
-                    binding.id
-                ),
+                text: format!("Hook {} {words}, so the prompt was not sent.", binding.id),
                 binding: Some(binding.id.clone()),
             });
         }

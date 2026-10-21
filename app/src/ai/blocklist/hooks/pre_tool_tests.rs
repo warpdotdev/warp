@@ -353,6 +353,57 @@ fn dropping_an_unfinished_dispatch_sets_its_cancel_flag() {
     });
 }
 
+/// A dispatch dropped before it finished leaves an entry that nothing will resolve. The next
+/// lookup notices and starts over instead of waiting forever; the approval it carried stays,
+/// since the operation and the configuration are unchanged.
+#[test]
+fn a_lookup_after_a_dropped_dispatch_starts_over() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        install_shell_deny(&harness, &mut app, "no");
+        let action = shell_action("a1", "ls");
+
+        let dropped = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &action,
+            harness.conversation_id,
+            true,
+        ));
+        drop(dropped.future);
+        assert!(matches!(
+            app.read(|ctx| cached_state(harness.conversation_id, &action.id, ctx)),
+            Some(PreToolHookState::Pending)
+        ));
+
+        let restarted = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &action,
+            harness.conversation_id,
+            false,
+        ));
+        assert!(
+            !Arc::ptr_eq(&restarted.ticket.cancel, &dropped.ticket.cancel),
+            "a fresh dispatch, not the dead one"
+        );
+        let outcome = block_on(restarted.future);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: true,
+            })
+        );
+        assert_eq!(
+            harness.hooks.adapter.encoded_count(),
+            1,
+            "the dropped dispatch never ran; the restarted one did"
+        );
+    });
+}
+
 /// Runs one lookup to its verdict so the entry is `Resolved`.
 fn resolve(app: &mut App, harness: &HookTestApp, action: &AIAgentAction) {
     let dispatch = expect_dispatch(lookup(app, harness, action, harness.conversation_id, false));
@@ -546,6 +597,54 @@ fn a_verdict_judged_under_an_older_revision_is_dropped_and_the_hooks_run_once_mo
     });
 }
 
+/// The user approved command X under one hook configuration; the configuration changed before
+/// the verdict landed. The new configuration may ask for a confirmation the user has never
+/// seen, so neither the resumption nor the restarted entry carries the approval.
+#[test]
+fn an_approval_does_not_survive_a_hook_configuration_change() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        install_shell_deny(&harness, &mut app, "no");
+        let action = shell_action("a1", "ls");
+
+        let dispatch = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &action,
+            harness.conversation_id,
+            true,
+        ));
+        let outcome = block_on(dispatch.future);
+        bump_registry_revision(&mut app);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&dispatch.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: false,
+            }),
+            "the action resumes, but not on the user-initiated path"
+        );
+
+        let restarted = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &action,
+            harness.conversation_id,
+            false,
+        ));
+        let outcome = block_on(restarted.future);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: false,
+            }),
+            "the new entry does not inherit the approval"
+        );
+    });
+}
+
 #[test]
 fn a_configuration_that_keeps_changing_ends_in_a_denial() {
     App::test((), |mut app| async move {
@@ -640,7 +739,43 @@ fn an_ask_on_an_interactive_surface_requires_confirmation() {
             panic!("expected a confirmation step, got {decision:?}");
         };
         assert_eq!(reason.text, "check first");
-        assert!(harness.hooks.messenger.notices().is_empty());
+        let notices = harness.hooks.messenger.notices();
+        assert_eq!(notices.len(), 1, "the user is told why the card appeared");
+        assert_eq!(notices[0].kind, HookNoticeKind::Warning);
+        assert_eq!(notices[0].text, "check first");
+        assert_eq!(notices[0].action_id, Some(action.id.clone()));
+    });
+}
+
+/// A waiting action is tried more than once; the user hears about the hook's `ask` once.
+#[test]
+fn the_ask_notice_goes_out_once_per_verdict() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        install_shell_deny(&harness, &mut app, "unused");
+        let action = shell_action("a1", "ls");
+        resolve(&mut app, &harness, &action);
+
+        for _ in 0..3 {
+            let decision = app.update(|ctx| {
+                decide(
+                    &ask_effects("check first"),
+                    warp_would_run(),
+                    PermissionFloors::default(),
+                    &action,
+                    harness.conversation_id,
+                    ctx,
+                )
+            });
+            assert!(matches!(
+                decision,
+                PermissionDecision::RequireConfirmation { .. }
+            ));
+        }
+        let notices = harness.hooks.messenger.notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, HookNoticeKind::Warning);
     });
 }
 

@@ -93,11 +93,23 @@ struct VerdictEntry {
     key: VerdictKey,
     state: PreToolHookState,
     /// Set once any caller asked for this action with user approval, so the resumed attempt
-    /// keeps that approval.
+    /// keeps that approval. The approval covers the operation the key describes; it is dropped
+    /// with the entry when the key changes.
     is_user_initiated: bool,
     cancel: Arc<AtomicBool>,
     /// How many times this action's hook check has started over.
     restarts: u32,
+    /// Set once the user was told a hook asked for confirmation, so the notice goes out once
+    /// however many times the waiting action is tried.
+    confirmation_noticed: bool,
+}
+
+impl VerdictEntry {
+    /// Whether the entry waits for a verdict that will never come: its dispatch future was
+    /// dropped before it finished, which set the cancel flag without resolving anything.
+    fn dispatch_died(&self) -> bool {
+        matches!(self.state, PreToolHookState::Pending) && self.cancel.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -168,8 +180,8 @@ impl Drop for CancelOnDrop {
 enum Cached {
     /// The entry describes the operation being looked up.
     Current(PreToolHookState),
-    /// The entry described an earlier revision of the operation; it was dropped and its
-    /// dispatch told to stop.
+    /// The entry described an earlier revision of the operation, or its dispatch died before
+    /// answering; it was dropped and its dispatch told to stop.
     Outdated {
         restarts: u32,
         is_user_initiated: bool,
@@ -191,6 +203,11 @@ pub(crate) fn begin_or_lookup(
     }
     let runtime = HookRuntime::handle(ctx);
     let snapshot = runtime.as_ref(ctx).snapshot(ctx);
+    // The key hashes the whole action, so the cheap check comes first. An entry left behind
+    // when the last pre-tool binding went away is dropped when the action finishes.
+    if !snapshot.has_bindings_for(HookBoundary::ToolPre) {
+        return PreToolLookup::Inactive;
+    }
     let key = VerdictKey {
         conversation_id,
         action_id: action.id.clone(),
@@ -206,7 +223,7 @@ pub(crate) fn begin_or_lookup(
     let cached = runtime.update(ctx, |runtime, _| {
         let entries = &mut runtime.pre_tool_verdicts.entries;
         match entries.get_mut(&action_key) {
-            Some(entry) if entry.key == key => {
+            Some(entry) if entry.key == key && !entry.dispatch_died() => {
                 entry.is_user_initiated |= is_user_initiated;
                 Cached::Current(entry.state.clone())
             }
@@ -215,19 +232,24 @@ pub(crate) fn begin_or_lookup(
                     .remove(&action_key)
                     .expect("the entry was just found");
                 entry.cancel.store(true, Ordering::Release);
+                let same_operation = entry.key == key;
                 log::info!(
-                    "hook verdict for {} no longer describes the action; running its hooks \
-                     again (restart {})",
+                    "hook verdict for {} {}; running its hooks again (restart {})",
                     entry.key.action_id,
+                    if same_operation {
+                        "was never going to arrive"
+                    } else {
+                        "no longer describes the action"
+                    },
                     entry.restarts + 1
                 );
                 Cached::Outdated {
                     restarts: entry.restarts + 1,
-                    // Approval covers the arguments the user saw. It carries over when only the
-                    // working directory or the configuration moved, never to different
-                    // arguments.
-                    is_user_initiated: entry.is_user_initiated
-                        && entry.key.argument_revision == key.argument_revision,
+                    // Approval covers the operation the user saw under the hook configuration
+                    // of that moment. Different arguments are a different operation, and a
+                    // changed configuration may ask for a confirmation the user never saw, so
+                    // approval carries over only when the key is unchanged.
+                    is_user_initiated: entry.is_user_initiated && same_operation,
                 }
             }
             None => Cached::Nothing,
@@ -257,17 +279,13 @@ pub(crate) fn begin_or_lookup(
                     is_user_initiated,
                     cancel: Arc::new(AtomicBool::new(false)),
                     restarts,
+                    confirmation_noticed: false,
                 },
             );
         });
         return PreToolLookup::Resolved(denied);
     }
 
-    // Building the envelope clones the action and reads the history model, so make sure some
-    // pre-tool binding exists before paying for that.
-    if !snapshot.has_bindings_for(HookBoundary::ToolPre) {
-        return PreToolLookup::Inactive;
-    }
     let site = EnvelopeSite::new(conversation_id, active_session);
     let envelope = envelope_for_tool_pre(action, &site, ctx);
     let has_matching_binding = snapshot
@@ -296,6 +314,7 @@ pub(crate) fn begin_or_lookup(
                 is_user_initiated,
                 cancel: ticket.cancel.clone(),
                 restarts,
+                confirmation_noticed: false,
             },
         );
         runtime.dispatcher().dispatch(
@@ -330,14 +349,16 @@ fn unstable_configuration_denial() -> MergedEffects {
 
 /// Stores a finished dispatch's verdict. Returns `None`, and drops the verdict, when the dispatch
 /// was cancelled or replaced while it ran. A verdict judged under a hook configuration that has
-/// since changed is dropped too, but the action is still resumed: its next lookup sees the
-/// entry's key no longer matches and runs the hooks again against the new configuration.
+/// since changed is dropped too, but the action is still resumed, without the approval it may
+/// have carried: its next lookup sees the entry's key no longer matches and runs the hooks again
+/// against the new configuration, which may ask for a confirmation the user has not seen.
 pub(crate) fn on_resolved(
     ticket: &DispatchTicket,
     outcome: DispatchOutcome,
     ctx: &mut AppContext,
 ) -> Option<Resumption> {
-    if ticket.cancel.load(Ordering::Acquire) || !HookRuntime::is_installed(ctx) {
+    if outcome.cancelled || ticket.cancel.load(Ordering::Acquire) || !HookRuntime::is_installed(ctx)
+    {
         return None;
     }
     let action_key = ticket.action_key();
@@ -354,6 +375,7 @@ pub(crate) fn on_resolved(
                 ticket.action_id,
                 outcome.registry_revision
             );
+            entry.is_user_initiated = false;
         } else {
             entry.state = PreToolHookState::Resolved(Box::new(outcome.effects));
         }
@@ -366,7 +388,9 @@ pub(crate) fn on_resolved(
 
 /// Applies the permission policy to a resolved verdict and reports what it decided. A denial is
 /// delivered to the user as a notice; a denial because nobody could answer a hook's `ask` is
-/// also announced to the run's owner when the run asked to end on it.
+/// also announced to the run's owner when the run asked to end on it. A confirmation step a
+/// hook asked for is announced once, with the hook's reason, so the user knows why the card
+/// appeared.
 pub(crate) fn decide(
     merged: &MergedEffects,
     warp: WarpPermissionResult,
@@ -384,34 +408,70 @@ pub(crate) fn decide(
     let messenger = runtime.messenger();
 
     let decision = HookPermissionPolicy::compose(merged, warp, &floors, run);
-    if let PermissionDecision::Deny { reason, cause } = &decision {
-        messenger.notify(HookNotice {
-            conversation_id,
-            action_id: Some(action.id.clone()),
-            kind: HookNoticeKind::Denied,
-            text: reason.text.clone(),
-        });
-        let ends_the_run = match (cause, headless_ask_behavior) {
-            (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::FailRun) => true,
-            (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::DenyWithReason)
-            | (
-                DenyCause::Hook | DenyCause::RewriteUnsupported | DenyCause::DeferralUnsupported,
-                HeadlessAskBehavior::DenyWithReason | HeadlessAskBehavior::FailRun,
-            ) => false,
-        };
-        if ends_the_run {
-            let reason = reason.text.clone();
-            let action_id = action.id.clone();
-            HookRuntime::handle(ctx).update(ctx, |_, ctx| {
-                ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
-                    conversation_id,
-                    action_id,
-                    reason,
-                });
+    match &decision {
+        PermissionDecision::Deny { reason, cause } => {
+            messenger.notify(HookNotice {
+                conversation_id,
+                action_id: Some(action.id.clone()),
+                kind: HookNoticeKind::Denied,
+                text: reason.text.clone(),
             });
+            let ends_the_run = match (cause, headless_ask_behavior) {
+                (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::FailRun) => true,
+                (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::DenyWithReason)
+                | (
+                    DenyCause::Hook
+                    | DenyCause::RewriteUnsupported
+                    | DenyCause::DeferralUnsupported,
+                    HeadlessAskBehavior::DenyWithReason | HeadlessAskBehavior::FailRun,
+                ) => false,
+            };
+            if ends_the_run {
+                let reason = reason.text.clone();
+                let action_id = action.id.clone();
+                HookRuntime::handle(ctx).update(ctx, |_, ctx| {
+                    ctx.emit(HookRuntimeEvent::ApprovalUnavailable {
+                        conversation_id,
+                        action_id,
+                        reason,
+                    });
+                });
+            }
         }
+        PermissionDecision::RequireConfirmation {
+            reason: Some(reason),
+        } => {
+            if first_confirmation_notice(conversation_id, &action.id, ctx) {
+                messenger.notify(HookNotice {
+                    conversation_id,
+                    action_id: Some(action.id.clone()),
+                    kind: HookNoticeKind::Warning,
+                    text: reason.text.clone(),
+                });
+            }
+        }
+        PermissionDecision::RequireConfirmation { reason: None } | PermissionDecision::Execute => {}
     }
     decision
+}
+
+/// Marks the action's entry as having announced its confirmation step and says whether this is
+/// the first time. Without an entry to remember it on, every call is the first.
+fn first_confirmation_notice(
+    conversation_id: AIConversationId,
+    action_id: &AIAgentActionId,
+    ctx: &mut AppContext,
+) -> bool {
+    let action_key = ActionKey {
+        conversation_id,
+        action_id: action_id.clone(),
+    };
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+        match runtime.pre_tool_verdicts.entries.get_mut(&action_key) {
+            Some(entry) => !std::mem::replace(&mut entry.confirmation_noticed, true),
+            None => true,
+        }
+    })
 }
 
 /// Forgets whatever is known about `action_id` in `conversation_id`. An in-flight dispatch is

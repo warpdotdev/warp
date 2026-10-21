@@ -684,7 +684,19 @@ mod hooks {
             )
             .await;
             assert_eq!(reason_of(&held), Some(NotExecutedReason::NeedsConfirmation));
-            assert!(harness.hooks.messenger.notices().is_empty());
+            let notices = harness.hooks.messenger.notices();
+            assert_eq!(notices.len(), 1, "the user is told why the card appeared");
+            assert_eq!(notices[0].kind, HookNoticeKind::Warning);
+            assert_eq!(notices[0].text, "check first");
+
+            // A second try while the card is up does not repeat the notice.
+            let held_again =
+                try_execute(&mut app, &executor, &init, harness.conversation_id, false);
+            assert_eq!(
+                reason_of(&held_again),
+                Some(NotExecutedReason::NeedsConfirmation)
+            );
+            assert_eq!(harness.hooks.messenger.notices().len(), 1);
 
             // The user's approval of this revision satisfies the ask; the verdict is reused.
             let approved = try_execute(&mut app, &executor, &init, harness.conversation_id, true);

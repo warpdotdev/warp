@@ -349,3 +349,80 @@ fn families_without_a_text_slot_finish_cancelled_or_rejected() {
         assert!(!wire_carries(&result, REASON), "no text slot for {action}");
     }
 }
+
+/// The wire form of `result`, when the conversion keeps it.
+fn wire_result(
+    result: &AIAgentActionResultType,
+) -> Option<api::request::input::tool_call_result::Result> {
+    let action_result = AIAgentActionResult {
+        id: AIAgentActionId::from("call_1".to_owned()),
+        task_id: TaskId::new("task".to_owned()),
+        result: result.clone(),
+    };
+    match api::request::input::user_inputs::user_input::Input::try_from(action_result).ok()? {
+        api::request::input::user_inputs::user_input::Input::ToolCallResult(tool_call) => {
+            tool_call.result
+        }
+        _ => None,
+    }
+}
+
+/// What the model is told when a family without a text slot is denied, pinned so a change is
+/// deliberate. A cancelled result sends no follow-up request when it is the last action of the
+/// batch, so the turn ends as cancelled and the model never learns the action was denied. The
+/// two single-result families reach the wire as their completed marker, so the model believes
+/// the action happened.
+#[test]
+fn a_denied_family_without_a_text_slot_ends_the_turn_or_reports_completion() {
+    let cancelled = [
+        AIAgentActionType::WriteToLongRunningShellCommand {
+            block_id: BlockId::new(),
+            input: bytes::Bytes::new(),
+            mode: AIAgentPtyWriteMode::Raw,
+        },
+        AIAgentActionType::ReadShellCommandOutput {
+            block_id: BlockId::new(),
+            delay: None,
+        },
+        AIAgentActionType::TransferShellCommandControlToUser {
+            reason: String::new(),
+        },
+        AIAgentActionType::SuggestPrompt(SuggestPromptRequest::PromptSuggestion {
+            prompt: String::new(),
+            label: None,
+        }),
+        AIAgentActionType::WaitForEvents {
+            tool_call_id: String::new(),
+            idle_timeout_seconds: 0,
+        },
+    ];
+    for action in cancelled {
+        let result = denied(action.clone());
+        assert!(result.is_cancelled(), "{action}");
+        assert!(
+            !result.should_trigger_request_upon_completion(),
+            "a denied {action} on its own ends the turn without a follow-up request"
+        );
+    }
+    let init = denied(AIAgentActionType::InitProject);
+    assert!(init.should_trigger_request_upon_completion());
+    assert!(
+        matches!(
+            wire_result(&init),
+            Some(api::request::input::tool_call_result::Result::InitProject(
+                _
+            ))
+        ),
+        "a denied project initialization is reported to the model as completed"
+    );
+    let review = denied(AIAgentActionType::OpenCodeReview);
+    assert!(review.should_trigger_request_upon_completion());
+    assert!(review.is_successful());
+    assert!(
+        matches!(
+            wire_result(&review),
+            Some(api::request::input::tool_call_result::Result::OpenCodeReview(_))
+        ),
+        "a denied code review opening is reported to the model as completed"
+    );
+}
