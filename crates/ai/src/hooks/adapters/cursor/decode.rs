@@ -80,7 +80,13 @@ impl Decoder<'_> {
             // hook. A missing or unknown `permission` is read that way rather than as consent.
             Some(_) | None => return self.malformed(),
         };
-        self.verdict_effects(verdict, &output)
+        let mut effects = self.verdict_effects(verdict, &output);
+        if verdict == HookVerdict::Deny && effects.reasons.is_empty() {
+            effects
+                .reasons
+                .push(self.reason(format!("Denied by hook {}.", self.binding.command)));
+        }
+        effects
     }
 
     /// Effects for a decided verdict. On a deny, `agent_message` (or `user_message` when there is
