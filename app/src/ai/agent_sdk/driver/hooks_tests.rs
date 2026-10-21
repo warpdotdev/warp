@@ -66,9 +66,10 @@ fn a_notice_without_an_action_has_a_null_action_id() {
     let mut notice = denial(AIConversationId::new());
     notice.action_id = None;
     notice.kind = HookNoticeKind::Warning;
-    let record: Value =
-        serde_json::from_str(&written(|buf| write_notice(&notice, OutputFormat::Json, buf)))
-            .unwrap();
+    let record: Value = serde_json::from_str(&written(|buf| {
+        write_notice(&notice, OutputFormat::Json, buf)
+    }))
+    .unwrap();
     assert_eq!(record["kind"], "warning");
     assert!(record["action_id"].is_null());
 }
@@ -153,7 +154,10 @@ fn a_path_inside_a_checkout_has_an_enclosing_repository() {
     let outside = temp.path().join("outside");
     fs::create_dir_all(&outside).unwrap();
 
-    assert_eq!(enclosing_repository(&repo.join("hooks")), Some(repo.clone()));
+    assert_eq!(
+        enclosing_repository(&repo.join("hooks")),
+        Some(repo.clone())
+    );
     assert_eq!(enclosing_repository(&repo), Some(repo));
     assert_eq!(enclosing_repository(&outside), None);
 }
