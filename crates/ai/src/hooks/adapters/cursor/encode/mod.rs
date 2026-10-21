@@ -276,6 +276,7 @@ fn encode_before_submit_prompt(envelope: &HookEnvelope, input: &mut Map<String, 
     let HookPayload::PromptSubmit {
         text,
         attachments_summary,
+        provenance: _,
     } = &envelope.payload
     else {
         return;

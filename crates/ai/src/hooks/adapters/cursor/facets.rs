@@ -10,8 +10,7 @@ use uuid::Uuid;
 
 use crate::agent::action::AIAgentActionType;
 use crate::agent::action_result::{
-    AIAgentActionResultType, CallMCPToolResult, ReadShellCommandOutputResult,
-    RequestCommandOutputResult,
+    AIAgentActionResultType, CallMCPToolResult, RequestCommandOutputResult,
 };
 use crate::hooks::model::HookPayload;
 
@@ -44,9 +43,10 @@ pub(super) struct FinishedShellCommand<'a> {
     pub completed_ts: Option<DateTime<Local>>,
 }
 
-/// The finished shell command in a result payload. A snapshot of a still-running command, a
-/// command that never started, and results whose text does not name the command are not
-/// finished commands.
+/// The finished shell command in a result payload. A snapshot of a still-running command and a
+/// command that never started are not finished commands. Neither is a poll, write, or handoff
+/// that saw a long-running command end: the completion funnel reports that exit once more, on
+/// the command's own action, so the command is counted once.
 pub(super) fn finished_shell_command(payload: &HookPayload) -> Option<FinishedShellCommand<'_>> {
     let result = match payload {
         HookPayload::ToolResult { result, .. } | HookPayload::ToolFailure { result, .. } => result,
@@ -92,41 +92,8 @@ pub(super) fn finished_shell_command(payload: &HookPayload) -> Option<FinishedSh
             | RequestCommandOutputResult::HookDenied { .. }
             | RequestCommandOutputResult::TerminalBusy { .. } => None,
         },
-        AIAgentActionResultType::ReadShellCommandOutput(result) => match result {
-            ReadShellCommandOutputResult::CommandFinished {
-                command,
-                output,
-                exit_code,
-                start_ts,
-                completed_ts,
-                block_id: _,
-            } => Some(FinishedShellCommand {
-                command,
-                output,
-                exit_code: Some(exit_code.value()),
-                start_ts: *start_ts,
-                completed_ts: *completed_ts,
-            }),
-            ReadShellCommandOutputResult::ShellRecovered {
-                command,
-                output,
-                start_ts,
-                completed_ts,
-                ..
-            } => Some(FinishedShellCommand {
-                command,
-                output,
-                exit_code: None,
-                start_ts: *start_ts,
-                completed_ts: *completed_ts,
-            }),
-            ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. }
-            | ReadShellCommandOutputResult::Cancelled
-            | ReadShellCommandOutputResult::Error(_) => None,
-        },
-        // These results do not carry the command text, which is what the event's matcher is
-        // tested against.
-        AIAgentActionResultType::WriteToLongRunningShellCommand(_)
+        AIAgentActionResultType::ReadShellCommandOutput(_)
+        | AIAgentActionResultType::WriteToLongRunningShellCommand(_)
         | AIAgentActionResultType::TransferShellCommandControlToUser(_) => None,
         AIAgentActionResultType::RequestFileEdits(_)
         | AIAgentActionResultType::ReadFiles(_)

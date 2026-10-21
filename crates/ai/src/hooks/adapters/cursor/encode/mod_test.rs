@@ -20,7 +20,7 @@ use crate::hooks::adapters::cursor::test_support::{
     EVENT_FIXTURES, FIXTURE_CONVERSATION_ID, completed_shell, fixture_envelope, json, mcp_action,
     shell_action, tool_failure, tool_pre, tool_result,
 };
-use crate::hooks::model::{HookTurnId, TurnStopStatus};
+use crate::hooks::model::{HookTurnId, PromptProvenance, TurnStopStatus};
 
 /// The payload each `stdin.json` fixture was written for.
 fn fixture_payload(event: CursorEvent) -> HookPayload {
@@ -59,8 +59,8 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         CursorEvent::BeforeMcpExecution => {
             tool_pre(mcp_action("write_file", json!({ "path": "notes.txt" })))
         }
-        // An MCP error result reaches the adapter as `tool.failure` until PR 7 reroutes finished
-        // calls to `tool.result`; the encoder reads both payloads the same way.
+        // A finished MCP call is a `tool.result` whether it returned a result or an error; the
+        // encoder reads a `tool.failure` payload the same way.
         CursorEvent::AfterMcpExecution => tool_result(
             mcp_action("write_file", json!({ "path": "notes.txt" })),
             AIAgentActionResultType::CallMCPTool(CallMCPToolResult::Error(
@@ -71,6 +71,7 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         CursorEvent::BeforeSubmitPrompt => HookPayload::PromptSubmit {
             text: "Fix the failing test".to_owned(),
             attachments_summary: vec!["/work/repo/src/lib.rs".to_owned()],
+            provenance: PromptProvenance::User,
         },
         CursorEvent::Stop => HookPayload::TurnStop {
             status: TurnStopStatus::Completed,
