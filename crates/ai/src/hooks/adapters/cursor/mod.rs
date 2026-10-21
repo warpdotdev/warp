@@ -16,7 +16,7 @@ use self::config::{
 use self::decode::decode_shell_permission_output;
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::{
-    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 use crate::hooks::model::{
     BindingCapabilities, DiagnosticSeverity, EffectKind, EmptyOutputPolicy, FailurePolicy,
