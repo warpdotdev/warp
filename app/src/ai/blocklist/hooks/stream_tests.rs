@@ -1,7 +1,9 @@
 use ai::hooks::test_util::{test_binding, test_source_id};
 use ai::hooks::{HookBoundary, HookPayload};
-use warp_multi_agent_api::client_action::{AddMessagesToTask, AppendToMessageContent};
-use warp_multi_agent_api::message::{AgentOutput, AgentReasoning};
+use warp_multi_agent_api::client_action::{
+    AddMessagesToTask, AppendToMessageContent, UpdateTaskMessage,
+};
+use warp_multi_agent_api::message::{AgentOutput, AgentReasoning, ToolCall};
 use warpui::App;
 
 use super::*;
@@ -210,6 +212,94 @@ fn message(id: &str, body: Message) -> api::Message {
         message: Some(body),
         ..Default::default()
     }
+}
+
+#[test]
+fn an_update_to_an_earlier_tool_call_does_not_end_the_streaming_text() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        app.update(|ctx| {
+            harness.hooks.install_bindings(
+                vec![test_binding(
+                    test_source_id("s"),
+                    HookBoundary::ResponseComplete,
+                    0,
+                    None,
+                )],
+                ctx,
+            )
+        });
+        let tool_call = |id: &str| {
+            message(
+                id,
+                Message::ToolCall(ToolCall {
+                    tool_call_id: id.to_owned(),
+                    ..Default::default()
+                }),
+            )
+        };
+        let actions = vec![
+            api::ClientAction {
+                action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                    task_id: "task".to_owned(),
+                    messages: vec![
+                        tool_call("call"),
+                        message(
+                            "t1",
+                            Message::AgentOutput(AgentOutput {
+                                text: "Hel".to_owned(),
+                            }),
+                        ),
+                    ],
+                })),
+            },
+            api::ClientAction {
+                action: Some(Action::UpdateTaskMessage(UpdateTaskMessage {
+                    task_id: "task".to_owned(),
+                    message: Some(tool_call("call")),
+                    mask: None,
+                })),
+            },
+            api::ClientAction {
+                action: Some(Action::AppendToMessageContent(AppendToMessageContent {
+                    task_id: "task".to_owned(),
+                    message: Some(message(
+                        "t1",
+                        Message::AgentOutput(AgentOutput {
+                            text: "lo".to_owned(),
+                        }),
+                    )),
+                    mask: None,
+                })),
+            },
+        ];
+        let observations =
+            app.read(|ctx| collect_observations(&actions, harness.conversation_id, ctx));
+        assert_eq!(
+            observations,
+            vec![
+                StreamObservation::OtherMessage {
+                    message_id: "call".to_owned(),
+                },
+                text("t1", TextUpdate::Set("Hel".to_owned())),
+                text("t1", TextUpdate::Append("lo".to_owned())),
+            ],
+            "the update to the tool call is not a new message"
+        );
+
+        let mut state = StreamObserverState::default();
+        let stream = stream_id();
+        let completed = state.apply_batch(
+            &stream,
+            harness.conversation_id,
+            Some(harness.conversation_id),
+            observations,
+        );
+        assert!(completed.is_empty());
+        let completed = state.finish(&stream, false);
+        assert_eq!(completed_ids(&completed), vec![("t1", "Hello")]);
+    });
 }
 
 #[test]

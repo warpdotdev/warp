@@ -197,13 +197,25 @@ fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
     Some(Duration::new(seconds, nanos))
 }
 
-fn observe_message(message: &api::Message, is_new: bool, out: &mut Vec<StreamObservation>) {
-    let update = |text: &str| {
-        if is_new {
-            TextUpdate::Set(text.to_owned())
-        } else {
-            TextUpdate::Append(text.to_owned())
-        }
+/// How a client action delivered a message.
+#[derive(Debug, Clone, Copy)]
+enum MessageDelivery {
+    /// A message the stream had not shown before.
+    Added,
+    /// A full replacement of a message already shown.
+    Replaced,
+    /// Text appended to a message already shown.
+    Appended,
+}
+
+fn observe_message(
+    message: &api::Message,
+    delivery: MessageDelivery,
+    out: &mut Vec<StreamObservation>,
+) {
+    let update = |text: &str| match delivery {
+        MessageDelivery::Added | MessageDelivery::Replaced => TextUpdate::Set(text.to_owned()),
+        MessageDelivery::Appended => TextUpdate::Append(text.to_owned()),
     };
     match &message.message {
         Some(Message::AgentOutput(output)) => out.push(StreamObservation::Text {
@@ -218,13 +230,14 @@ fn observe_message(message: &api::Message, is_new: bool, out: &mut Vec<StreamObs
                 .as_ref()
                 .and_then(proto_duration),
         }),
-        Some(_) => {
-            if is_new {
-                out.push(StreamObservation::OtherMessage {
-                    message_id: message.id.clone(),
-                });
-            }
-        }
+        // Only a message that is new to the stream ends the text before it. An update to an
+        // earlier tool call, for example, says nothing about whether the text is finished.
+        Some(_) => match delivery {
+            MessageDelivery::Added => out.push(StreamObservation::OtherMessage {
+                message_id: message.id.clone(),
+            }),
+            MessageDelivery::Replaced | MessageDelivery::Appended => {}
+        },
         None => {}
     }
 }
@@ -245,17 +258,17 @@ pub(crate) fn collect_observations(
         match &action.action {
             Some(Action::AddMessagesToTask(add)) => {
                 for message in &add.messages {
-                    observe_message(message, true, &mut out);
+                    observe_message(message, MessageDelivery::Added, &mut out);
                 }
             }
             Some(Action::UpdateTaskMessage(update)) => {
                 if let Some(message) = &update.message {
-                    observe_message(message, true, &mut out);
+                    observe_message(message, MessageDelivery::Replaced, &mut out);
                 }
             }
             Some(Action::AppendToMessageContent(append)) => {
                 if let Some(message) = &append.message {
-                    observe_message(message, false, &mut out);
+                    observe_message(message, MessageDelivery::Appended, &mut out);
                 }
             }
             Some(Action::StartNewConversation(_)) => out.push(StreamObservation::ConversationSplit),
