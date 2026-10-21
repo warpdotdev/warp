@@ -1,3 +1,5 @@
+use clap::Parser as _;
+
 use super::*;
 
 /// Locks in [`Harness::config_name`] / [`Harness::from_config_name`] as a true inverse pair
@@ -34,7 +36,6 @@ struct RunArgsParser {
 }
 
 fn parse_run_args(args: &[&str]) -> RunAgentArgs {
-    use clap::Parser as _;
     RunArgsParser::try_parse_from(std::iter::once("run").chain(args.iter().copied()))
         .expect("run args should parse")
         .args

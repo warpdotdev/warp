@@ -29,14 +29,14 @@ use crate::ai::blocklist::hooks::{
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 
-/// The hook settings a run was launched with. The run's `WARP_HOOK_DIRS` is read separately, when
-/// the driver is created.
+/// The hook sources and policy settings for one agent run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HookRunOptions {
-    /// Sources the configuration file named, with absolute paths.
+    /// Hook directories: the run's `WARP_HOOK_DIRS` entries, then `--hook-dir` entries. Relative
+    /// entries are resolved against the run's working directory when the sources load.
+    pub hook_dirs: Vec<PathBuf>,
+    /// Sources the configuration file named, already resolved against the file's directory.
     pub configured_sources: Vec<ExplicitHookSource>,
-    /// Directories from `--hook-dir`, added after the `WARP_HOOK_DIRS` entries.
-    pub extra_dirs: Vec<PathBuf>,
     pub strict: bool,
     pub on_ask: HooksOnAsk,
     pub surface: RunSurface,
@@ -59,11 +59,10 @@ pub(crate) fn headless_ask_behavior(on_ask: HooksOnAsk) -> HeadlessAskBehavior {
     }
 }
 
-/// The run's hook directories: the `WARP_HOOK_DIRS` entries, then `extra_dirs`.
-/// Relative entries stay relative until the run's working directory resolves them.
-pub(crate) fn hook_dirs(env_value: Option<&str>, extra_dirs: &[PathBuf]) -> Vec<PathBuf> {
+/// The `WARP_HOOK_DIRS` entries in `env_value`, then `flag_dirs`.
+pub(crate) fn hook_dirs(env_value: Option<&str>, flag_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs = env_value.map(parse_hook_dirs_value).unwrap_or_default();
-    dirs.extend(extra_dirs.iter().cloned());
+    dirs.extend(flag_dirs.iter().cloned());
     dirs
 }
 
@@ -186,7 +185,7 @@ impl AgentDriver {
         }
         let sources = explicit_sources(
             &self.working_dir,
-            &self.hook_dirs,
+            &self.hook_options.hook_dirs,
             &self.hook_options.configured_sources,
         );
         HookRuntime::handle(ctx).update(ctx, |runtime, _| {
@@ -224,9 +223,8 @@ impl AgentDriver {
         });
     }
 
-    /// Fails the conversation the hook denied an action in, through the same path a shell exit
-    /// takes, so the run reports a failure with the hook's reason. A conversation on another
-    /// surface (a hidden child) fails the run's own conversation instead.
+    /// Fails the conversation where the hook denied an action, or the run's own conversation if
+    /// the denial happened on a hidden child's surface.
     fn fail_run_for_hook(
         &self,
         conversation_id: AIConversationId,
@@ -384,7 +382,7 @@ pub(crate) fn write_diagnostic<W: Write>(
             output::json::hook_diagnostic(&source, severity, &diagnostic.message, w)
         }
         OutputFormat::Text | OutputFormat::Pretty => {
-            output::text::hook_diagnostic(severity, &source, &diagnostic.message, w)
+            output::text::hook_diagnostic(&source, severity, &diagnostic.message, w)
         }
     }
 }

@@ -345,7 +345,7 @@ fn hook_directories_load_as_run_delivered_sources() {
         let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![absolute.clone(), PathBuf::from("rel")];
+            driver.hook_options.hook_dirs = vec![absolute.clone(), PathBuf::from("rel")];
             driver.load_hook_sources_for_run(ctx)
         });
 
@@ -377,7 +377,7 @@ fn a_missing_hook_directory_is_a_diagnostic_and_the_run_goes_on() {
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
             driver.load_hook_sources_for_run(ctx)
         });
 
@@ -402,7 +402,7 @@ fn a_missing_hook_directory_fails_a_strict_run_before_it_starts() {
         let (driver, _messenger) = driver_with_test_hooks(&mut app, root.path());
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
             driver.hook_options.strict = true;
             driver.load_hook_sources_for_run(ctx)
         });
@@ -451,7 +451,7 @@ fn a_source_named_by_a_hook_directory_and_config_loads_once() {
         let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![repo.join("hooks")];
+            driver.hook_options.hook_dirs = vec![repo.join("hooks")];
             driver.hook_options.configured_sources = vec![ExplicitHookSource {
                 path: repo.join("hooks/hooks.json"),
                 format: HookFormat::Cursor,
@@ -474,7 +474,7 @@ fn hook_sources_are_not_loaded_when_hooks_are_off() {
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
             driver.hook_options.strict = true;
             driver.load_hook_sources_for_run(ctx)
         });

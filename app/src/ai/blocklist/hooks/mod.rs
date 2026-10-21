@@ -319,8 +319,6 @@ impl HookRuntime {
         self.run = run;
     }
 
-    /// Records the explicit sources the run was configured with, so launches that start other
-    /// runs can tell whether those sources would be missing there.
     pub(crate) fn set_delivered_sources(&mut self, sources: Vec<ExplicitHookSource>) {
         self.delivered_sources = sources;
     }

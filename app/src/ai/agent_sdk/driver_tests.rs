@@ -15,7 +15,6 @@ use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::poll;
 use mockito::Matcher;
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
@@ -1857,7 +1856,7 @@ fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
         let (driver, _terminal, hooks) = driver_with_hooks(&mut app, &working_dir);
 
         let loaded = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("early")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("early")];
             driver.load_hook_sources_for_run(ctx)
         });
         assert!(loaded.is_ok(), "{loaded:?}");
@@ -1880,7 +1879,7 @@ fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
         });
 
         let late = driver.update(&mut app, |driver, ctx| {
-            driver.hook_dirs = vec![PathBuf::from("late")];
+            driver.hook_options.hook_dirs = vec![PathBuf::from("late")];
             driver.load_hook_sources_for_run(ctx)
         });
         assert!(late.is_ok());

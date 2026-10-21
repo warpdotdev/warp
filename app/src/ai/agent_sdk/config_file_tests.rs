@@ -345,7 +345,7 @@ fn command_line_hook_settings_win_over_the_file() {
     );
     assert!(from_cli.strict);
     assert_eq!(from_cli.on_ask, HooksOnAsk::Deny);
-    assert_eq!(from_cli.extra_dirs, vec![PathBuf::from("extra")]);
+    assert_eq!(from_cli.hook_dirs, vec![PathBuf::from("extra")]);
     assert_eq!(from_cli.surface, RunSurface::Oz);
 
     let defaults = super::merge_hook_settings(None, false, None, Vec::new(), RunSurface::Oz);

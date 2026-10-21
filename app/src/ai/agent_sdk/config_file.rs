@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use ai::hooks::ExplicitHookSource;
+#[cfg(not(target_family = "wasm"))]
+use ai::hooks::{ExplicitSourceScope, sources_for_hook_dirs};
 use anyhow::Context as _;
 use serde_json::{Map, Value};
 use warp_cli::agent::HooksOnAsk;
@@ -180,8 +182,6 @@ fn validate_hooks(
     file: &AgentConfigSnapshotFile,
     config_dir: &Path,
 ) -> anyhow::Result<ConfiguredHooks> {
-    use ai::hooks::{ExplicitSourceScope, sources_for_hook_dirs};
-
     const SUPPORTED_HOOK_FORMATS: &str = "cursor";
     const SUPPORTED_HOOK_SCOPES: &str = "run, factory_agent, factory_wide";
     const SUPPORTED_HOOKS_ON_ASK: &str = "deny, fail_run";
@@ -233,11 +233,8 @@ fn validate_hooks(
     })
 }
 
-/// The hook settings for one `warp agent run`, from the configuration file and the command line.
-/// The command line wins: `--hooks-on-ask` replaces the file's value, and `--hooks-strict` turns
-/// the strict policy on whatever the file says (the flag cannot turn it off, so a file can only
-/// be made stricter from the command line). `--hook-dir` entries are kept apart from the file's
-/// sources because they resolve against the run's working directory, like `WARP_HOOK_DIRS`.
+/// Merge config-file hook settings with CLI overrides (`--hooks-strict` can only enable strict
+/// mode, never disable a file's `hooks_strict: true`).
 pub fn merge_hook_settings(
     file: Option<&LoadedAgentConfigSnapshotFile>,
     cli_strict: bool,
@@ -247,10 +244,10 @@ pub fn merge_hook_settings(
 ) -> HookRunOptions {
     let configured = file.map(|loaded| &loaded.hooks);
     HookRunOptions {
+        hook_dirs: cli_hook_dirs,
         configured_sources: configured
             .map(|hooks| hooks.sources.clone())
             .unwrap_or_default(),
-        extra_dirs: cli_hook_dirs,
         strict: cli_strict || configured.and_then(|hooks| hooks.strict).unwrap_or(false),
         on_ask: cli_on_ask
             .or_else(|| configured.and_then(|hooks| hooks.on_ask))
