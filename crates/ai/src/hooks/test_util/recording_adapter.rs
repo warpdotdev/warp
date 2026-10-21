@@ -191,6 +191,7 @@ impl HookFormatAdapter for RecordingAdapter {
                         text,
                         loop_limit: None,
                     }),
+                    unsupported: Vec::new(),
                 }
             }
             ProcessExit::Code(_)
