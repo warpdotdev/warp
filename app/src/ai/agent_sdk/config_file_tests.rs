@@ -1,12 +1,16 @@
 #![cfg(not(target_family = "wasm"))]
 
 use std::io::Write as _;
+use std::path::PathBuf;
 
+use ai::hooks::{ExplicitHookSource, ExplicitSourceScope, HookFormat};
 use serde_json::json;
+use warp_cli::agent::HooksOnAsk;
 use warp_cli::mcp::MCPSpec;
 use warp_core::features::FeatureFlag;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
+use crate::ai::blocklist::hooks::RunSurface;
 
 fn write_temp(suffix: &str, contents: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
@@ -212,6 +216,142 @@ fn non_uuid_warp_id_is_rejected_when_flag_disabled() {
 
     let err = super::mcp_specs_from_mcp_servers(&map).unwrap_err();
     assert!(format!("{err:#}").contains("must be a UUID"));
+}
+
+#[test]
+fn hook_entries_resolve_against_the_config_files_directory() {
+    let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+    let dir = tempfile::TempDir::new().unwrap();
+    let config = dir.path().join("agent.yaml");
+    std::fs::write(
+        &config,
+        "hooks:\n  - path: ./hooks\n  - path: /abs/hooks\n    format: cursor\n    scope: factory_wide\nhooks_strict: true\nhooks_on_ask: fail_run\n",
+    )
+    .unwrap();
+
+    let loaded = super::load_config_file_for_local_run(&config).unwrap();
+
+    let config_dir = dunce::canonicalize(dir.path()).unwrap();
+    assert_eq!(
+        loaded.hooks.sources,
+        vec![
+            ExplicitHookSource {
+                path: config_dir.join("./hooks").join("hooks.json"),
+                format: HookFormat::Cursor,
+                scope: ExplicitSourceScope::Run,
+            },
+            ExplicitHookSource {
+                path: PathBuf::from("/abs/hooks/hooks.json"),
+                format: HookFormat::Cursor,
+                scope: ExplicitSourceScope::FactoryWide,
+            },
+        ]
+    );
+    assert_eq!(loaded.hooks.strict, Some(true));
+    assert_eq!(loaded.hooks.on_ask, Some(HooksOnAsk::FailRun));
+}
+
+#[test]
+fn unknown_hook_format_scope_and_on_ask_are_rejected_with_the_supported_values() {
+    let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+    for (contents, expected) in [
+        (
+            json!({ "hooks": [{ "path": "h", "format": "claude" }] }),
+            "hooks[0].format must be one of: cursor (got 'claude')",
+        ),
+        (
+            json!({ "hooks": [{ "path": "h", "scope": "team" }] }),
+            "hooks[0].scope must be one of: run, factory_agent, factory_wide (got 'team')",
+        ),
+        (
+            json!({ "hooks": [{ "path": "  " }] }),
+            "hooks[0].path must not be empty",
+        ),
+        (
+            json!({ "hooks_on_ask": "ask" }),
+            "hooks_on_ask must be one of: deny, fail_run (got 'ask')",
+        ),
+    ] {
+        let file = write_temp(".json", &contents.to_string());
+        let err = format!(
+            "{:#}",
+            super::load_config_file_for_local_run(file.path()).unwrap_err()
+        );
+        assert!(err.contains(expected), "{err}");
+    }
+}
+
+#[test]
+fn unknown_keys_in_a_hook_entry_are_rejected() {
+    let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+    let file = write_temp(
+        ".json",
+        &json!({ "hooks": [{ "path": "h", "timeout": 5 }] }).to_string(),
+    );
+    assert!(super::load_config_file_for_local_run(file.path()).is_err());
+}
+
+#[test]
+fn supported_keys_list_the_hook_keys() {
+    let context = super::supported_keys_context();
+    for key in ["hooks", "hooks_strict", "hooks_on_ask"] {
+        assert!(context.contains(key), "{context}");
+    }
+}
+
+#[test]
+fn hook_settings_are_rejected_outside_a_local_run_and_when_hooks_are_off() {
+    let file = write_temp(".json", &json!({ "hooks_strict": true }).to_string());
+    {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let err = format!("{:#}", super::load_config_file(file.path()).unwrap_err());
+        assert!(err.contains("apply only to `agent run`"), "{err}");
+    }
+    let _flag = FeatureFlag::AgentHooks.override_enabled(false);
+    let err = format!(
+        "{:#}",
+        super::load_config_file_for_local_run(file.path()).unwrap_err()
+    );
+    assert!(err.contains("agent hooks are not enabled"), "{err}");
+}
+
+#[test]
+fn command_line_hook_settings_win_over_the_file() {
+    let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+    let file = write_temp(
+        ".json",
+        &json!({ "hooks": [{ "path": "/h" }], "hooks_strict": false, "hooks_on_ask": "fail_run" })
+            .to_string(),
+    );
+    let loaded = super::load_config_file_for_local_run(file.path()).unwrap();
+
+    let from_file = super::merge_hook_settings(
+        Some(&loaded),
+        false,
+        None,
+        Vec::new(),
+        RunSurface::CommandLine,
+    );
+    assert!(!from_file.strict);
+    assert_eq!(from_file.on_ask, HooksOnAsk::FailRun);
+    assert_eq!(from_file.configured_sources.len(), 1);
+
+    let from_cli = super::merge_hook_settings(
+        Some(&loaded),
+        true,
+        Some(HooksOnAsk::Deny),
+        vec![PathBuf::from("extra")],
+        RunSurface::Oz,
+    );
+    assert!(from_cli.strict);
+    assert_eq!(from_cli.on_ask, HooksOnAsk::Deny);
+    assert_eq!(from_cli.extra_dirs, vec![PathBuf::from("extra")]);
+    assert_eq!(from_cli.surface, RunSurface::Oz);
+
+    let defaults = super::merge_hook_settings(None, false, None, Vec::new(), RunSurface::Oz);
+    assert!(!defaults.strict);
+    assert_eq!(defaults.on_ask, HooksOnAsk::Deny);
+    assert!(defaults.configured_sources.is_empty());
 }
 
 #[test]
