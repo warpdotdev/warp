@@ -14,23 +14,10 @@ use futures::future::BoxFuture;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
-use super::{HookRuntime, HookRuntimeEvent};
+use super::{HeadlessAskBehavior, HookRuntime, HookRuntimeEvent};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
 use crate::terminal::model::session::active_session::ActiveSession;
-
-/// What a hook's `ask` does on a surface with no one to ask.
-// Only the run's launcher, which is later work, selects anything but the default.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum HeadlessAskBehavior {
-    /// The action is denied with a reason that tells the model approval was unavailable.
-    #[default]
-    DenyWithReason,
-    /// The action is denied the same way, and the runtime also announces the refusal so the
-    /// run's owner can end the run.
-    FailRun,
-}
 
 /// What a cached verdict is keyed by: the action within its conversation (tool call ids are
 /// only unique within a conversation, and the cache is shared by every conversation in the
@@ -39,10 +26,13 @@ pub(crate) enum HeadlessAskBehavior {
 /// again.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct VerdictKey {
+    /// Tool call ids are only unique within a conversation, and the cache is shared by every
+    /// conversation in the process.
     pub conversation_id: AIConversationId,
     pub action_id: AIAgentActionId,
     /// A hash of the action's arguments as they were when the hooks ran.
     pub argument_revision: u64,
+    /// The working directory the operation would run in.
     pub cwd: Option<PathBuf>,
 }
 
@@ -100,9 +90,48 @@ impl VerdictEntry {
     }
 }
 
+/// One entry per action; the entry's key says which operation its verdict describes.
 #[derive(Debug, Default)]
 pub(crate) struct PreToolVerdictCache {
     entries: HashMap<ActionKey, VerdictEntry>,
+}
+
+impl PreToolVerdictCache {
+    /// What the cache holds for `key`'s action. An entry for an earlier revision of the
+    /// operation, or one whose dispatch died, is removed and its dispatch told to stop.
+    fn consult(&mut self, key: &VerdictKey, is_user_initiated: bool) -> Cached {
+        let action_key = key.action_key();
+        match self.entries.get_mut(&action_key) {
+            Some(entry) if entry.key == *key && !entry.dispatch_died() => {
+                entry.is_user_initiated |= is_user_initiated;
+                Cached::Current(entry.state.clone())
+            }
+            Some(_) => {
+                let entry = self
+                    .entries
+                    .remove(&action_key)
+                    .expect("the entry was just found");
+                entry.cancel.store(true, Ordering::Release);
+                let same_operation = entry.key == *key;
+                log::info!(
+                    "hook verdict for {} {}; running its hooks again",
+                    entry.key.action_id,
+                    if same_operation {
+                        "was never going to arrive"
+                    } else {
+                        "no longer describes the action"
+                    }
+                );
+                Cached::Outdated {
+                    // Approval covers the arguments the user saw. It carries over when only the
+                    // working directory moved, never to different arguments.
+                    is_user_initiated: entry.is_user_initiated
+                        && entry.key.argument_revision == key.argument_revision,
+                }
+            }
+            None => Cached::Nothing,
+        }
+    }
 }
 
 /// Names one dispatch of one action. A later dispatch for the same action gets a new ticket, so
@@ -207,36 +236,7 @@ pub(crate) fn begin_or_lookup(
     };
     let action_key = key.action_key();
     let cached = runtime.update(ctx, |runtime, _| {
-        let entries = &mut runtime.pre_tool_verdicts.entries;
-        match entries.get_mut(&action_key) {
-            Some(entry) if entry.key == key && !entry.dispatch_died() => {
-                entry.is_user_initiated |= is_user_initiated;
-                Cached::Current(entry.state.clone())
-            }
-            Some(_) => {
-                let entry = entries
-                    .remove(&action_key)
-                    .expect("the entry was just found");
-                entry.cancel.store(true, Ordering::Release);
-                let same_operation = entry.key == key;
-                log::info!(
-                    "hook verdict for {} {}; running its hooks again",
-                    entry.key.action_id,
-                    if same_operation {
-                        "was never going to arrive"
-                    } else {
-                        "no longer describes the action"
-                    }
-                );
-                Cached::Outdated {
-                    // Approval covers the arguments the user saw. It carries over when only the
-                    // working directory moved, never to different arguments.
-                    is_user_initiated: entry.is_user_initiated
-                        && entry.key.argument_revision == key.argument_revision,
-                }
-            }
-            None => Cached::Nothing,
-        }
+        runtime.pre_tool_verdicts.consult(&key, is_user_initiated)
     });
     let is_user_initiated = match cached {
         Cached::Current(PreToolHookState::Pending) => {

@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use ai::agent::action::FileEdit;
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
@@ -105,7 +106,6 @@ use crate::ai::blocklist::permissions::{
     FileWritePermissionDeniedReason,
 };
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(not(target_family = "wasm"))]
@@ -242,13 +242,6 @@ pub(super) enum TryExecuteResult {
         reason: NotExecutedReason,
         action: Box<AIAgentAction>,
     },
-}
-
-/// What Warp's own permission check decided for an action, with the facts it established that
-/// no hook may loosen.
-struct ExecutorPermissionFacts {
-    can_auto_execute: bool,
-    floors: PermissionFloors,
 }
 
 /// How an MCP action names its server when it carries no installation id.
@@ -668,8 +661,7 @@ impl BlocklistAIActionExecutor {
             action: &action,
             conversation_id,
         };
-        let facts = self.permission_facts(input, hook_effects.is_some(), ctx);
-        let can_auto_execute = facts.can_auto_execute;
+        let can_auto_execute = self.should_autoexecute(input, ctx);
         let is_agent_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
         let is_autonomous_shell_exception =
             is_agent_autonomous && action.action.is_request_command_output();
@@ -677,6 +669,7 @@ impl BlocklistAIActionExecutor {
         // A hook denial ends the action here and a hook's request for confirmation holds it;
         // execution falls through to the checks below, which are what the policy started from.
         if let Some(merged) = hook_effects {
+            let floors = self.permission_floors(input, can_auto_execute, ctx);
             let decision = pre_tool::decide(
                 &merged,
                 WarpPermissionResult {
@@ -684,7 +677,7 @@ impl BlocklistAIActionExecutor {
                     is_user_initiated,
                     is_autonomous_shell_exception,
                 },
-                facts.floors,
+                floors,
                 &action,
                 conversation_id,
                 ctx,
@@ -1099,29 +1092,9 @@ impl BlocklistAIActionExecutor {
         }
     }
 
-    /// Runs Warp's own permission check for `input`. When `with_floors` is set and the check did
-    /// not auto-execute, it also names the facts behind that answer which no hook may loosen. An
-    /// action Warp executes has nothing to loosen, so it has no floors; neither has any family
-    /// other than the shell, file edit, and MCP ones.
-    fn permission_facts(
-        &self,
-        input: ExecuteActionInput,
-        with_floors: bool,
-        ctx: &mut ModelContext<Self>,
-    ) -> ExecutorPermissionFacts {
-        let can_auto_execute = self.should_autoexecute(input, ctx);
-        let floors = if with_floors && !can_auto_execute {
-            self.permission_floors(input, ctx)
-        } else {
-            PermissionFloors::default()
-        };
-        ExecutorPermissionFacts {
-            can_auto_execute,
-            floors,
-        }
-    }
-
-    /// The floors for an `input` Warp did not auto-execute, read from the same permission
+    /// The facts behind Warp's own permission answer that no hook may loosen. An action Warp
+    /// auto-executes has nothing to loosen, so it has no floors; neither has any family other
+    /// than the shell, file edit, and MCP ones. The floors are read from the same permission
     /// functions the per-family `should_autoexecute` checks call, so a denylist bypass or a
     /// sandbox exemption is applied exactly as Warp applies it. The functions are called again
     /// here rather than read from the executor that ran them; where that executor answered
@@ -1129,98 +1102,27 @@ impl BlocklistAIActionExecutor {
     fn permission_floors(
         &self,
         input: ExecuteActionInput,
+        can_auto_execute: bool,
         ctx: &ModelContext<Self>,
     ) -> PermissionFloors {
-        let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let terminal_view_id = Some(self.terminal_view_id);
+        if can_auto_execute {
+            return PermissionFloors::default();
+        }
         match &input.action.action {
             AIAgentActionType::RequestCommandOutput {
                 command,
                 is_read_only,
                 is_risky,
                 ..
-            } => {
-                let scope = (self.team_context_resolver)(ctx);
-                let Some(escape_char) = self
-                    .active_session
-                    .as_ref(ctx)
-                    .shell_type(ctx)
-                    .map(|shell| ShellFamily::from(shell).escape_char())
-                else {
-                    // Without a shell type the command cannot be taken apart for the denylist
-                    // and Warp does not auto-execute it; the setting is still a fact.
-                    return PermissionFloors {
-                        always_ask_setting: permissions.get_execute_commands_setting(
-                            terminal_view_id,
-                            &scope,
-                            ctx,
-                        ) == ActionPermission::AlwaysAsk,
-                        ..Default::default()
-                    };
-                };
-                match permissions.can_autoexecute_command(
-                    &input.conversation_id,
-                    command,
-                    escape_char,
-                    is_read_only.unwrap_or(false),
-                    *is_risky,
-                    terminal_view_id,
-                    &scope,
-                    ctx,
-                ) {
-                    CommandExecutionPermission::Denied(
-                        CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted,
-                    ) => PermissionFloors {
-                        command_denylist_hit: true,
-                        ..Default::default()
-                    },
-                    CommandExecutionPermission::Denied(
-                        CommandExecutionPermissionDeniedReason::AlwaysAskEnabled,
-                    ) => PermissionFloors {
-                        always_ask_setting: true,
-                        ..Default::default()
-                    },
-                    CommandExecutionPermission::Denied(
-                        CommandExecutionPermissionDeniedReason::AutonomyForceDisabled
-                        | CommandExecutionPermissionDeniedReason::ContainsRedirection
-                        | CommandExecutionPermissionDeniedReason::Inconclusive
-                        | CommandExecutionPermissionDeniedReason::AgentDecided,
-                    )
-                    | CommandExecutionPermission::Allowed(_) => PermissionFloors::default(),
-                }
-            }
+            } => self.shell_floors(
+                &input.conversation_id,
+                command,
+                *is_read_only,
+                *is_risky,
+                ctx,
+            ),
             AIAgentActionType::RequestFileEdits { file_edits, .. } => {
-                let paths = file_edits
-                    .iter()
-                    .filter_map(|edit| edit.file().map(PathBuf::from))
-                    .collect::<Vec<_>>();
-                let scope = (self.team_context_resolver)(ctx);
-                match permissions.can_write_files(
-                    &input.conversation_id,
-                    &paths,
-                    terminal_view_id,
-                    &scope,
-                    ctx,
-                ) {
-                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath) => {
-                        PermissionFloors {
-                            protected_write_path: true,
-                            ..Default::default()
-                        }
-                    }
-                    FileWritePermission::Denied(
-                        FileWritePermissionDeniedReason::AlwaysAskEnabled,
-                    ) => PermissionFloors {
-                        always_ask_setting: true,
-                        ..Default::default()
-                    },
-                    FileWritePermission::Denied(
-                        FileWritePermissionDeniedReason::AutonomyForceDisabled
-                        | FileWritePermissionDeniedReason::Inconclusive
-                        | FileWritePermissionDeniedReason::AgentDecided,
-                    )
-                    | FileWritePermission::Allowed(_) => PermissionFloors::default(),
-                }
+                self.file_write_floors(&input.conversation_id, file_edits, ctx)
             }
             AIAgentActionType::CallMCPTool {
                 server_id, name, ..
@@ -1264,6 +1166,107 @@ impl BlocklistAIActionExecutor {
             | AIAgentActionType::AskUserQuestion { .. }
             | AIAgentActionType::RunAgents(_)
             | AIAgentActionType::WaitForEvents { .. } => PermissionFloors::default(),
+        }
+    }
+
+    /// The floors for a shell command, from `can_autoexecute_command`'s reason. Without a shell
+    /// type the command cannot be taken apart for the denylist and Warp does not auto-execute
+    /// it; the setting is still a fact.
+    fn shell_floors(
+        &self,
+        conversation_id: &AIConversationId,
+        command: &str,
+        is_read_only: Option<bool>,
+        is_risky: Option<bool>,
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let permissions = BlocklistAIPermissions::as_ref(ctx);
+        let terminal_view_id = Some(self.terminal_view_id);
+        let scope = (self.team_context_resolver)(ctx);
+        let Some(escape_char) = self
+            .active_session
+            .as_ref(ctx)
+            .shell_type(ctx)
+            .map(|shell| ShellFamily::from(shell).escape_char())
+        else {
+            return PermissionFloors {
+                always_ask_setting: permissions.get_execute_commands_setting(
+                    terminal_view_id,
+                    &scope,
+                    ctx,
+                ) == ActionPermission::AlwaysAsk,
+                ..Default::default()
+            };
+        };
+        match permissions.can_autoexecute_command(
+            conversation_id,
+            command,
+            escape_char,
+            is_read_only.unwrap_or(false),
+            is_risky,
+            terminal_view_id,
+            &scope,
+            ctx,
+        ) {
+            CommandExecutionPermission::Denied(
+                CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted,
+            ) => PermissionFloors {
+                command_denylist_hit: true,
+                ..Default::default()
+            },
+            CommandExecutionPermission::Denied(
+                CommandExecutionPermissionDeniedReason::AlwaysAskEnabled,
+            ) => PermissionFloors {
+                always_ask_setting: true,
+                ..Default::default()
+            },
+            CommandExecutionPermission::Denied(
+                CommandExecutionPermissionDeniedReason::AutonomyForceDisabled
+                | CommandExecutionPermissionDeniedReason::ContainsRedirection
+                | CommandExecutionPermissionDeniedReason::Inconclusive
+                | CommandExecutionPermissionDeniedReason::AgentDecided,
+            )
+            | CommandExecutionPermission::Allowed(_) => PermissionFloors::default(),
+        }
+    }
+
+    /// The floors for a file edit, from `can_write_files`'s reason.
+    fn file_write_floors(
+        &self,
+        conversation_id: &AIConversationId,
+        file_edits: &[FileEdit],
+        ctx: &ModelContext<Self>,
+    ) -> PermissionFloors {
+        let paths = file_edits
+            .iter()
+            .filter_map(|edit| edit.file().map(PathBuf::from))
+            .collect::<Vec<_>>();
+        let scope = (self.team_context_resolver)(ctx);
+        match BlocklistAIPermissions::as_ref(ctx).can_write_files(
+            conversation_id,
+            &paths,
+            Some(self.terminal_view_id),
+            &scope,
+            ctx,
+        ) {
+            FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath) => {
+                PermissionFloors {
+                    protected_write_path: true,
+                    ..Default::default()
+                }
+            }
+            FileWritePermission::Denied(FileWritePermissionDeniedReason::AlwaysAskEnabled) => {
+                PermissionFloors {
+                    always_ask_setting: true,
+                    ..Default::default()
+                }
+            }
+            FileWritePermission::Denied(
+                FileWritePermissionDeniedReason::AutonomyForceDisabled
+                | FileWritePermissionDeniedReason::Inconclusive
+                | FileWritePermissionDeniedReason::AgentDecided,
+            )
+            | FileWritePermission::Allowed(_) => PermissionFloors::default(),
         }
     }
 
