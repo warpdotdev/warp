@@ -899,7 +899,8 @@ mod windows {
     fn a_timeout_ends_the_job_including_a_grandchild() {
         let dir = TempDir::new().expect("tempdir");
         write_script(dir.path(), "hook.cmd", START_GRANDCHILD);
-        let timeout = Duration::from_secs(3);
+        // Long enough for a cold PowerShell start to record the grandchild before the job ends.
+        let timeout = Duration::from_secs(8);
         let started = Instant::now();
         let outcome = run(
             &runner(),
