@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::future::Future;
 use std::path::Path;
 use std::process::{ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt, io};
 
 use async_process::Child;
@@ -484,12 +485,17 @@ impl Command {
 /// Control over the process tree of a child spawned with [`Command::spawn_in_job`]: the process
 /// group on Unix, the Job Object on Windows. Dropping the guard ends whatever is still running
 /// in the tree.
+///
+/// Once the tree has been seen to have ended, the guard never signals its id again: on Unix a
+/// process group id becomes reusable the moment its last member is gone, and a signal sent after
+/// that could reach an unrelated process group that took the id.
 #[derive(Debug)]
 pub struct JobGuard {
     #[cfg(unix)]
     process_group: libc::pid_t,
     #[cfg(windows)]
     job: crate::windows::ProcessJob,
+    ended: AtomicBool,
 }
 
 impl JobGuard {
@@ -498,48 +504,67 @@ impl JobGuard {
         {
             Ok(Self {
                 process_group: child.id() as libc::pid_t,
+                ended: AtomicBool::new(false),
             })
         }
         #[cfg(windows)]
         {
             Ok(Self {
                 job: crate::windows::ProcessJob::create_for(child.id())?,
+                ended: AtomicBool::new(false),
             })
         }
     }
 
     /// Asks the tree to stop. On Unix this is `SIGTERM` to the process group, which a process may
     /// handle or ignore; on Windows it ends the job outright, since there is no gentler signal.
-    pub fn request_stop(&self) {
+    /// Returns whether anything was sent, which is false once the tree is known to have ended.
+    pub fn request_stop(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
         #[cfg(unix)]
-        self.signal_group(libc::SIGTERM);
+        {
+            self.signal_group(libc::SIGTERM)
+        }
         #[cfg(windows)]
-        self.terminate();
+        {
+            self.terminate_job()
+        }
     }
 
-    /// Ends everything still running in the tree now.
-    pub fn terminate(&self) {
+    /// Ends everything still running in the tree now. Returns whether anything was sent, which is
+    /// false once the tree is known to have ended.
+    pub fn terminate(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
         #[cfg(unix)]
-        self.signal_group(libc::SIGKILL);
+        {
+            self.signal_group(libc::SIGKILL)
+        }
         #[cfg(windows)]
-        if let Err(error) = self.job.terminate() {
-            log::debug!("could not terminate hook job: {error}");
+        {
+            self.terminate_job()
         }
     }
 
     /// Whether any process in the tree still exists. A finished-but-unreaped process counts, so
     /// callers should keep collecting the child's exit status while polling this.
     pub fn is_alive(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
         #[cfg(unix)]
-        {
-            // Signal 0 only checks that the group exists.
-            // SAFETY: `killpg` has no memory-safety preconditions.
-            unsafe { libc::killpg(self.process_group, 0) == 0 }
-        }
+        // Signal 0 only checks that the group exists.
+        // SAFETY: `killpg` has no memory-safety preconditions.
+        let alive = unsafe { libc::killpg(self.process_group, 0) == 0 };
         #[cfg(windows)]
-        {
-            self.active_processes().is_ok_and(|count| count > 0)
+        let alive = self.active_processes().is_ok_and(|count| count > 0);
+        if !alive {
+            self.ended.store(true, Ordering::Release);
         }
+        alive
     }
 
     /// How many processes in the job are still running.
@@ -548,17 +573,44 @@ impl JobGuard {
         self.job.active_processes()
     }
 
+    fn has_ended(&self) -> bool {
+        self.ended.load(Ordering::Acquire)
+    }
+
+    /// Drops the guard without an explicit terminate, so a test can observe that closing the job
+    /// handle alone ends the tree.
+    #[cfg(all(test, windows))]
+    pub(crate) fn close_without_terminating(self) {
+        self.ended.store(true, Ordering::Release);
+    }
+
+    /// Sends `signal` to the group. Returns whether it was delivered; a group that no longer
+    /// exists marks the tree as ended.
     #[cfg(unix)]
-    fn signal_group(&self, signal: libc::c_int) {
-        // SAFETY: `killpg` has no memory-safety preconditions. A group that no longer exists
-        // reports `ESRCH`, which is the expected outcome once the tree has ended.
-        if unsafe { libc::killpg(self.process_group, signal) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                log::debug!(
-                    "could not send signal {signal} to process group {}: {error}",
-                    self.process_group
-                );
+    fn signal_group(&self, signal: libc::c_int) -> bool {
+        // SAFETY: `killpg` has no memory-safety preconditions.
+        if unsafe { libc::killpg(self.process_group, signal) } == 0 {
+            return true;
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            self.ended.store(true, Ordering::Release);
+        } else {
+            log::debug!(
+                "could not send signal {signal} to process group {}: {error}",
+                self.process_group
+            );
+        }
+        false
+    }
+
+    #[cfg(windows)]
+    fn terminate_job(&self) -> bool {
+        match self.job.terminate() {
+            Ok(()) => true,
+            Err(error) => {
+                log::debug!("could not terminate hook job: {error}");
+                false
             }
         }
     }
@@ -566,9 +618,12 @@ impl JobGuard {
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
-        // On Windows closing the job handle has the same effect; terminating first makes the
-        // order explicit and covers a job handle that is still open elsewhere.
-        self.terminate();
+        // Checked first so a tree that already ended is never signalled by an id that may have
+        // been reused since. On Windows closing the job handle would end the tree anyway;
+        // terminating first makes the order explicit.
+        if self.is_alive() {
+            self.terminate();
+        }
     }
 }
 

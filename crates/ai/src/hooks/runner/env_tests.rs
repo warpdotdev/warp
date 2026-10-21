@@ -110,6 +110,12 @@ fn the_host_environment_is_kept_except_for_the_scrub_list_and_prefixes() {
     let mut runner = runner();
     runner.variables.extend([
         var("WARP_API_KEY", "secret"),
+        var("WARP_WORKLOAD_TOKEN", "secret"),
+        var("WARP_CLOUD_AGENT_OTLP_TOKEN", "secret"),
+        var(
+            "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
+            "2026-10-21T00:00:00Z",
+        ),
         var("WARP_IS_LOCAL_SHELL_SESSION", "1"),
         var("WARP_HONOR_PS1", "0"),
         var("WARP_TERMINAL_SESSION_UUID", "abc"),
@@ -123,6 +129,19 @@ fn the_host_environment_is_kept_except_for_the_scrub_list_and_prefixes() {
     let variables = build(runner, cursor_hook());
     for scrubbed in HOST_SCRUB_LIST {
         assert_eq!(value_of(&variables, scrubbed), None, "{scrubbed}");
+    }
+    // Named one by one, so a credential missing from the list fails here and not only in review.
+    for credential in [
+        "WARP_API_KEY",
+        "WARP_WORKLOAD_TOKEN",
+        "WARP_CLOUD_AGENT_OTLP_TOKEN",
+        "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT",
+    ] {
+        assert!(
+            HOST_SCRUB_LIST.contains(&credential),
+            "{credential} is not on the scrub list"
+        );
+        assert_eq!(value_of(&variables, credential), None, "{credential}");
     }
     assert_eq!(value_of(&variables, "WARP_METADATA_TOKEN"), None);
     assert_eq!(value_of(&variables, "WARP_METADATA_"), None);
@@ -285,6 +304,8 @@ mod subprocess {
         // threads before these calls, so nothing reads the environment concurrently.
         unsafe {
             std::env::set_var("WARP_API_KEY", "must-not-leak");
+            std::env::set_var("WARP_WORKLOAD_TOKEN", "must-not-leak");
+            std::env::set_var("WARP_CLOUD_AGENT_OTLP_TOKEN", "must-not-leak");
             std::env::set_var("WARP_METADATA_SECRET_TEST", "must-not-leak");
             std::env::set_var("WARP_IS_LOCAL_SHELL_SESSION", "1");
             std::env::set_var("WARP_RUN_ID", "an-outer-run");
@@ -321,6 +342,8 @@ mod subprocess {
             .collect::<Vec<_>>();
 
         assert_eq!(value_of(&seen, "WARP_API_KEY"), None);
+        assert_eq!(value_of(&seen, "WARP_WORKLOAD_TOKEN"), None);
+        assert_eq!(value_of(&seen, "WARP_CLOUD_AGENT_OTLP_TOKEN"), None);
         assert_eq!(value_of(&seen, "WARP_METADATA_SECRET_TEST"), None);
         assert_eq!(value_of(&seen, "WARP_IS_LOCAL_SHELL_SESSION"), None);
         assert_eq!(

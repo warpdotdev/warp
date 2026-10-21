@@ -216,6 +216,9 @@ async fn run_once(
             return finish(exit, Captured::default());
         }
     };
+    if invocation.cancel.load(Ordering::Acquire) {
+        return finish(ProcessExit::Cancelled, Captured::default());
+    }
 
     let mut command = shell.invoke(&invocation.command);
     command
@@ -223,6 +226,12 @@ async fn run_once(
         .env_clear()
         .envs(host_environment(&runner_env))
         .envs(invocation.env.iter().map(|(key, value)| (key, value)))
+        // The one protected variable the runner owns is written after the invocation's layer so
+        // nothing handed in can replace it.
+        .env(
+            "WARP_HOOK_PROTOCOL_VERSION",
+            runner_env.protocol_version.to_string(),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -264,7 +273,17 @@ async fn run_once(
         }
     };
     pipes.finish_reading(pid).await;
-    finish(exit, pipes.take_captured())
+    let mut captured = pipes.take_captured();
+    match exit {
+        // Anything written after the hook was told to stop is not its decision; only the stderr
+        // tail survives, for the log line.
+        ProcessExit::TimedOut | ProcessExit::Cancelled => {
+            captured.stdout.clear();
+            captured.stdout_truncated = false;
+        }
+        ProcessExit::Code(_) | ProcessExit::Signal(_) | ProcessExit::SpawnFailed(_) => {}
+    }
+    finish(exit, captured)
 }
 
 /// Drives the pipes until the hook exits, the deadline passes, or the cancel flag is set. The
