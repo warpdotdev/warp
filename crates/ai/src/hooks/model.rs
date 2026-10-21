@@ -30,8 +30,9 @@ pub const SESSION_END_TIMEOUT: Duration = Duration::from_secs(5);
 /// the source is activated, not run with a shorter deadline.
 pub const HOOK_TIMEOUT_CEILING: Duration = Duration::from_secs(600);
 
-/// Most follow-up prompts stop hooks may add to one turn, counting every stop binding together. A
-/// definition's own `loop_limit` can only lower this.
+/// Most continuations stop hooks may add to one turn, counting every stop binding together. Each
+/// continuation is delivered as a follow-up prompt. A definition's own `loop_limit` can only
+/// lower this.
 pub const HOOK_FOLLOW_UP_CAP: u32 = 8;
 
 /// A moment in the agent loop at which hooks can run.
@@ -151,8 +152,7 @@ impl Display for HookBoundary {
     }
 }
 
-/// Where a hook configuration came from. The user file is not a Phase 1 source and is left out
-/// until a later PR needs it.
+/// Where a hook configuration came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookSourceKind {
     ProjectCursorFile,
@@ -173,15 +173,16 @@ impl HookSourceKind {
     }
 }
 
-/// How a source is identified once resolved: a canonical file path for discovered files, or the
-/// name an explicit source was delivered under.
+/// Where a resolved hook source lives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookSourceLocation {
+    /// Canonical file path for a file discovered on disk.
     CanonicalPath(PathBuf),
+    /// Name an explicit source was delivered under.
     Named(String),
 }
 
-/// A resolved source: what kind it is and where it was found.
+/// Identity of a resolved hook configuration source.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HookSourceId {
     pub kind: HookSourceKind,
@@ -197,12 +198,13 @@ impl Display for HookSourceId {
     }
 }
 
-/// One hook definition inside a source: the vendor event it is declared under and its position in
-/// that event's array.
+/// Identifies one hook definition inside a source.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HookBindingId {
     pub source: HookSourceId,
+    /// The event name as the source's format spells it.
     pub event: String,
+    /// Zero-based position in that event's hook array.
     pub index: usize,
 }
 
@@ -273,8 +275,8 @@ impl Default for HookTurnId {
     }
 }
 
-/// Identifies one chain of hook follow-ups: the user's prompt that started it and every follow-up
-/// a stop hook queued from it.
+/// Identifies one chain of hook continuations: the user's prompt that started it and every
+/// follow-up prompt a stop hook's continuation queued from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FollowUpChainId(Uuid);
 
@@ -299,7 +301,8 @@ impl Default for FollowUpChainId {
 pub enum PromptProvenance {
     /// A person typed it.
     User,
-    /// A stop hook asked for it as a follow-up to the turn that just ended.
+    /// A stop hook's [`ContinuationRequest`], delivered as a follow-up prompt to the turn that
+    /// just ended.
     HookFollowUp {
         binding: HookBindingId,
         chain_id: FollowUpChainId,
