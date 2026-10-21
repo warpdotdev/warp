@@ -2458,6 +2458,10 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(LocalShellState::new);
         ctx.add_singleton_model(system::SystemInfo::new);
     }
+    // Hook processes want the login shell's PATH, so the runner is installed once
+    // `LocalShellState` is available to capture it.
+    #[cfg(feature = "local_fs")]
+    HookRuntime::install_command_runner(ctx);
 
     // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
     // Identity Federation (impersonating the IAP access service account). Gated
