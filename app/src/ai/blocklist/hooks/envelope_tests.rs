@@ -1,0 +1,96 @@
+use ai::agent::action_result::RequestCommandOutputResult;
+use ai::hooks::{HOOK_PROTOCOL_VERSION, HookBoundary, HookPayload, HookSurface};
+use warpui::App;
+
+use super::*;
+use crate::ai::agent::CancellationReason;
+use crate::ai::blocklist::hooks::testing::{hook_test_app, shell_action};
+use crate::features::FeatureFlag;
+
+#[test]
+fn tool_pre_envelope_carries_the_action_and_common_fields() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let action = shell_action("a1", "ls -la");
+        let envelope = app.read(|ctx| {
+            let site = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            envelope_for_tool_pre(&action, &site, ctx)
+        });
+
+        assert_eq!(envelope.boundary(), HookBoundary::ToolPre);
+        assert_eq!(envelope.conversation_id, harness.conversation_id);
+        assert_eq!(envelope.action_id, Some(action.id.clone()));
+        assert_eq!(envelope.protocol_version, HOOK_PROTOCOL_VERSION);
+        assert_eq!(envelope.surface, HookSurface::Gui);
+        assert!(!envelope.warp_version.is_empty());
+        assert_eq!(envelope.turn_id, None);
+        assert_eq!(envelope.exchange_id, None, "no exchange has been sent yet");
+        assert_eq!(
+            envelope.cwd, None,
+            "the mock session has no working directory"
+        );
+        assert!(envelope.roots.is_empty());
+        let HookPayload::ToolPre {
+            action: payload_action,
+            tool_name,
+        } = &envelope.payload
+        else {
+            panic!("expected a tool.pre payload");
+        };
+        assert_eq!(payload_action, &action.action);
+        assert_eq!(tool_name.as_str(), "Shell");
+    });
+}
+
+#[test]
+fn result_and_failure_envelopes_carry_the_result_and_cancellation_reason() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let action = shell_action("a1", "ls");
+        let result = AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::CancelledBeforeExecution,
+        );
+        let (result_envelope, failure_envelope) = app.read(|ctx| {
+            let site = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            (
+                envelope_for_tool_result(&action, &result, &site, ctx),
+                envelope_for_tool_failure(
+                    &action,
+                    &result,
+                    Some(CancellationReason::ManuallyCancelled),
+                    &site,
+                    ctx,
+                ),
+            )
+        });
+        assert_eq!(result_envelope.boundary(), HookBoundary::ToolResult);
+        assert_eq!(failure_envelope.boundary(), HookBoundary::ToolFailure);
+        assert_eq!(failure_envelope.action_id, Some(action.id.clone()));
+        let HookPayload::ToolFailure {
+            cancellation_reason,
+            ..
+        } = &failure_envelope.payload
+        else {
+            panic!("expected a tool.failure payload");
+        };
+        assert_eq!(cancellation_reason.as_deref(), Some("ManuallyCancelled"));
+    });
+}
+
+#[test]
+fn a_new_conversation_site_builds_without_a_session_or_history_lookup() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let envelope = app.read(|ctx| {
+            let site = EnvelopeSite::for_new_conversation(harness.conversation_id);
+            envelope_for_session_start(false, &site, ctx)
+        });
+        assert_eq!(envelope.boundary(), HookBoundary::SessionStart);
+        assert_eq!(envelope.cwd, None);
+        assert_eq!(envelope.exchange_id, None);
+        assert_eq!(envelope.model_id, None);
+    });
+}
