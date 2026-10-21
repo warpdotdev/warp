@@ -280,15 +280,17 @@ mod unix {
             r#"printf '%s\n%s\n%s\n%s\n' "$WARP_PROJECT_DIR" "$CURSOR_PROJECT_DIR" "$CLAUDE_PROJECT_DIR" "$CURSOR_VERSION""#,
         );
         let mut invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10));
-        invocation.env = invocation_environment(&HookIdentity {
-            format: HookFormat::Cursor,
-            project_dir: PathBuf::from("/work/repo"),
-            warp_version: "v0.2026.01.01".to_owned(),
-            run_id: None,
-            user_email: None,
-            remote: false,
-            session_env: Vec::new(),
-        });
+        invocation.env = invocation_environment(
+            &HookIdentity {
+                format: HookFormat::Cursor,
+                project_dir: PathBuf::from("/work/repo"),
+                warp_version: "v0.2026.01.01".to_owned(),
+                run_id: None,
+                user_email: None,
+                remote: false,
+            },
+            &[],
+        );
         let outcome = run(&runner(), invocation);
         assert_eq!(outcome.exit, ProcessExit::Code(0));
         assert_eq!(

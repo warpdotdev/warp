@@ -104,20 +104,18 @@ impl Command {
     pub fn new_in_job<S: AsRef<OsStr>>(program: S) -> Command {
         #[cfg(windows)]
         {
-            let program = crate::wsl::translate_program_for_spawn(program.as_ref());
             #[allow(unused_mut)]
-            let mut inner = async_process::Command::new(program);
+            let mut command = Self::new(program);
+            // `new_internal` adds `CREATE_BREAKAWAY_FROM_JOB`; a child that must stay in the job
+            // `spawn_in_job` puts it in cannot have it. `creation_flags` replaces the flags.
             #[cfg(not(feature = "test-util"))]
             {
                 use async_process::windows::CommandExt;
-                inner.creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+                command
+                    .inner
+                    .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
             }
-            Self {
-                inner,
-                stdin_is_default: true,
-                stdout_is_default: true,
-                stderr_is_default: true,
-            }
+            command
         }
         #[cfg(not(windows))]
         {
@@ -406,8 +404,8 @@ impl Command {
 
     /// Spawns a command built with [`Command::new_in_job`] and returns, with the child, the guard
     /// that controls its process tree. On Windows the child is assigned to a fresh kill-on-close
-    /// Job Object; if that fails the child is killed and the error returned, so a hook never runs
-    /// outside a job. On Unix the guard addresses the child's process group.
+    /// Job Object; if that fails the child is killed and the error returned, so the child never
+    /// runs outside a job. On Unix the guard addresses the child's process group.
     pub fn spawn_in_job(&mut self) -> io::Result<(Child, JobGuard)> {
         let mut child = self.spawn()?;
         match JobGuard::for_child(&child) {
@@ -518,7 +516,7 @@ impl JobGuard {
 
     /// Asks the tree to stop. On Unix this is `SIGTERM` to the process group, which a process may
     /// handle or ignore; on Windows it ends the job outright, since there is no gentler signal.
-    /// Returns whether anything was sent, which is false once the tree is known to have ended.
+    /// Returns whether anything was sent.
     pub fn request_stop(&self) -> bool {
         if self.has_ended() {
             return false;
@@ -533,8 +531,7 @@ impl JobGuard {
         }
     }
 
-    /// Ends everything still running in the tree now. Returns whether anything was sent, which is
-    /// false once the tree is known to have ended.
+    /// Ends everything still running in the tree now. Returns whether anything was sent.
     pub fn terminate(&self) -> bool {
         if self.has_ended() {
             return false;
@@ -558,7 +555,7 @@ impl JobGuard {
         #[cfg(unix)]
         // Signal 0 only checks that the group exists.
         // SAFETY: `killpg` has no memory-safety preconditions.
-        let alive = unsafe { libc::killpg(self.process_group, 0) == 0 };
+        let alive = !self.group_is_gone(unsafe { libc::killpg(self.process_group, 0) });
         #[cfg(windows)]
         let alive = self.active_processes().is_ok_and(|count| count > 0);
         if !alive {
@@ -589,19 +586,30 @@ impl JobGuard {
     #[cfg(unix)]
     fn signal_group(&self, signal: libc::c_int) -> bool {
         // SAFETY: `killpg` has no memory-safety preconditions.
-        if unsafe { libc::killpg(self.process_group, signal) } == 0 {
+        let result = unsafe { libc::killpg(self.process_group, signal) };
+        if result == 0 {
             return true;
         }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            self.ended.store(true, Ordering::Release);
-        } else {
+        if !self.group_is_gone(result) {
             log::debug!(
-                "could not send signal {signal} to process group {}: {error}",
-                self.process_group
+                "could not send signal {signal} to process group {}: {}",
+                self.process_group,
+                io::Error::last_os_error()
             );
         }
         false
+    }
+
+    /// Reads a `killpg` result taken a moment ago and records when it says the group is gone.
+    /// Only `ESRCH` means that; `EPERM` means the group exists but holds a process this user
+    /// cannot signal, which is still a live tree.
+    #[cfg(unix)]
+    fn group_is_gone(&self, killpg_result: libc::c_int) -> bool {
+        let gone = killpg_says_gone(killpg_result, io::Error::last_os_error().raw_os_error());
+        if gone {
+            self.ended.store(true, Ordering::Release);
+        }
+        gone
     }
 
     #[cfg(windows)]
@@ -609,11 +617,17 @@ impl JobGuard {
         match self.job.terminate() {
             Ok(()) => true,
             Err(error) => {
-                log::debug!("could not terminate hook job: {error}");
+                log::debug!("could not terminate the child's job: {error}");
                 false
             }
         }
     }
+}
+
+/// Whether a `killpg` result and the errno it left mean the process group no longer exists.
+#[cfg(unix)]
+fn killpg_says_gone(result: libc::c_int, errno: Option<i32>) -> bool {
+    result != 0 && errno == Some(libc::ESRCH)
 }
 
 impl Drop for JobGuard {

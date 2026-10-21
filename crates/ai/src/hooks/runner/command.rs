@@ -48,14 +48,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How long to keep reading the pipes once the hook's tree has ended. A writer that left the
 /// tree (with `setsid`, for example) can still hold them; its output is not the hook's decision.
-const PIPE_GRACE: Duration = Duration::from_secs(1);
+const PIPE_CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// How long to wait for a killed hook to be collected before moving on without it.
-const REAP_GRACE: Duration = Duration::from_secs(2);
+const COLLECT_WAIT: Duration = Duration::from_secs(2);
 
 /// Runs hook commands through the host shell: `sh -c` on Unix, `cmd.exe /S /C` on Windows. The
 /// command string is passed to the shell exactly as written in the configuration; payload bytes
-/// only ever travel over stdin.
+/// only ever travel over stdin. The invocation's `env` is applied over the host layer from
+/// [`super::env::host_environment`]; that module holds the whole environment policy.
 pub struct CommandHookRunner {
     path_capture: PathCapture,
     home: Option<PathBuf>,
@@ -200,8 +201,9 @@ async fn run_once(
         .env_clear()
         .envs(host_environment(&runner_env))
         .envs(invocation.env.iter().map(|(key, value)| (key, value)))
-        // The one protected variable the runner owns is written after the invocation's layer so
-        // nothing handed in can replace it.
+        // `host_environment` already set this, but `invocation.env` is a plain list the caller
+        // built and could carry its own copy; writing it again after that layer keeps the
+        // runner's value.
         .env(
             "WARP_HOOK_PROTOCOL_VERSION",
             runner_env.protocol_version.to_string(),
@@ -229,8 +231,8 @@ async fn run_once(
             exit_from_status(status)
         }
         Err(interrupted) => {
-            // A hook that exited in the moment between its exit and the deadline is reported by
-            // its exit status, as it would have been one poll earlier.
+            // A hook that exited after the deadline or the cancel flag fired, but before this
+            // check, is reported by its exit status, as it would have been one poll earlier.
             let already_exited = match child.try_status() {
                 Ok(status) => status,
                 Err(error) => {
@@ -239,7 +241,7 @@ async fn run_once(
                 }
             };
             end_tree(&tree, &mut child, &mut pipes).await;
-            reap(&mut child, pid).await;
+            wait_for_collection(&mut child, pid).await;
             match already_exited {
                 Some(status) => exit_from_status(Ok(status)),
                 None => interrupted,
@@ -335,11 +337,13 @@ async fn end_tree(tree: &JobGuard, child: &mut Child, pipes: &mut HookPipes) {
 }
 
 /// Waits for a stopped hook to be collected, so a pid check afterwards sees it gone.
-async fn reap(child: &mut Child, pid: u32) {
+async fn wait_for_collection(child: &mut Child, pid: u32) {
     futures::select_biased! {
         _ = child.status().fuse() => {}
-        _ = Timer::after(REAP_GRACE).fuse() => {
-            log::warn!("hook process {pid} was killed but was not collected within {REAP_GRACE:?}");
+        _ = Timer::after(COLLECT_WAIT).fuse() => {
+            log::warn!(
+                "hook process {pid} was killed but was not collected within {COLLECT_WAIT:?}"
+            );
         }
     }
 }
@@ -436,11 +440,11 @@ impl HookPipes {
         }
     }
 
-    /// Reads until both output pipes close, for up to [`PIPE_GRACE`]. Once the hook's tree has
-    /// ended only a writer that escaped it can still hold them, and it does not get to delay
+    /// Reads until both output pipes close, for up to [`PIPE_CLOSE_WAIT`]. Once the hook's tree
+    /// has ended only a writer that escaped it can still hold them, and it does not get to delay
     /// the outcome.
     async fn finish_reading(&mut self, pid: u32) {
-        let mut grace = Timer::after(PIPE_GRACE).fuse();
+        let mut limit = Timer::after(PIPE_CLOSE_WAIT).fuse();
         while !(self.stdout_drained.is_terminated() && self.stderr_drained.is_terminated()) {
             let mut stdin_written = &mut self.stdin_written;
             let mut stdout_drained = &mut self.stdout_drained;
@@ -449,7 +453,7 @@ impl HookPipes {
                 () = stdout_drained => {}
                 () = stderr_drained => {}
                 () = stdin_written => {}
-                _ = grace => {
+                _ = limit => {
                     log::debug!(
                         "hook process {pid} is gone but something outside its process tree still \
                          holds its output pipes; reading stopped"
