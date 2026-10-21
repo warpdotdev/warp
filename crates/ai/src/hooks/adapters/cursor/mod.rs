@@ -79,7 +79,16 @@ impl HookFormatAdapter for CursorAdapter {
 
     fn bindings(&self, config: &ParsedHookConfig) -> Vec<DeclaredBinding> {
         match parse_cursor_document(&config.document) {
-            Ok(parsed) => events::declare_bindings(&parsed.definitions, &config.source),
+            Ok(parsed) => {
+                let bindings = events::declare_bindings(&parsed.definitions, &config.source);
+                for pattern in bindings
+                    .iter()
+                    .filter_map(|binding| binding.matcher.as_deref())
+                {
+                    self.matchers.precompile(pattern);
+                }
+                bindings
+            }
             Err(error) => {
                 log::error!(
                     "hook source {} no longer parses, though it was accepted earlier: {error}",
