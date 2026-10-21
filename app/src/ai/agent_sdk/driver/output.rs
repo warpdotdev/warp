@@ -679,7 +679,8 @@ pub mod json {
         #[serde(rename = "hook_notice")]
         HookNotice {
             kind: &'a str,
-            conversation_id: &'a str,
+            conversation_id: Option<&'a str>,
+            local_conversation_id: &'a str,
             action_id: Option<&'a str>,
             text: &'a str,
         },
@@ -1405,10 +1406,12 @@ pub mod json {
         write_message(&message, w)
     }
 
-    /// Write a notice from the run's agent hooks as a `hook_notice` record.
+    /// Write a notice from the run's agent hooks as a `hook_notice` record. `conversation_id` is
+    /// the server token `conversation_started` reports, once the server has assigned one.
     pub fn hook_notice<W: Write>(
         kind: &str,
-        conversation_id: &str,
+        conversation_id: Option<&str>,
+        local_conversation_id: &str,
         action_id: Option<&str>,
         text: &str,
         w: &mut W,
@@ -1416,6 +1419,7 @@ pub mod json {
         let message = JsonMessage::HookNotice {
             kind,
             conversation_id,
+            local_conversation_id,
             action_id,
             text,
         };
