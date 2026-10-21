@@ -8,9 +8,10 @@ use futures::future::BoxFuture;
 
 use crate::hooks::model::HookBindingId;
 
-/// Captures the login shell's PATH so hook processes can find user-installed tools. Supplied by
-/// the application, which owns the shell state.
-pub type PathCapture = fn() -> Option<OsString>;
+/// Returns the login shell's PATH so hook processes can find user-installed tools. Supplied by
+/// the application, which owns the shell state and may fill the value in after startup; `None`
+/// means the runner falls back to its own process PATH.
+pub type PathCapture = Arc<dyn Fn() -> Option<OsString> + Send + Sync>;
 
 /// One request to run a hook process.
 #[derive(Debug, Clone)]
