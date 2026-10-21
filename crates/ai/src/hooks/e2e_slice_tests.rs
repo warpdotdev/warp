@@ -20,7 +20,7 @@ use tempfile::TempDir;
 
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::HookConfigError;
-use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
+use crate::hooks::dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher};
 use crate::hooks::model::{
     HookBoundary, HookEnvelope, HookPayload, HookSourceKind, HookSourcePolicy, HookVerdict,
 };
@@ -94,6 +94,7 @@ impl Harness {
         block_on(self.dispatcher.dispatch(
             shell_envelope(command, self.dir.path()),
             self.registry.snapshot(),
+            DispatchPolicy::default(),
             Arc::new(AtomicBool::new(false)),
         ))
     }

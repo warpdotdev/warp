@@ -20,7 +20,7 @@ pub use adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookDirectory, HookFormatAdapter,
     HookSourceLayout, ParsedHookConfig, source_layout,
 };
-pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
+pub use dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
     ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
