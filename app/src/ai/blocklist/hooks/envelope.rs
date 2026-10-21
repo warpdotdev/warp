@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ai::hooks::{
-    CanonicalToolName, HOOK_PROTOCOL_VERSION, HookEnvelope, HookExecutionHost, HookPayload,
-    HookSurface, PermissionFacts, TurnStopStatus,
+    CanonicalToolName, ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope,
+    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -18,9 +18,6 @@ use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReaso
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::active_session::ActiveSession;
-
-/// The envelope's schema version. Bumped when the shape of the common fields changes.
-const ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
 /// Where the boundary fired from, as far as the envelope builders need to know.
 pub(crate) struct EnvelopeSite<'a> {
@@ -198,13 +195,30 @@ pub(crate) fn envelope_for_tool_failure(
             action: action.action.clone(),
             tool_name: CanonicalToolName::for_action(&action.action),
             result: result.clone(),
-            cancellation_reason: cancellation_reason.map(|reason| format!("{reason:?}")),
+            cancellation_reason: cancellation_reason
+                .map(|reason| cancellation_reason_name(reason).to_owned()),
             duration: None,
         },
         ctx,
     );
     envelope.action_id = Some(action.id.clone());
     envelope
+}
+
+/// The name hooks see for a cancellation reason. Scripts match on these strings, so they are
+/// fixed here rather than derived from the enum's spelling.
+pub(crate) fn cancellation_reason_name(reason: CancellationReason) -> &'static str {
+    match reason {
+        CancellationReason::ManuallyCancelled => "user_cancelled",
+        CancellationReason::AutomaticCloudHandoff => "cloud_handoff",
+        CancellationReason::FollowUpSubmitted { .. } => "follow_up_submitted",
+        CancellationReason::UserCommandExecuted => "user_ran_command",
+        CancellationReason::Reverted => "reverted",
+        CancellationReason::Deleted => "conversation_deleted",
+        CancellationReason::CommandFinishedDuringInlineAgentView => "command_finished",
+        CancellationReason::CLISubagentUserTakeover => "user_took_control",
+        CancellationReason::AgentExitedShell => "shell_exited",
+    }
 }
 
 pub(crate) fn envelope_for_prompt_submit(
