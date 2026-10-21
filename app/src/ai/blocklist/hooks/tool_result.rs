@@ -4,6 +4,7 @@ use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_tool_failure, envelope_for_tool_result};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// What the funnel recorded about one terminal result, kept so tests can count calls per path.
@@ -15,7 +16,8 @@ pub(crate) struct ObservedTerminalResult {
 }
 
 /// Fires `tool.failure` for failed or cancelled results and `tool.result` for everything else.
-/// The result is never held; the dispatch runs detached.
+/// The result is never held; the dispatch runs detached. Only conversations whose tool calls
+/// this client runs fire hooks; a result mirrored from another client does not.
 pub(crate) fn observe_terminal_result(
     action: &AIAgentAction,
     result: &AIAgentActionResultType,
@@ -24,7 +26,7 @@ pub(crate) fn observe_terminal_result(
     active_session: &ModelHandle<ActiveSession>,
     ctx: &mut AppContext,
 ) {
-    if !HookRuntime::is_active(ctx) {
+    if !HookRuntime::is_active(ctx) || !executes_tool_calls_locally(conversation_id, ctx) {
         return;
     }
     let site = EnvelopeSite::new(conversation_id, active_session);
@@ -45,6 +47,14 @@ pub(crate) fn observe_terminal_result(
         });
     }
     HookRuntime::as_ref(ctx).dispatch_detached(envelope, ctx);
+}
+
+/// Whether this client runs `conversation_id`'s tool calls. Unknown conversations do not.
+fn executes_tool_calls_locally(conversation_id: AIConversationId, ctx: &AppContext) -> bool {
+    ctx.has_singleton_model::<BlocklistAIHistoryModel>()
+        && BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.driver().executes_tool_calls_locally())
 }
 
 #[cfg(test)]
