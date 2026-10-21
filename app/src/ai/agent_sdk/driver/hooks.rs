@@ -386,7 +386,11 @@ pub(crate) fn write_notice<W: Write>(
         OutputFormat::Json | OutputFormat::Ndjson => output::json::hook_notice(
             kind,
             &notice.conversation_id.to_string(),
-            notice.action_id.as_ref().map(|id| id.to_string()).as_deref(),
+            notice
+                .action_id
+                .as_ref()
+                .map(|id| id.to_string())
+                .as_deref(),
             &notice.text,
             w,
         ),

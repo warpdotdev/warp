@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use ai::hooks::HookRegistry;
 use chrono::Local;
 use cloud_object_models::CodeForge;
 use command::blocking::Command as ProcessCommand;
@@ -17,7 +18,6 @@ use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, Repo
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
-use ai::hooks::HookRegistry;
 use warp_cli::agent::{Harness, HarnessTransport, HooksOnAsk};
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
@@ -55,16 +55,14 @@ use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::{HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunSurface};
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
     ResponseStream, ResponseStreamId,
-};
-use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
-use crate::ai::blocklist::hooks::{
-    HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunSurface,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
@@ -1786,10 +1784,8 @@ fn driver_with_hooks(
     let terminal_view = add_window_with_terminal(app, None);
     let working_dir = working_dir.to_path_buf();
     let driver = app.add_model(|ctx| {
-        let terminal_driver = super::terminal::TerminalDriver::create_from_existing_view(
-            terminal_view.clone(),
-            ctx,
-        );
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
         let mut driver = AgentDriver::new_for_test(working_dir, terminal_driver, ctx);
         driver.skip_initial_turn = true;
         driver.idle_on_complete = None;
