@@ -1,6 +1,5 @@
 use std::ffi::{OsStr, c_void};
 use std::io;
-use std::mem::size_of;
 use std::os::windows::process::CommandExt as _;
 
 use anyhow::{Context, Result};
