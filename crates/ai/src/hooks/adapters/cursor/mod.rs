@@ -98,14 +98,20 @@ impl HookFormatAdapter for CursorAdapter {
         source: &HookSourceId,
     ) -> Result<ParsedHookConfig, HookConfigError> {
         let (document, parsed) = parse_cursor_file(bytes)?;
+        let warning = |message: String| HookDiagnostic {
+            source: source.clone(),
+            severity: DiagnosticSeverity::Warning,
+            message,
+        };
         let warnings = parsed
             .unknown_events
             .iter()
-            .map(|event| HookDiagnostic {
-                source: source.clone(),
-                severity: DiagnosticSeverity::Warning,
-                message: format!("{event} hooks are not supported yet; they were skipped"),
+            .map(|event| {
+                warning(format!(
+                    "{event} hooks are not supported yet; they were skipped"
+                ))
             })
+            .chain(parsed.skipped_definitions.into_iter().map(warning))
             .collect();
         Ok(ParsedHookConfig {
             source: source.clone(),
@@ -129,12 +135,11 @@ impl HookFormatAdapter for CursorAdapter {
         parsed
             .shell_hooks
             .into_iter()
-            .enumerate()
-            .map(|(index, definition)| DeclaredBinding {
+            .map(|definition| DeclaredBinding {
                 id: HookBindingId {
                     source: config.source.clone(),
                     event: BEFORE_SHELL_EXECUTION.to_owned(),
-                    index,
+                    index: definition.index,
                 },
                 boundary: HookBoundary::ToolPre,
                 vendor_event: BEFORE_SHELL_EXECUTION.to_owned(),

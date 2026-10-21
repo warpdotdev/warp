@@ -17,6 +17,9 @@ pub(super) const BEFORE_SHELL_EXECUTION: &str = "beforeShellExecution";
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ParsedCursorFile {
     pub shell_hooks: Vec<ShellHookDefinition>,
+    /// Definitions under a known event that this adapter cannot run, each named with the reason,
+    /// in file order.
+    pub skipped_definitions: Vec<String>,
     /// Event names in the file that this adapter does not understand yet, in sorted order.
     pub unknown_events: Vec<String>,
 }
@@ -24,10 +27,19 @@ pub(super) struct ParsedCursorFile {
 /// One validated `beforeShellExecution` definition.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ShellHookDefinition {
+    /// Position in the event's array, counting definitions that were skipped.
+    pub index: usize,
     pub command: String,
     pub matcher: Option<String>,
     pub timeout: Duration,
     pub fail_closed: bool,
+}
+
+/// What validating one definition found.
+enum ValidatedDefinition {
+    Shell(ShellHookDefinition),
+    /// A definition this adapter cannot run yet; the text says which and why.
+    Skipped(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +88,7 @@ pub(super) fn parse_cursor_document(
     }
 
     let mut shell_hooks = Vec::new();
+    let mut skipped_definitions = Vec::new();
     let mut unknown_events = Vec::new();
     for (event, definitions) in &file.hooks {
         if event != BEFORE_SHELL_EXECUTION {
@@ -88,12 +101,16 @@ pub(super) fn parse_cursor_document(
             )));
         };
         for (index, definition) in definitions.iter().enumerate() {
-            shell_hooks.push(validate_definition(event, index, definition)?);
+            match validate_definition(event, index, definition)? {
+                ValidatedDefinition::Shell(definition) => shell_hooks.push(definition),
+                ValidatedDefinition::Skipped(reason) => skipped_definitions.push(reason),
+            }
         }
     }
 
     Ok(ParsedCursorFile {
         shell_hooks,
+        skipped_definitions,
         unknown_events,
     })
 }
@@ -102,7 +119,7 @@ fn validate_definition(
     event: &str,
     index: usize,
     definition: &serde_json::Value,
-) -> Result<ShellHookDefinition, HookConfigError> {
+) -> Result<ValidatedDefinition, HookConfigError> {
     let invalid =
         |message: String| HookConfigError::Invalid(format!("{event}[{index}]: {message}"));
     let raw: RawDefinition =
@@ -110,10 +127,12 @@ fn validate_definition(
 
     match raw.kind.as_deref() {
         None | Some("command") => {}
+        // Cursor's own headless surfaces run command hooks only and leave prompt hooks out, so a
+        // prompt hook does not stop the command hooks beside it from loading.
         Some("prompt") => {
-            return Err(invalid(
-                "prompt hooks are not supported; only command hooks run".to_owned(),
-            ));
+            return Ok(ValidatedDefinition::Skipped(format!(
+                "{event}[{index}]: prompt hooks are not supported yet; it was skipped"
+            )));
         }
         Some(other) => return Err(invalid(format!("unknown hook type {other:?}"))),
     }
@@ -142,12 +161,13 @@ fn validate_definition(
         return Err(invalid(format!("matcher is not a valid regex: {error}")));
     }
 
-    Ok(ShellHookDefinition {
+    Ok(ValidatedDefinition::Shell(ShellHookDefinition {
+        index,
         command,
         matcher: raw.matcher,
         timeout,
         fail_closed: raw.fail_closed,
-    })
+    }))
 }
 
 /// Cursor treats an empty matcher and a bare `*` as "match everything"; neither is a regex.
