@@ -77,6 +77,33 @@ impl HookRuntime {
         self.run_metadata.as_ref()
     }
 
+    /// Records the run this process belongs to. Envelopes built afterwards carry it.
+    // Nothing supplies run metadata yet; the setter exists so the run bootstrap can install it.
+    #[allow(dead_code)]
+    pub fn set_run_metadata(&mut self, run_metadata: Option<RunMetadata>) {
+        self.run_metadata = run_metadata;
+    }
+
+    /// Replaces the runner. Dispatches already in flight keep the runner they started with.
+    // The only runner so far is the placeholder passed at startup; the command runner replaces
+    // it through this setter.
+    #[allow(dead_code)]
+    pub fn set_runner(&mut self, runner: Arc<dyn HookRunner>) {
+        self.dispatcher = Arc::new(HookDispatcher::new(runner, self.messenger.clone()));
+    }
+
+    /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
+    // The only messenger so far is the log-only one passed at startup; a surface-specific
+    // messenger replaces it through this setter.
+    #[allow(dead_code)]
+    pub fn set_messenger(&mut self, messenger: Arc<dyn HookMessenger>) {
+        self.dispatcher = Arc::new(HookDispatcher::new(
+            self.dispatcher.runner().clone(),
+            messenger.clone(),
+        ));
+        self.messenger = messenger;
+    }
+
     /// Starts a dispatch whose outcome nobody waits for. Used by boundaries that only observe.
     pub(crate) fn dispatch_detached(&self, envelope: HookEnvelope, ctx: &AppContext) {
         let future = self.dispatcher.dispatch(
@@ -104,9 +131,7 @@ pub(crate) mod testing {
     use std::time::Duration;
 
     use ai::hooks::test_util::{RecordingAdapter, RecordingMessenger, ScriptedRunner};
-    use ai::hooks::{
-        ActiveBinding, DeclaredBinding, HookDiagnostic, HookDispatcher, HookRegistry, HookRunner,
-    };
+    use ai::hooks::{ActiveBinding, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner};
     use async_channel::unbounded;
     use parking_lot::FairMutex;
     use warpui::r#async::Timer;
@@ -280,11 +305,8 @@ pub(crate) mod testing {
         let messenger_dyn: Arc<dyn ai::hooks::HookMessenger> = messenger.clone();
         if ctx.has_singleton_model::<HookRuntime>() {
             HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-                runtime.dispatcher = Arc::new(HookDispatcher::new(
-                    runner_dyn.clone(),
-                    messenger_dyn.clone(),
-                ));
-                runtime.messenger = messenger_dyn.clone();
+                runtime.set_runner(runner_dyn.clone());
+                runtime.set_messenger(messenger_dyn.clone());
             });
         } else {
             ctx.add_singleton_model(|ctx| HookRuntime::new(runner_dyn, messenger_dyn, ctx));

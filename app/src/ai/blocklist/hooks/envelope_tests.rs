@@ -1,11 +1,13 @@
 use ai::agent::action_result::RequestCommandOutputResult;
-use ai::hooks::{HOOK_PROTOCOL_VERSION, HookBoundary, HookPayload, HookSurface};
+use ai::hooks::{HOOK_PROTOCOL_VERSION, HookBoundary, HookPayload, HookSurface, RunMetadata};
+use warp_core::execution_mode::ExecutionMode;
 use warpui::App;
 
 use super::*;
 use crate::ai::agent::CancellationReason;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, shell_action};
+use crate::ai::blocklist::hooks::testing::{hook_test_app, install_test_hooks, shell_action};
 use crate::features::FeatureFlag;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 
 #[test]
 fn tool_pre_envelope_carries_the_action_and_common_fields() {
@@ -92,5 +94,37 @@ fn a_new_conversation_site_builds_without_a_session_or_history_lookup() {
         assert_eq!(envelope.cwd, None);
         assert_eq!(envelope.exchange_id, None);
         assert_eq!(envelope.model_id, None);
+    });
+}
+
+#[test]
+fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
+        app.update(install_test_hooks);
+        let conversation_id = AIConversationId::new();
+
+        let before = app.read(|ctx| {
+            envelope_for_session_start(true, &EnvelopeSite::for_new_conversation(conversation_id), ctx)
+        });
+        assert_eq!(before.run, None);
+        assert_eq!(before.surface, HookSurface::CliRun);
+
+        let run = RunMetadata {
+            run_id: "run-1".to_owned(),
+            parent_run_id: None,
+            task_id: Some("task-1".to_owned()),
+        };
+        app.update(|ctx| {
+            HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+                runtime.set_run_metadata(Some(run.clone()));
+            });
+        });
+        let after = app.read(|ctx| {
+            envelope_for_session_start(true, &EnvelopeSite::for_new_conversation(conversation_id), ctx)
+        });
+        assert_eq!(after.run, Some(run));
+        assert_eq!(after.surface, HookSurface::OzRun);
     });
 }
