@@ -9,8 +9,8 @@ use crate::agent::action::{
     SearchCodebaseRequest,
 };
 use crate::agent::action_result::{
-    AIAgentActionResultType, CallMCPToolResult, ReadFilesResult, RequestCommandOutputResult,
-    RequestFileEditsResult,
+    AIAgentActionResultType, CallMCPToolResult, ReadFilesResult, ReadShellCommandOutputResult,
+    RequestCommandOutputResult, RequestFileEditsResult,
 };
 use crate::hooks::adapters::cursor::config::parse_cursor_file;
 use crate::hooks::adapters::cursor::events::CursorEvent;
@@ -18,7 +18,7 @@ use crate::hooks::adapters::cursor::test_support::{
     binding_for, completed_shell, fixture_envelope, mcp_action, shell_action, tool_failure,
     tool_pre, tool_result,
 };
-use crate::hooks::model::{HookPayload, TurnStopStatus};
+use crate::hooks::model::{HookPayload, PromptProvenance, TurnStopStatus};
 use crate::hooks::test_util::test_source_id;
 
 fn binding_with_matcher(event: CursorEvent, matcher: Option<&str>) -> DeclaredBinding {
@@ -257,6 +257,27 @@ fn shell_events_match_the_command_text_and_only_shell_commands() {
         !matches(after, None, denied),
         "a command that never ran did not finish"
     );
+    // The real exit of an agent-started command is reported once, on the command's own action;
+    // the poll that happened to see it is a `postToolUse` of `ShellRead`.
+    let poll = tool_result(
+        AIAgentActionType::ReadShellCommandOutput {
+            block_id: BlockId::from("b".to_owned()),
+            delay: None,
+        },
+        AIAgentActionResultType::ReadShellCommandOutput(
+            ReadShellCommandOutputResult::CommandFinished {
+                command: "cargo test".to_owned(),
+                block_id: BlockId::from("b".to_owned()),
+                output: "ok".to_owned(),
+                exit_code: 0.into(),
+                start_ts: None,
+                completed_ts: None,
+            },
+        ),
+        None,
+    );
+    assert!(!matches(after, None, poll.clone()));
+    assert!(matches(CursorEvent::PostToolUse, Some("^ShellRead$"), poll));
 }
 
 #[test]
@@ -296,6 +317,7 @@ fn literal_events_match_their_fixed_word() {
     let prompt = HookPayload::PromptSubmit {
         text: "hi".to_owned(),
         attachments_summary: Vec::new(),
+        provenance: PromptProvenance::User,
     };
     assert!(matches(
         CursorEvent::BeforeSubmitPrompt,
