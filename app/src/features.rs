@@ -443,8 +443,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::QueuedPromptsV2,
         #[cfg(feature = "kitty_keyboard_protocol")]
         FeatureFlag::KittyKeyboardProtocol,
-        #[cfg(feature = "inline_menu_headers")]
-        FeatureFlag::InlineMenuHeaders,
         #[cfg(feature = "restore_prompt_on_inline_model_selector_search")]
         FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
         #[cfg(feature = "directory_tab_colors")]

@@ -35,7 +35,6 @@ use crate::ai::llms::{
     should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
-use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::result_renderer::ItemHighlightState;
@@ -43,7 +42,7 @@ use crate::search::{SearchItem, SyncDataSource};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
     DetailsRenderConfig, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
-    default_navigation_message_items, styles as inline_styles,
+    styles as inline_styles,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
@@ -63,10 +62,6 @@ impl InlineMenuAction for AcceptModel {
     const MENU_TYPE: InlineMenuType = InlineMenuType::ModelSelector;
 
     fn produce_inline_menu_message<T>(args: InlineMenuMessageArgs<'_, Self, T>) -> Option<Message> {
-        if !FeatureFlag::InlineMenuHeaders.is_enabled() {
-            return Some(Message::new(default_navigation_message_items(&args)));
-        }
-
         let mut items = vec![
             MessageItem::keystroke(Keystroke {
                 key: "enter".to_owned(),

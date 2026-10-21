@@ -3,7 +3,6 @@ use std::sync::LazyLock;
 
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
@@ -75,7 +74,7 @@ pub enum InlineMenuEvent<T: Action + Clone> {
 type TrailingElementFn = Box<dyn Fn(&AppContext) -> Box<dyn Element>>;
 type BannerFn = Box<dyn Fn(&AppContext) -> Option<Box<dyn Element>>>;
 
-/// Configuration for the conditional header bar above the inline menu.
+/// Configuration for the header bar above the inline menu.
 pub struct InlineMenuHeaderConfig {
     /// Command label shown at the left of the header.
     pub label: String,
@@ -722,11 +721,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         true
     }
 
-    fn render_header(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        if !FeatureFlag::InlineMenuHeaders.is_enabled() {
-            return None;
-        }
-
+    fn render_header(&self, app: &AppContext) -> Box<dyn Element> {
         let model = self.model.as_ref(app);
         let tab_configs = model.tab_configs();
 
@@ -865,7 +860,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             .finish();
 
         // Clip so trailing controls don't paint past the pane in a narrow split pane.
-        Some(Clipped::new(header).finish())
+        Clipped::new(header).finish()
     }
 
     pub fn render_results_only(
@@ -1127,7 +1122,6 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
         };
 
         let header = self.render_header(app);
-        let has_header = header.is_some();
 
         let height = self.positioner.as_ref(app).inline_menu_height(app);
         let menu = ConstrainedBox::new(
@@ -1135,9 +1129,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
                 .with_border(
                     Border::new(inline_styles::CONTENT_BORDER_WIDTH)
                         .with_sides(
-                            is_rendering_below_input || !has_header,
+                            is_rendering_below_input,
                             false,
-                            !is_rendering_below_input || !has_header,
+                            !is_rendering_below_input,
                             false,
                         )
                         .with_border_fill(if self.agent_view_controller.as_ref(app).is_active() {
@@ -1157,26 +1151,25 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
             column = column.with_reverse_orientation();
         }
 
-        let mut children: Vec<Box<dyn Element>> = Vec::new();
-        if let Some(header) = header {
-            let on_resize_end: ResizeEndFn = Box::new(|ctx, _| {
-                ctx.dispatch_typed_action(InlineMenuRowAction::<A>::ResizeEnd);
-            });
-            let header = DragResizeElement::new(
-                self.resize_handle.clone(),
+        let on_resize_end: ResizeEndFn = Box::new(|ctx, _| {
+            ctx.dispatch_typed_action(InlineMenuRowAction::<A>::ResizeEnd);
+        });
+        let header = DragResizeElement::new(
+            self.resize_handle.clone(),
+            header,
+            |delta, ctx, _| {
+                ctx.dispatch_typed_action(InlineMenuRowAction::<A>::ResizeUpdate { delta });
+            },
+            Some(on_resize_end),
+        )
+        .finish();
+        column
+            .with_children(vec![
                 header,
-                |delta, ctx, _| {
-                    ctx.dispatch_typed_action(InlineMenuRowAction::<A>::ResizeUpdate { delta });
-                },
-                Some(on_resize_end),
-            )
-            .finish();
-            children.push(header);
-        }
-        children.push(Clipped::new(menu).finish());
-        children.push(ChildView::new(&self.message_bar).finish());
-
-        column.with_children(children).finish()
+                Clipped::new(menu).finish(),
+                ChildView::new(&self.message_bar).finish(),
+            ])
+            .finish()
     }
 }
 

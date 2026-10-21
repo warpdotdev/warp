@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
@@ -214,11 +213,7 @@ impl InlineMenuPositioner {
 
     /// The non-content height of the menu container (header, message bar, borders).
     fn menu_frame_height(&self, app: &AppContext) -> f32 {
-        let header_height = if FeatureFlag::InlineMenuHeaders.is_enabled() {
-            HEADER_ROW_HEIGHT + HEADER_BORDER * 2.
-        } else {
-            0.
-        };
+        let header_height = HEADER_ROW_HEIGHT + HEADER_BORDER * 2.;
         if self.agent_view_controller.as_ref(app).is_active() {
             header_height
         } else {

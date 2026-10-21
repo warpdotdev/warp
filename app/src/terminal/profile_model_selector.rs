@@ -762,13 +762,12 @@ impl ProfileModelSelector {
                 &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
             );
             let llm_preferences = LLMPreferences::as_ref(ctx);
-            let active_llm = if FeatureFlag::InlineMenuHeaders.is_enabled()
-                && self
-                    .terminal_model
-                    .lock()
-                    .block_list()
-                    .active_block()
-                    .is_agent_in_control_or_tagged_in()
+            let active_llm = if self
+                .terminal_model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_in_control_or_tagged_in()
             {
                 llm_preferences.get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
             } else {
@@ -1765,11 +1764,10 @@ impl ProfileModelSelector {
         let has_edit_access = is_composing_ambient_agent
             || !terminal_model.shared_session_status().is_viewer()
             || terminal_model.shared_session_status().is_executor();
-        let is_lrc = FeatureFlag::InlineMenuHeaders.is_enabled()
-            && terminal_model
-                .block_list()
-                .active_block()
-                .is_agent_in_control_or_tagged_in();
+        let is_lrc = terminal_model
+            .block_list()
+            .active_block()
+            .is_agent_in_control_or_tagged_in();
         drop(terminal_model);
 
         let (model_display_name, is_using_chatgpt_subscription) = if self
@@ -1847,17 +1845,6 @@ impl ProfileModelSelector {
         }
 
         content = content.with_child(model_text);
-
-        // Only show chevron icon if the user can click to open the menu (i.e. has edit access)
-        // and the InlineMenuHeaders feature flag is not enabled
-        // (when enabled, clicking opens the inline model selector instead of a dropdown).
-        if has_edit_access && !FeatureFlag::InlineMenuHeaders.is_enabled() {
-            content = content.with_child(
-                Container::new(chip_icon(Icon::ChevronDown))
-                    .with_margin_left(ICON_SPACING)
-                    .finish(),
-            );
-        }
 
         let button = Container::new(content.finish())
             .with_vertical_padding(vertical_padding)
@@ -2328,10 +2315,8 @@ impl TypedActionView for ProfileModelSelector {
                 }
                 if self.is_third_party_harness(ctx) {
                     self.set_model_menu_visibility(!self.is_model_menu_open, ctx);
-                } else if FeatureFlag::InlineMenuHeaders.is_enabled() {
-                    ctx.emit(ProfileModelSelectorEvent::ToggleInlineModelSelector);
                 } else {
-                    self.set_model_menu_visibility(!self.is_model_menu_open, ctx);
+                    ctx.emit(ProfileModelSelectorEvent::ToggleInlineModelSelector);
                 }
             }
         }
