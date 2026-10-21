@@ -2,10 +2,10 @@ use ai::agent::action_result::{
     AskUserQuestionResult, CallMCPToolResult, CreateDocumentsResult, EditDocumentsResult,
     FetchConversationResult, FileGlobResult, FileGlobV2Result, GrepResult,
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
-    ReadSkillResult, RequestCommandOutputResult, RequestComputerUseResult,
-    RequestFileEditsResult, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
-    SuggestNewConversationResult, UploadArtifactResult, UseComputerResult,
+    ReadSkillResult, RequestCommandOutputResult, RequestComputerUseResult, RequestFileEditsResult,
+    RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult, SendMessageToAgentResult,
+    StartRecordingResult, StopRecordingResult, SuggestNewConversationResult, UploadArtifactResult,
+    UseComputerResult,
 };
 
 use crate::ai::agent::{AIAgentActionResultType, AIAgentActionType};
@@ -22,7 +22,10 @@ pub(crate) const DENIED_BY_HOOK_PREFIX: &str = "Denied by agent hook: ";
 /// shell write, read, and handoff actions, the project and code review actions, the two
 /// suggestion actions, and waiting for events. Those finish with their cancelled or rejected
 /// result, and the reason reaches only the user, through the denial notice.
-pub(crate) fn denied_result_for(action: &AIAgentActionType, reason: &str) -> AIAgentActionResultType {
+pub(crate) fn denied_result_for(
+    action: &AIAgentActionType,
+    reason: &str,
+) -> AIAgentActionResultType {
     let message = || format!("{DENIED_BY_HOOK_PREFIX}{reason}");
     match action {
         AIAgentActionType::RequestCommandOutput { command, .. } => {
@@ -43,12 +46,12 @@ pub(crate) fn denied_result_for(action: &AIAgentActionType, reason: &str) -> AIA
                 message: message(),
             })
         }
-        AIAgentActionType::RequestFileEdits { .. } => {
-            AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::DiffApplicationFailed {
-                error: message(),
-            })
+        AIAgentActionType::RequestFileEdits { .. } => AIAgentActionResultType::RequestFileEdits(
+            RequestFileEditsResult::DiffApplicationFailed { error: message() },
+        ),
+        AIAgentActionType::Grep { .. } => {
+            AIAgentActionResultType::Grep(GrepResult::Error(message()))
         }
-        AIAgentActionType::Grep { .. } => AIAgentActionResultType::Grep(GrepResult::Error(message())),
         AIAgentActionType::FileGlob { .. } => {
             AIAgentActionResultType::FileGlob(FileGlobResult::Error(message()))
         }

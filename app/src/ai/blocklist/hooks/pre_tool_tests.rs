@@ -395,7 +395,10 @@ fn a_changed_command_gets_a_new_dispatch_without_an_explicit_invalidate() {
             harness.conversation_id,
             true,
         ));
-        assert!(old_cancel.load(Ordering::Acquire), "the old entry is stopped");
+        assert!(
+            old_cancel.load(Ordering::Acquire),
+            "the old entry is stopped"
+        );
         let key = app
             .read(|ctx| cached_key(harness.conversation_id, &edited.id, ctx))
             .expect("entry");
@@ -443,7 +446,10 @@ fn a_changed_working_directory_gets_a_new_dispatch() {
         // Back in the first directory the key is new again; nothing is kept per directory.
         set_working_directory(&mut app, &harness, Path::new("/work/one"));
         let third = lookup(&mut app, &harness, &action, harness.conversation_id, false);
-        assert!(matches!(third, PreToolLookup::Pending { dispatch: Some(_) }));
+        assert!(matches!(
+            third,
+            PreToolLookup::Pending { dispatch: Some(_) }
+        ));
     });
 }
 
@@ -532,7 +538,11 @@ fn a_verdict_judged_under_an_older_revision_is_dropped_and_the_hooks_run_once_mo
         ));
         let again = lookup(&mut app, &harness, &action, harness.conversation_id, false);
         assert!(matches!(again, PreToolLookup::Resolved(_)));
-        assert_eq!(harness.hooks.adapter.encoded_count(), 2, "exactly once more");
+        assert_eq!(
+            harness.hooks.adapter.encoded_count(),
+            2,
+            "exactly once more"
+        );
     });
 }
 
@@ -623,7 +633,10 @@ fn an_ask_on_an_interactive_surface_requires_confirmation() {
                 ctx,
             )
         });
-        let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+        let PermissionDecision::RequireConfirmation {
+            reason: Some(reason),
+        } = decision
+        else {
             panic!("expected a confirmation step, got {decision:?}");
         };
         assert_eq!(reason.text, "check first");

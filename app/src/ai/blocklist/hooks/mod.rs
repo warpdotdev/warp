@@ -42,8 +42,8 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 use self::pre_tool::{HeadlessAskBehavior, PreToolVerdictCache};
 use self::stream::StreamObserverState;
 use self::strict_policy::StrictHookPolicy;
-use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::agent::AIAgentActionId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::execution_profiles::ActionPermission;

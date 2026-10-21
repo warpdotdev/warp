@@ -659,8 +659,12 @@ mod hooks {
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
-            let binding =
-                test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("InitProject"));
+            let binding = test_binding(
+                test_source_id("s"),
+                HookBoundary::ToolPre,
+                0,
+                Some("InitProject"),
+            );
             harness.hooks.runner.script(
                 binding.id.clone(),
                 ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"check first"}"#),

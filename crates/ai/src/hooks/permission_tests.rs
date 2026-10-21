@@ -280,7 +280,10 @@ fn ask_adds_a_confirmation_step_with_the_hooks_reason_where_someone_can_answer()
         &PermissionFloors::default(),
         interactive(),
     );
-    let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+    let PermissionDecision::RequireConfirmation {
+        reason: Some(reason),
+    } = decision
+    else {
         panic!("expected a confirmation step, got {decision:?}");
     };
     assert_eq!(reason.text, "this touches production");
@@ -291,7 +294,10 @@ fn ask_adds_a_confirmation_step_with_the_hooks_reason_where_someone_can_answer()
         &PermissionFloors::default(),
         interactive(),
     );
-    let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+    let PermissionDecision::RequireConfirmation {
+        reason: Some(reason),
+    } = decision
+    else {
         panic!("expected a confirmation step, got {decision:?}");
     };
     assert_eq!(reason.text, DEFAULT_ASK_REASON);

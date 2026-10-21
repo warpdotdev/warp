@@ -11,11 +11,11 @@ use ai::agent::action_result::{
     FetchConversationResult, FileGlobResult, FileGlobV2Result, GrepResult,
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
-    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, SendMessageToAgentResult,
-    StartRecordingResult, StopRecordingResult, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
-    UseComputerResult, WaitForEventsResult, WriteToLongRunningShellCommandResult,
+    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    WriteToLongRunningShellCommandResult,
 };
 use ai::skills::SkillReference;
 use warp_multi_agent_api as api;
@@ -310,9 +310,7 @@ fn families_without_a_text_slot_finish_cancelled_or_rejected() {
             AIAgentActionType::SuggestNewConversation {
                 message_id: String::new(),
             },
-            AIAgentActionResultType::SuggestNewConversation(
-                SuggestNewConversationResult::Rejected,
-            ),
+            AIAgentActionResultType::SuggestNewConversation(SuggestNewConversationResult::Rejected),
         ),
         (
             AIAgentActionType::SuggestPrompt(SuggestPromptRequest::PromptSuggestion {
@@ -341,15 +339,13 @@ fn families_without_a_text_slot_finish_cancelled_or_rejected() {
         let result = denied(action.clone());
         assert_eq!(result, expected, "{action}");
         assert!(
-            !result.is_successful() || matches!(
-                result,
-                AIAgentActionResultType::InitProject | AIAgentActionResultType::OpenCodeReview
-            ),
+            !result.is_successful()
+                || matches!(
+                    result,
+                    AIAgentActionResultType::InitProject | AIAgentActionResultType::OpenCodeReview
+                ),
             "{action}"
         );
-        assert!(
-            !wire_carries(&result, REASON),
-            "no text slot for {action}"
-        );
+        assert!(!wire_carries(&result, REASON), "no text slot for {action}");
     }
 }

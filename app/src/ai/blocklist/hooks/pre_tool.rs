@@ -211,7 +211,9 @@ pub(crate) fn begin_or_lookup(
                 Cached::Current(entry.state.clone())
             }
             Some(_) => {
-                let entry = entries.remove(&action_key).expect("the entry was just found");
+                let entry = entries
+                    .remove(&action_key)
+                    .expect("the entry was just found");
                 entry.cancel.store(true, Ordering::Release);
                 log::info!(
                     "hook verdict for {} no longer describes the action; running its hooks \
