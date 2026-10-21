@@ -1085,13 +1085,9 @@ mod hooks {
     use ai::hooks::test_util::{test_binding, test_source_id};
     use ai::hooks::{HookBoundary, HookPayload, TurnStopStatus};
     use warp_core::features::FeatureFlag;
-    use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
+    use warp_multi_agent_api::Message;
     use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
-    use warp_multi_agent_api::message::{AgentOutput, Message as MessageKind, ToolCall};
-    use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
-    use warp_multi_agent_api::{
-        ClientAction, Message, ResponseEvent, Task, client_action, response_event,
-    };
+    use warp_multi_agent_api::message::{Message as MessageKind, ToolCall};
     use warpui::{App, SingletonEntity};
 
     use super::{register_mock_response_stream, stream_init_event};
@@ -1099,7 +1095,8 @@ mod hooks {
     use crate::ai::agent::conversation::AIConversationId;
     use crate::ai::blocklist::BlocklistAIHistoryModel;
     use crate::ai::blocklist::hooks::test_utils::{
-        TestHooks, install_test_hooks, let_background_work_settle, settle,
+        TestHooks, create_task_with_messages, done_event, install_test_hooks,
+        let_background_work_settle, root_task_id, settle, text_message,
     };
     use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -1147,63 +1144,21 @@ mod hooks {
             .collect()
     }
 
-    fn message(task_id: &str, kind: MessageKind) -> Message {
+    fn tool_call_message(task_id: &str) -> Message {
         Message {
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task_id.to_owned(),
             request_id: "request".to_owned(),
             timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
-            message: Some(kind),
+            message: Some(MessageKind::ToolCall(ToolCall {
+                tool_call_id: "call_1".to_owned(),
+                tool: Some(Tool::RunShellCommand(RunShellCommand {
+                    command: "ls".to_owned(),
+                    ..Default::default()
+                })),
+            })),
             ..Default::default()
         }
-    }
-
-    /// A batch that creates the root task (the stream's first action does this in production)
-    /// and adds `messages` to it.
-    fn create_task_with_messages(task_id: &str, messages: Vec<Message>) -> ResponseEvent {
-        ResponseEvent {
-            r#type: Some(response_event::Type::ClientActions(
-                response_event::ClientActions {
-                    actions: vec![
-                        ClientAction {
-                            action: Some(client_action::Action::CreateTask(CreateTask {
-                                task: Some(Task {
-                                    id: task_id.to_owned(),
-                                    ..Default::default()
-                                }),
-                            })),
-                        },
-                        ClientAction {
-                            action: Some(client_action::Action::AddMessagesToTask(
-                                AddMessagesToTask {
-                                    task_id: task_id.to_owned(),
-                                    messages,
-                                },
-                            )),
-                        },
-                    ],
-                },
-            )),
-        }
-    }
-
-    fn done() -> ResponseEvent {
-        ResponseEvent {
-            r#type: Some(response_event::Type::Finished(StreamFinished {
-                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
-                ..Default::default()
-            })),
-        }
-    }
-
-    fn root_task_id(app: &App, conversation_id: AIConversationId) -> String {
-        BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
-            history
-                .conversation(&conversation_id)
-                .expect("conversation exists")
-                .get_root_task_id()
-                .to_string()
-        })
     }
 
     #[test]
@@ -1264,18 +1219,10 @@ mod hooks {
             stream.update(&mut app, |stream, ctx| {
                 stream.emit_response_event_for_test(stream_init_event("request"), ctx);
                 stream.emit_response_event_for_test(
-                    create_task_with_messages(
-                        &task_id,
-                        vec![message(
-                            &task_id,
-                            MessageKind::AgentOutput(AgentOutput {
-                                text: "All done.".to_owned(),
-                            }),
-                        )],
-                    ),
+                    create_task_with_messages(&task_id, vec![text_message(&task_id, "All done.")]),
                     ctx,
                 );
-                stream.emit_response_event_for_test(done(), ctx);
+                stream.emit_response_event_for_test(done_event(), ctx);
                 stream.emit_after_stream_finished_for_test(ctx);
             });
 
@@ -1311,27 +1258,13 @@ mod hooks {
                     create_task_with_messages(
                         &task_id,
                         vec![
-                            message(
-                                &task_id,
-                                MessageKind::AgentOutput(AgentOutput {
-                                    text: "Let me look.".to_owned(),
-                                }),
-                            ),
-                            message(
-                                &task_id,
-                                MessageKind::ToolCall(ToolCall {
-                                    tool_call_id: "call_1".to_owned(),
-                                    tool: Some(Tool::RunShellCommand(RunShellCommand {
-                                        command: "ls".to_owned(),
-                                        ..Default::default()
-                                    })),
-                                }),
-                            ),
+                            text_message(&task_id, "Let me look."),
+                            tool_call_message(&task_id),
                         ],
                     ),
                     ctx,
                 );
-                stream.emit_response_event_for_test(done(), ctx);
+                stream.emit_response_event_for_test(done_event(), ctx);
                 stream.emit_after_stream_finished_for_test(ctx);
             });
 
