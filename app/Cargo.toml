@@ -710,6 +710,7 @@ default = [
     "native_shell_completions",
     "history_search_ranking_v2",
     "cloud_agent_shell_respawn",
+    "acp_harness",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -1037,6 +1038,7 @@ shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
 cloud_agent_shell_respawn = []
+acp_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
