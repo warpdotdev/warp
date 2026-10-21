@@ -178,6 +178,41 @@ fn reduce_reports_defer_as_unsupported_and_does_not_merge_it() {
 }
 
 #[test]
+fn reduce_carries_each_bindings_unsupported_effects_in_order() {
+    let unsupported = |index: usize, effect: EffectKind| UnsupportedEffect {
+        binding: binding("a", index),
+        effect,
+        reason: format!("ignored-{index}"),
+    };
+    let merged = reduce_effects(vec![
+        (
+            binding("a", 0),
+            HookEffects {
+                unsupported: vec![unsupported(0, EffectKind::Verdict)],
+                ..Default::default()
+            },
+        ),
+        (binding("a", 1), effects(HookVerdict::Defer)),
+        (
+            binding("a", 2),
+            HookEffects {
+                unsupported: vec![unsupported(2, EffectKind::Continuation)],
+                ..Default::default()
+            },
+        ),
+    ]);
+    assert_eq!(merged.verdict, HookVerdict::NoOpinion);
+    assert_eq!(merged.unsupported.len(), 3);
+    assert_eq!(merged.unsupported[0], unsupported(0, EffectKind::Verdict));
+    assert_eq!(merged.unsupported[1].binding, binding("a", 1));
+    assert_eq!(merged.unsupported[1].effect, EffectKind::Verdict);
+    assert_eq!(
+        merged.unsupported[2],
+        unsupported(2, EffectKind::Continuation)
+    );
+}
+
+#[test]
 fn reduce_of_nothing_is_no_opinion() {
     assert_eq!(reduce_effects(Vec::new()), MergedEffects::no_opinion());
 }

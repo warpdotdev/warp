@@ -500,6 +500,9 @@ pub struct HookEffects {
     pub session_env: Vec<(String, String)>,
     pub halt_turn: bool,
     pub continuation: Option<ContinuationRequest>,
+    /// Effects the hook asked for that its event cannot produce, so the adapter did not apply
+    /// them. They are reported, not acted on.
+    pub unsupported: Vec<UnsupportedEffect>,
 }
 
 /// One channel of [`HookEffects`].
@@ -583,6 +586,7 @@ pub fn reduce_effects(ordered: Vec<(HookBindingId, HookEffects)>) -> MergedEffec
         merged.model_context.extend(effects.model_context);
         merged.user_notices.extend(effects.user_notices);
         merged.session_env.extend(effects.session_env);
+        merged.unsupported.extend(effects.unsupported);
         merged.halt_turn |= effects.halt_turn;
 
         merge_scalar(
