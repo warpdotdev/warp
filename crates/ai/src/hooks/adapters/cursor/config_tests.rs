@@ -52,7 +52,10 @@ fn the_full_config_parses_every_event_with_its_options() {
         .collect::<Vec<_>>();
     assert_eq!(
         events,
-        CursorEvent::ALL.to_vec(),
+        CURSOR_EVENTS
+            .iter()
+            .map(|spec| spec.event)
+            .collect::<Vec<_>>(),
         "one command definition per event, in table order"
     );
 

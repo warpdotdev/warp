@@ -1,9 +1,15 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use strum::EnumCount as _;
+
 use super::*;
 use crate::hooks::adapters::cursor::test_support::{FULL_CONFIG, bindings_from};
 use crate::hooks::model::{PRE_EXECUTION_TIMEOUT, SESSION_END_TIMEOUT};
+
+fn every_event() -> impl Iterator<Item = CursorEvent> {
+    CURSOR_EVENTS.iter().map(|spec| spec.event)
+}
 
 /// Cursor's 21 event names, as the headings of research/01 §3 spell them.
 const CURSOR_NAMES: [&str; 21] = [
@@ -41,13 +47,18 @@ const PERMISSION_HOOKS: [CursorEvent; 6] = [
 
 #[test]
 fn the_table_lists_every_event_once_in_order_under_its_cursor_name() {
-    assert_eq!(CURSOR_EVENTS.len(), 21);
-    for (index, (spec, event)) in CURSOR_EVENTS.iter().zip(CursorEvent::ALL).enumerate() {
-        assert_eq!(spec.event, event);
-        assert_eq!(spec.name, CURSOR_NAMES[index]);
-        assert_eq!(CursorEvent::from_name(spec.name), Some(event));
-        assert_eq!(event.name(), spec.name);
-        assert!(std::ptr::eq(event.spec(), spec));
+    assert_eq!(CURSOR_EVENTS.len(), CursorEvent::COUNT);
+    assert_eq!(CURSOR_EVENTS.len(), CURSOR_NAMES.len());
+    assert_eq!(
+        every_event().collect::<HashSet<_>>().len(),
+        CursorEvent::COUNT,
+        "no event has two table entries"
+    );
+    for (spec, name) in CURSOR_EVENTS.iter().zip(CURSOR_NAMES) {
+        assert_eq!(spec.name, name);
+        assert_eq!(CursorEvent::from_name(spec.name), Some(spec.event));
+        assert_eq!(spec.event.name(), spec.name);
+        assert!(std::ptr::eq(spec.event.spec(), spec));
     }
     assert_eq!(CursorEvent::from_name("postToolUseFailed"), None);
     assert_eq!(CursorEvent::from_name("PreToolUse"), None);
@@ -112,8 +123,7 @@ fn boundaries_follow_the_architecture_mapping() {
 
 #[test]
 fn twelve_events_fire_in_phase_1_and_the_rest_never_match() {
-    let fires = CursorEvent::ALL
-        .into_iter()
+    let fires = every_event()
         .filter(|event| event.spec().fires_in_phase_1)
         .collect::<Vec<_>>();
     assert_eq!(
@@ -139,8 +149,7 @@ fn twelve_events_fire_in_phase_1_and_the_rest_never_match() {
         Some(HookBoundary::ToolResult)
     );
     assert!(!CursorEvent::AfterFileEdit.spec().fires_in_phase_1);
-    for event in CursorEvent::ALL {
-        let spec = event.spec();
+    for spec in &CURSOR_EVENTS {
         if let Some(boundary) = spec.boundary {
             assert!(
                 boundary.fires_in_phase_1() || !spec.fires_in_phase_1,
@@ -156,9 +165,8 @@ fn twelve_events_fire_in_phase_1_and_the_rest_never_match() {
 #[test]
 fn only_the_six_permission_hooks_deny_on_malformed_output() {
     let permission_hooks = HashSet::from(PERMISSION_HOOKS);
-    for event in CursorEvent::ALL {
-        let spec = event.spec();
-        let expected = if permission_hooks.contains(&event) {
+    for spec in &CURSOR_EVENTS {
+        let expected = if permission_hooks.contains(&spec.event) {
             MalformedOutputPolicy::Deny
         } else {
             MalformedOutputPolicy::FollowFailurePolicy
@@ -174,13 +182,12 @@ fn only_the_six_permission_hooks_deny_on_malformed_output() {
 
 #[test]
 fn empty_output_is_a_failure_only_where_the_hook_decides_something() {
-    for event in CursorEvent::ALL {
-        let spec = event.spec();
+    for spec in &CURSOR_EVENTS {
         let expected = match spec.control() {
             ControlEffect::Verdict | ControlEffect::HaltTurn => {
                 EmptyOutputPolicy::FollowFailurePolicy
             }
-            ControlEffect::None => EmptyOutputPolicy::NoOpinion,
+            ControlEffect::ObserveOnly => EmptyOutputPolicy::NoOpinion,
         };
         assert_eq!(spec.empty_output, expected, "{}", spec.name);
     }
@@ -218,7 +225,7 @@ fn control_effects_follow_the_documented_output() {
     ] {
         assert_eq!(
             event.spec().control(),
-            ControlEffect::None,
+            ControlEffect::ObserveOnly,
             "{}",
             event.name()
         );

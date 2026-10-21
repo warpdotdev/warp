@@ -28,7 +28,7 @@ pub(super) fn decode_output(
         spec,
         binding,
         control: spec.control(),
-        strict: policy.strict && spec.control() != ControlEffect::None,
+        strict: policy.strict && spec.control() != ControlEffect::ObserveOnly,
     };
     match &outcome.exit {
         ProcessExit::Code(2) => decoder.blocked_by_exit_two(&outcome.stdout),
@@ -39,7 +39,7 @@ pub(super) fn decode_output(
         ProcessExit::SpawnFailed(error) => decoder.failed(&format!("could not start: {error}")),
         // A cancelled hook never evaluated the operation. Its verdict is normally discarded by
         // the caller; if it is ever applied, it must not read as permission.
-        ProcessExit::Cancelled => decoder.closed("was cancelled before it finished"),
+        ProcessExit::Cancelled => decoder.block("was cancelled before it finished"),
     }
 }
 
@@ -97,7 +97,7 @@ impl Decoder<'_> {
                         .unwrap_or_else(|| format!("Blocked by hook {} (exit 2).", self.command())),
                 )
             }
-            ControlEffect::None => self.failed("exited with code 2"),
+            ControlEffect::ObserveOnly => self.failed("exited with code 2"),
         }
     }
 
@@ -184,12 +184,10 @@ impl Decoder<'_> {
         // A rewrite is carried on every permission hook, not only `preToolUse` where Cursor
         // documents it, because the permission policy denies an action whose input a hook asked
         // to change and cannot be honored; dropping the request would run the original input
-        // against the hook's intent. Claude's nested spelling counts only where Cursor reads it.
-        let updated_input = object_field(output, "updated_input")?.or_else(|| {
-            (self.spec.event == CursorEvent::PreToolUse)
-                .then(|| claude.and_then(|claude| claude.updated_input))
-                .flatten()
-        });
+        // against the hook's intent. Claude's nested spelling is already `None` on events whose
+        // table entry does not document it.
+        let updated_input = object_field(output, "updated_input")?
+            .or_else(|| claude.and_then(|claude| claude.updated_input));
         effects.replacement_input = updated_input.map(Value::Object);
         Ok(effects)
     }
@@ -455,10 +453,10 @@ impl Decoder<'_> {
         let what_happened = match self.control {
             ControlEffect::Verdict => "printed output that is not a valid permission decision",
             ControlEffect::HaltTurn => "printed output that is not a valid response",
-            ControlEffect::None => "printed output that does not fit the event",
+            ControlEffect::ObserveOnly => "printed output that does not fit the event",
         };
         match self.malformed_output_policy() {
-            MalformedOutputPolicy::Deny => self.closed(what_happened),
+            MalformedOutputPolicy::Deny => self.block(what_happened),
             MalformedOutputPolicy::FollowFailurePolicy => self.failed(what_happened),
         }
     }
@@ -467,13 +465,13 @@ impl Decoder<'_> {
     fn failed(&self, what_happened: &str) -> HookEffects {
         match self.failure_policy() {
             FailurePolicy::FailOpen => HookEffects::default(),
-            FailurePolicy::FailClosed => self.closed(what_happened),
+            FailurePolicy::FailClosed => self.block(what_happened),
         }
     }
 
-    /// The fail-closed outcome for this event: a denial where the event decides permission, a
-    /// halted prompt where it decides submission, and nothing where it only observes.
-    fn closed(&self, what_happened: &str) -> HookEffects {
+    /// What blocking means for this event: a denial where the event decides permission, a halted
+    /// prompt where it decides submission, and nothing where it only observes.
+    fn block(&self, what_happened: &str) -> HookEffects {
         let command = self.command();
         match self.control {
             ControlEffect::Verdict => self.deny(format!(
@@ -483,7 +481,7 @@ impl Decoder<'_> {
             ControlEffect::HaltTurn => self.halt(format!(
                 "Hook {command} {what_happened}, so the prompt was not sent."
             )),
-            ControlEffect::None => HookEffects::default(),
+            ControlEffect::ObserveOnly => HookEffects::default(),
         }
     }
 

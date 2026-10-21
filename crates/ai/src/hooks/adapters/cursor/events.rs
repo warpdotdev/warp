@@ -1,10 +1,12 @@
 //! Cursor's 21 hook events and what the adapter knows about each one: the Warp boundary it
 //! projects onto, whether Warp fires it in Phase 1, what its matcher is tested against, which
 //! output fields Cursor documents for it, and how it fails. Every other part of the adapter reads
-//! this table instead of matching on event names.
+//! an event's facts from this table and matches on `CursorEvent` only to pick per-event code.
 
 use std::collections::HashSet;
 use std::time::Duration;
+
+use strum_macros::EnumCount;
 
 use super::config::ParsedDefinition;
 use crate::hooks::adapters::DeclaredBinding;
@@ -22,7 +24,7 @@ pub(super) const LOOP_LIMIT_HOST_CAP: u32 = 8;
 
 /// One of the event names Cursor's `hooks.json` accepts, in the order Cursor's reference lists
 /// them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumCount)]
 pub(super) enum CursorEvent {
     SessionStart,
     SessionEnd,
@@ -48,32 +50,6 @@ pub(super) enum CursorEvent {
 }
 
 impl CursorEvent {
-    /// Every event, in table order. Bindings from one source are declared in this order, so two
-    /// events that project onto the same boundary merge in a fixed order.
-    pub(super) const ALL: [Self; 21] = [
-        Self::SessionStart,
-        Self::SessionEnd,
-        Self::PreToolUse,
-        Self::PostToolUse,
-        Self::PostToolUseFailure,
-        Self::SubagentStart,
-        Self::SubagentStop,
-        Self::BeforeShellExecution,
-        Self::AfterShellExecution,
-        Self::BeforeMcpExecution,
-        Self::AfterMcpExecution,
-        Self::BeforeReadFile,
-        Self::AfterFileEdit,
-        Self::BeforeSubmitPrompt,
-        Self::PreCompact,
-        Self::Stop,
-        Self::AfterAgentResponse,
-        Self::AfterAgentThought,
-        Self::BeforeTabFileRead,
-        Self::AfterTabFileEdit,
-        Self::WorkspaceOpen,
-    ];
-
     pub(super) fn from_name(name: &str) -> Option<Self> {
         CURSOR_EVENTS
             .iter()
@@ -81,6 +57,7 @@ impl CursorEvent {
             .map(|spec| spec.event)
     }
 
+    #[cfg(test)]
     pub(super) fn name(self) -> &'static str {
         self.spec().name
     }
@@ -93,7 +70,10 @@ impl CursorEvent {
     }
 }
 
-/// The value a definition's `matcher` is tested against when its event fires.
+/// The value a definition's `matcher` is tested against when its event fires. Finer than the
+/// shared `MatcherTarget` it is reported as: the adapter must tell an MCP tool's bare name from
+/// the canonical `MCP:<tool>` (both are `MatcherTarget::ToolName`) and must know which events have
+/// nothing to match (`Everything`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MatchedValue {
     /// The canonical tool name (`Shell`, `Read`, `MCP:<tool>`, and Warp's own names).
@@ -117,8 +97,8 @@ pub(super) enum ControlEffect {
     Verdict,
     /// The hook can stop a prompt from being sent.
     HaltTurn,
-    /// The hook only observes.
-    None,
+    /// Nothing the hook returns changes what the agent does.
+    ObserveOnly,
 }
 
 /// What the adapter knows about one event.
@@ -144,7 +124,8 @@ pub(super) struct CursorEventSpec {
     /// an allow it is dropped. The shell and MCP hooks document it as "shown in client" with no
     /// such condition.
     pub user_message_on_deny_only: bool,
-    /// What a Warp-written reason calls the thing a block stops, as in "the command was denied".
+    /// The noun Warp's own denial reasons use for what was blocked, as in "so the command was
+    /// denied".
     pub subject: &'static str,
 }
 
@@ -155,7 +136,7 @@ impl CursorEventSpec {
         } else if self.may_produce.contains(&EffectKind::HaltTurn) {
             ControlEffect::HaltTurn
         } else {
-            ControlEffect::None
+            ControlEffect::ObserveOnly
         }
     }
 
@@ -212,7 +193,8 @@ const FOLLOW_UP_OUTPUT: &[&str] = &[
     "reason",
 ];
 
-/// Cursor's events, in the order its reference lists them.
+/// Cursor's events, in the order its reference lists them. Bindings from one source are declared
+/// in this order, so two events that project onto the same boundary merge in a fixed order.
 pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
     CursorEventSpec {
         event: CursorEvent::SessionStart,
