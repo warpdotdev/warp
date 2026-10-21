@@ -1333,12 +1333,8 @@ mod hooks {
 
             controller.update(&mut app, |controller, ctx| {
                 // The person's row steers into the running turn as before.
-                let steered = controller.steer_head_prompt_for_request(
-                    conversation_id,
-                    &task_id,
-                    true,
-                    ctx,
-                );
+                let steered =
+                    controller.steer_head_prompt_for_request(conversation_id, &task_id, ctx);
                 assert!(matches!(
                     steered,
                     Some(AIAgentInput::UserQuery { query, .. }) if query == "a person's"
@@ -1353,7 +1349,11 @@ mod hooks {
                 assert_eq!(queued.len(), 1);
                 assert_eq!(queued[0].origin(), QueuedQueryOrigin::HookFollowUp);
             });
-            assert_eq!(fired(&hooks).len(), 1, "no prompt hook ran for the steered row");
+            assert_eq!(
+                fired(&hooks).len(),
+                1,
+                "no prompt hook ran for the steered row"
+            );
 
             // Once the turn is over, the row leaves through the prompt path: it runs the prompt
             // hooks with its provenance and its own turn id.

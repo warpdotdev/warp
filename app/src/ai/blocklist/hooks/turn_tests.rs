@@ -14,7 +14,9 @@ use crate::ai::blocklist::hooks::test_utils::{
     HookTestApp, controller_harness, conversation_status, exchange_count, finish_turn_with_text,
     hook_test_app, let_background_work_settle, record_statuses, settle,
 };
-use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
+};
 use crate::features::FeatureFlag;
 
 fn stop_binding(loop_limit: Option<u32>) -> DeclaredBinding {
@@ -56,7 +58,10 @@ fn queued_texts(app: &App, conversation_id: AIConversationId) -> Vec<(String, Pr
 }
 
 /// The text and mode of the user query in the conversation's latest exchange.
-fn latest_user_query(app: &App, conversation_id: AIConversationId) -> Option<(String, UserQueryMode)> {
+fn latest_user_query(
+    app: &App,
+    conversation_id: AIConversationId,
+) -> Option<(String, UserQueryMode)> {
     BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
         history
             .conversation(&conversation_id)?
@@ -76,7 +81,9 @@ fn latest_user_query(app: &App, conversation_id: AIConversationId) -> Option<(St
 
 /// Starts a turn by hand for a conversation whose first request was mocked.
 fn start_turn(app: &mut App, conversation_id: AIConversationId) -> HookTurnId {
-    app.update(|ctx| HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.start_turn(conversation_id)))
+    app.update(|ctx| {
+        HookRuntime::handle(ctx).update(ctx, |runtime, _| runtime.start_turn(conversation_id))
+    })
 }
 
 #[test]
@@ -451,7 +458,10 @@ fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
             provenance,
             PromptProvenance::HookFollowUp { binding, .. } if *binding == stop.id
         ));
-        assert!(follow_up.turn_id.is_some(), "the follow-up starts a turn of its own");
+        assert!(
+            follow_up.turn_id.is_some(),
+            "the follow-up starts a turn of its own"
+        );
         assert_ne!(follow_up.turn_id, Some(first_turn));
         assert_eq!(
             follow_up.turn_id,
@@ -595,12 +605,22 @@ fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         let first_prompt_hold = harness.hooks.runner.hold();
         harness.update_controller(&mut app, |controller, ctx| {
-            controller.send_user_query_in_conversation("one".to_owned(), conversation_id, None, ctx);
+            controller.send_user_query_in_conversation(
+                "one".to_owned(),
+                conversation_id,
+                None,
+                ctx,
+            );
         });
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 2).await;
         let second_prompt_hold = harness.hooks.runner.hold();
         harness.update_controller(&mut app, |controller, ctx| {
-            controller.send_user_query_in_conversation("two".to_owned(), conversation_id, None, ctx);
+            controller.send_user_query_in_conversation(
+                "two".to_owned(),
+                conversation_id,
+                None,
+                ctx,
+            );
         });
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 3).await;
 
@@ -616,7 +636,10 @@ fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
         assert!(app.read(|ctx| is_pending(conversation_id, ctx)));
         assert_eq!(exchange_count(&app, conversation_id), 1);
         assert!(
-            !statuses.lock().unwrap().contains(&ConversationStatus::Success),
+            !statuses
+                .lock()
+                .unwrap()
+                .contains(&ConversationStatus::Success),
             "{:?}",
             statuses.lock().unwrap()
         );
@@ -627,7 +650,12 @@ fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
             latest_user_query(&app, conversation_id).map(|(text, _)| text),
             Some("two".to_owned())
         );
-        assert!(!statuses.lock().unwrap().contains(&ConversationStatus::Success));
+        assert!(
+            !statuses
+                .lock()
+                .unwrap()
+                .contains(&ConversationStatus::Success)
+        );
     });
 }
 
@@ -655,7 +683,11 @@ fn a_follow_up_for_a_conversation_the_surface_left_waits_for_its_drain() {
         })
         .await;
         let queued = queued_texts(&app, left_behind);
-        assert_eq!(queued.len(), 1, "the follow-up waits for the conversation's next drain");
+        assert_eq!(
+            queued.len(),
+            1,
+            "the follow-up waits for the conversation's next drain"
+        );
         assert_eq!(queued[0].0, "later");
         assert_eq!(exchange_count(&app, left_behind), 1);
         assert_eq!(

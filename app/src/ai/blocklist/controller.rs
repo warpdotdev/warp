@@ -1162,7 +1162,8 @@ impl BlocklistAIController {
         }
         let is_this_surfaces_conversation = self.native_prompt_conversation_id
             == Some(conversation_id)
-            || BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_surface_id)
+            || BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation_id(self.terminal_surface_id)
                 == Some(conversation_id);
         if is_this_surfaces_conversation {
             self.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
