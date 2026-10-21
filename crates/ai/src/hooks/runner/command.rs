@@ -53,10 +53,7 @@ const PIPE_CLOSE_WAIT: Duration = Duration::from_secs(1);
 /// How long to wait for a killed hook to be collected before moving on without it.
 const COLLECT_WAIT: Duration = Duration::from_secs(2);
 
-/// Runs hook commands through the host shell: `sh -c` on Unix, `cmd.exe /S /C` on Windows. The
-/// command string is passed to the shell exactly as written in the configuration; payload bytes
-/// only ever travel over stdin. The invocation's `env` is applied over the host layer from
-/// [`super::env::host_environment`]; that module holds the whole environment policy.
+/// Runs hook commands through the host shell (`/bin/sh -c` on Unix, `cmd.exe /S /C` on Windows).
 pub struct CommandHookRunner {
     path_capture: PathCapture,
     home: Option<PathBuf>,
@@ -112,7 +109,6 @@ impl CommandHookRunner {
         self
     }
 
-    /// Replaces the home directory given to hooks.
     #[cfg(any(test, feature = "test-util"))]
     pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
         self.home = home;
@@ -175,20 +171,17 @@ async fn run_once(
     }
     let _permit = match permits.acquire(deadline, &invocation.cancel).await {
         Ok(permit) => permit,
-        Err(exit) => {
-            let why = match exit {
-                ProcessExit::TimedOut => "its deadline passed",
-                ProcessExit::Cancelled => "it was cancelled",
-                ProcessExit::Code(_) | ProcessExit::Signal(_) | ProcessExit::SpawnFailed(_) => {
-                    "it ended"
-                }
+        Err(interrupted) => {
+            let why = match interrupted {
+                Interruption::TimedOut => "its deadline passed",
+                Interruption::Cancelled => "it was cancelled",
             };
             log::warn!(
                 "hook {} did not start: {why} while waiting for one of the \
                  {HOOK_MAX_CONCURRENT} hook slots",
                 invocation.binding
             );
-            return finish(exit, Captured::default());
+            return finish(interrupted.into_exit(), Captured::default());
         }
     };
     if invocation.cancel.load(Ordering::Acquire) {
@@ -201,9 +194,7 @@ async fn run_once(
         .env_clear()
         .envs(host_environment(&runner_env))
         .envs(invocation.env.iter().map(|(key, value)| (key, value)))
-        // `host_environment` already set this, but `invocation.env` is a plain list the caller
-        // built and could carry its own copy; writing it again after that layer keeps the
-        // runner's value.
+        // Written again after the caller's list so a copy in it cannot replace the runner's value.
         .env(
             "WARP_HOOK_PROTOCOL_VERSION",
             runner_env.protocol_version.to_string(),
@@ -244,7 +235,7 @@ async fn run_once(
             wait_for_collection(&mut child, pid).await;
             match already_exited {
                 Some(status) => exit_from_status(Ok(status)),
-                None => interrupted,
+                None => interrupted.into_exit(),
             }
         }
     };
@@ -262,6 +253,22 @@ async fn run_once(
     finish(exit, captured)
 }
 
+/// Why a hook was stopped before it finished on its own.
+#[derive(Clone, Copy)]
+enum Interruption {
+    TimedOut,
+    Cancelled,
+}
+
+impl Interruption {
+    fn into_exit(self) -> ProcessExit {
+        match self {
+            Self::TimedOut => ProcessExit::TimedOut,
+            Self::Cancelled => ProcessExit::Cancelled,
+        }
+    }
+}
+
 /// Drives the pipes until the hook exits, the deadline passes, or the cancel flag is set. The
 /// exit wins over a deadline that expired in the same instant, so a finished hook is never
 /// reported as timed out.
@@ -270,7 +277,7 @@ async fn wait_for_exit(
     pipes: &mut HookPipes,
     deadline: Instant,
     cancel: Arc<AtomicBool>,
-) -> Result<io::Result<ExitStatus>, ProcessExit> {
+) -> Result<io::Result<ExitStatus>, Interruption> {
     let exited = exited.fuse();
     futures::pin_mut!(exited);
     let mut deadline = Timer::at(deadline).fuse();
@@ -284,13 +291,12 @@ async fn wait_for_exit(
             () = stdin_written => {}
             () = stdout_drained => {}
             () = stderr_drained => {}
-            _ = deadline => return Err(ProcessExit::TimedOut),
-            _ = cancelled => return Err(ProcessExit::Cancelled),
+            _ = deadline => return Err(Interruption::TimedOut),
+            _ = cancelled => return Err(Interruption::Cancelled),
         }
     }
 }
 
-/// Resolves once `cancel` is set.
 async fn cancelled(cancel: Arc<AtomicBool>) {
     loop {
         Timer::after(POLL_INTERVAL).await;
@@ -371,19 +377,18 @@ impl Permits {
         Self { available, returns }
     }
 
-    /// Waits for a permit until `deadline` passes or `cancel` is set.
     async fn acquire(
         &self,
         deadline: Instant,
         cancel: &Arc<AtomicBool>,
-    ) -> Result<Permit, ProcessExit> {
+    ) -> Result<Permit, Interruption> {
         let mut taken = Box::pin(self.available.recv().fuse());
         let mut deadline = Timer::at(deadline).fuse();
         let mut cancelled = Box::pin(cancelled(cancel.clone()).fuse());
         futures::select_biased! {
             _ = taken => Ok(Permit { returns: self.returns.clone() }),
-            _ = cancelled => Err(ProcessExit::Cancelled),
-            _ = deadline => Err(ProcessExit::TimedOut),
+            _ = cancelled => Err(Interruption::Cancelled),
+            _ = deadline => Err(Interruption::TimedOut),
         }
     }
 }
@@ -396,7 +401,6 @@ impl Drop for Permit {
     }
 }
 
-/// What has been read from the hook so far, within the limits.
 #[derive(Default)]
 struct Captured {
     stdout: Vec<u8>,
@@ -509,7 +513,6 @@ async fn drain_stdout(reader: Option<impl AsyncRead + Unpin>, captured: Arc<Mute
     }
 }
 
-/// Keeps only the last [`HOOK_STDERR_TAIL`] bytes of stderr.
 async fn drain_stderr(reader: Option<impl AsyncRead + Unpin>, captured: Arc<Mutex<Captured>>) {
     let Some(mut reader) = reader else {
         return;
@@ -535,7 +538,7 @@ async fn drain_stderr(reader: Option<impl AsyncRead + Unpin>, captured: Arc<Mute
 /// newline and tab written as `\xNN`, so a script cannot put terminal escape sequences into a
 /// log or a notice. The result is cut from the front to [`HOOK_STDERR_TAIL`] bytes, since
 /// escaping can lengthen it.
-pub fn escape_control(bytes: &[u8]) -> String {
+fn escape_control(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
@@ -555,7 +558,6 @@ pub fn escape_control(bytes: &[u8]) -> String {
     escaped
 }
 
-/// Cuts `text` to at most `limit` bytes without splitting a character.
 fn truncate_to_char_boundary(text: &str, limit: usize) -> &str {
     if text.len() <= limit {
         return text;

@@ -64,8 +64,8 @@ fn build_with_session(
 ) -> Vec<(OsString, OsString)> {
     build_environment(EnvironmentInput {
         runner,
-        hook,
         session_env,
+        hook,
     })
 }
 

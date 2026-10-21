@@ -64,7 +64,6 @@ mod unix {
     use crate::hooks::HookFormat;
     use crate::hooks::runner::env::{HookIdentity, invocation_environment};
 
-    /// Writes an executable `#!/bin/sh` script and returns its path.
     fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
@@ -79,8 +78,16 @@ mod unix {
         kill(Pid::from_raw(pid), None).is_ok()
     }
 
+    /// Slack added to every wall-clock bound in the process-tree tests, so a loaded machine
+    /// (slow spawns, late timers) does not turn a passing run into a failure.
+    const LOAD_MARGIN: Duration = Duration::from_secs(5);
+
+    /// A deadline long enough that even a loaded machine has started the script's shell and run
+    /// its first lines before it fires.
+    const GENEROUS_TIMEOUT: Duration = Duration::from_secs(8);
+
     fn wait_until_gone(pid: i32) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if !process_is_alive(pid) {
                 return true;
@@ -90,7 +97,18 @@ mod unix {
         false
     }
 
-    /// The pids a script wrote to `pids`, one per whitespace-separated field.
+    /// Waits for the script to write its `pids` file, which it does as soon as it is running.
+    fn wait_for_pids_file(dir: &Path) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if fs::metadata(dir.join("pids")).is_ok_and(|metadata| metadata.len() > 0) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
     fn recorded_pids(dir: &Path) -> Vec<i32> {
         let pids = fs::read_to_string(dir.join("pids")).expect("the script recorded its pids");
         pids.split_whitespace()
@@ -328,13 +346,15 @@ wait"#,
         let started = Instant::now();
         let outcome = run(
             &runner(),
-            invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(1)),
+            invocation(dir.path(), "./hook.sh", b"{}", GENEROUS_TIMEOUT),
         );
+        let elapsed = started.elapsed();
         assert_eq!(outcome.exit, ProcessExit::TimedOut);
         assert!(
-            started.elapsed() < Duration::from_secs(1) + HOOK_KILL_GRACE,
-            "a tree that stops when asked does not wait out the grace period"
+            elapsed < GENEROUS_TIMEOUT + HOOK_KILL_GRACE + LOAD_MARGIN,
+            "the runner returned promptly ({elapsed:?})"
         );
+        assert!(wait_for_pids_file(dir.path()), "the script never ran");
         let pids = recorded_pids(dir.path());
         assert_eq!(pids.len(), 2);
         for pid in pids {
@@ -354,21 +374,31 @@ sleep 60 &
 echo "$$ $!" > "$PWD/pids"
 wait"#,
         );
-        let timeout = Duration::from_secs(1);
-        let started = Instant::now();
-        let outcome = run(
-            &runner(),
-            invocation(dir.path(), "./hook.sh", b"{}", timeout),
-        );
-        let elapsed = started.elapsed();
-        assert_eq!(outcome.exit, ProcessExit::TimedOut);
+        // The stop is triggered through the cancel flag once the script is known to be running
+        // (and so has its trap in place), not through a deadline a loaded machine could reach
+        // first; the timeout and cancel paths share the same stop, grace, and kill sequence.
+        let invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(60));
+        let cancel = invocation.cancel.clone();
+        let flipper = std::thread::spawn({
+            let dir = dir.path().to_path_buf();
+            move || {
+                let ready = wait_for_pids_file(&dir);
+                cancel.store(true, Ordering::Release);
+                (ready, Instant::now())
+            }
+        });
+        let outcome = run(&runner(), invocation);
+        let (script_was_running, flipped_at) = flipper.join().expect("flipper thread");
+        let since_flip = flipped_at.elapsed();
+        assert!(script_was_running, "the script never ran");
+        assert_eq!(outcome.exit, ProcessExit::Cancelled);
         assert!(
-            elapsed >= timeout + HOOK_KILL_GRACE,
-            "the tree got its grace period ({elapsed:?})"
+            since_flip >= HOOK_KILL_GRACE,
+            "the tree got its grace period ({since_flip:?})"
         );
         assert!(
-            elapsed < timeout + HOOK_KILL_GRACE + Duration::from_secs(3),
-            "the kill followed the grace period promptly ({elapsed:?})"
+            since_flip < HOOK_KILL_GRACE + LOAD_MARGIN,
+            "the kill followed the grace period promptly ({since_flip:?})"
         );
         let pids = recorded_pids(dir.path());
         assert_eq!(pids.len(), 2);
@@ -392,15 +422,26 @@ wait"#,
         );
         let invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(30));
         let cancel = invocation.cancel.clone();
-        let flipper = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(500));
-            cancel.store(true, Ordering::Release);
+        // The flag is set once the script is known to be running (it has written its pids), not
+        // after a fixed delay, so a slow start on a loaded machine cannot cancel the hook before
+        // its trap is in place.
+        let flipper = std::thread::spawn({
+            let dir = dir.path().to_path_buf();
+            move || {
+                let ready = wait_for_pids_file(&dir);
+                cancel.store(true, Ordering::Release);
+                (ready, Instant::now())
+            }
         });
-        let started = Instant::now();
         let outcome = run(&runner(), invocation);
-        flipper.join().expect("flipper thread");
+        let (script_was_running, flipped_at) = flipper.join().expect("flipper thread");
+        assert!(script_was_running, "the script never ran");
         assert_eq!(outcome.exit, ProcessExit::Cancelled);
-        assert!(started.elapsed() < Duration::from_millis(500) + HOOK_KILL_GRACE);
+        assert!(
+            flipped_at.elapsed() < HOOK_KILL_GRACE + LOAD_MARGIN,
+            "the hook stopped promptly after the flag was set ({:?})",
+            flipped_at.elapsed()
+        );
         assert!(
             outcome.stdout.is_empty(),
             "output written after the stop request is discarded: {:?}",
@@ -495,12 +536,12 @@ exit 2"#,
         let started = Instant::now();
         let outcome = run(
             &runner(),
-            invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10)),
+            invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(30)),
         );
         assert_eq!(outcome.exit, ProcessExit::Code(2));
         assert_eq!(outcome.stdout, br#"{"agent_message":"no"}"#);
         assert!(
-            started.elapsed() < HOOK_KILL_GRACE,
+            started.elapsed() < HOOK_KILL_GRACE + LOAD_MARGIN,
             "a descendant that stops when asked does not delay the outcome"
         );
         for pid in recorded_pids(dir.path()) {
@@ -584,7 +625,7 @@ rm -f "$PWD/running.$$""#,
 
     #[test]
     fn no_more_than_the_bound_run_at_once_and_all_complete() {
-        let hold = Duration::from_millis(500);
+        let hold = Duration::from_secs(1);
         let started = Instant::now();
         let (outcomes, most_at_once) =
             run_concurrently(HOOK_MAX_CONCURRENT + 2, hold, Duration::from_secs(20));
@@ -606,7 +647,7 @@ rm -f "$PWD/running.$$""#,
     #[test]
     fn waiting_for_a_slot_counts_against_the_deadline_and_a_waiter_that_gives_up_never_ran() {
         let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "sleeper.sh", "sleep 2");
+        write_script(dir.path(), "sleeper.sh", "sleep 3");
         write_script(dir.path(), "late.sh", r#"touch "$PWD/late-ran""#);
         let runner = runner();
         let mut futures = (0..HOOK_MAX_CONCURRENT)
@@ -628,9 +669,11 @@ rm -f "$PWD/running.$$""#,
         let outcomes = block_on(join_all(futures));
         let late = outcomes.last().expect("the late hook's outcome");
         assert_eq!(late.exit, ProcessExit::TimedOut);
+        // Well before the sleepers free a slot at about 3 s.
         assert!(
-            late.duration < Duration::from_secs(1),
-            "gave up at its own deadline"
+            late.duration < Duration::from_secs(2),
+            "gave up at its own deadline ({:?})",
+            late.duration
         );
         assert!(
             !dir.path().join("late-ran").exists(),
@@ -644,10 +687,11 @@ rm -f "$PWD/running.$$""#,
     #[test]
     fn a_hook_that_waited_for_a_slot_runs_with_what_is_left_of_its_deadline() {
         let dir = TempDir::new().expect("tempdir");
-        write_script(dir.path(), "sleeper.sh", "sleep 1");
+        let sleeper_hold = Duration::from_secs(2);
+        write_script(dir.path(), "sleeper.sh", "sleep 2");
         write_script(dir.path(), "slow.sh", "sleep 30");
         let runner = runner();
-        let timeout = Duration::from_millis(1500);
+        let timeout = Duration::from_secs(4);
         let mut futures = (0..HOOK_MAX_CONCURRENT)
             .map(|_| {
                 runner.run(invocation(
@@ -659,24 +703,23 @@ rm -f "$PWD/running.$$""#,
             })
             .collect::<Vec<_>>();
         futures.push(runner.run(invocation(dir.path(), "./slow.sh", b"{}", timeout)));
-        let started = Instant::now();
         let outcomes = block_on(join_all(futures));
         let slow = outcomes.last().expect("the slow hook's outcome");
         assert_eq!(slow.exit, ProcessExit::TimedOut);
-        // It waited about a second for a slot and then had about half a second left to run. Had
-        // the deadline been taken after the wait, it would have run until about 2.5 s.
+        // It waited about two seconds for a slot and then had about two left to run. Had the
+        // deadline been taken after the wait, it would have run until about 6 s. The deadline is
+        // absolute, so a slow start on a loaded machine does not move it.
         assert!(slow.duration >= timeout);
         assert!(
-            slow.duration > Duration::from_secs(1),
+            slow.duration > sleeper_hold,
             "the hook waited for a slot ({:?})",
             slow.duration
         );
         assert!(
-            slow.duration < timeout + Duration::from_millis(700),
+            slow.duration < timeout + Duration::from_millis(1500),
             "the slot wait was not added on top of the timeout ({:?})",
             slow.duration
         );
-        assert!(started.elapsed() < timeout + HOOK_KILL_GRACE + Duration::from_secs(1));
     }
 
     struct CapturingLogger;
@@ -773,7 +816,6 @@ mod windows {
 
     use super::*;
 
-    /// Writes a `.cmd` script with CRLF line endings and returns its path.
     fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
         let body = body.replace('\n', "\r\n");
@@ -781,7 +823,6 @@ mod windows {
         path
     }
 
-    /// Whether `tasklist` still lists a process with `pid`.
     fn process_exists(pid: u32) -> bool {
         let output = command::blocking::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])

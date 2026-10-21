@@ -96,11 +96,8 @@ impl Command {
         Self::new_internal(inner)
     }
 
-    /// Same as new, but for a child whose whole process tree must be stoppable as a unit through
-    /// the [`JobGuard`] that [`Command::spawn_in_job`] returns. On Unix the child leads a new
-    /// process group, as with [`Command::new_with_process_group`]. On Windows the child is not
-    /// created with `CREATE_BREAKAWAY_FROM_JOB`, so it stays inside Warp's own job as well as the
-    /// fresh one it is assigned to on spawn.
+    /// Same as [`Command::new`], configured to be spawned with [`Command::spawn_in_job`] so the
+    /// child's whole process tree can be stopped as a unit through the returned [`JobGuard`].
     pub fn new_in_job<S: AsRef<OsStr>>(program: S) -> Command {
         #[cfg(windows)]
         {
@@ -402,10 +399,9 @@ impl Command {
         self.inner.spawn()
     }
 
-    /// Spawns a command built with [`Command::new_in_job`] and returns, with the child, the guard
-    /// that controls its process tree. On Windows the child is assigned to a fresh kill-on-close
-    /// Job Object; if that fails the child is killed and the error returned, so the child never
-    /// runs outside a job. On Unix the guard addresses the child's process group.
+    /// Spawns a command built with [`Command::new_in_job`] and returns the child with the
+    /// [`JobGuard`] that controls its process tree. If attaching the guard fails, the child is
+    /// killed before the error is returned.
     pub fn spawn_in_job(&mut self) -> io::Result<(Child, JobGuard)> {
         let mut child = self.spawn()?;
         match JobGuard::for_child(&child) {
@@ -557,16 +553,15 @@ impl JobGuard {
         // SAFETY: `killpg` has no memory-safety preconditions.
         let alive = !self.group_is_gone(unsafe { libc::killpg(self.process_group, 0) });
         #[cfg(windows)]
-        let alive = self.active_processes().is_ok_and(|count| count > 0);
+        let alive = self.job.active_processes().is_ok_and(|count| count > 0);
         if !alive {
             self.ended.store(true, Ordering::Release);
         }
         alive
     }
 
-    /// How many processes in the job are still running.
-    #[cfg(windows)]
-    pub fn active_processes(&self) -> io::Result<u32> {
+    #[cfg(all(test, windows))]
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
         self.job.active_processes()
     }
 
@@ -581,8 +576,6 @@ impl JobGuard {
         self.ended.store(true, Ordering::Release);
     }
 
-    /// Sends `signal` to the group. Returns whether it was delivered; a group that no longer
-    /// exists marks the tree as ended.
     #[cfg(unix)]
     fn signal_group(&self, signal: libc::c_int) -> bool {
         // SAFETY: `killpg` has no memory-safety preconditions.
@@ -600,9 +593,6 @@ impl JobGuard {
         false
     }
 
-    /// Reads a `killpg` result taken a moment ago and records when it says the group is gone.
-    /// Only `ESRCH` means that; `EPERM` means the group exists but holds a process this user
-    /// cannot signal, which is still a live tree.
     #[cfg(unix)]
     fn group_is_gone(&self, killpg_result: libc::c_int) -> bool {
         let gone = killpg_says_gone(killpg_result, io::Error::last_os_error().raw_os_error());
@@ -624,7 +614,8 @@ impl JobGuard {
     }
 }
 
-/// Whether a `killpg` result and the errno it left mean the process group no longer exists.
+/// Only `ESRCH` means the process group is gone; `EPERM` means the group still exists and holds
+/// a process this user cannot signal.
 #[cfg(unix)]
 fn killpg_says_gone(result: libc::c_int, errno: Option<i32>) -> bool {
     result != 0 && errno == Some(libc::ESRCH)

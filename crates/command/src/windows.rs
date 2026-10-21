@@ -144,7 +144,7 @@ const TERMINATED_EXIT_CODE: u32 = 1;
 /// short-lived child wants. It calls the `windows` crate directly because `win32job::Job` has no
 /// way to terminate a job.
 #[derive(Debug)]
-pub struct ProcessJob {
+pub(crate) struct ProcessJob {
     // Kept as an integer so the job can travel with a `Send` future; `HANDLE` wraps a raw pointer.
     handle: isize,
 }
@@ -153,7 +153,7 @@ impl ProcessJob {
     /// Creates a job and assigns the process with id `pid` to it. The caller must still hold the
     /// process alive (for example through its `Child`) so the id cannot be recycled before the
     /// assignment.
-    pub fn create_for(pid: u32) -> io::Result<Self> {
+    pub(crate) fn create_for(pid: u32) -> io::Result<Self> {
         // SAFETY: plain Win32 calls with valid arguments; every handle opened here is closed on
         // every path (the job through `Drop`, the process handle right after assignment).
         unsafe {
@@ -176,14 +176,12 @@ impl ProcessJob {
         }
     }
 
-    /// Ends every process in the job now.
-    pub fn terminate(&self) -> io::Result<()> {
+    pub(crate) fn terminate(&self) -> io::Result<()> {
         // SAFETY: the handle is a live job handle owned by `self`.
         unsafe { TerminateJobObject(self.handle(), TERMINATED_EXIT_CODE) }.map_err(Into::into)
     }
 
-    /// How many processes in the job are still running.
-    pub fn active_processes(&self) -> io::Result<u32> {
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         // SAFETY: `accounting` is a correctly sized, writable buffer for the requested class.
         unsafe {

@@ -7,7 +7,6 @@ use super::{Command, JobGuard};
 
 const SETTLE: Duration = Duration::from_secs(5);
 
-/// Polls `condition` until it holds or `SETTLE` passes.
 fn eventually(mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + SETTLE;
     while Instant::now() < deadline {
@@ -137,7 +136,6 @@ mod windows {
 
     use super::*;
 
-    /// Whether `tasklist` still lists a process with `pid`.
     fn process_exists(pid: u32) -> bool {
         let output = crate::blocking::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
