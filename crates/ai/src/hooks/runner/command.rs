@@ -6,11 +6,13 @@
 use std::ffi::OsString;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_process::Child;
 use command::r#async::Command;
 use futures::FutureExt;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, FusedFuture};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use instant::Instant;
 use warpui_core::r#async::Timer;
@@ -23,6 +25,10 @@ const STDERR_TAIL_LIMIT: usize = 4096;
 
 /// How often the cancel flag is checked while the process runs.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How long to keep reading the pipes after the hook itself has exited. A descendant the hook
+/// left behind can hold them open; its output is not the hook's decision.
+const PIPE_GRACE: Duration = Duration::from_secs(1);
 
 /// How long to wait for a killed process to be collected before moving on without it.
 const REAP_GRACE: Duration = Duration::from_secs(2);
@@ -145,27 +151,26 @@ async fn run_once(
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let exited = child.status();
+    let mut exited = Box::pin(child.status().fuse());
 
     let payload = invocation.stdin;
-    let write_stdin = async move {
-        // A hook that exits without reading its input is judged by its exit code, so a failed
-        // write is not an error here. Dropping the handle closes the pipe.
-        if let Some(mut stdin) = stdin {
-            let _ = stdin.write_all(&payload).await;
-            let _ = stdin.close().await;
-        }
-    };
-    // Stdin, stdout, and stderr are driven together so a hook that fills one pipe before touching
-    // another cannot deadlock against this process.
-    let mut finished = Box::pin(
+    let mut stdin_written = Box::pin(
         async move {
-            let (status, (), stdout, stderr) =
-                futures::join!(exited, write_stdin, read_all(stdout), read_all(stderr));
-            (status, stdout, stderr)
+            // A hook that exits without reading its input is judged by its exit code, so a
+            // failed write is not an error here. Dropping the handle closes the pipe.
+            if let Some(mut stdin) = stdin {
+                let _ = stdin.write_all(&payload).await;
+                let _ = stdin.close().await;
+            }
         }
         .fuse(),
     );
+    // Output accumulates in shared buffers so whatever arrived before a pipe stopped mattering is
+    // still available.
+    let stdout_bytes = Arc::new(Mutex::new(Vec::new()));
+    let stderr_bytes = Arc::new(Mutex::new(Vec::new()));
+    let mut stdout_drained = Box::pin(drain(stdout, stdout_bytes.clone()).fuse());
+    let mut stderr_drained = Box::pin(drain(stderr, stderr_bytes.clone()).fuse());
     let mut deadline = Timer::after(invocation.timeout).fuse();
     let cancel = invocation.cancel.clone();
     let mut cancelled = Box::pin(
@@ -180,39 +185,91 @@ async fn run_once(
         .fuse(),
     );
 
-    // A process that has finished wins over a deadline that expired in the same instant, so a
-    // completed hook is never reported as timed out.
-    let interrupted = futures::select_biased! {
-        (status, stdout, stderr) = finished => {
-            return finish(exit_from_status(status), stdout, stderr);
+    // Stdin, stdout, and stderr are driven together with the exit wait, so a hook that fills one
+    // pipe before touching another cannot deadlock against this process. The exit wins over a
+    // deadline that expired in the same instant, so a finished hook is never reported as timed
+    // out.
+    let exit = loop {
+        futures::select_biased! {
+            status = exited => break Ok(status),
+            () = stdin_written => {}
+            () = stdout_drained => {}
+            () = stderr_drained => {}
+            _ = deadline => break Err(ProcessExit::TimedOut),
+            _ = cancelled => break Err(ProcessExit::Cancelled),
         }
-        _ = deadline => ProcessExit::TimedOut,
-        _ = cancelled => ProcessExit::Cancelled,
+    };
+
+    let interrupted = match exit {
+        Ok(status) => {
+            // The hook has exited, so its exit status is the decision. A background process it
+            // started may still hold the pipes; give them a moment, then stop reading rather than
+            // let a stray descendant turn a decision into a timeout.
+            let mut grace = Timer::after(PIPE_GRACE).fuse();
+            while !(stdout_drained.is_terminated() && stderr_drained.is_terminated()) {
+                futures::select_biased! {
+                    () = stdout_drained => {}
+                    () = stderr_drained => {}
+                    () = stdin_written => {}
+                    _ = grace => {
+                        log::debug!(
+                            "hook process {pid} exited but something it started still holds its \
+                             output pipes; reading stopped"
+                        );
+                        break;
+                    }
+                }
+            }
+            drop((stdin_written, stdout_drained, stderr_drained));
+            return finish(
+                exit_from_status(status),
+                take_bytes(&stdout_bytes),
+                take_bytes(&stderr_bytes),
+            );
+        }
+        Err(interrupted) => interrupted,
     };
 
     // Stop reading the pipes before killing, so a descendant that kept them open cannot keep this
     // future alive.
-    drop(finished);
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, killpg};
-        use nix::unistd::Pid;
-        // The child leads its own process group, so the group id is its pid and the signal reaches
-        // every process it started.
-        if let Err(error) = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL) {
-            log::debug!("could not signal hook process group {pid}: {error}");
-        }
-    }
-    if let Err(error) = child.kill() {
-        log::debug!("could not kill hook process {pid}: {error}");
-    }
+    drop((exited, stdin_written, stdout_drained, stderr_drained));
+    kill_hook(&mut child, pid);
     futures::select_biased! {
         _ = child.status().fuse() => {}
         _ = Timer::after(REAP_GRACE).fuse() => {
             log::warn!("hook process {pid} was killed but did not exit within {REAP_GRACE:?}");
         }
     }
-    finish(interrupted, Vec::new(), Vec::new())
+    finish(
+        interrupted,
+        take_bytes(&stdout_bytes),
+        take_bytes(&stderr_bytes),
+    )
+}
+
+/// Kills the hook and, on Unix, everything else in its process group. The group is signalled
+/// only while the hook itself is known to be alive: once it has been collected its pid, and so
+/// its group id, may already belong to someone else.
+fn kill_hook(child: &mut Child, pid: u32) {
+    match child.try_status() {
+        Ok(None) => {
+            #[cfg(unix)]
+            {
+                use nix::sys::signal::{Signal, killpg};
+                use nix::unistd::Pid;
+                if let Err(error) = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL) {
+                    log::debug!("could not signal hook process group {pid}: {error}");
+                }
+            }
+            if let Err(error) = child.kill() {
+                log::debug!("could not kill hook process {pid}: {error}");
+            }
+        }
+        Ok(Some(_)) => log::debug!(
+            "hook process {pid} had already exited; anything it left running was not signalled"
+        ),
+        Err(error) => log::debug!("could not check hook process {pid} before killing it: {error}"),
+    }
 }
 
 fn exit_from_status(status: std::io::Result<ExitStatus>) -> ProcessExit {
@@ -232,12 +289,25 @@ fn exit_from_status(status: std::io::Result<ExitStatus>) -> ProcessExit {
     ProcessExit::Code(-1)
 }
 
-async fn read_all(reader: Option<impl AsyncRead + Unpin>) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    if let Some(mut reader) = reader {
-        let _ = reader.read_to_end(&mut buffer).await;
+/// Copies everything `reader` produces into `sink` until it closes or fails.
+async fn drain(reader: Option<impl AsyncRead + Unpin>, sink: Arc<Mutex<Vec<u8>>>) {
+    let Some(mut reader) = reader else {
+        return;
+    };
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => sink
+                .lock()
+                .expect("hook output lock")
+                .extend_from_slice(&chunk[..read]),
+        }
     }
-    buffer
+}
+
+fn take_bytes(sink: &Mutex<Vec<u8>>) -> Vec<u8> {
+    std::mem::take(&mut *sink.lock().expect("hook output lock"))
 }
 
 fn stderr_tail(stderr: &[u8]) -> String {
