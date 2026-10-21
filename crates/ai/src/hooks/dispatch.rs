@@ -68,15 +68,7 @@ impl DispatchOutcome {
     }
 }
 
-/// The one call the agent loop makes to run hooks: fire an envelope, get merged effects.
-///
-/// Every binding that matches runs at the same time (the runner bounds how many processes are
-/// alive at once) and each is held to its own timeout, so the dispatch ends when the slowest
-/// invocation does. Results are merged in the pinned snapshot's order, never in the order the
-/// processes finished. The adapter applies each binding's failure policy and the strict hook
-/// policy to what the process did; the dispatcher then refuses any effect the boundary cannot
-/// honor in this phase, by denying on a boundary that runs before an operation and by reporting
-/// it everywhere else.
+/// Runs the active bindings that match an envelope and merges their effects in snapshot order.
 pub struct HookDispatcher {
     runner: Arc<dyn HookRunner>,
     messenger: Arc<dyn HookMessenger>,
@@ -363,10 +355,10 @@ fn refusal_for(boundary: HookBoundary) -> Refusal {
 }
 
 /// The kind of output field a control effect travels in, in the words a refusal reason uses
-/// for a field the adapter refused because the event does not define it. The adapter reports
-/// such a field without reading its value, so the words name the field's purpose and do not
-/// claim what the hook asked for. `None` for effects that only inform someone and never block
-/// anything.
+/// for a field the adapter refused because the event does not define it. `UnsupportedEffect`
+/// records only the [`EffectKind`] and not the field's value, so the words name the field's
+/// purpose rather than the specific value. `None` for effects that only inform someone and
+/// never block anything.
 fn control_field_words(kind: EffectKind) -> Option<&'static str> {
     match kind {
         EffectKind::Verdict => Some("a field that decides permission"),
@@ -398,12 +390,11 @@ fn refusal_words(asked: &[&str], returned: &[&str]) -> String {
     parts.join(", and ")
 }
 
-/// The words a refusal reason uses for the fields the adapter refused because the event does
-/// not define them. They are already in `unsupported`; this only names them.
-fn returned_field_words(effects: &HookEffects) -> Vec<&'static str> {
+/// The words a refusal reason uses for control fields the adapter rejected because the event
+/// does not define them.
+fn returned_field_words(adapter_unsupported: &[UnsupportedEffect]) -> Vec<&'static str> {
     let mut returned = Vec::new();
-    for words in effects
-        .unsupported
+    for words in adapter_unsupported
         .iter()
         .filter_map(|unsupported| control_field_words(unsupported.effect))
     {
@@ -476,7 +467,7 @@ fn refuse_unhonorable_effects(
         );
     }
     let refusal = refusal_for(boundary);
-    let returned = returned_field_words(&effects);
+    let returned = returned_field_words(&effects.unsupported);
     let unhonorable = unhonorable_channels(&effects, &refusal, surface, policy);
 
     let reported = effects

@@ -17,8 +17,8 @@ pub const APPROVAL_UNAVAILABLE_PREFIX: &str =
     "Approval unavailable: an agent hook asked for confirmation";
 
 /// Text used when a hook asks to defer an action and nothing could resume it later.
-pub const DEFERRAL_UNSUPPORTED_DENY_REASON: &str = "An agent hook asked to defer this action for later. Resumable deferral is not supported, so \
-     the action was not run.";
+pub const DEFERRAL_UNSUPPORTED_DENY_REASON: &str = "An agent hook asked to defer this action for later. \
+     Resumable deferral is not supported, so the action was not run.";
 
 /// The facts Warp's own permission check produced for an action, before hooks are consulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,13 +121,8 @@ impl PermissionDecision {
     }
 }
 
-/// Composes a merged hook verdict with Warp's permission result. Hooks can only tighten. Warp's
-/// own decision is computed first and is what every verdict starts from: a deny always denies,
-/// an ask adds a confirmation step (or denies where nobody can confirm), a deferral is refused
-/// where nobody could resume it, and an allow or no opinion changes nothing. No verdict can turn
-/// a confirmation or a denial into execution, so the floors Warp's check established are never
-/// crossed. The floors are inputs already so that bounded loosening, when it is added, has named
-/// facts to consult in this one place; nothing reads them yet.
+/// Composes a merged hook verdict with Warp's own permission result so that hooks can only
+/// tighten what Warp decided.
 pub struct HookPermissionPolicy;
 
 impl HookPermissionPolicy {
@@ -187,11 +182,8 @@ impl HookPermissionPolicy {
         decision
     }
 
-    /// What an `ask` becomes. Where someone can answer, it adds a confirmation step unless the
-    /// user already approved this exact revision of the action. Where nobody can answer, asking
-    /// would hang the run or silently proceed, so the action is denied with a reason the model
-    /// can read; that holds even for a revision marked as user-approved, since no approval can
-    /// have come from a person on such a surface.
+    /// Resolves an `Ask` verdict. Headless surfaces deny even when `is_user_initiated` is set,
+    /// because no person can have approved the action on a surface with no one to ask.
     fn compose_ask(
         merged: &MergedEffects,
         run: RunFacts,

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use ai::agent::action::FileEdit;
 use ai::hooks::{
     DenyCause, DispatchOutcome, HookBoundary, HookExecutionHost, HookNotice, HookNoticeKind,
     HookPermissionPolicy, HookReason, HookVerdict, MergedEffects, PermissionDecision,
@@ -11,13 +12,23 @@ use ai::hooks::{
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use warpui::{AppContext, ModelHandle, SingletonEntity};
+use warp_util::path::ShellFamily;
+use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
 use super::{HeadlessAskBehavior, HookRuntime, HookRuntimeEvent};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
+use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::permissions::{
+    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
+    FileWritePermissionDeniedReason,
+};
+use crate::ai::execution_profiles::ActionPermission;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// How many times one action's hook check may start over because the facts it was keyed on
 /// changed underneath it. A hook configuration that keeps changing (a file written in a loop)
@@ -25,8 +36,8 @@ use crate::terminal::model::session::active_session::ActiveSession;
 const MAX_RESTARTS_PER_ACTION: u32 = 3;
 
 /// Reason an action is denied with when its hook check restarted too many times.
-pub(crate) const CONFIGURATION_UNSTABLE_DENY_REASON: &str = "The hook configuration kept changing while this action waited for its hooks, so the \
-     action was not run.";
+pub(crate) const CONFIGURATION_UNSTABLE_DENY_REASON: &str = "The hook configuration kept changing while this action waited for its hooks, so the action \
+     was not run.";
 
 /// What a cached verdict is keyed by. A change to any part of it makes the verdict describe a
 /// different operation, so the hooks run again.
@@ -451,6 +462,252 @@ pub(crate) fn decide(
         PermissionDecision::RequireConfirmation { reason: None } | PermissionDecision::Execute => {}
     }
     decision
+}
+
+/// The facts behind Warp's own permission answer for `action` that no hook may loosen. An action
+/// Warp auto-executes has nothing to loosen, so it has no floors; neither has any family other
+/// than the shell, file edit, and MCP ones. The floors are read from the same permission
+/// functions the per-family auto-execute checks call, so a denylist bypass or a sandbox exemption
+/// is applied exactly as Warp applies it. The functions are called again here rather than read
+/// from the executor that ran them; where that executor answered before reaching them, the
+/// floors still describe the settings and lists as they stand.
+pub(crate) fn permission_floors(
+    action: &AIAgentActionType,
+    conversation_id: &AIConversationId,
+    can_auto_execute: bool,
+    active_session: &ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> PermissionFloors {
+    if can_auto_execute {
+        return PermissionFloors::default();
+    }
+    match action {
+        AIAgentActionType::RequestCommandOutput {
+            command,
+            is_read_only,
+            is_risky,
+            ..
+        } => shell_floors(
+            conversation_id,
+            command,
+            *is_read_only,
+            *is_risky,
+            active_session,
+            terminal_view_id,
+            scope,
+            ctx,
+        ),
+        AIAgentActionType::RequestFileEdits { file_edits, .. } => {
+            file_write_floors(conversation_id, file_edits, terminal_view_id, scope, ctx)
+        }
+        AIAgentActionType::CallMCPTool {
+            server_id, name, ..
+        } => mcp_floors(
+            server_id.as_ref(),
+            McpLookup::Tool { name },
+            terminal_view_id,
+            ctx,
+        ),
+        AIAgentActionType::ReadMCPResource {
+            server_id,
+            name,
+            uri,
+        } => mcp_floors(
+            server_id.as_ref(),
+            McpLookup::Resource {
+                name,
+                uri: uri.as_deref(),
+            },
+            terminal_view_id,
+            ctx,
+        ),
+        AIAgentActionType::WriteToLongRunningShellCommand { .. }
+        | AIAgentActionType::ReadShellCommandOutput { .. }
+        | AIAgentActionType::TransferShellCommandControlToUser { .. }
+        | AIAgentActionType::ReadFiles(_)
+        | AIAgentActionType::UploadArtifact(_)
+        | AIAgentActionType::SearchCodebase(_)
+        | AIAgentActionType::Grep { .. }
+        | AIAgentActionType::FileGlob { .. }
+        | AIAgentActionType::FileGlobV2 { .. }
+        | AIAgentActionType::SuggestNewConversation { .. }
+        | AIAgentActionType::SuggestPrompt(_)
+        | AIAgentActionType::InitProject
+        | AIAgentActionType::OpenCodeReview
+        | AIAgentActionType::ReadDocuments(_)
+        | AIAgentActionType::EditDocuments(_)
+        | AIAgentActionType::CreateDocuments(_)
+        | AIAgentActionType::UseComputer(_)
+        | AIAgentActionType::InsertCodeReviewComments { .. }
+        | AIAgentActionType::RequestComputerUse(_)
+        | AIAgentActionType::StartRecording { .. }
+        | AIAgentActionType::StopRecording { .. }
+        | AIAgentActionType::ReadSkill(_)
+        | AIAgentActionType::FetchConversation { .. }
+        | AIAgentActionType::SendMessageToAgent { .. }
+        | AIAgentActionType::AskUserQuestion { .. }
+        | AIAgentActionType::RunAgents(_)
+        | AIAgentActionType::WaitForEvents { .. } => PermissionFloors::default(),
+    }
+}
+
+/// The floors for a shell command, from `can_autoexecute_command`'s reason. Without a shell type
+/// the command cannot be taken apart for the denylist and Warp does not auto-execute it; the
+/// setting is still a fact.
+#[allow(clippy::too_many_arguments)]
+fn shell_floors(
+    conversation_id: &AIConversationId,
+    command: &str,
+    is_read_only: Option<bool>,
+    is_risky: Option<bool>,
+    active_session: &ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> PermissionFloors {
+    let permissions = BlocklistAIPermissions::as_ref(ctx);
+    let terminal_view_id = Some(terminal_view_id);
+    let Some(escape_char) = active_session
+        .as_ref(ctx)
+        .shell_type(ctx)
+        .map(|shell| ShellFamily::from(shell).escape_char())
+    else {
+        return PermissionFloors {
+            always_ask_setting: permissions.get_execute_commands_setting(
+                terminal_view_id,
+                scope,
+                ctx,
+            ) == ActionPermission::AlwaysAsk,
+            ..Default::default()
+        };
+    };
+    match permissions.can_autoexecute_command(
+        conversation_id,
+        command,
+        escape_char,
+        is_read_only.unwrap_or(false),
+        is_risky,
+        terminal_view_id,
+        scope,
+        ctx,
+    ) {
+        CommandExecutionPermission::Denied(
+            CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted,
+        ) => PermissionFloors {
+            command_denylist_hit: true,
+            ..Default::default()
+        },
+        CommandExecutionPermission::Denied(
+            CommandExecutionPermissionDeniedReason::AlwaysAskEnabled,
+        ) => PermissionFloors {
+            always_ask_setting: true,
+            ..Default::default()
+        },
+        CommandExecutionPermission::Denied(
+            CommandExecutionPermissionDeniedReason::AutonomyForceDisabled
+            | CommandExecutionPermissionDeniedReason::ContainsRedirection
+            | CommandExecutionPermissionDeniedReason::Inconclusive
+            | CommandExecutionPermissionDeniedReason::AgentDecided,
+        )
+        | CommandExecutionPermission::Allowed(_) => PermissionFloors::default(),
+    }
+}
+
+/// The floors for a file edit, from `can_write_files`'s reason.
+fn file_write_floors(
+    conversation_id: &AIConversationId,
+    file_edits: &[FileEdit],
+    terminal_view_id: EntityId,
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> PermissionFloors {
+    let paths = file_edits
+        .iter()
+        .filter_map(|edit| edit.file().map(PathBuf::from))
+        .collect::<Vec<_>>();
+    match BlocklistAIPermissions::as_ref(ctx).can_write_files(
+        conversation_id,
+        &paths,
+        Some(terminal_view_id),
+        scope,
+        ctx,
+    ) {
+        FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath) => {
+            PermissionFloors {
+                protected_write_path: true,
+                ..Default::default()
+            }
+        }
+        FileWritePermission::Denied(FileWritePermissionDeniedReason::AlwaysAskEnabled) => {
+            PermissionFloors {
+                always_ask_setting: true,
+                ..Default::default()
+            }
+        }
+        FileWritePermission::Denied(
+            FileWritePermissionDeniedReason::AutonomyForceDisabled
+            | FileWritePermissionDeniedReason::Inconclusive
+            | FileWritePermissionDeniedReason::AgentDecided,
+        )
+        | FileWritePermission::Allowed(_) => PermissionFloors::default(),
+    }
+}
+
+/// How an MCP action names its server when it carries no installation id.
+enum McpLookup<'a> {
+    Tool { name: &'a str },
+    Resource { name: &'a str, uri: Option<&'a str> },
+}
+
+/// The floors for an MCP call. The server is found the way `can_call_mcp_tool` and
+/// `can_read_mcp_resource` find it (by installation id, else by the tool or resource name),
+/// because those checks answer only yes or no and do not say whether the denylist was why.
+#[cfg(not(target_family = "wasm"))]
+fn mcp_floors(
+    server_id: Option<&uuid::Uuid>,
+    lookup: McpLookup<'_>,
+    terminal_view_id: EntityId,
+    ctx: &AppContext,
+) -> PermissionFloors {
+    let permissions = BlocklistAIPermissions::as_ref(ctx);
+    let manager = TemplatableMCPServerManager::as_ref(ctx);
+    let terminal_view_id = Some(terminal_view_id);
+    let template = server_id
+        .and_then(|id| manager.get_template_uuid(*id))
+        .or_else(|| {
+            let installation = match lookup {
+                McpLookup::Tool { name } => manager.server_from_tool(name.to_owned()),
+                McpLookup::Resource { name, uri } => manager.server_from_resource(name, uri),
+            };
+            installation
+                .copied()
+                .and_then(|id| manager.get_template_uuid(id))
+        });
+    let mcp_server_denylisted = template.is_some_and(|template| {
+        permissions
+            .get_mcp_denylist(ctx, terminal_view_id)
+            .contains(&template)
+    });
+    let always_ask_setting = permissions.get_mcp_permissions_setting(ctx, terminal_view_id)
+        == ActionPermission::AlwaysAsk;
+    PermissionFloors {
+        mcp_server_denylisted,
+        always_ask_setting,
+        ..Default::default()
+    }
+}
+
+/// MCP calls never run on wasm, so the check that would establish a floor never runs either.
+#[cfg(target_family = "wasm")]
+fn mcp_floors(
+    _server_id: Option<&uuid::Uuid>,
+    _lookup: McpLookup<'_>,
+    _terminal_view_id: EntityId,
+    _ctx: &AppContext,
+) -> PermissionFloors {
+    PermissionFloors::default()
 }
 
 /// Marks the action's entry as having announced its confirmation step and says whether this is

@@ -15,12 +15,6 @@ use crate::ai::agent::{AIAgentActionResultType, AIAgentActionType};
 pub(crate) const DENIED_BY_HOOK_PREFIX: &str = "Denied by agent hook: ";
 
 /// The result an action finishes with when a hook denies it before it runs.
-///
-/// A shell command has a result made for this, which carries the reason as a denial. Most other
-/// families have an error or denied variant with free text on the wire, and the reason travels
-/// there with [`DENIED_BY_HOOK_PREFIX`] in front. A family with no text slot finishes with its
-/// cancelled or rejected result, and the reason reaches only the user, through the denial
-/// notice.
 pub(crate) fn denied_result_for(
     action: &AIAgentActionType,
     reason: &str,
@@ -105,8 +99,9 @@ pub(crate) fn denied_result_for(
         AIAgentActionType::RunAgents(_) => {
             AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { reason: message() })
         }
-        // A declined suggestion is the answer the model expects for "no"; a cancellation would
-        // be dropped from the wire.
+        // The remaining families have no wire slot for a denial reason, so the reason reaches
+        // only the user notice. `SuggestNewConversation` finishes `Rejected` because a declined
+        // suggestion is the wire answer for "no" whereas a cancellation is dropped.
         AIAgentActionType::SuggestNewConversation { .. } => {
             AIAgentActionResultType::SuggestNewConversation(SuggestNewConversationResult::Rejected)
         }

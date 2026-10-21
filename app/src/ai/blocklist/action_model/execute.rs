@@ -30,7 +30,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ai::agent::action::FileEdit;
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
@@ -83,7 +82,6 @@ use warp_files::{FileModel, TextFileReadResult};
 use warp_util::file::FileLoadError;
 #[cfg(feature = "local_fs")]
 use warp_util::file_type::is_buffer_binary;
-use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, SpawnableOutput};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -96,20 +94,12 @@ use crate::ai::agent::{
     FileLocations, ReadFilesFailedFile, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::blocklist::hooks::denied_result::denied_result_for;
 use crate::ai::blocklist::hooks::pre_tool::{self, PendingDispatch, PreToolLookup};
 use crate::ai::blocklist::hooks::tool_result;
-use crate::ai::blocklist::permissions::{
-    CommandExecutionPermission, CommandExecutionPermissionDeniedReason, FileWritePermission,
-    FileWritePermissionDeniedReason,
-};
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
-use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::TemplatableMCPServerManager;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
 use crate::server::team_scope::RequestTeamScope;
@@ -242,12 +232,6 @@ pub(super) enum TryExecuteResult {
         reason: NotExecutedReason,
         action: Box<AIAgentAction>,
     },
-}
-
-/// How an MCP action names its server when it carries no installation id.
-enum McpLookup<'a> {
-    Tool { name: &'a str },
-    Resource { name: &'a str, uri: Option<&'a str> },
 }
 
 #[derive(Clone)]
@@ -1092,231 +1076,23 @@ impl BlocklistAIActionExecutor {
         }
     }
 
-    /// The facts behind Warp's own permission answer that no hook may loosen. An action Warp
-    /// auto-executes has nothing to loosen, so it has no floors; neither has any family other
-    /// than the shell, file edit, and MCP ones. The floors are read from the same permission
-    /// functions the per-family `should_autoexecute` checks call, so a denylist bypass or a
-    /// sandbox exemption is applied exactly as Warp applies it. The functions are called again
-    /// here rather than read from the executor that ran them; where that executor answered
-    /// before reaching them, the floors still describe the settings and lists as they stand.
+    /// The facts behind Warp's own permission answer for `input` that no hook may loosen.
     fn permission_floors(
         &self,
         input: ExecuteActionInput,
         can_auto_execute: bool,
         ctx: &ModelContext<Self>,
     ) -> PermissionFloors {
-        if can_auto_execute {
-            return PermissionFloors::default();
-        }
-        match &input.action.action {
-            AIAgentActionType::RequestCommandOutput {
-                command,
-                is_read_only,
-                is_risky,
-                ..
-            } => self.shell_floors(
-                &input.conversation_id,
-                command,
-                *is_read_only,
-                *is_risky,
-                ctx,
-            ),
-            AIAgentActionType::RequestFileEdits { file_edits, .. } => {
-                self.file_write_floors(&input.conversation_id, file_edits, ctx)
-            }
-            AIAgentActionType::CallMCPTool {
-                server_id, name, ..
-            } => self.mcp_floors(server_id.as_ref(), McpLookup::Tool { name }, ctx),
-            AIAgentActionType::ReadMCPResource {
-                server_id,
-                name,
-                uri,
-            } => self.mcp_floors(
-                server_id.as_ref(),
-                McpLookup::Resource {
-                    name,
-                    uri: uri.as_deref(),
-                },
-                ctx,
-            ),
-            AIAgentActionType::WriteToLongRunningShellCommand { .. }
-            | AIAgentActionType::ReadShellCommandOutput { .. }
-            | AIAgentActionType::TransferShellCommandControlToUser { .. }
-            | AIAgentActionType::ReadFiles(_)
-            | AIAgentActionType::UploadArtifact(_)
-            | AIAgentActionType::SearchCodebase(_)
-            | AIAgentActionType::Grep { .. }
-            | AIAgentActionType::FileGlob { .. }
-            | AIAgentActionType::FileGlobV2 { .. }
-            | AIAgentActionType::SuggestNewConversation { .. }
-            | AIAgentActionType::SuggestPrompt(_)
-            | AIAgentActionType::InitProject
-            | AIAgentActionType::OpenCodeReview
-            | AIAgentActionType::ReadDocuments(_)
-            | AIAgentActionType::EditDocuments(_)
-            | AIAgentActionType::CreateDocuments(_)
-            | AIAgentActionType::UseComputer(_)
-            | AIAgentActionType::InsertCodeReviewComments { .. }
-            | AIAgentActionType::RequestComputerUse(_)
-            | AIAgentActionType::StartRecording { .. }
-            | AIAgentActionType::StopRecording { .. }
-            | AIAgentActionType::ReadSkill(_)
-            | AIAgentActionType::FetchConversation { .. }
-            | AIAgentActionType::SendMessageToAgent { .. }
-            | AIAgentActionType::AskUserQuestion { .. }
-            | AIAgentActionType::RunAgents(_)
-            | AIAgentActionType::WaitForEvents { .. } => PermissionFloors::default(),
-        }
-    }
-
-    /// The floors for a shell command, from `can_autoexecute_command`'s reason. Without a shell
-    /// type the command cannot be taken apart for the denylist and Warp does not auto-execute
-    /// it; the setting is still a fact.
-    fn shell_floors(
-        &self,
-        conversation_id: &AIConversationId,
-        command: &str,
-        is_read_only: Option<bool>,
-        is_risky: Option<bool>,
-        ctx: &ModelContext<Self>,
-    ) -> PermissionFloors {
-        let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let terminal_view_id = Some(self.terminal_view_id);
         let scope = (self.team_context_resolver)(ctx);
-        let Some(escape_char) = self
-            .active_session
-            .as_ref(ctx)
-            .shell_type(ctx)
-            .map(|shell| ShellFamily::from(shell).escape_char())
-        else {
-            return PermissionFloors {
-                always_ask_setting: permissions.get_execute_commands_setting(
-                    terminal_view_id,
-                    &scope,
-                    ctx,
-                ) == ActionPermission::AlwaysAsk,
-                ..Default::default()
-            };
-        };
-        match permissions.can_autoexecute_command(
-            conversation_id,
-            command,
-            escape_char,
-            is_read_only.unwrap_or(false),
-            is_risky,
-            terminal_view_id,
+        pre_tool::permission_floors(
+            &input.action.action,
+            &input.conversation_id,
+            can_auto_execute,
+            &self.active_session,
+            self.terminal_view_id,
             &scope,
             ctx,
-        ) {
-            CommandExecutionPermission::Denied(
-                CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted,
-            ) => PermissionFloors {
-                command_denylist_hit: true,
-                ..Default::default()
-            },
-            CommandExecutionPermission::Denied(
-                CommandExecutionPermissionDeniedReason::AlwaysAskEnabled,
-            ) => PermissionFloors {
-                always_ask_setting: true,
-                ..Default::default()
-            },
-            CommandExecutionPermission::Denied(
-                CommandExecutionPermissionDeniedReason::AutonomyForceDisabled
-                | CommandExecutionPermissionDeniedReason::ContainsRedirection
-                | CommandExecutionPermissionDeniedReason::Inconclusive
-                | CommandExecutionPermissionDeniedReason::AgentDecided,
-            )
-            | CommandExecutionPermission::Allowed(_) => PermissionFloors::default(),
-        }
-    }
-
-    /// The floors for a file edit, from `can_write_files`'s reason.
-    fn file_write_floors(
-        &self,
-        conversation_id: &AIConversationId,
-        file_edits: &[FileEdit],
-        ctx: &ModelContext<Self>,
-    ) -> PermissionFloors {
-        let paths = file_edits
-            .iter()
-            .filter_map(|edit| edit.file().map(PathBuf::from))
-            .collect::<Vec<_>>();
-        let scope = (self.team_context_resolver)(ctx);
-        match BlocklistAIPermissions::as_ref(ctx).can_write_files(
-            conversation_id,
-            &paths,
-            Some(self.terminal_view_id),
-            &scope,
-            ctx,
-        ) {
-            FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath) => {
-                PermissionFloors {
-                    protected_write_path: true,
-                    ..Default::default()
-                }
-            }
-            FileWritePermission::Denied(FileWritePermissionDeniedReason::AlwaysAskEnabled) => {
-                PermissionFloors {
-                    always_ask_setting: true,
-                    ..Default::default()
-                }
-            }
-            FileWritePermission::Denied(
-                FileWritePermissionDeniedReason::AutonomyForceDisabled
-                | FileWritePermissionDeniedReason::Inconclusive
-                | FileWritePermissionDeniedReason::AgentDecided,
-            )
-            | FileWritePermission::Allowed(_) => PermissionFloors::default(),
-        }
-    }
-
-    /// The floors for an MCP call. The server is found the way `can_call_mcp_tool` and
-    /// `can_read_mcp_resource` find it (by installation id, else by the tool or resource name),
-    /// because those checks answer only yes or no and do not say whether the denylist was why.
-    #[cfg(not(target_family = "wasm"))]
-    fn mcp_floors(
-        &self,
-        server_id: Option<&uuid::Uuid>,
-        lookup: McpLookup<'_>,
-        ctx: &ModelContext<Self>,
-    ) -> PermissionFloors {
-        let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let manager = TemplatableMCPServerManager::as_ref(ctx);
-        let terminal_view_id = Some(self.terminal_view_id);
-        let template = server_id
-            .and_then(|id| manager.get_template_uuid(*id))
-            .or_else(|| {
-                let installation = match lookup {
-                    McpLookup::Tool { name } => manager.server_from_tool(name.to_owned()),
-                    McpLookup::Resource { name, uri } => manager.server_from_resource(name, uri),
-                };
-                installation
-                    .copied()
-                    .and_then(|id| manager.get_template_uuid(id))
-            });
-        let mcp_server_denylisted = template.is_some_and(|template| {
-            permissions
-                .get_mcp_denylist(ctx, terminal_view_id)
-                .contains(&template)
-        });
-        let always_ask_setting = permissions.get_mcp_permissions_setting(ctx, terminal_view_id)
-            == ActionPermission::AlwaysAsk;
-        PermissionFloors {
-            mcp_server_denylisted,
-            always_ask_setting,
-            ..Default::default()
-        }
-    }
-
-    /// MCP calls never run on wasm, so the check that would establish a floor never runs either.
-    #[cfg(target_family = "wasm")]
-    fn mcp_floors(
-        &self,
-        _server_id: Option<&uuid::Uuid>,
-        _lookup: McpLookup<'_>,
-        _ctx: &ModelContext<Self>,
-    ) -> PermissionFloors {
-        PermissionFloors::default()
+        )
     }
 
     fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {
