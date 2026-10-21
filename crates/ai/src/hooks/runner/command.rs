@@ -233,24 +233,30 @@ async fn run_once(
     // Stop reading the pipes before killing, so a descendant that kept them open cannot keep this
     // future alive.
     drop((exited, stdin_written, stdout_drained, stderr_drained));
-    kill_hook(&mut child, pid);
-    futures::select_biased! {
-        _ = child.status().fuse() => {}
-        _ = Timer::after(REAP_GRACE).fuse() => {
-            log::warn!("hook process {pid} was killed but did not exit within {REAP_GRACE:?}");
+    let exit = match kill_hook(&mut child, pid) {
+        // The hook finished in the moment between the deadline and the kill; its status is the
+        // decision, as it would have been one poll earlier.
+        Some(status) => exit_from_status(Ok(status)),
+        None => {
+            futures::select_biased! {
+                _ = child.status().fuse() => {}
+                _ = Timer::after(REAP_GRACE).fuse() => {
+                    log::warn!(
+                        "hook process {pid} was killed but did not exit within {REAP_GRACE:?}"
+                    );
+                }
+            }
+            interrupted
         }
-    }
-    finish(
-        interrupted,
-        take_bytes(&stdout_bytes),
-        take_bytes(&stderr_bytes),
-    )
+    };
+    finish(exit, take_bytes(&stdout_bytes), take_bytes(&stderr_bytes))
 }
 
 /// Kills the hook and, on Unix, everything else in its process group. The group is signalled
 /// only while the hook itself is known to be alive: once it has been collected its pid, and so
-/// its group id, may already belong to someone else.
-fn kill_hook(child: &mut Child, pid: u32) {
+/// its group id, may already belong to someone else. Returns the exit status when the hook turns
+/// out to have exited already.
+fn kill_hook(child: &mut Child, pid: u32) -> Option<ExitStatus> {
     match child.try_status() {
         Ok(None) => {
             #[cfg(unix)]
@@ -264,11 +270,18 @@ fn kill_hook(child: &mut Child, pid: u32) {
             if let Err(error) = child.kill() {
                 log::debug!("could not kill hook process {pid}: {error}");
             }
+            None
         }
-        Ok(Some(_)) => log::debug!(
-            "hook process {pid} had already exited; anything it left running was not signalled"
-        ),
-        Err(error) => log::debug!("could not check hook process {pid} before killing it: {error}"),
+        Ok(Some(status)) => {
+            log::debug!(
+                "hook process {pid} had already exited; anything it left running was not signalled"
+            );
+            Some(status)
+        }
+        Err(error) => {
+            log::debug!("could not check hook process {pid} before killing it: {error}");
+            None
+        }
     }
 }
 
