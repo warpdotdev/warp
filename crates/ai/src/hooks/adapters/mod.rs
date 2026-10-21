@@ -37,6 +37,8 @@ pub struct ParsedHookConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HookConfigError {
+    #[error("could not read hook configuration: {0}")]
+    Unreadable(String),
     #[error("could not parse hook configuration: {0}")]
     Parse(String),
     #[error("invalid hook configuration: {0}")]
