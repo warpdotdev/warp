@@ -45,10 +45,13 @@ const OBSERVER_EVENTS: [CursorEvent; 7] = [
 ];
 
 fn subject(event: CursorEvent) -> &'static str {
-    event.spec().subject
+    match event.spec().control {
+        ControlEffect::Verdict(rules) => rules.subject,
+        ControlEffect::HaltTurn | ControlEffect::ObserveOnly => {
+            panic!("{} is not a permission hook", event.name())
+        }
+    }
 }
-
-// Exit codes and process failures, for every Phase 1 event.
 
 #[test]
 fn exit_two_blocks_where_the_event_can_block_and_is_a_failure_elsewhere() {
@@ -222,8 +225,6 @@ fn a_cancelled_hook_blocks_where_it_could_have_blocked_regardless_of_policy() {
         }
     }
 }
-
-// Empty and malformed output.
 
 #[test]
 fn empty_output_follows_the_binding_policy() {
@@ -403,8 +404,6 @@ fn stdout_the_runner_cut_off_is_malformed_even_when_what_remains_parses() {
         );
     }
 }
-
-// Permission decisions.
 
 #[test]
 fn allow_deny_and_their_messages_decode_on_every_permission_event() {
@@ -725,10 +724,10 @@ fn control_fields_an_event_does_not_document_are_reported_and_the_rest_logged() 
     );
 }
 
-/// A control field the event does not define is reported only when its value asks for
-/// something. Claude-shaped output carries `continue: true` as a matter of course; a hook that
-/// copies it onto a shell hook has not asked to stop anything, and the dispatcher would
-/// otherwise deny the command for it.
+/// A control field the event does not define is reported only when its value asks for something.
+/// Claude-shaped output carries `continue: true` as a matter of course; a hook that copies it onto
+/// a shell hook has not asked to stop anything, and the dispatcher would otherwise deny the command
+/// for it.
 #[test]
 fn undocumented_control_fields_whose_values_ask_for_nothing_are_only_logged() {
     let allow_with_continue = decode(
@@ -781,8 +780,6 @@ fn undocumented_control_fields_whose_values_ask_for_nothing_are_only_logged() {
     assert_eq!(wrong_type.unsupported.len(), 1);
     assert_eq!(wrong_type.unsupported[0].effect, EffectKind::HaltTurn);
 }
-
-// Context and environment.
 
 #[test]
 fn additional_context_is_model_context_where_documented() {
@@ -864,8 +861,6 @@ fn post_tool_use_reads_the_mcp_output_replacement() {
         HookEffects::default()
     );
 }
-
-// Prompt submission and follow-ups.
 
 #[test]
 fn before_submit_prompt_halts_on_continue_false() {
@@ -949,8 +944,6 @@ fn stop_reads_the_follow_up_with_the_bindings_loop_limit() {
     );
 }
 
-// Claude's output shape.
-
 #[test]
 fn claude_shaped_output_is_translated_on_the_events_cursor_documents() {
     let fixture: serde_json::Value = serde_json::from_str(CLAUDE_SHAPE_OUTPUT).expect("JSON");
@@ -1016,8 +1009,6 @@ fn claude_shaped_output_is_translated_on_the_events_cursor_documents() {
     );
 }
 
-// Strict mode.
-
 #[test]
 fn strict_mode_turns_every_failure_of_a_blocking_hook_into_a_block() {
     for event in PERMISSION_EVENTS {
@@ -1054,8 +1045,6 @@ fn strict_mode_turns_every_failure_of_a_blocking_hook_into_a_block() {
         );
     }
 }
-
-// Text handling and fixtures.
 
 #[test]
 fn control_characters_are_removed_from_messages() {

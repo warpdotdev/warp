@@ -50,8 +50,7 @@ impl ParsedDefinition {
     }
 }
 
-/// A definition's `matcher`, compiled once while the file is validated so activation can reuse
-/// it.
+/// A definition's `matcher`, compiled once while the file is validated so activation can reuse it.
 #[derive(Clone)]
 pub(super) enum ParsedMatcher {
     /// `""` or `"*"`, which match everything and are not regexes.
@@ -135,7 +134,6 @@ enum ValidatedDefinition {
     Skipped(String),
 }
 
-/// Parses the raw file bytes into the JSON document and the definitions the adapter reads.
 pub(super) fn parse_cursor_file(
     bytes: &[u8],
 ) -> Result<(serde_json::Value, ParsedCursorFile), HookConfigError> {
@@ -145,7 +143,6 @@ pub(super) fn parse_cursor_file(
     Ok((document, parsed))
 }
 
-/// Reads the definitions out of an already-parsed JSON document.
 pub(super) fn parse_cursor_document(
     document: &serde_json::Value,
 ) -> Result<ParsedCursorFile, HookConfigError> {

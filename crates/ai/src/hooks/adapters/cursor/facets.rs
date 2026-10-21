@@ -1,8 +1,7 @@
 //! Views of an envelope payload for the shell and MCP facets of the tool boundaries. A facet is
 //! one vendor event that projects onto a shared boundary and sees only part of its payload
 //! (architecture.md §4.1): Cursor's shell and MCP events sit beside `preToolUse` and
-//! `postToolUse` on `tool.pre` and `tool.result`. Matching and encoding both pull the same pieces
-//! out of Warp's action and result types, so they share these views.
+//! `postToolUse` on `tool.pre` and `tool.result`.
 
 use chrono::{DateTime, Local};
 use rmcp::model::CallToolResult;
@@ -14,7 +13,6 @@ use crate::agent::action_result::{
 };
 use crate::hooks::model::HookPayload;
 
-/// The model's shell command before it runs.
 pub(super) fn pending_shell_command(payload: &HookPayload) -> Option<&str> {
     match payload {
         HookPayload::ToolPre {
@@ -125,7 +123,6 @@ pub(super) fn finished_shell_command(payload: &HookPayload) -> Option<FinishedSh
     }
 }
 
-/// An MCP tool call, before or after it ran.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct McpToolCall<'a> {
     pub server_id: Option<Uuid>,

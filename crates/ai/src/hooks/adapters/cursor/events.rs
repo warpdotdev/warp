@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use strum::EnumCount as _;
 use strum_macros::EnumCount;
 
 use super::config::ParsedDefinition;
@@ -71,9 +72,7 @@ impl CursorEvent {
 }
 
 /// The value a definition's `matcher` is tested against when its event fires. Finer than the
-/// shared `MatcherTarget` it is reported as: the adapter must tell an MCP tool's bare name from
-/// the canonical `MCP:<tool>` (both are `MatcherTarget::ToolName`) and must know which events have
-/// nothing to match (`Everything`).
+/// shared `MatcherTarget` so the adapter can distinguish variants that report the same target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MatchedValue {
     /// The canonical tool name (`Shell`, `Read`, `MCP:<tool>`, and Warp's own names).
@@ -94,11 +93,59 @@ pub(super) enum MatchedValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ControlEffect {
     /// The hook returns a permission decision.
-    Verdict,
+    Verdict(VerdictRules),
     /// The hook can stop a prompt from being sent.
     HaltTurn,
     /// Nothing the hook returns changes what the agent does.
     ObserveOnly,
+}
+
+impl ControlEffect {
+    /// Cursor says output that does not fit a permission hook's schema blocks; it states no rule
+    /// for the other events, so they follow `failClosed`.
+    pub(super) fn malformed_output(self) -> MalformedOutputPolicy {
+        match self {
+            Self::Verdict(_) => MalformedOutputPolicy::Deny,
+            Self::HaltTurn | Self::ObserveOnly => MalformedOutputPolicy::FollowFailurePolicy,
+        }
+    }
+
+    /// Silence is a missing decision where the hook decides something, and the normal answer
+    /// where it only observes or may request a follow-up.
+    pub(super) fn empty_output(self) -> EmptyOutputPolicy {
+        match self {
+            Self::Verdict(_) | Self::HaltTurn => EmptyOutputPolicy::FollowFailurePolicy,
+            Self::ObserveOnly => EmptyOutputPolicy::NoOpinion,
+        }
+    }
+}
+
+/// What a permission hook's output means beyond `allow` and `deny`, which every permission hook
+/// reads the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VerdictRules {
+    /// The noun Warp's own denial reasons use for what was blocked, as in "so the command was
+    /// denied".
+    pub subject: &'static str,
+    /// Cursor documents `user_message` on this event as shown only when the hook denies, so on
+    /// an allow it is dropped. The shell and MCP hooks document it as "shown in client" with no
+    /// such condition.
+    pub user_message_on_deny_only: bool,
+    pub ask: AskRule,
+}
+
+/// What `permission: "ask"` means on a permission hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AskRule {
+    /// The user is asked, as Cursor documents for the shell and MCP hooks.
+    Honor,
+    /// Cursor accepts the value but does not enforce it, so it is no opinion unless Warp's strict
+    /// hook policy is on.
+    IgnoreUnlessStrict,
+    /// Cursor documents `ask` as a denial on this event.
+    Deny,
+    /// Cursor's schema for the event has no `ask`, so it is a schema mismatch.
+    NotInSchema,
 }
 
 /// What the adapter knows about one event.
@@ -118,28 +165,10 @@ pub(super) struct CursorEventSpec {
     pub documented_output: &'static [&'static str],
     /// The effect channels those fields feed.
     pub may_produce: &'static [EffectKind],
-    pub malformed_output: MalformedOutputPolicy,
-    pub empty_output: EmptyOutputPolicy,
-    /// Cursor documents `user_message` on this event as shown only when the hook denies, so on
-    /// an allow it is dropped. The shell and MCP hooks document it as "shown in client" with no
-    /// such condition.
-    pub user_message_on_deny_only: bool,
-    /// The noun Warp's own denial reasons use for what was blocked, as in "so the command was
-    /// denied".
-    pub subject: &'static str,
+    pub control: ControlEffect,
 }
 
 impl CursorEventSpec {
-    pub(super) fn control(&self) -> ControlEffect {
-        if self.may_produce.contains(&EffectKind::Verdict) {
-            ControlEffect::Verdict
-        } else if self.may_produce.contains(&EffectKind::HaltTurn) {
-            ControlEffect::HaltTurn
-        } else {
-            ControlEffect::ObserveOnly
-        }
-    }
-
     pub(super) fn may_continue(&self) -> bool {
         self.may_produce.contains(&EffectKind::Continuation)
     }
@@ -172,8 +201,8 @@ impl CursorEventSpec {
             } else {
                 FailurePolicy::FailOpen
             },
-            malformed_output: self.malformed_output,
-            empty_output: self.empty_output,
+            malformed_output: self.control.malformed_output(),
+            empty_output: self.control.empty_output(),
             matcher_target: self.matcher_target(),
             handler: HandlerKind::Command,
         }
@@ -195,7 +224,7 @@ const FOLLOW_UP_OUTPUT: &[&str] = &[
 
 /// Cursor's events, in the order its reference lists them. Bindings from one source are declared
 /// in this order, so two events that project onto the same boundary merge in a fixed order.
-pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
+pub(super) static CURSOR_EVENTS: [CursorEventSpec; CursorEvent::COUNT] = [
     CursorEventSpec {
         event: CursorEvent::SessionStart,
         name: "sessionStart",
@@ -204,10 +233,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Everything,
         documented_output: &["env", "additional_context", "continue", "user_message"],
         may_produce: &[EffectKind::SessionEnv, EffectKind::ModelContext],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the session",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::SessionEnd,
@@ -217,10 +243,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Everything,
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the session",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::PreToolUse,
@@ -240,10 +263,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
             EffectKind::UserNotice,
             EffectKind::ReplacementInput,
         ],
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: true,
-        subject: "the tool call",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the tool call",
+            user_message_on_deny_only: true,
+            ask: AskRule::IgnoreUnlessStrict,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::PostToolUse,
@@ -253,10 +277,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::ToolName,
         documented_output: &["updated_mcp_tool_output", "additional_context"],
         may_produce: &[EffectKind::ReplacementResult, EffectKind::ModelContext],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the tool result",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::PostToolUseFailure,
@@ -266,10 +287,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::ToolName,
         documented_output: &["additional_context"],
         may_produce: &[EffectKind::ModelContext],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the tool result",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::SubagentStart,
@@ -279,10 +297,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::SubagentType,
         documented_output: &["permission", "user_message"],
         may_produce: PERMISSION_EFFECTS,
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: true,
-        subject: "the subagent",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the subagent",
+            user_message_on_deny_only: true,
+            ask: AskRule::Deny,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::SubagentStop,
@@ -292,10 +311,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::SubagentType,
         documented_output: FOLLOW_UP_OUTPUT,
         may_produce: &[EffectKind::Continuation],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the subagent",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::BeforeShellExecution,
@@ -305,10 +321,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::CommandText,
         documented_output: PERMISSION_OUTPUT,
         may_produce: PERMISSION_EFFECTS,
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: false,
-        subject: "the command",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the command",
+            user_message_on_deny_only: false,
+            ask: AskRule::Honor,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::AfterShellExecution,
@@ -318,10 +335,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::CommandText,
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the command",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::BeforeMcpExecution,
@@ -331,10 +345,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::McpToolName,
         documented_output: PERMISSION_OUTPUT,
         may_produce: PERMISSION_EFFECTS,
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: false,
-        subject: "the MCP tool call",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the MCP tool call",
+            user_message_on_deny_only: false,
+            ask: AskRule::Honor,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::AfterMcpExecution,
@@ -344,10 +359,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::McpToolName,
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the MCP tool call",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::BeforeReadFile,
@@ -357,10 +369,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("Read"),
         documented_output: &["permission", "user_message"],
         may_produce: PERMISSION_EFFECTS,
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: true,
-        subject: "the file read",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the file read",
+            user_message_on_deny_only: true,
+            ask: AskRule::NotInSchema,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::AfterFileEdit,
@@ -370,10 +383,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("Write"),
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the file edit",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::BeforeSubmitPrompt,
@@ -383,10 +393,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("UserPromptSubmit"),
         documented_output: &["continue", "user_message"],
         may_produce: &[EffectKind::HaltTurn, EffectKind::UserNotice],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: false,
-        subject: "the prompt",
+        control: ControlEffect::HaltTurn,
     },
     CursorEventSpec {
         event: CursorEvent::PreCompact,
@@ -396,10 +403,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Everything,
         documented_output: &["user_message"],
         may_produce: &[EffectKind::UserNotice],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the compaction",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::Stop,
@@ -409,10 +413,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("Stop"),
         documented_output: FOLLOW_UP_OUTPUT,
         may_produce: &[EffectKind::Continuation],
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the turn",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::AfterAgentResponse,
@@ -422,10 +423,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("AgentResponse"),
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the response",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::AfterAgentThought,
@@ -435,10 +433,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("AgentThought"),
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the reasoning",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::BeforeTabFileRead,
@@ -448,10 +443,11 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("TabRead"),
         documented_output: &["permission"],
         may_produce: &[EffectKind::Verdict],
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        user_message_on_deny_only: false,
-        subject: "the file read",
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the file read",
+            user_message_on_deny_only: false,
+            ask: AskRule::NotInSchema,
+        }),
     },
     CursorEventSpec {
         event: CursorEvent::AfterTabFileEdit,
@@ -461,10 +457,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Literal("TabWrite"),
         documented_output: NO_OUTPUT,
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the file edit",
+        control: ControlEffect::ObserveOnly,
     },
     CursorEventSpec {
         event: CursorEvent::WorkspaceOpen,
@@ -474,10 +467,7 @@ pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [
         matched_value: MatchedValue::Everything,
         documented_output: &["pluginPaths"],
         may_produce: NO_EFFECTS,
-        malformed_output: MalformedOutputPolicy::FollowFailurePolicy,
-        empty_output: EmptyOutputPolicy::NoOpinion,
-        user_message_on_deny_only: false,
-        subject: "the workspace",
+        control: ControlEffect::ObserveOnly,
     },
 ];
 

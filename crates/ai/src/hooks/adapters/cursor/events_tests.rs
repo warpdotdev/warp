@@ -171,10 +171,18 @@ fn only_the_six_permission_hooks_deny_on_malformed_output() {
         } else {
             MalformedOutputPolicy::FollowFailurePolicy
         };
-        assert_eq!(spec.malformed_output, expected, "{}", spec.name);
+        assert_eq!(
+            spec.capabilities(false).malformed_output,
+            expected,
+            "{}",
+            spec.name
+        );
     }
     assert_eq!(
-        CursorEvent::BeforeSubmitPrompt.spec().malformed_output,
+        CursorEvent::BeforeSubmitPrompt
+            .spec()
+            .capabilities(false)
+            .malformed_output,
         MalformedOutputPolicy::FollowFailurePolicy,
         "beforeSubmitPrompt follows failClosed because Cursor's rule is unstated"
     );
@@ -182,57 +190,84 @@ fn only_the_six_permission_hooks_deny_on_malformed_output() {
 
 #[test]
 fn empty_output_is_a_failure_only_where_the_hook_decides_something() {
+    let permission_hooks = HashSet::from(PERMISSION_HOOKS);
     for spec in &CURSOR_EVENTS {
-        let expected = match spec.control() {
-            ControlEffect::Verdict | ControlEffect::HaltTurn => {
-                EmptyOutputPolicy::FollowFailurePolicy
-            }
-            ControlEffect::ObserveOnly => EmptyOutputPolicy::NoOpinion,
+        let expected = if permission_hooks.contains(&spec.event)
+            || spec.event == CursorEvent::BeforeSubmitPrompt
+        {
+            EmptyOutputPolicy::FollowFailurePolicy
+        } else {
+            EmptyOutputPolicy::NoOpinion
         };
-        assert_eq!(spec.empty_output, expected, "{}", spec.name);
+        assert_eq!(
+            spec.capabilities(false).empty_output,
+            expected,
+            "{}",
+            spec.name
+        );
     }
 }
 
 #[test]
 fn control_effects_follow_the_documented_output() {
+    for spec in &CURSOR_EVENTS {
+        let expected_verdict = spec.may_produce.contains(&EffectKind::Verdict);
+        let expected_halt = spec.may_produce.contains(&EffectKind::HaltTurn);
+        match spec.control {
+            ControlEffect::Verdict(_) => assert!(expected_verdict, "{}", spec.name),
+            ControlEffect::HaltTurn => assert!(expected_halt, "{}", spec.name),
+            ControlEffect::ObserveOnly => {
+                assert!(!expected_verdict && !expected_halt, "{}", spec.name);
+            }
+        }
+    }
     for event in PERMISSION_HOOKS {
-        assert_eq!(
-            event.spec().control(),
-            ControlEffect::Verdict,
+        assert!(
+            matches!(event.spec().control, ControlEffect::Verdict(_)),
             "{}",
             event.name()
         );
     }
     assert_eq!(
-        CursorEvent::BeforeSubmitPrompt.spec().control(),
+        CursorEvent::BeforeSubmitPrompt.spec().control,
         ControlEffect::HaltTurn
     );
-    for event in [
-        CursorEvent::SessionStart,
-        CursorEvent::SessionEnd,
-        CursorEvent::PostToolUse,
-        CursorEvent::PostToolUseFailure,
-        CursorEvent::SubagentStop,
-        CursorEvent::AfterShellExecution,
-        CursorEvent::AfterMcpExecution,
-        CursorEvent::AfterFileEdit,
-        CursorEvent::PreCompact,
-        CursorEvent::Stop,
-        CursorEvent::AfterAgentResponse,
-        CursorEvent::AfterAgentThought,
-        CursorEvent::AfterTabFileEdit,
-        CursorEvent::WorkspaceOpen,
-    ] {
-        assert_eq!(
-            event.spec().control(),
-            ControlEffect::ObserveOnly,
-            "{}",
-            event.name()
-        );
-    }
+    assert_eq!(
+        CURSOR_EVENTS
+            .iter()
+            .filter(|spec| spec.control == ControlEffect::ObserveOnly)
+            .count(),
+        14
+    );
     assert!(CursorEvent::Stop.spec().may_continue());
     assert!(CursorEvent::SubagentStop.spec().may_continue());
     assert!(!CursorEvent::PreToolUse.spec().may_continue());
+}
+
+#[test]
+fn permission_hooks_carry_their_ask_and_user_message_rules() {
+    let expected = [
+        (CursorEvent::BeforeShellExecution, AskRule::Honor, false),
+        (CursorEvent::BeforeMcpExecution, AskRule::Honor, false),
+        (CursorEvent::PreToolUse, AskRule::IgnoreUnlessStrict, true),
+        (CursorEvent::SubagentStart, AskRule::Deny, true),
+        (CursorEvent::BeforeReadFile, AskRule::NotInSchema, true),
+        (CursorEvent::BeforeTabFileRead, AskRule::NotInSchema, false),
+    ];
+    assert_eq!(expected.len(), PERMISSION_HOOKS.len());
+    for (event, ask, user_message_on_deny_only) in expected {
+        let ControlEffect::Verdict(rules) = event.spec().control else {
+            panic!("{} is a permission hook", event.name());
+        };
+        assert_eq!(rules.ask, ask, "{}", event.name());
+        assert_eq!(
+            rules.user_message_on_deny_only,
+            user_message_on_deny_only,
+            "{}",
+            event.name()
+        );
+        assert!(rules.subject.starts_with("the "), "{}", event.name());
+    }
 }
 
 #[test]

@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Value};
 
-use super::events::{ControlEffect, CursorEvent, CursorEventSpec};
+use super::events::{AskRule, ControlEffect, CursorEvent, CursorEventSpec, VerdictRules};
 use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
 use crate::hooks::model::{
     ContinuationRequest, EffectKind, EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason,
@@ -17,7 +17,6 @@ use crate::hooks::model::{
 };
 use crate::hooks::runner::{HookProcessOutcome, ProcessExit};
 
-/// Decodes `outcome` for `binding`, a definition of `spec`'s event.
 pub(super) fn decode_output(
     spec: &CursorEventSpec,
     binding: &DeclaredBinding,
@@ -27,8 +26,7 @@ pub(super) fn decode_output(
     let decoder = Decoder {
         spec,
         binding,
-        control: spec.control(),
-        strict: policy.strict && spec.control() != ControlEffect::ObserveOnly,
+        strict: policy.strict && !matches!(spec.control, ControlEffect::ObserveOnly),
     };
     match &outcome.exit {
         ProcessExit::Code(2) => decoder.blocked_by_exit_two(&outcome.stdout),
@@ -53,12 +51,18 @@ type Decoded = Result<HookEffects, Malformed>;
 struct Decoder<'a> {
     spec: &'a CursorEventSpec,
     binding: &'a DeclaredBinding,
-    control: ControlEffect,
     /// The strict hook policy applies to this binding: it can block, and the setting is on.
     strict: bool,
 }
 
 impl Decoder<'_> {
+    fn verdict_rules(&self) -> Option<VerdictRules> {
+        match self.spec.control {
+            ControlEffect::Verdict(rules) => Some(rules),
+            ControlEffect::HaltTurn | ControlEffect::ObserveOnly => None,
+        }
+    }
+
     fn failure_policy(&self) -> FailurePolicy {
         if self.strict {
             FailurePolicy::FailClosed
@@ -79,8 +83,8 @@ impl Decoder<'_> {
         // Exit 2 may still carry messages; a script that printed nothing or something else gets
         // the default reason.
         let output = parse_object(stdout).unwrap_or_default();
-        match self.control {
-            ControlEffect::Verdict => {
+        match self.spec.control {
+            ControlEffect::Verdict(_) => {
                 let (agent_message, user_message) =
                     self.permission_messages(&output).unwrap_or((None, None));
                 let mut effects =
@@ -103,8 +107,8 @@ impl Decoder<'_> {
         }
     }
 
-    /// The configured command, cleaned the way hook messages are, for Warp-written reasons. A
-    /// command that is nothing but control characters is named by its binding id instead.
+    /// The configured command with control characters stripped, or the binding id if nothing
+    /// printable remains.
     fn command(&self) -> String {
         clean_text(&self.binding.command).unwrap_or_else(|| self.binding.id.to_string())
     }
@@ -194,53 +198,39 @@ impl Decoder<'_> {
         Ok(effects)
     }
 
-    /// What `permission: "ask"` means depends on the event: Cursor honors it on the shell and
-    /// MCP hooks, ignores it on `preToolUse` (unless Warp's strict policy is on), treats it as a
-    /// denial on `subagentStart`, and does not accept it at all on the file-read hooks.
     fn ask_effects(&self, agent_message: Option<String>, user_message: Option<String>) -> Decoded {
-        match self.spec.event {
-            CursorEvent::BeforeShellExecution | CursorEvent::BeforeMcpExecution => {
+        let Some(rules) = self.verdict_rules() else {
+            return Err(Malformed);
+        };
+        match rules.ask {
+            AskRule::Honor => {
                 Ok(self.verdict_effects(HookVerdict::Ask, agent_message, user_message))
             }
-            CursorEvent::PreToolUse => {
+            AskRule::IgnoreUnlessStrict => {
                 if self.strict {
                     return Ok(self.verdict_effects(HookVerdict::Ask, agent_message, user_message));
                 }
                 log::info!(
-                    "hook {} answered ask on preToolUse, which Cursor does not enforce; it was \
-                     ignored",
-                    self.binding.id
+                    "hook {} answered ask on {}, which Cursor does not enforce; it was ignored",
+                    self.binding.id,
+                    self.spec.name
                 );
                 Ok(self.verdict_effects(HookVerdict::NoOpinion, agent_message, user_message))
             }
-            CursorEvent::SubagentStart => {
+            AskRule::Deny => {
                 let mut effects =
                     self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
                 effects.reasons.insert(
                     0,
                     self.reason(format!(
-                        "Hook {} answered ask, which subagentStart treats as deny.",
-                        self.command()
+                        "Hook {} answered ask, which {} treats as deny.",
+                        self.command(),
+                        self.spec.name
                     )),
                 );
                 Ok(effects)
             }
-            CursorEvent::BeforeReadFile | CursorEvent::BeforeTabFileRead => Err(Malformed),
-            CursorEvent::SessionStart
-            | CursorEvent::SessionEnd
-            | CursorEvent::PostToolUse
-            | CursorEvent::PostToolUseFailure
-            | CursorEvent::SubagentStop
-            | CursorEvent::AfterShellExecution
-            | CursorEvent::AfterMcpExecution
-            | CursorEvent::AfterFileEdit
-            | CursorEvent::BeforeSubmitPrompt
-            | CursorEvent::PreCompact
-            | CursorEvent::Stop
-            | CursorEvent::AfterAgentResponse
-            | CursorEvent::AfterAgentThought
-            | CursorEvent::AfterTabFileEdit
-            | CursorEvent::WorkspaceOpen => Err(Malformed),
+            AskRule::NotInSchema => Err(Malformed),
         }
     }
 
@@ -288,7 +278,10 @@ impl Decoder<'_> {
                 (None, None) => {}
             },
             HookVerdict::Allow | HookVerdict::NoOpinion | HookVerdict::Defer => {
-                if self.spec.user_message_on_deny_only {
+                let deny_only = self
+                    .verdict_rules()
+                    .is_some_and(|rules| rules.user_message_on_deny_only);
+                if deny_only {
                     if user_message.is_some() {
                         log::info!(
                             "hook {} set user_message without denying; {} shows it only on a \
@@ -423,33 +416,36 @@ impl Decoder<'_> {
             if self.spec.documented_output.contains(&field.as_str()) {
                 continue;
             }
-            let Some(effect) = control_effect_of_field(field) else {
-                log::warn!(
-                    "hook {} returned {field}, which {} does not use; it was ignored",
-                    self.binding.id,
-                    self.spec.name
-                );
-                continue;
+            let effect = match classify_undocumented_control(field, value) {
+                None => {
+                    log::warn!(
+                        "hook {} returned {field}, which {} does not use; it was ignored",
+                        self.binding.id,
+                        self.spec.name
+                    );
+                    continue;
+                }
+                Some(UndocumentedControl::NoOp) => {
+                    log::info!(
+                        "hook {} returned {field}: {value}, which {} does not use and which asks \
+                         for nothing; it was ignored",
+                        self.binding.id,
+                        self.spec.name
+                    );
+                    continue;
+                }
+                Some(UndocumentedControl::Active(effect)) => effect,
             };
-            if asks_for_nothing(field, value) {
-                log::info!(
-                    "hook {} returned {field}: {value}, which {} does not use and which asks for \
-                     nothing; it was ignored",
-                    self.binding.id,
-                    self.spec.name
-                );
-                continue;
-            }
-            let reason = if effect == EffectKind::ReplacementInput
-                && self.control == ControlEffect::Verdict
-            {
-                format!(
+            let rewrite_on_permission_hook = (effect == EffectKind::ReplacementInput)
+                .then(|| self.verdict_rules())
+                .flatten();
+            let reason = match rewrite_on_permission_hook {
+                Some(rules) => format!(
                     "{} does not document updated_input, and a rewrite cannot be honored, so {} \
                      was denied instead of rewritten",
-                    self.spec.name, self.spec.subject
-                )
-            } else {
-                format!("{} does not use {field}; it was ignored", self.spec.name)
+                    self.spec.name, rules.subject
+                ),
+                None => format!("{} does not use {field}; it was ignored", self.spec.name),
             };
             unsupported.push(UnsupportedEffect {
                 binding: self.binding.id.clone(),
@@ -461,8 +457,8 @@ impl Decoder<'_> {
     }
 
     fn malformed(&self) -> HookEffects {
-        let what_happened = match self.control {
-            ControlEffect::Verdict => "printed output that is not a valid permission decision",
+        let what_happened = match self.spec.control {
+            ControlEffect::Verdict(_) => "printed output that is not a valid permission decision",
             ControlEffect::HaltTurn => "printed output that is not a valid response",
             ControlEffect::ObserveOnly => "printed output that does not fit the event",
         };
@@ -484,10 +480,10 @@ impl Decoder<'_> {
     /// prompt where it decides submission, and nothing where it only observes.
     fn block(&self, what_happened: &str) -> HookEffects {
         let command = self.command();
-        match self.control {
-            ControlEffect::Verdict => self.deny(format!(
+        match self.spec.control {
+            ControlEffect::Verdict(rules) => self.deny(format!(
                 "Hook {command} {what_happened}, so {} was denied.",
-                self.spec.subject
+                rules.subject
             )),
             ControlEffect::HaltTurn => self.halt(format!(
                 "Hook {command} {what_happened}, so the prompt was not sent."
@@ -539,34 +535,46 @@ fn parse_object(stdout: &[u8]) -> Option<Map<String, Value>> {
     }
 }
 
-/// The output keys that carry a control effect on the events Cursor defines them for. On an
-/// event that does not define one, the hook is asking for an effect the binding cannot produce.
-fn control_effect_of_field(field: &str) -> Option<EffectKind> {
-    match field {
-        "permission" | "hookSpecificOutput" => Some(EffectKind::Verdict),
-        "updated_input" => Some(EffectKind::ReplacementInput),
-        "updated_mcp_tool_output" => Some(EffectKind::ReplacementResult),
-        "continue" => Some(EffectKind::HaltTurn),
-        "followup_message" | "decision" => Some(EffectKind::Continuation),
-        _ => None,
-    }
+/// An output key that carries a control effect on the events Cursor defines it for, found on an
+/// event that does not.
+enum UndocumentedControl {
+    /// The value asks for the effect, which this binding cannot produce.
+    Active(EffectKind),
+    /// The value is the one that means "nothing to do" where the key is defined, so the hook has
+    /// not asked for anything.
+    NoOp,
 }
 
-/// Whether a control field carries the value that means "nothing to do" on the events that
-/// define it: `continue: true`, `permission: "allow"`, a `decision` other than `"block"`, or an
-/// empty `followup_message`. Claude-shaped output routinely carries `continue: true`, and a
-/// hook that copies it onto an event that does not define the field has not asked for anything.
-/// A rewrite, a result replacement, and Claude's nested object always ask for something.
-fn asks_for_nothing(field: &str, value: &Value) -> bool {
-    match field {
-        "continue" => value == &Value::Bool(true),
-        "permission" => value == &Value::String("allow".to_owned()),
-        "decision" => value.as_str().is_some_and(|decision| decision != "block"),
-        "followup_message" => value
-            .as_str()
-            .is_some_and(|message| clean_text(message).is_none()),
-        _ => false,
-    }
+/// Classifies an undocumented output key by the control effect it names. Claude-shaped output
+/// routinely carries `continue: true`, and a hook that copies it onto an event that does not
+/// define the key has not asked for anything, so the no-op values (`continue: true`,
+/// `permission: "allow"`, a `decision` other than `"block"`, a blank `followup_message`) are told
+/// apart from the asking ones. A rewrite, a result replacement, and Claude's nested object always
+/// ask for something.
+fn classify_undocumented_control(field: &str, value: &Value) -> Option<UndocumentedControl> {
+    let (effect, is_no_op) = match field {
+        "permission" => (EffectKind::Verdict, value.as_str() == Some("allow")),
+        "hookSpecificOutput" => (EffectKind::Verdict, false),
+        "updated_input" => (EffectKind::ReplacementInput, false),
+        "updated_mcp_tool_output" => (EffectKind::ReplacementResult, false),
+        "continue" => (EffectKind::HaltTurn, value.as_bool() == Some(true)),
+        "followup_message" => (
+            EffectKind::Continuation,
+            value
+                .as_str()
+                .is_some_and(|message| clean_text(message).is_none()),
+        ),
+        "decision" => (
+            EffectKind::Continuation,
+            value.as_str().is_some_and(|decision| decision != "block"),
+        ),
+        _ => return None,
+    };
+    Some(if is_no_op {
+        UndocumentedControl::NoOp
+    } else {
+        UndocumentedControl::Active(effect)
+    })
 }
 
 /// A string field, cleaned for display. A present field that is not a string is malformed; an
@@ -579,8 +587,7 @@ fn text_field(output: &Map<String, Value>, field: &str) -> Result<Option<String>
     }
 }
 
-/// A string field compared as written. Used for the fields that name a decision, so a value
-/// that only cleans up to a known word is still a schema mismatch.
+/// Reads an optional string field verbatim, without trimming or stripping control characters.
 fn raw_text_field(output: &Map<String, Value>, field: &str) -> Result<Option<String>, Malformed> {
     match output.get(field) {
         None => Ok(None),
