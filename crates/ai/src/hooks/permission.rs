@@ -64,20 +64,28 @@ impl HookPermissionPolicy {
         }
         match merged.verdict {
             HookVerdict::Deny => PermissionDecision::Deny {
-                reason: merged
-                    .reasons
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| HookReason {
-                        text: DEFAULT_DENY_REASON.to_owned(),
-                        binding: merged.verdict_binding.clone(),
-                    }),
+                reason: deny_reason(merged),
             },
             HookVerdict::NoOpinion | HookVerdict::Allow | HookVerdict::Ask | HookVerdict::Defer => {
                 warp.decision_without_hooks()
             }
         }
     }
+}
+
+/// The reason to report for a merged deny: the denying binding's own reason when it gave one,
+/// otherwise the first reason any binding gave, otherwise the default text.
+fn deny_reason(merged: &MergedEffects) -> HookReason {
+    merged
+        .reasons
+        .iter()
+        .find(|reason| reason.binding.is_some() && reason.binding == merged.verdict_binding)
+        .or_else(|| merged.reasons.first())
+        .cloned()
+        .unwrap_or_else(|| HookReason {
+            text: DEFAULT_DENY_REASON.to_owned(),
+            binding: merged.verdict_binding.clone(),
+        })
 }
 
 #[cfg(test)]

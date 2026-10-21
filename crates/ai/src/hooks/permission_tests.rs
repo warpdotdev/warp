@@ -57,6 +57,40 @@ fn deny_denies_for_every_warp_result_including_user_initiated() {
 }
 
 #[test]
+fn a_deny_is_reported_with_the_denying_bindings_reason() {
+    let allowing = test_binding_id(test_source_id("s"), "tool.pre", 0);
+    let denying = test_binding_id(test_source_id("s"), "tool.pre", 1);
+    let effects = MergedEffects {
+        verdict: HookVerdict::Deny,
+        verdict_binding: Some(denying.clone()),
+        reasons: vec![
+            HookReason {
+                text: "looks fine to me".to_owned(),
+                binding: Some(allowing),
+            },
+            HookReason {
+                text: "not in this repository".to_owned(),
+                binding: Some(denying.clone()),
+            },
+        ],
+        ..Default::default()
+    };
+    let PermissionDecision::Deny { reason } = HookPermissionPolicy::compose(
+        &effects,
+        WarpPermissionResult {
+            can_auto_execute: true,
+            is_user_initiated: false,
+            is_autonomous_shell_exception: false,
+        },
+        &PermissionFloors::default(),
+    ) else {
+        panic!("expected deny");
+    };
+    assert_eq!(reason.text, "not in this repository");
+    assert_eq!(reason.binding, Some(denying));
+}
+
+#[test]
 fn deny_without_a_reason_uses_the_default_text() {
     let decision = HookPermissionPolicy::compose(
         &merged(HookVerdict::Deny, vec![]),
