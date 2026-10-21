@@ -21,7 +21,7 @@ pub mod watcher;
 pub use adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
-pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
+pub use dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
     ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
