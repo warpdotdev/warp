@@ -101,7 +101,9 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
     }
 }
 
-fn surface(is_run: bool, ctx: &AppContext) -> HookSurface {
+/// The surface this process fires boundaries from. `is_run` tells an Oz run apart from a local
+/// command-line run, which share an execution mode.
+pub(super) fn surface(is_run: bool, ctx: &AppContext) -> HookSurface {
     if !ctx.has_singleton_model::<AppExecutionMode>() {
         return HookSurface::CliRun;
     }
