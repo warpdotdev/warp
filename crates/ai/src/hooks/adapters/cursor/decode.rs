@@ -32,6 +32,8 @@ pub(super) fn decode_output(
     };
     match &outcome.exit {
         ProcessExit::Code(2) => decoder.blocked_by_exit_two(&outcome.stdout),
+        // What the runner kept is not the whole response, so it cannot be read as a decision.
+        ProcessExit::Code(0) if outcome.stdout_truncated => decoder.malformed(),
         ProcessExit::Code(0) => decoder.decode_success(&outcome.stdout),
         ProcessExit::Code(code) => decoder.failed(&format!("exited with code {code}")),
         ProcessExit::Signal(signal) => decoder.failed(&format!("was killed by signal {signal}")),
