@@ -23,8 +23,7 @@ fn a_minimal_file_yields_one_shell_hook_with_defaults() {
                 timeout: PRE_EXECUTION_TIMEOUT,
                 fail_closed: false,
             }],
-            skipped_definitions: Vec::new(),
-            unknown_events: Vec::new(),
+            warnings: Vec::new(),
         }
     );
 }
@@ -57,14 +56,20 @@ fn unknown_events_are_skipped_and_reported() {
     )
     .expect("parses");
     assert_eq!(parsed.shell_hooks.len(), 1);
-    assert_eq!(parsed.unknown_events, vec!["afterFileEdit", "stop"]);
+    assert_eq!(
+        parsed.warnings,
+        vec![
+            "afterFileEdit hooks are not supported yet; they were skipped",
+            "stop hooks are not supported yet; they were skipped",
+        ]
+    );
 }
 
 #[test]
 fn a_file_with_no_hooks_object_has_no_bindings() {
     let parsed = parse(r#"{ "version": 1 }"#).expect("parses");
     assert!(parsed.shell_hooks.is_empty());
-    assert!(parsed.unknown_events.is_empty());
+    assert!(parsed.warnings.is_empty());
 }
 
 #[test]
@@ -117,7 +122,7 @@ fn a_prompt_hook_is_skipped_and_the_command_hooks_beside_it_keep_their_positions
     assert_eq!(parsed.shell_hooks[0].index, 1);
     assert_eq!(parsed.shell_hooks[0].command, "./check.sh");
     assert_eq!(
-        parsed.skipped_definitions,
+        parsed.warnings,
         vec!["beforeShellExecution[0]: prompt hooks are not supported yet; it was skipped"]
     );
 }
