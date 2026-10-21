@@ -1078,3 +1078,274 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
         );
     });
 }
+
+mod hooks {
+    use std::time::SystemTime;
+
+    use ai::hooks::test_util::{test_binding, test_source_id};
+    use ai::hooks::{HookBoundary, HookPayload, TurnStopStatus};
+    use warp_core::features::FeatureFlag;
+    use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
+    use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
+    use warp_multi_agent_api::message::{AgentOutput, Message as MessageKind, ToolCall};
+    use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
+    use warp_multi_agent_api::{
+        ClientAction, Message, ResponseEvent, Task, client_action, response_event,
+    };
+    use warpui::{App, SingletonEntity};
+
+    use super::{register_mock_response_stream, stream_init_event};
+    use crate::ai::agent::AIAgentInput;
+    use crate::ai::agent::conversation::AIConversationId;
+    use crate::ai::blocklist::BlocklistAIHistoryModel;
+    use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks, settle};
+    use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+
+    /// Hooks installed for every boundary the controller fires, so a missing call shows up as a
+    /// missing envelope rather than an inactive boundary.
+    fn install_controller_hooks(app: &mut App) -> TestHooks {
+        let hooks = app.update(install_test_hooks);
+        let source = test_source_id("controller");
+        app.update(|ctx| {
+            hooks.install_bindings(
+                vec![
+                    test_binding(source.clone(), HookBoundary::PromptSubmit, 0, None),
+                    test_binding(source.clone(), HookBoundary::ResponseComplete, 0, None),
+                    test_binding(source, HookBoundary::TurnStop, 0, None),
+                ],
+                ctx,
+            )
+        });
+        hooks
+    }
+
+    /// One line per encoded envelope: the boundary plus the payload detail a test cares about.
+    fn fired(hooks: &TestHooks) -> Vec<(AIConversationId, String)> {
+        hooks
+            .adapter
+            .encoded_envelopes()
+            .iter()
+            .map(|envelope| {
+                let detail = match &envelope.payload {
+                    HookPayload::PromptSubmit { text, .. } => format!("prompt.submit:{text}"),
+                    HookPayload::ResponseComplete { text, .. } => {
+                        format!("response.complete:{text}")
+                    }
+                    HookPayload::TurnStop { status, .. } => format!("turn.stop:{status:?}"),
+                    HookPayload::SessionStart { .. }
+                    | HookPayload::ToolPre { .. }
+                    | HookPayload::ToolResult { .. }
+                    | HookPayload::ToolFailure { .. }
+                    | HookPayload::ReasoningComplete { .. } => {
+                        envelope.boundary().canonical_name().to_owned()
+                    }
+                };
+                (envelope.conversation_id, detail)
+            })
+            .collect()
+    }
+
+    fn message(task_id: &str, kind: MessageKind) -> Message {
+        Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_owned(),
+            request_id: "request".to_owned(),
+            timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
+            message: Some(kind),
+            ..Default::default()
+        }
+    }
+
+    /// A batch that creates the root task (the stream's first action does this in production)
+    /// and adds `messages` to it.
+    fn create_task_with_messages(task_id: &str, messages: Vec<Message>) -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::ClientActions(
+                response_event::ClientActions {
+                    actions: vec![
+                        ClientAction {
+                            action: Some(client_action::Action::CreateTask(CreateTask {
+                                task: Some(Task {
+                                    id: task_id.to_owned(),
+                                    ..Default::default()
+                                }),
+                            })),
+                        },
+                        ClientAction {
+                            action: Some(client_action::Action::AddMessagesToTask(
+                                AddMessagesToTask {
+                                    task_id: task_id.to_owned(),
+                                    messages,
+                                },
+                            )),
+                        },
+                    ],
+                },
+            )),
+        }
+    }
+
+    fn done() -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn root_task_id(app: &App, conversation_id: AIConversationId) -> String {
+        BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .expect("conversation exists")
+                .get_root_task_id()
+                .to_string()
+        })
+    }
+
+    #[test]
+    fn a_typed_prompt_fires_prompt_submit_and_a_custom_input_does_not() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+                let conversation_id =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.start_new_conversation(terminal.id(), false, false, false, ctx)
+                    });
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.send_user_query_in_conversation(
+                        "hello hooks".to_owned(),
+                        conversation_id,
+                        None,
+                        ctx,
+                    );
+                });
+                conversation_id
+            });
+            settle(&mut app, |_| !fired(&hooks).is_empty()).await;
+            assert_eq!(
+                fired(&hooks),
+                vec![(conversation_id, "prompt.submit:hello hooks".to_owned())]
+            );
+
+            // A custom input is not something the user typed, so it is not a prompt.
+            terminal.update(&mut app, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller.send_custom_ai_input_query(
+                        AIAgentInput::ResumeConversation {
+                            context: std::sync::Arc::from(Vec::new()),
+                        },
+                        ctx,
+                    );
+                });
+            });
+            for _ in 0..10 {
+                warpui::r#async::Timer::after(std::time::Duration::from_millis(5)).await;
+                app.update(|_| {});
+            }
+            assert_eq!(fired(&hooks).len(), 1, "{:?}", fired(&hooks));
+        });
+    }
+
+    #[test]
+    fn a_clean_stream_end_with_no_actions_fires_response_complete_and_turn_stop() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            let task_id = root_task_id(&app, conversation_id);
+
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(stream_init_event("request"), ctx);
+                stream.emit_response_event_for_test(
+                    create_task_with_messages(
+                        &task_id,
+                        vec![message(
+                            &task_id,
+                            MessageKind::AgentOutput(AgentOutput {
+                                text: "All done.".to_owned(),
+                            }),
+                        )],
+                    ),
+                    ctx,
+                );
+                stream.emit_response_event_for_test(done(), ctx);
+                stream.emit_after_stream_finished_for_test(ctx);
+            });
+
+            settle(&mut app, |_| fired(&hooks).len() == 2).await;
+            let mut lines = fired(&hooks);
+            lines.sort_by(|a, b| a.1.cmp(&b.1));
+            assert_eq!(
+                lines,
+                vec![
+                    (conversation_id, "response.complete:All done.".to_owned()),
+                    (
+                        conversation_id,
+                        format!("turn.stop:{:?}", TurnStopStatus::Completed)
+                    ),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn a_stream_that_queues_a_tool_call_does_not_fire_turn_stop() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            initialize_app_for_terminal_view(&mut app);
+            let hooks = install_controller_hooks(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            let task_id = root_task_id(&app, conversation_id);
+
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(stream_init_event("request"), ctx);
+                stream.emit_response_event_for_test(
+                    create_task_with_messages(
+                        &task_id,
+                        vec![
+                            message(
+                                &task_id,
+                                MessageKind::AgentOutput(AgentOutput {
+                                    text: "Let me look.".to_owned(),
+                                }),
+                            ),
+                            message(
+                                &task_id,
+                                MessageKind::ToolCall(ToolCall {
+                                    tool_call_id: "call_1".to_owned(),
+                                    tool: Some(Tool::RunShellCommand(RunShellCommand {
+                                        command: "ls".to_owned(),
+                                        ..Default::default()
+                                    })),
+                                }),
+                            ),
+                        ],
+                    ),
+                    ctx,
+                );
+                stream.emit_response_event_for_test(done(), ctx);
+                stream.emit_after_stream_finished_for_test(ctx);
+            });
+
+            settle(&mut app, |_| !fired(&hooks).is_empty()).await;
+            for _ in 0..10 {
+                warpui::r#async::Timer::after(std::time::Duration::from_millis(5)).await;
+                app.update(|_| {});
+            }
+            assert_eq!(
+                fired(&hooks),
+                vec![(conversation_id, "response.complete:Let me look.".to_owned())],
+                "the turn is still open while the tool call waits"
+            );
+        });
+    }
+}
