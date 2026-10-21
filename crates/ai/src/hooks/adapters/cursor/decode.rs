@@ -8,7 +8,7 @@
 use serde_json::{Map, Value};
 
 use super::events::{ControlEffect, CursorEvent, CursorEventSpec};
-use crate::hooks::adapters::{DecodePolicy, DeclaredBinding};
+use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
 use crate::hooks::model::{
     ContinuationRequest, EmptyOutputPolicy, FailurePolicy, HookEffects, HookReason, HookVerdict,
     MalformedOutputPolicy,
@@ -79,12 +79,12 @@ impl Decoder<'_> {
             ControlEffect::Verdict => {
                 let (agent_message, user_message) =
                     self.permission_messages(&output).unwrap_or((None, None));
-                let mut effects = self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
+                let mut effects =
+                    self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
                 if effects.reasons.is_empty() {
-                    effects.reasons.push(self.reason(format!(
-                        "Denied by hook {} (exit 2).",
-                        self.binding.command
-                    )));
+                    effects.reasons.push(
+                        self.reason(format!("Denied by hook {} (exit 2).", self.binding.command)),
+                    );
                 }
                 effects
             }
@@ -137,8 +137,11 @@ impl Decoder<'_> {
 
     fn decode_permission(&self, output: &Map<String, Value>) -> Decoded {
         let claude = self.claude_output(output)?;
-        let permission = text_field(output, "permission")?
-            .or_else(|| claude.as_ref().and_then(|claude| claude.permission_decision.clone()));
+        let permission = text_field(output, "permission")?.or_else(|| {
+            claude
+                .as_ref()
+                .and_then(|claude| claude.permission_decision.clone())
+        });
         let Some(permission) = permission else {
             return Err(Malformed);
         };
@@ -195,7 +198,8 @@ impl Decoder<'_> {
                 Ok(self.verdict_effects(HookVerdict::NoOpinion, agent_message, user_message))
             }
             CursorEvent::SubagentStart => {
-                let mut effects = self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
+                let mut effects =
+                    self.verdict_effects(HookVerdict::Deny, agent_message, user_message);
                 effects.reasons.insert(
                     0,
                     self.reason(format!(
@@ -326,12 +330,13 @@ impl Decoder<'_> {
             None if decision.as_deref() == Some("block") => reason,
             None => None,
         };
-        let mut effects = HookEffects::default();
-        effects.continuation = follow_up.map(|text| ContinuationRequest {
-            text,
-            loop_limit: self.binding.loop_limit,
-        });
-        Ok(effects)
+        Ok(HookEffects {
+            continuation: follow_up.map(|text| ContinuationRequest {
+                text,
+                loop_limit: self.binding.loop_limit,
+            }),
+            ..Default::default()
+        })
     }
 
     fn decode_before_submit_prompt(&self, output: &Map<String, Value>) -> Decoded {
@@ -344,9 +349,9 @@ impl Decoder<'_> {
             effects.user_notices.extend(user_message);
             return Ok(effects);
         }
-        Ok(self.halt(user_message.unwrap_or_else(|| {
-            format!("Blocked by hook {}.", self.binding.command)
-        })))
+        Ok(self.halt(
+            user_message.unwrap_or_else(|| format!("Blocked by hook {}.", self.binding.command)),
+        ))
     }
 
     fn decode_pre_compact(&self, output: &Map<String, Value>) -> Decoded {
@@ -359,12 +364,11 @@ impl Decoder<'_> {
 
     /// Claude's nested response shape, which Cursor accepts on `preToolUse`, `stop`, and
     /// `subagentStop`. Elsewhere the key is undocumented and ignored.
-    fn claude_output(&self, output: &Map<String, Value>) -> Result<Option<ClaudeOutput>, Malformed> {
-        if !self
-            .spec
-            .documented_output
-            .contains(&"hookSpecificOutput")
-        {
+    fn claude_output(
+        &self,
+        output: &Map<String, Value>,
+    ) -> Result<Option<ClaudeOutput>, Malformed> {
+        if !self.spec.documented_output.contains(&"hookSpecificOutput") {
             return Ok(None);
         }
         let Some(nested) = output.get("hookSpecificOutput") else {
@@ -467,11 +471,9 @@ struct ClaudeOutput {
 fn parse_object(stdout: &[u8]) -> Option<Map<String, Value>> {
     match serde_json::from_slice(stdout).ok()? {
         Value::Object(object) => Some(object),
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            None
+        }
     }
 }
 
