@@ -112,6 +112,7 @@ async fn run_once(
     let finish = |exit: ProcessExit, (stdout, stderr): (Vec<u8>, Vec<u8>)| HookProcessOutcome {
         exit,
         stdout,
+        stdout_truncated: false,
         stderr_tail: stderr_tail(&stderr),
         duration: started.elapsed(),
     };

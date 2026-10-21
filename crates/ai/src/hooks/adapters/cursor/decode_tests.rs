@@ -22,6 +22,7 @@ fn outcome(exit: ProcessExit, stdout: &str) -> HookProcessOutcome {
     HookProcessOutcome {
         exit,
         stdout: stdout.as_bytes().to_vec(),
+        stdout_truncated: false,
         stderr_tail: String::new(),
         duration: Duration::from_millis(1),
     }
@@ -159,6 +160,7 @@ fn stdout_that_is_not_utf8_is_malformed() {
     let outcome = HookProcessOutcome {
         exit: ProcessExit::Code(0),
         stdout: b"{\"permission\":\"allow\xff\"}".to_vec(),
+        stdout_truncated: false,
         stderr_tail: String::new(),
         duration: Duration::from_millis(1),
     };
