@@ -14,6 +14,7 @@ fn binding(fail_closed: bool) -> DeclaredBinding {
         matcher: None,
         command: "./check.sh".to_owned(),
         timeout: Duration::from_secs(30),
+        loop_limit: None,
     }
 }
 

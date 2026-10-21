@@ -16,7 +16,7 @@ use self::config::{
 use self::decode::decode_shell_permission_output;
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::{
-    DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 use crate::hooks::model::{
     BindingCapabilities, DiagnosticSeverity, EffectKind, EmptyOutputPolicy, FailurePolicy,
@@ -141,6 +141,7 @@ impl HookFormatAdapter for CursorAdapter {
                 matcher: definition.matcher,
                 command: definition.command,
                 timeout: definition.timeout,
+                loop_limit: None,
             })
             .collect()
     }
@@ -209,6 +210,7 @@ impl HookFormatAdapter for CursorAdapter {
         &self,
         binding: &DeclaredBinding,
         outcome: &HookProcessOutcome,
+        _policy: &DecodePolicy,
     ) -> HookEffects {
         decode_shell_permission_output(binding, outcome)
     }
