@@ -77,8 +77,41 @@ fn result_and_failure_envelopes_carry_the_result_and_cancellation_reason() {
         else {
             panic!("expected a tool.failure payload");
         };
-        assert_eq!(cancellation_reason.as_deref(), Some("ManuallyCancelled"));
+        assert_eq!(cancellation_reason.as_deref(), Some("user_cancelled"));
     });
+}
+
+#[test]
+fn cancellation_reason_names_are_stable() {
+    // Scripts match on these strings. Changing one is a breaking change for hook authors.
+    let expected = [
+        (CancellationReason::ManuallyCancelled, "user_cancelled"),
+        (CancellationReason::AutomaticCloudHandoff, "cloud_handoff"),
+        (
+            CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: true,
+            },
+            "follow_up_submitted",
+        ),
+        (
+            CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: false,
+            },
+            "follow_up_submitted",
+        ),
+        (CancellationReason::UserCommandExecuted, "user_ran_command"),
+        (CancellationReason::Reverted, "reverted"),
+        (CancellationReason::Deleted, "conversation_deleted"),
+        (
+            CancellationReason::CommandFinishedDuringInlineAgentView,
+            "command_finished",
+        ),
+        (CancellationReason::CLISubagentUserTakeover, "user_took_control"),
+        (CancellationReason::AgentExitedShell, "shell_exited"),
+    ];
+    for (reason, name) in expected {
+        assert_eq!(cancellation_reason_name(reason), name, "{reason:?}");
+    }
 }
 
 #[test]
