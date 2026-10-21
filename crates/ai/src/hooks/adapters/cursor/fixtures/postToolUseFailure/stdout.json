@@ -1,0 +1,1 @@
+{ "additional_context": "Tests time out on CI runners. Retry with --maxWorkers=2." }

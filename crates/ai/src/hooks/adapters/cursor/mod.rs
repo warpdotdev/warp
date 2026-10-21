@@ -1,90 +1,52 @@
-//! The adapter for Cursor's `hooks.json` format. This first version understands only
-//! `beforeShellExecution`, which runs before a shell command and may deny it.
+//! The adapter for Cursor's `hooks.json` format. It reads every option and all 21 event names,
+//! declares a binding with capabilities and failure semantics for each definition, matches,
+//! encodes the stdin payload Cursor documents for the events Warp fires, and decodes output
+//! under Cursor's exit-code and schema rules. Events Warp does not fire are parsed, reported,
+//! and never matched.
 
 mod config;
 mod decode;
+mod encode;
+mod events;
+mod facets;
+mod matcher;
+#[cfg(test)]
+mod test_support;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-
-use regex::Regex;
-use serde_json::json;
-
-use self::config::{
-    BEFORE_SHELL_EXECUTION, matches_everything, parse_cursor_document, parse_cursor_file,
-};
-use self::decode::decode_shell_permission_output;
-use crate::agent::action::AIAgentActionType;
+use self::config::{parse_cursor_document, parse_cursor_file};
+use self::events::CursorEvent;
+use self::matcher::MatcherCache;
 use crate::hooks::adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 use crate::hooks::model::{
-    BindingCapabilities, DiagnosticSeverity, EffectKind, EmptyOutputPolicy, FailurePolicy,
-    HandlerKind, HookBindingId, HookBoundary, HookDiagnostic, HookEffects, HookEnvelope,
-    HookFormat, HookPayload, HookSourceId, MalformedOutputPolicy, MatcherTarget,
+    DiagnosticSeverity, HookDiagnostic, HookEffects, HookEnvelope, HookFormat, HookSourceId,
 };
 use crate::hooks::runner::HookProcessOutcome;
 
 #[derive(Default)]
 pub struct CursorAdapter {
-    /// Compiled matchers by pattern text. Patterns were validated when the file was parsed, so
-    /// every entry here compiled once already.
-    matchers: Mutex<HashMap<String, Arc<Regex>>>,
+    matchers: MatcherCache,
 }
 
 impl CursorAdapter {
     pub fn new() -> Self {
         Self::default()
     }
-
-    fn matcher(&self, pattern: &str) -> Option<Arc<Regex>> {
-        let mut matchers = self.matchers.lock().expect("matcher cache lock");
-        if let Some(regex) = matchers.get(pattern) {
-            return Some(regex.clone());
-        }
-        let regex = Arc::new(Regex::new(pattern).ok()?);
-        matchers.insert(pattern.to_owned(), regex.clone());
-        Some(regex)
-    }
 }
 
-/// What a `beforeShellExecution` definition may do and how it fails: it is one of Cursor's
-/// permission hooks, so unreadable output denies even when the definition fails open.
-fn shell_permission_capabilities(fail_closed: bool) -> BindingCapabilities {
-    BindingCapabilities {
-        may_produce: HashSet::from([
-            EffectKind::Verdict,
-            EffectKind::UserNotice,
-            EffectKind::ModelContext,
-        ]),
-        failure: if fail_closed {
-            FailurePolicy::FailClosed
-        } else {
-            FailurePolicy::FailOpen
-        },
-        malformed_output: MalformedOutputPolicy::Deny,
-        empty_output: EmptyOutputPolicy::FollowFailurePolicy,
-        matcher_target: MatcherTarget::CommandText,
-        handler: HandlerKind::Command,
+/// The event a binding was declared under. Bindings handed to this adapter always come from it,
+/// so a name it does not know is a bug in the caller and is logged.
+fn event_of(binding: &DeclaredBinding) -> Option<CursorEvent> {
+    let event = CursorEvent::from_name(&binding.vendor_event);
+    if event.is_none() {
+        log::error!(
+            "hook {} was declared under {}, which is not a Cursor event this adapter knows",
+            binding.id,
+            binding.vendor_event
+        );
     }
-}
-
-/// The shell command a `tool.pre` envelope is about, when it is about one.
-fn shell_command(envelope: &HookEnvelope) -> Option<&str> {
-    match &envelope.payload {
-        HookPayload::ToolPre {
-            action: AIAgentActionType::RequestCommandOutput { command, .. },
-            ..
-        } => Some(command),
-        HookPayload::ToolPre { .. }
-        | HookPayload::SessionStart { .. }
-        | HookPayload::PromptSubmit { .. }
-        | HookPayload::ToolResult { .. }
-        | HookPayload::ToolFailure { .. }
-        | HookPayload::TurnStop { .. }
-        | HookPayload::ResponseComplete { .. }
-        | HookPayload::ReasoningComplete { .. } => None,
-    }
+    event
 }
 
 impl HookFormatAdapter for CursorAdapter {
@@ -116,47 +78,22 @@ impl HookFormatAdapter for CursorAdapter {
     }
 
     fn bindings(&self, config: &ParsedHookConfig) -> Vec<DeclaredBinding> {
-        let parsed = match parse_cursor_document(&config.document) {
-            Ok(parsed) => parsed,
+        match parse_cursor_document(&config.document) {
+            Ok(parsed) => events::declare_bindings(&parsed.definitions, &config.source),
             Err(error) => {
                 log::error!(
                     "hook source {} no longer parses, though it was accepted earlier: {error}",
                     config.source
                 );
-                return Vec::new();
+                Vec::new()
             }
-        };
-        parsed
-            .shell_hooks
-            .into_iter()
-            .map(|definition| DeclaredBinding {
-                id: HookBindingId {
-                    source: config.source.clone(),
-                    event: BEFORE_SHELL_EXECUTION.to_owned(),
-                    index: definition.index,
-                },
-                boundary: HookBoundary::ToolPre,
-                vendor_event: BEFORE_SHELL_EXECUTION.to_owned(),
-                capabilities: shell_permission_capabilities(definition.fail_closed),
-                matcher: definition.matcher,
-                command: definition.command,
-                timeout: definition.timeout,
-                loop_limit: None,
-            })
-            .collect()
+        }
     }
 
     fn matches(&self, binding: &DeclaredBinding, envelope: &HookEnvelope) -> bool {
-        let Some(command) = shell_command(envelope) else {
-            return false;
-        };
-        match binding.matcher.as_deref() {
-            None => true,
-            Some(pattern) if matches_everything(pattern) => true,
-            Some(pattern) => self
-                .matcher(pattern)
-                .is_some_and(|regex| regex.is_match(command)),
-        }
+        event_of(binding).is_some_and(|event| {
+            matcher::binding_matches(&self.matchers, event.spec(), binding, envelope)
+        })
     }
 
     fn encode_input(
@@ -164,55 +101,22 @@ impl HookFormatAdapter for CursorAdapter {
         binding: &DeclaredBinding,
         envelope: &HookEnvelope,
     ) -> serde_json::Value {
-        let conversation_id = envelope.conversation_id.to_string();
-        let generation_id = envelope
-            .turn_id
-            .map(|turn| turn.as_uuid().to_string())
-            .unwrap_or_else(|| conversation_id.clone());
-        let cwd = envelope.cwd.as_deref().map(|cwd| cwd.to_string_lossy());
-        let workspace_roots = if envelope.roots.is_empty() {
-            cwd.as_ref()
-                .map(|cwd| vec![cwd.to_string()])
-                .unwrap_or_default()
-        } else {
-            envelope
-                .roots
-                .iter()
-                .map(|root| root.to_string_lossy().into_owned())
-                .collect()
-        };
-
-        let mut input = json!({
-            "conversation_id": conversation_id,
-            "generation_id": generation_id,
-            "hook_event_name": binding.vendor_event,
-            "cursor_version": envelope.warp_version,
-            "workspace_roots": workspace_roots,
-            "user_email": envelope.user_email,
-            "transcript_path": serde_json::Value::Null,
-        });
-        if let Some(model) = &envelope.model_id {
-            input["model"] = json!(model.to_string());
+        match event_of(binding) {
+            Some(event) => encode::encode_input(event.spec(), envelope),
+            None => serde_json::Value::Object(serde_json::Map::new()),
         }
-        if let Some(action_id) = &envelope.action_id {
-            input["tool_use_id"] = json!(action_id.to_string());
-        }
-        if let Some(command) = shell_command(envelope) {
-            input["command"] = json!(command);
-        }
-        if let Some(cwd) = cwd {
-            input["cwd"] = json!(cwd);
-        }
-        input
     }
 
     fn decode_output(
         &self,
         binding: &DeclaredBinding,
         outcome: &HookProcessOutcome,
-        _policy: &DecodePolicy,
+        policy: &DecodePolicy,
     ) -> HookEffects {
-        decode_shell_permission_output(binding, outcome)
+        match event_of(binding) {
+            Some(event) => decode::decode_output(event.spec(), binding, outcome, policy),
+            None => HookEffects::default(),
+        }
     }
 }
 

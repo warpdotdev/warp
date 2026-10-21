@@ -1,0 +1,24 @@
+{
+  "conversation_id": "11111111-1111-1111-1111-111111111111",
+  "generation_id": "11111111-1111-1111-1111-111111111111",
+  "model": "claude-sonnet",
+  "model_id": "claude-sonnet",
+  "model_params": [],
+  "cursor_version": "v0.2026.01.01",
+  "warp_version": "v0.2026.01.01",
+  "workspace_roots": ["/work/repo"],
+  "user_email": "dev@example.com",
+  "transcript_path": null,
+  "hook_event_name": "postToolUseFailure",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "rm -rf /",
+    "cwd": "/work/repo/src",
+    "wait_until_completion": true
+  },
+  "tool_use_id": "call_1",
+  "cwd": "/work/repo/src",
+  "error_message": "Command 'rm -rf /' was denied by an agent hook: not allowed here",
+  "failure_type": "permission_denied",
+  "is_interrupt": false
+}

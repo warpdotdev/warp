@@ -1,0 +1,5 @@
+{
+  "permission": "deny",
+  "user_message": "Force pushes are blocked in this repository.",
+  "agent_message": "Push without --force, or open a pull request."
+}

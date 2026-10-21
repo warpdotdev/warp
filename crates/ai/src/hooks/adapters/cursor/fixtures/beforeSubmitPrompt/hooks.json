@@ -1,0 +1,1 @@
+{ "version": 1, "hooks": { "beforeSubmitPrompt": [ { "command": "./hooks/before-prompt.sh" } ] } }

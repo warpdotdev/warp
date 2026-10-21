@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "./hooks/first.sh", "matcher": "(" },
+      { "command": "./hooks/second.sh", "matcher": "^rm " }
+    ]
+  }
+}

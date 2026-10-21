@@ -1,0 +1,5 @@
+{
+  "permission": "ask",
+  "user_message": "This MCP tool writes files.",
+  "agent_message": "The user must confirm file writes through MCP."
+}
