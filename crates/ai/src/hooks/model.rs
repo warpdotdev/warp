@@ -26,6 +26,10 @@ pub const POST_AND_OTHER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default deadline for `session.end` hooks, which run while a surface is closing.
 pub const SESSION_END_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Longest per-definition `timeout` a source may declare. A definition above it is rejected when
+/// the source is activated, not run with a shorter deadline.
+pub const HOOK_TIMEOUT_CEILING: Duration = Duration::from_secs(600);
+
 /// A moment in the agent loop at which hooks can run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookBoundary {

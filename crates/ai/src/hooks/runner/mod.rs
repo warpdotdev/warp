@@ -43,6 +43,9 @@ pub enum ProcessExit {
 pub struct HookProcessOutcome {
     pub exit: ProcessExit,
     pub stdout: Vec<u8>,
+    /// Whether `stdout` is only the start of what the hook printed because it went over the
+    /// runner's limit. Adapters treat a cut-off response as malformed output.
+    pub stdout_truncated: bool,
     /// The end of stderr, bounded so it can be logged safely.
     pub stderr_tail: String,
     pub duration: Duration,
@@ -66,6 +69,7 @@ impl HookRunner for UnavailableRunner {
         Box::pin(futures::future::ready(HookProcessOutcome {
             exit: ProcessExit::SpawnFailed("no hook runner is available in this build".to_owned()),
             stdout: Vec::new(),
+            stdout_truncated: false,
             stderr_tail: String::new(),
             duration: Duration::ZERO,
         }))
