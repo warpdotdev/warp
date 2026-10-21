@@ -49,6 +49,32 @@ impl From<std::io::Result<String>> for FileReadResult {
     }
 }
 
+/// Per-file byte limit for diff application (10 MB). Bounds how much of a file's content stays
+/// retained in `AIRequestedCodeDiff::original_content` and the editor buffers built from it
+/// (APP-5568), and is enforced on both local and remote reads so a diff is never computed
+/// against truncated content either.
+pub(crate) const MAX_DIFF_READ_BYTES: u32 = 10_000_000;
+
+/// Reads a local file for diff application, refusing files over [`MAX_DIFF_READ_BYTES`] instead
+/// of reading them into memory.
+pub(crate) async fn read_local_file(path: &str) -> FileReadResult {
+    // The size check races with the read: a file that crosses the cap in between is still read in
+    // full, so this bound is best-effort.
+    match std::fs::metadata(path) {
+        Ok(metadata) if !metadata.is_file() => {
+            FileReadResult::ReadError("Not a regular file".to_string())
+        }
+        Ok(metadata) if metadata.len() > u64::from(MAX_DIFF_READ_BYTES) => {
+            FileReadResult::ReadError(format!(
+                "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for diff application. The \
+                 diff cannot be applied safely."
+            ))
+        }
+        Ok(_) => FileReadResult::from(std::fs::read_to_string(path)),
+        Err(err) => FileReadResult::from(Err::<String, _>(err)),
+    }
+}
+
 /// Errors that can occur while applying a diff.
 #[derive(Debug)]
 pub(crate) enum DiffApplicationError {
