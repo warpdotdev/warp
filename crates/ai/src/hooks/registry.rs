@@ -5,7 +5,7 @@ use warpui_core::{Entity, SingletonEntity};
 
 use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};
 #[cfg(feature = "local_fs")]
-use crate::hooks::adapters::{HookConfigError, adapter_for};
+use crate::hooks::adapters::{HookConfigError, ParsedHookConfig, adapter_for};
 #[cfg(feature = "local_fs")]
 use crate::hooks::model::{
     DiagnosticSeverity, HookFormat, HookSourceId, HookSourceKind, HookSourceLocation,
@@ -88,8 +88,8 @@ impl RegistrySnapshot {
     }
 }
 
-/// Holds the current snapshot of active bindings. Loading from disk is not implemented here yet;
-/// the snapshot is replaced wholesale when a loader installs a new one.
+/// Holds the current snapshot of active bindings. A loader replaces the snapshot wholesale;
+/// discovery and trust are not wired yet.
 pub struct HookRegistry {
     snapshot: Arc<RegistrySnapshot>,
 }
@@ -178,43 +178,31 @@ impl HookRegistry {
             location: HookSourceLocation::CanonicalPath(canonical_path),
         };
         let config = adapter.parse(&bytes, &source)?;
+        let (bindings, diagnostics) = activate(&adapter, &config, &working_directory);
+        self.replace_source(&source, bindings, diagnostics);
+        Ok(())
+    }
 
-        let mut diagnostics = config.warnings.clone();
-        let bindings = adapter
-            .bindings(&config)
-            .into_iter()
-            .map(|binding| {
-                diagnostics.extend(
-                    validate_capabilities(binding.boundary, &binding.capabilities)
-                        .into_iter()
-                        .map(|warning| HookDiagnostic {
-                            source: source.clone(),
-                            severity: DiagnosticSeverity::Warning,
-                            message: format!("{}: {}", binding.id, warning.message),
-                        }),
-                );
-                ActiveBinding {
-                    binding,
-                    adapter: adapter.clone(),
-                    scope: BindingScope::Everywhere,
-                    host: HookExecutionHost::Local,
-                    working_directory: working_directory.clone(),
-                }
-            })
-            .collect::<Vec<_>>();
-
+    /// Publishes a snapshot in which `source`'s bindings and diagnostics are the given ones and
+    /// every other source is unchanged.
+    fn replace_source(
+        &mut self,
+        source: &HookSourceId,
+        bindings: Vec<ActiveBinding>,
+        diagnostics: Vec<HookDiagnostic>,
+    ) {
         let previous = &self.snapshot;
         let mut next_bindings = previous
             .bindings
             .iter()
-            .filter(|active| active.binding.id.source != source)
+            .filter(|active| active.binding.id.source != *source)
             .cloned()
             .collect::<Vec<_>>();
         next_bindings.extend(bindings);
         let mut next_diagnostics = previous
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.source != source)
+            .filter(|diagnostic| diagnostic.source != *source)
             .cloned()
             .collect::<Vec<_>>();
         next_diagnostics.extend(diagnostics);
@@ -223,8 +211,37 @@ impl HookRegistry {
             bindings: next_bindings,
             diagnostics: next_diagnostics,
         });
-        Ok(())
     }
+}
+
+/// Turns a parsed source into bindings that apply everywhere on the local host and run in
+/// `working_directory`, plus the source's parse warnings and one warning per capability the
+/// boundary cannot honor yet.
+#[cfg(feature = "local_fs")]
+fn activate(
+    adapter: &Arc<dyn HookFormatAdapter>,
+    config: &ParsedHookConfig,
+    working_directory: &Path,
+) -> (Vec<ActiveBinding>, Vec<HookDiagnostic>) {
+    let mut diagnostics = config.warnings.clone();
+    let mut bindings = Vec::new();
+    for binding in adapter.bindings(config) {
+        for warning in validate_capabilities(binding.boundary, &binding.capabilities) {
+            diagnostics.push(HookDiagnostic {
+                source: config.source.clone(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("{}: {}", binding.id, warning.message),
+            });
+        }
+        bindings.push(ActiveBinding {
+            binding,
+            adapter: adapter.clone(),
+            scope: BindingScope::Everywhere,
+            host: HookExecutionHost::Local,
+            working_directory: working_directory.to_path_buf(),
+        });
+    }
+    (bindings, diagnostics)
 }
 
 /// Emitted when a loader installs a new snapshot.
