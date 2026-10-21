@@ -3,6 +3,11 @@ use crate::hooks::model::{HookReason, HookVerdict, MergedEffects};
 /// Text used when a hook denies without saying why.
 pub const DEFAULT_DENY_REASON: &str = "An agent hook denied this action.";
 
+/// Text used when a hook asks for a rewrite, which cannot be honored yet. Running the original
+/// input instead would silently drop a control effect, so the action is denied.
+pub const REWRITE_UNSUPPORTED_DENY_REASON: &str = "An agent hook asked to rewrite this action. Rewrites are not supported yet, so the action \
+     was not run.";
+
 /// The facts Warp's own permission check produced for an action, before hooks are consulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WarpPermissionResult {
@@ -38,7 +43,8 @@ pub enum PermissionDecision {
 }
 
 /// Composes a merged hook verdict with Warp's permission result. Hooks can only tighten: a deny
-/// always denies, and every other verdict leaves Warp's own decision in place.
+/// always denies, an input rewrite denies because it cannot be honored yet, and every other
+/// verdict leaves Warp's own decision in place.
 pub struct HookPermissionPolicy;
 
 impl HookPermissionPolicy {
@@ -48,6 +54,14 @@ impl HookPermissionPolicy {
         floors: &PermissionFloors,
     ) -> PermissionDecision {
         let PermissionFloors {} = floors;
+        if merged.replacement_input.is_some() && merged.verdict != HookVerdict::Deny {
+            return PermissionDecision::Deny {
+                reason: HookReason {
+                    text: REWRITE_UNSUPPORTED_DENY_REASON.to_owned(),
+                    binding: None,
+                },
+            };
+        }
         match merged.verdict {
             HookVerdict::Deny => PermissionDecision::Deny {
                 reason: merged
