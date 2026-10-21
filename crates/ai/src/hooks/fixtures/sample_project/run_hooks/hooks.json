@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "../.cursor/scripts/session_env.sh" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "../.cursor/scripts/log_prompt.sh" }
+    ],
+    "beforeShellExecution": [
+      { "command": "../.cursor/scripts/deny_dangerous.sh" }
+    ],
+    "afterShellExecution": [
+      { "command": "../.cursor/scripts/audit.sh" }
+    ],
+    "stop": [
+      { "command": "true" }
+    ]
+  }
+}
