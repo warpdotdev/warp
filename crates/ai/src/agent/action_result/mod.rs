@@ -285,6 +285,8 @@ pub enum RequestCommandOutputResult {
     CancelledBeforeExecution,
     /// The command was denied because it was present on the denylist.
     Denylisted { command: String },
+    /// An agent hook denied the command. `reason` is the hook's own text, shown to the model.
+    HookDenied { command: String, reason: String },
     /// The requested command was not started because another command owns the terminal.
     TerminalBusy { command: String, block_id: BlockId },
 }
@@ -297,6 +299,7 @@ impl RequestCommandOutputResult {
             Self::ShellRecovered { .. }
             | Self::CancelledBeforeExecution
             | Self::Denylisted { .. }
+            | Self::HookDenied { .. }
             | Self::TerminalBusy { .. } => false,
         }
     }
@@ -304,9 +307,10 @@ impl RequestCommandOutputResult {
     pub fn failed(&self) -> bool {
         match self {
             Self::Completed { exit_code, .. } => !exit_code.was_successful(),
-            Self::ShellRecovered { .. } | Self::Denylisted { .. } | Self::TerminalBusy { .. } => {
-                true
-            }
+            Self::ShellRecovered { .. }
+            | Self::Denylisted { .. }
+            | Self::HookDenied { .. }
+            | Self::TerminalBusy { .. } => true,
             Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
         }
     }
@@ -343,6 +347,12 @@ impl Display for RequestCommandOutputResult {
             }
             RequestCommandOutputResult::Denylisted { .. } => {
                 write!(f, "Command output was on denylist")
+            }
+            RequestCommandOutputResult::HookDenied { command, reason } => {
+                write!(
+                    f,
+                    "Command '{command}' was denied by an agent hook: {reason}"
+                )
             }
             RequestCommandOutputResult::TerminalBusy { block_id, .. } => {
                 write!(
