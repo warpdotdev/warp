@@ -4,6 +4,7 @@ use std::time::Duration;
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
 use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload};
 use chrono::Local;
+use instant::Instant;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
@@ -16,11 +17,21 @@ use crate::ai::llms::LLMId;
 use crate::features::FeatureFlag;
 
 fn session_binding() -> DeclaredBinding {
-    test_binding(test_source_id("session"), HookBoundary::SessionStart, 0, None)
+    test_binding(
+        test_source_id("session"),
+        HookBoundary::SessionStart,
+        0,
+        None,
+    )
 }
 
 fn prompt_binding() -> DeclaredBinding {
-    test_binding(test_source_id("prompt"), HookBoundary::PromptSubmit, 0, None)
+    test_binding(
+        test_source_id("prompt"),
+        HookBoundary::PromptSubmit,
+        0,
+        None,
+    )
 }
 
 fn send_prompt(app: &mut App, harness: &ControllerHarness, text: &str) -> AIConversationId {
@@ -152,7 +163,7 @@ fn a_session_hook_that_fails_or_times_out_adds_nothing_and_does_not_block_furthe
         harness.hooks.adapter.clear_encoded();
         app.update(|ctx| harness.hooks.install_bindings(vec![slow], ctx));
         let _hold = harness.hooks.runner.hold();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let slow_conversation = send_prompt(&mut app, &harness, "hello again");
         settle(&mut app, |app| exchange_count(app, slow_conversation) == 1).await;
         assert!(started.elapsed() >= Duration::from_millis(100));
@@ -280,17 +291,21 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
             })
             .expect("the second request waits on the same hooks");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
-        assert!(app.read(|ctx| HookRuntime::as_ref(ctx)
-            .session_starts
-            .is_in_flight(harness.conversation_id)));
+        assert!(app.read(|ctx| {
+            HookRuntime::as_ref(ctx)
+                .session_starts
+                .is_in_flight(harness.conversation_id)
+        }));
 
         hold.release();
         first.await;
         second.await;
         settle(&mut app, |app| {
-            !app.read(|ctx| HookRuntime::as_ref(ctx)
-                .session_starts
-                .is_in_flight(harness.conversation_id))
+            !app.read(|ctx| {
+                HookRuntime::as_ref(ctx)
+                    .session_starts
+                    .is_in_flight(harness.conversation_id)
+            })
         })
         .await;
         assert_eq!(harness.hooks.runner.invocation_count(), 1);

@@ -859,9 +859,11 @@ impl BlocklistAIController {
         let submitted_prompt = (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx))
             .then(|| hooks::prompt::SubmittedPrompt {
                 text: query.clone(),
-                provenance: input_query.queued_query_id.map_or(PromptProvenance::User, |id| {
-                    QueuedQueryModel::as_ref(ctx).provenance_for(conversation_id, id)
-                }),
+                provenance: input_query
+                    .queued_query_id
+                    .map_or(PromptProvenance::User, |id| {
+                        QueuedQueryModel::as_ref(ctx).provenance_for(conversation_id, id)
+                    }),
             });
         let (query, user_query_mode) = extract_user_query_mode(query);
 
@@ -1102,8 +1104,13 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(stop) = hooks::turn::start_turn_stop(conversation_id, ctx) {
-            ctx.spawn(stop, move |me, outcome, ctx| {
-                match hooks::turn::resolve_turn_stop(conversation_id, outcome, ctx) {
+            ctx.spawn(
+                stop,
+                move |me, outcome, ctx| match hooks::turn::resolve_turn_stop(
+                    conversation_id,
+                    outcome,
+                    ctx,
+                ) {
                     hooks::turn::TurnStopResolution::Dropped => {}
                     hooks::turn::TurnStopResolution::Finalize => {
                         me.finalize_held_turn(conversation_id, ctx)
@@ -1111,8 +1118,8 @@ impl BlocklistAIController {
                     hooks::turn::TurnStopResolution::FollowUpQueued => {
                         me.settle_turn_after_stop(conversation_id, ctx)
                     }
-                }
-            });
+                },
+            );
         }
     }
 

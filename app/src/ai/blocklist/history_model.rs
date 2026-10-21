@@ -22,8 +22,8 @@ use warp_multi_agent_api::response_event::stream_finished::{
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use super::controller::response_stream::ResponseStreamId;
 use super::RequestInput;
+use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
@@ -2155,14 +2155,14 @@ impl BlocklistAIHistoryModel {
         let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
             return false;
         };
-        let turn_ended = match conversation.mark_request_completed(stream_id, terminal_surface_id, ctx)
-        {
-            Ok(turn_ended) => turn_ended,
-            Err(e) => {
-                log::warn!("Failed to mark exchange as completed: {e}");
-                false
-            }
-        };
+        let turn_ended =
+            match conversation.mark_request_completed(stream_id, terminal_surface_id, ctx) {
+                Ok(turn_ended) => turn_ended,
+                Err(e) => {
+                    log::warn!("Failed to mark exchange as completed: {e}");
+                    false
+                }
+            };
 
         // If this conversation doesn't have server metadata yet, and it has a server conversation token,
         // fetch the metadata from the server.

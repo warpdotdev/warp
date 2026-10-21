@@ -15,7 +15,12 @@ use crate::ai::blocklist::hooks::test_utils::{
 use crate::features::FeatureFlag;
 
 fn prompt_binding() -> ai::hooks::DeclaredBinding {
-    test_binding(test_source_id("prompt"), HookBoundary::PromptSubmit, 0, None)
+    test_binding(
+        test_source_id("prompt"),
+        HookBoundary::PromptSubmit,
+        0,
+        None,
+    )
 }
 
 fn user_prompt(text: &str) -> SubmittedPrompt {
@@ -186,7 +191,11 @@ fn a_halting_hook_stops_the_prompt_and_tells_the_person_why() {
         settle(&mut app, |_| !harness.hooks.messenger.notices().is_empty()).await;
         let_things_settle(&mut app).await;
 
-        assert_eq!(exchange_count(&app, conversation_id), 0, "no request went out");
+        assert_eq!(
+            exchange_count(&app, conversation_id),
+            0,
+            "no request went out"
+        );
         assert_eq!(conversation_status(&app, conversation_id), status_before);
         let notices = harness.hooks.messenger.notices();
         assert_eq!(notices.len(), 1);

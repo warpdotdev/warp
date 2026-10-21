@@ -27,8 +27,7 @@ use super::envelope::{EnvelopeSite, envelope_for_tool_failure, envelope_for_tool
 use super::{HookRuntime, executes_tool_calls_locally};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResultType, AIAgentActionType, CancellationReason,
-    RunAgentsResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, CancellationReason, RunAgentsResult,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 
@@ -126,22 +125,18 @@ fn report_shell_completion(
         .start_ts
         .zip(finished.completed_ts)
         .and_then(|(start, end)| end.signed_duration_since(start).to_std().ok());
-    let result = AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
-        block_id: finished.block_id,
-        command: command.clone(),
-        output: finished.output,
-        exit_code: finished.exit_code,
-        start_ts: finished.start_ts,
-        completed_ts: finished.completed_ts,
-    });
+    let result =
+        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+            block_id: finished.block_id,
+            command: command.clone(),
+            output: finished.output,
+            exit_code: finished.exit_code,
+            start_ts: finished.start_ts,
+            completed_ts: finished.completed_ts,
+        });
     let site = EnvelopeSite::new(pending.conversation_id, active_session);
-    let envelope = envelope_for_tool_result_with_duration(
-        &pending.action,
-        &result,
-        duration,
-        &site,
-        ctx,
-    );
+    let envelope =
+        envelope_for_tool_result_with_duration(&pending.action, &result, duration, &site, ctx);
     #[cfg(test)]
     record_observation(&pending.action, &envelope, ctx);
     HookRuntime::as_ref(ctx).dispatch_detached(envelope, ctx);
@@ -155,10 +150,7 @@ fn envelope_for_tool_result_with_duration(
     ctx: &AppContext,
 ) -> HookEnvelope {
     let mut envelope = envelope_for_tool_result(action, result, site, ctx);
-    if let HookPayload::ToolResult {
-        duration: slot, ..
-    } = &mut envelope.payload
-    {
+    if let HookPayload::ToolResult { duration: slot, .. } = &mut envelope.payload {
         *slot = duration;
     }
     envelope
@@ -176,7 +168,9 @@ struct FinishedCommand {
 /// What a result says about a long-running command.
 enum ShellProgress {
     /// The command is still running; its exit will be reported later.
-    Snapshot { block_id: BlockId },
+    Snapshot {
+        block_id: BlockId,
+    },
     /// The command exited.
     Finished(FinishedCommand),
     None,

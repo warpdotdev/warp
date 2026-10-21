@@ -101,7 +101,12 @@ pub(crate) fn barrier(
     if !HookRuntime::is_active(ctx) {
         return None;
     }
-    match runtime.as_ref(ctx).session_starts.states.get(&conversation_id) {
+    match runtime
+        .as_ref(ctx)
+        .session_starts
+        .states
+        .get(&conversation_id)
+    {
         Some(SessionStartState::Done { .. }) => return None,
         Some(SessionStartState::InFlight { done, .. }) => {
             // A second request before the first finished waits on the same hooks.
@@ -138,16 +143,13 @@ pub(crate) fn barrier(
     };
 
     let (sender, receiver) = oneshot::channel();
-    let done: SessionDone = receiver
-        .map(|env| env.unwrap_or_default())
-        .boxed()
-        .shared();
+    let done: SessionDone = receiver.map(|env| env.unwrap_or_default()).boxed().shared();
     let wait = wait_for(done.clone(), timeout);
     runtime.update(ctx, |runtime, ctx| {
-        runtime
-            .session_starts
-            .states
-            .insert(conversation_id, SessionStartState::InFlight { done, sender });
+        runtime.session_starts.states.insert(
+            conversation_id,
+            SessionStartState::InFlight { done, sender },
+        );
         let dispatch = runtime.dispatcher().dispatch(
             envelope,
             snapshot,
