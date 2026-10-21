@@ -67,10 +67,18 @@ fn exit_two_blocks_where_the_event_can_block_and_is_a_failure_elsewhere() {
         );
     }
 
-    let halted = decode(CursorEvent::BeforeSubmitPrompt, false, ProcessExit::Code(2), "");
+    let halted = decode(
+        CursorEvent::BeforeSubmitPrompt,
+        false,
+        ProcessExit::Code(2),
+        "",
+    );
     assert!(halted.halt_turn);
     assert_eq!(halted.verdict, HookVerdict::NoOpinion);
-    assert_eq!(reasons(&halted), vec!["Blocked by hook ./check.sh (exit 2)."]);
+    assert_eq!(
+        reasons(&halted),
+        vec!["Blocked by hook ./check.sh (exit 2)."]
+    );
     let halted = decode(
         CursorEvent::BeforeSubmitPrompt,
         false,
@@ -108,7 +116,12 @@ fn exit_two_still_reads_the_messages() {
     assert_eq!(reasons(&effects), vec!["rm is not allowed here"]);
     assert_eq!(effects.user_notices, vec!["Blocked by policy"]);
 
-    let unreadable = decode(CursorEvent::PreToolUse, false, ProcessExit::Code(2), "not json");
+    let unreadable = decode(
+        CursorEvent::PreToolUse,
+        false,
+        ProcessExit::Code(2),
+        "not json",
+    );
     assert_eq!(unreadable.verdict, HookVerdict::Deny);
     assert_eq!(
         reasons(&unreadable),
@@ -131,9 +144,19 @@ fn other_failures_follow_the_failure_policy() {
     for (exit, description) in &failures {
         for event in PERMISSION_EVENTS {
             let open = decode(event, false, exit.clone(), r#"{"permission":"deny"}"#);
-            assert_eq!(open, HookEffects::default(), "{} fail open on {exit:?}", event.name());
+            assert_eq!(
+                open,
+                HookEffects::default(),
+                "{} fail open on {exit:?}",
+                event.name()
+            );
             let closed = decode(event, true, exit.clone(), "");
-            assert_eq!(closed.verdict, HookVerdict::Deny, "{} on {exit:?}", event.name());
+            assert_eq!(
+                closed.verdict,
+                HookVerdict::Deny,
+                "{} on {exit:?}",
+                event.name()
+            );
             assert_eq!(
                 reasons(&closed),
                 vec![format!(
@@ -205,7 +228,10 @@ fn a_cancelled_hook_blocks_where_it_could_have_blocked_regardless_of_policy() {
 #[test]
 fn empty_output_follows_the_binding_policy() {
     for stdout in ["", "  \n"] {
-        for event in PERMISSION_EVENTS.into_iter().chain([CursorEvent::BeforeSubmitPrompt]) {
+        for event in PERMISSION_EVENTS
+            .into_iter()
+            .chain([CursorEvent::BeforeSubmitPrompt])
+        {
             let open = decode(event, false, OK, stdout);
             assert_eq!(open, HookEffects::default(), "{} fail open", event.name());
             let closed = decode(event, true, OK, stdout);
@@ -258,7 +284,12 @@ fn malformed_output_denies_on_permission_hooks_even_when_they_fail_open() {
     ] {
         for event in PERMISSION_EVENTS {
             let effects = decode(event, false, OK, stdout);
-            assert_eq!(effects.verdict, HookVerdict::Deny, "{} on {stdout:?}", event.name());
+            assert_eq!(
+                effects.verdict,
+                HookVerdict::Deny,
+                "{} on {stdout:?}",
+                event.name()
+            );
             assert_eq!(
                 reasons(&effects),
                 vec![format!(
@@ -288,7 +319,11 @@ fn malformed_output_elsewhere_follows_the_failure_policy() {
             ]
         );
     }
-    for stdout in ["not json", r#"{"additional_context": 5}"#, r#"{"env": "x"}"#] {
+    for stdout in [
+        "not json",
+        r#"{"additional_context": 5}"#,
+        r#"{"env": "x"}"#,
+    ] {
         for event in OBSERVER_EVENTS.into_iter().chain([CursorEvent::Stop]) {
             for fail_closed in [false, true] {
                 assert_eq!(
@@ -388,11 +423,22 @@ fn ask_means_something_different_on_each_event() {
     assert_eq!(honored.verdict, HookVerdict::Ask);
     assert_eq!(honored.user_notices, vec!["Please confirm."]);
     assert_eq!(
-        decode(CursorEvent::BeforeMcpExecution, false, OK, r#"{"permission":"ask"}"#).verdict,
+        decode(
+            CursorEvent::BeforeMcpExecution,
+            false,
+            OK,
+            r#"{"permission":"ask"}"#
+        )
+        .verdict,
         HookVerdict::Ask
     );
 
-    let ignored = decode(CursorEvent::PreToolUse, false, OK, r#"{"permission":"ask"}"#);
+    let ignored = decode(
+        CursorEvent::PreToolUse,
+        false,
+        OK,
+        r#"{"permission":"ask"}"#,
+    );
     assert_eq!(
         ignored.verdict,
         HookVerdict::NoOpinion,
@@ -406,7 +452,12 @@ fn ask_means_something_different_on_each_event() {
     );
     assert_eq!(strict.verdict, HookVerdict::Ask);
 
-    let subagent = decode(CursorEvent::SubagentStart, false, OK, r#"{"permission":"ask"}"#);
+    let subagent = decode(
+        CursorEvent::SubagentStart,
+        false,
+        OK,
+        r#"{"permission":"ask"}"#,
+    );
     assert_eq!(subagent.verdict, HookVerdict::Deny);
     assert_eq!(
         reasons(&subagent),
@@ -424,7 +475,12 @@ fn ask_means_something_different_on_each_event() {
         "strict mode never weakens a vendor denial"
     );
 
-    let read = decode(CursorEvent::BeforeReadFile, false, OK, r#"{"permission":"ask"}"#);
+    let read = decode(
+        CursorEvent::BeforeReadFile,
+        false,
+        OK,
+        r#"{"permission":"ask"}"#,
+    );
     assert_eq!(
         read.verdict,
         HookVerdict::Deny,
@@ -442,7 +498,10 @@ fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
         r#"{"permission":"allow","updated_input":{"command":"npm ci"}}"#,
     );
     assert_eq!(effects.verdict, HookVerdict::Allow);
-    assert_eq!(effects.replacement_input, Some(json!({ "command": "npm ci" })));
+    assert_eq!(
+        effects.replacement_input,
+        Some(json!({ "command": "npm ci" }))
+    );
 
     let not_an_object = decode(
         CursorEvent::PreToolUse,
@@ -464,7 +523,8 @@ fn updated_input_becomes_a_replacement_only_on_pre_tool_use() {
         );
         assert_eq!(effects.verdict, HookVerdict::Allow, "{}", event.name());
         assert_eq!(
-            effects.replacement_input, None,
+            effects.replacement_input,
+            None,
             "{} does not document updated_input",
             event.name()
         );
@@ -563,12 +623,7 @@ fn session_start_env_and_context_are_read() {
     );
     assert_eq!(effects.model_context, vec!["Use pnpm."]);
 
-    let bad_value = decode(
-        CursorEvent::SessionStart,
-        true,
-        OK,
-        r#"{"env":{"CI":1}}"#,
-    );
+    let bad_value = decode(CursorEvent::SessionStart, true, OK, r#"{"env":{"CI":1}}"#);
     assert_eq!(
         bad_value,
         HookEffects::default(),
@@ -618,7 +673,12 @@ fn before_submit_prompt_halts_on_continue_false() {
     );
     assert!(halted.user_notices.is_empty());
 
-    let silent = decode(CursorEvent::BeforeSubmitPrompt, false, OK, r#"{"continue":false}"#);
+    let silent = decode(
+        CursorEvent::BeforeSubmitPrompt,
+        false,
+        OK,
+        r#"{"continue":false}"#,
+    );
     assert_eq!(reasons(&silent), vec!["Blocked by hook ./check.sh."]);
 
     let proceed = decode(
@@ -652,18 +712,14 @@ fn stop_reads_the_follow_up_with_the_bindings_loop_limit() {
 
     let mut capped = binding_for(CursorEvent::Stop, false);
     capped.loop_limit = Some(2);
-    let effects = decode_with(
-        &capped,
-        OK,
-        r#"{"followup_message":"again"}"#,
-        &DEFAULT,
-    );
-    assert_eq!(
-        effects.continuation.map(|c| c.loop_limit),
-        Some(Some(2))
-    );
+    let effects = decode_with(&capped, OK, r#"{"followup_message":"again"}"#, &DEFAULT);
+    assert_eq!(effects.continuation.map(|c| c.loop_limit), Some(Some(2)));
 
-    for stdout in [r#"{"followup_message":""}"#, r#"{"followup_message":"  "}"#, "{}"] {
+    for stdout in [
+        r#"{"followup_message":""}"#,
+        r#"{"followup_message":"  "}"#,
+        "{}",
+    ] {
         assert_eq!(
             decode(CursorEvent::Stop, false, OK, stdout),
             HookEffects::default(),
@@ -671,9 +727,14 @@ fn stop_reads_the_follow_up_with_the_bindings_loop_limit() {
         );
     }
     assert_eq!(
-        decode(CursorEvent::SubagentStop, false, OK, r#"{"followup_message":"more"}"#)
-            .continuation
-            .map(|c| c.text),
+        decode(
+            CursorEvent::SubagentStop,
+            false,
+            OK,
+            r#"{"followup_message":"more"}"#
+        )
+        .continuation
+        .map(|c| c.text),
         Some("more".to_owned())
     );
 }
@@ -829,5 +890,9 @@ fn every_documented_stdout_fixture_decodes_without_a_failure() {
         OK,
         CursorEvent::BeforeShellExecution.spec().name,
     );
-    assert_eq!(shell.verdict, HookVerdict::Deny, "the event name alone is not JSON");
+    assert_eq!(
+        shell.verdict,
+        HookVerdict::Deny,
+        "the event name alone is not JSON"
+    );
 }

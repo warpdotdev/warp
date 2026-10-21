@@ -31,13 +31,8 @@ fn parse_turns_file_warnings_into_diagnostics_on_the_source() {
         assert_eq!(warning.source, config.source);
         assert_eq!(warning.severity, DiagnosticSeverity::Warning);
     }
-    assert!(
-        config
-            .warnings
-            .iter()
-            .any(|warning| warning.message
-                == "workspaceOpen[0]: Warp has no workspaceOpen moment; this hook will never run")
-    );
+    assert!(config.warnings.iter().any(|warning| warning.message
+        == "workspaceOpen[0]: Warp has no workspaceOpen moment; this hook will never run"));
     assert_eq!(config.document, json(FULL_CONFIG));
 }
 
@@ -47,11 +42,17 @@ fn bindings_come_from_the_kept_document_and_carry_activation_warnings_where_due(
     let config = parsed(FULL_CONFIG);
     let bindings = adapter.bindings(&config);
     assert_eq!(bindings.len(), 18);
-    assert!(bindings.iter().all(|binding| binding.id.source == config.source));
+    assert!(
+        bindings
+            .iter()
+            .all(|binding| binding.id.source == config.source)
+    );
 
     let warned = bindings
         .iter()
-        .filter(|binding| !validate_capabilities(binding.boundary, &binding.capabilities).is_empty())
+        .filter(|binding| {
+            !validate_capabilities(binding.boundary, &binding.capabilities).is_empty()
+        })
         .map(|binding| binding.vendor_event.as_str())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -89,7 +90,10 @@ fn the_trait_methods_work_end_to_end_for_a_shell_hook() {
     let envelope = fixture_envelope(tool_pre(shell_action("git push --force")));
     assert!(adapter.matches(binding, &envelope));
     assert!(!adapter.matches(binding, &fixture_envelope(tool_pre(shell_action("ls")))));
-    assert_eq!(adapter.encode_input(binding, &envelope), json(fixture.stdin));
+    assert_eq!(
+        adapter.encode_input(binding, &envelope),
+        json(fixture.stdin)
+    );
 
     let effects = adapter.decode_output(
         binding,

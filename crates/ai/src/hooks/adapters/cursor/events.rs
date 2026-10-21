@@ -9,9 +9,8 @@ use std::time::Duration;
 use super::config::ParsedDefinition;
 use crate::hooks::adapters::DeclaredBinding;
 use crate::hooks::model::{
-    BindingCapabilities, EffectKind, EmptyOutputPolicy, FailurePolicy, HandlerKind,
-    HookBindingId, HookBoundary, HookSourceId, MalformedOutputPolicy, MatcherTarget,
-    POST_AND_OTHER_TIMEOUT,
+    BindingCapabilities, EffectKind, EmptyOutputPolicy, FailurePolicy, HandlerKind, HookBindingId,
+    HookBoundary, HookSourceId, MalformedOutputPolicy, MatcherTarget, POST_AND_OTHER_TIMEOUT,
 };
 
 /// Cursor's default per-definition cap on the follow-ups a stop hook may request.
@@ -202,7 +201,12 @@ const PERMISSION_OUTPUT: &[&str] = &["permission", "user_message", "agent_messag
 const PERMISSION_EFFECTS: &[EffectKind] = &[EffectKind::Verdict, EffectKind::UserNotice];
 /// The follow-up fields for `stop` and `subagentStop`: Cursor's own `followup_message` plus the
 /// Claude shapes it translates.
-const FOLLOW_UP_OUTPUT: &[&str] = &["followup_message", "hookSpecificOutput", "decision", "reason"];
+const FOLLOW_UP_OUTPUT: &[&str] = &[
+    "followup_message",
+    "hookSpecificOutput",
+    "decision",
+    "reason",
+];
 
 /// Cursor's events, in the order its reference lists them.
 pub(super) static CURSOR_EVENTS: [CursorEventSpec; 21] = [

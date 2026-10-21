@@ -9,12 +9,12 @@ use warp_terminal::model::BlockId;
 use super::*;
 use crate::agent::FileLocations;
 use crate::agent::action::{
-    AIAgentActionType, FileEdit, ReadFilesRequest, RunAgentsAgentRunConfig,
-    RunAgentsExecutionMode, RunAgentsRequest,
+    AIAgentActionType, FileEdit, ReadFilesRequest, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
+    RunAgentsRequest,
 };
 use crate::agent::action_result::{
-    AIAgentActionResultType, AnyFileContent, CallMCPToolResult, FileContext,
-    ReadFilesFailedFile, ReadFilesResult, RequestCommandOutputResult,
+    AIAgentActionResultType, AnyFileContent, CallMCPToolResult, FileContext, ReadFilesFailedFile,
+    ReadFilesResult, RequestCommandOutputResult,
 };
 use crate::hooks::adapters::cursor::test_support::{
     EVENT_FIXTURES, FIXTURE_CONVERSATION_ID, completed_shell, fixture_envelope, json, mcp_action,
@@ -44,12 +44,10 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         ),
         CursorEvent::PostToolUseFailure => tool_failure(
             shell_action("rm -rf /"),
-            AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::HookDenied {
-                    command: "rm -rf /".to_owned(),
-                    reason: "not allowed here".to_owned(),
-                },
-            ),
+            AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
+                command: "rm -rf /".to_owned(),
+                reason: "not allowed here".to_owned(),
+            }),
             None,
         ),
         CursorEvent::BeforeShellExecution => tool_pre(shell_action("git push --force")),
@@ -181,16 +179,20 @@ fn cursor_version_and_warp_version_both_carry_warps_version() {
 
 #[test]
 fn after_shell_execution_takes_the_duration_from_timestamps_when_nothing_measured_it() {
-    let start = Local.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).single().expect("a time");
+    let start = Local
+        .with_ymd_and_hms(2026, 1, 1, 12, 0, 0)
+        .single()
+        .expect("a time");
     let end = start + chrono::Duration::milliseconds(2500);
-    let result = AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
-        block_id: BlockId::from("b".to_owned()),
-        command: "make".to_owned(),
-        output: "built".to_owned(),
-        exit_code: 1.into(),
-        start_ts: Some(start),
-        completed_ts: Some(end),
-    });
+    let result =
+        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+            block_id: BlockId::from("b".to_owned()),
+            command: "make".to_owned(),
+            output: "built".to_owned(),
+            exit_code: 1.into(),
+            start_ts: Some(start),
+            completed_ts: Some(end),
+        });
     let input = encode(
         CursorEvent::AfterShellExecution,
         tool_result(shell_action("make"), result, None),
@@ -202,8 +204,8 @@ fn after_shell_execution_takes_the_duration_from_timestamps_when_nothing_measure
 
 #[test]
 fn a_recovered_shell_has_no_exit_code() {
-    let result = AIAgentActionResultType::RequestCommandOutput(
-        RequestCommandOutputResult::ShellRecovered {
+    let result =
+        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::ShellRecovered {
             block_id: BlockId::from("b".to_owned()),
             command: "exit".to_owned(),
             output: String::new(),
@@ -212,8 +214,7 @@ fn a_recovered_shell_has_no_exit_code() {
             used_fallback_directory: false,
             start_ts: None,
             completed_ts: None,
-        },
-    );
+        });
     let input = encode(
         CursorEvent::AfterShellExecution,
         tool_result(shell_action("exit"), result, None),
@@ -226,9 +227,8 @@ fn a_recovered_shell_has_no_exit_code() {
 
 #[test]
 fn after_mcp_execution_carries_the_result_as_a_json_string() {
-    let result = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
-        "hello",
-    )]);
+    let result =
+        rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text("hello")]);
     let input = encode(
         CursorEvent::AfterMcpExecution,
         tool_result(
@@ -340,11 +340,7 @@ fn tool_input_describes_non_shell_actions() {
     assert_eq!(input["tool_input"]["execution_mode"], "local");
     assert_eq!(input["tool_input"]["agents"][0]["name"], "child");
     assert!(
-        input["tool_input"]
-            .as_object()
-            .expect("an object")
-            .values()
-            .all(|value| value.to_string() != "\"secret\""),
+        !input["tool_input"].to_string().contains("secret"),
         "the harness secret name is not part of the input"
     );
 }

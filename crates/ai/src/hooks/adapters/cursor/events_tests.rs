@@ -60,20 +60,47 @@ fn boundaries_follow_the_architecture_mapping() {
         (CursorEvent::SessionEnd, Some(HookBoundary::SessionEnd)),
         (CursorEvent::PreToolUse, Some(HookBoundary::ToolPre)),
         (CursorEvent::PostToolUse, Some(HookBoundary::ToolResult)),
-        (CursorEvent::PostToolUseFailure, Some(HookBoundary::ToolFailure)),
-        (CursorEvent::SubagentStart, Some(HookBoundary::SubagentStart)),
+        (
+            CursorEvent::PostToolUseFailure,
+            Some(HookBoundary::ToolFailure),
+        ),
+        (
+            CursorEvent::SubagentStart,
+            Some(HookBoundary::SubagentStart),
+        ),
         (CursorEvent::SubagentStop, Some(HookBoundary::SubagentStop)),
-        (CursorEvent::BeforeShellExecution, Some(HookBoundary::ToolPre)),
-        (CursorEvent::AfterShellExecution, Some(HookBoundary::ToolResult)),
+        (
+            CursorEvent::BeforeShellExecution,
+            Some(HookBoundary::ToolPre),
+        ),
+        (
+            CursorEvent::AfterShellExecution,
+            Some(HookBoundary::ToolResult),
+        ),
         (CursorEvent::BeforeMcpExecution, Some(HookBoundary::ToolPre)),
-        (CursorEvent::AfterMcpExecution, Some(HookBoundary::ToolResult)),
-        (CursorEvent::BeforeReadFile, Some(HookBoundary::FileExposure)),
+        (
+            CursorEvent::AfterMcpExecution,
+            Some(HookBoundary::ToolResult),
+        ),
+        (
+            CursorEvent::BeforeReadFile,
+            Some(HookBoundary::FileExposure),
+        ),
         (CursorEvent::AfterFileEdit, Some(HookBoundary::ToolResult)),
-        (CursorEvent::BeforeSubmitPrompt, Some(HookBoundary::PromptSubmit)),
+        (
+            CursorEvent::BeforeSubmitPrompt,
+            Some(HookBoundary::PromptSubmit),
+        ),
         (CursorEvent::PreCompact, Some(HookBoundary::CompactionPre)),
         (CursorEvent::Stop, Some(HookBoundary::TurnStop)),
-        (CursorEvent::AfterAgentResponse, Some(HookBoundary::ResponseComplete)),
-        (CursorEvent::AfterAgentThought, Some(HookBoundary::ReasoningComplete)),
+        (
+            CursorEvent::AfterAgentResponse,
+            Some(HookBoundary::ResponseComplete),
+        ),
+        (
+            CursorEvent::AfterAgentThought,
+            Some(HookBoundary::ReasoningComplete),
+        ),
         (CursorEvent::BeforeTabFileRead, None),
         (CursorEvent::AfterTabFileEdit, None),
         (CursorEvent::WorkspaceOpen, None),
@@ -162,7 +189,12 @@ fn empty_output_is_a_failure_only_where_the_hook_decides_something() {
 #[test]
 fn control_effects_follow_the_documented_output() {
     for event in PERMISSION_HOOKS {
-        assert_eq!(event.spec().control(), ControlEffect::Verdict, "{}", event.name());
+        assert_eq!(
+            event.spec().control(),
+            ControlEffect::Verdict,
+            "{}",
+            event.name()
+        );
     }
     assert_eq!(
         CursorEvent::BeforeSubmitPrompt.spec().control(),
@@ -184,7 +216,12 @@ fn control_effects_follow_the_documented_output() {
         CursorEvent::AfterTabFileEdit,
         CursorEvent::WorkspaceOpen,
     ] {
-        assert_eq!(event.spec().control(), ControlEffect::None, "{}", event.name());
+        assert_eq!(
+            event.spec().control(),
+            ControlEffect::None,
+            "{}",
+            event.name()
+        );
     }
     assert!(CursorEvent::Stop.spec().may_continue());
     assert!(CursorEvent::SubagentStop.spec().may_continue());
@@ -205,8 +242,14 @@ fn matcher_targets_follow_the_cursor_table() {
         (CursorEvent::AfterMcpExecution, MatchedValue::McpToolName),
         (CursorEvent::BeforeReadFile, MatchedValue::Literal("Read")),
         (CursorEvent::AfterFileEdit, MatchedValue::Literal("Write")),
-        (CursorEvent::BeforeTabFileRead, MatchedValue::Literal("TabRead")),
-        (CursorEvent::AfterTabFileEdit, MatchedValue::Literal("TabWrite")),
+        (
+            CursorEvent::BeforeTabFileRead,
+            MatchedValue::Literal("TabRead"),
+        ),
+        (
+            CursorEvent::AfterTabFileEdit,
+            MatchedValue::Literal("TabWrite"),
+        ),
         (
             CursorEvent::BeforeSubmitPrompt,
             MatchedValue::Literal("UserPromptSubmit"),
@@ -347,7 +390,10 @@ fn the_full_config_declares_a_binding_for_every_event_with_a_boundary() {
         "loop_limit null is capped"
     );
     assert_eq!(by_event(CursorEvent::Stop).timeout, Duration::from_secs(15));
-    assert_eq!(by_event(CursorEvent::SessionEnd).timeout, Duration::from_secs(3));
+    assert_eq!(
+        by_event(CursorEvent::SessionEnd).timeout,
+        Duration::from_secs(3)
+    );
 
     let shell = by_event(CursorEvent::BeforeShellExecution);
     assert_eq!(shell.id.index, 0, "the prompt hook after it is skipped");

@@ -67,16 +67,31 @@ fn the_full_config_parses_every_event_with_its_options() {
     assert_eq!(pre_tool.matcher.as_deref(), Some("Shell|Write"));
     assert_eq!(pre_tool.timeout, Duration::from_secs(20));
     assert!(pre_tool.fail_closed);
-    assert_eq!(by_event(CursorEvent::PostToolUseFailure).matcher.as_deref(), Some(""));
-    assert_eq!(by_event(CursorEvent::SubagentStop).matcher.as_deref(), Some("*"));
+    assert_eq!(
+        by_event(CursorEvent::PostToolUseFailure).matcher.as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        by_event(CursorEvent::SubagentStop).matcher.as_deref(),
+        Some("*")
+    );
     assert_eq!(by_event(CursorEvent::SubagentStop).loop_limit, Some(3));
     assert_eq!(
         by_event(CursorEvent::Stop).loop_limit,
         Some(LOOP_LIMIT_HOST_CAP)
     );
-    assert_eq!(by_event(CursorEvent::SessionStart).timeout, Duration::from_secs(10));
-    assert_eq!(by_event(CursorEvent::AfterMcpExecution).timeout, POST_AND_OTHER_TIMEOUT);
-    assert_eq!(by_event(CursorEvent::WorkspaceOpen).timeout, POST_AND_OTHER_TIMEOUT);
+    assert_eq!(
+        by_event(CursorEvent::SessionStart).timeout,
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        by_event(CursorEvent::AfterMcpExecution).timeout,
+        POST_AND_OTHER_TIMEOUT
+    );
+    assert_eq!(
+        by_event(CursorEvent::WorkspaceOpen).timeout,
+        POST_AND_OTHER_TIMEOUT
+    );
 
     assert_eq!(
         parsed.warnings,
@@ -197,7 +212,10 @@ fn a_definition_with_a_wrongly_typed_field_is_invalid() {
         r#"{ "command": "x", "timeout": "5" }"#,
     ] {
         assert!(
-            matches!(parse(&shell_file(definition)), Err(HookConfigError::Invalid(_))),
+            matches!(
+                parse(&shell_file(definition)),
+                Err(HookConfigError::Invalid(_))
+            ),
             "{definition} should be rejected"
         );
     }

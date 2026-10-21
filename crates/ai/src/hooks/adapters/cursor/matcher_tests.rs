@@ -64,7 +64,11 @@ fn empty_star_and_missing_matchers_match_everything() {
 #[test]
 fn a_matcher_is_an_unanchored_case_sensitive_regex() {
     let event = CursorEvent::BeforeShellExecution;
-    assert!(matches(event, Some("rm -rf"), shell_pre("sudo rm -rf /tmp/x")));
+    assert!(matches(
+        event,
+        Some("rm -rf"),
+        shell_pre("sudo rm -rf /tmp/x")
+    ));
     assert!(!matches(event, Some("rm -rf"), shell_pre("RM -RF /tmp/x")));
     assert!(matches(
         event,
@@ -77,7 +81,11 @@ fn a_matcher_is_an_unanchored_case_sensitive_regex() {
         shell_pre("echo git push")
     ));
     assert!(matches(event, Some("push$"), shell_pre("git push")));
-    assert!(!matches(event, Some("push$"), shell_pre("git push --force")));
+    assert!(!matches(
+        event,
+        Some("push$"),
+        shell_pre("git push --force")
+    ));
 }
 
 #[test]
@@ -169,7 +177,11 @@ fn pre_tool_use_matches_the_canonical_tool_name() {
 #[test]
 fn post_tool_events_match_the_canonical_tool_name_too() {
     let result = tool_result(shell_action("ls"), completed_shell("ls", "", 0), None);
-    assert!(matches(CursorEvent::PostToolUse, Some("^Shell$"), result.clone()));
+    assert!(matches(
+        CursorEvent::PostToolUse,
+        Some("^Shell$"),
+        result.clone()
+    ));
     assert!(!matches(CursorEvent::PostToolUse, Some("^Read$"), result));
 
     let failure = tool_failure(
@@ -198,7 +210,11 @@ fn shell_events_match_the_command_text_and_only_shell_commands() {
             locations: Vec::new(),
         }))
     ));
-    assert!(!matches(pre, None, tool_pre(mcp_action("read_file", json!({})))));
+    assert!(!matches(
+        pre,
+        None,
+        tool_pre(mcp_action("read_file", json!({})))
+    ));
 
     let after = CursorEvent::AfterShellExecution;
     let finished = tool_result(
@@ -332,7 +348,11 @@ fn a_binding_never_matches_an_envelope_of_another_boundary() {
         result.clone()
     ));
     assert!(!matches(CursorEvent::PreToolUse, None, result));
-    assert!(!matches(CursorEvent::AfterShellExecution, None, shell_pre("ls")));
+    assert!(!matches(
+        CursorEvent::AfterShellExecution,
+        None,
+        shell_pre("ls")
+    ));
     assert!(!matches(CursorEvent::PostToolUse, None, shell_pre("ls")));
     assert!(!matches(
         CursorEvent::Stop,
@@ -375,6 +395,14 @@ fn grep_is_a_tool_name_not_a_command() {
         queries: vec!["rm".to_owned()],
         path: ".".to_owned(),
     });
-    assert!(matches(CursorEvent::PreToolUse, Some("^Grep$"), grep.clone()));
-    assert!(!matches(CursorEvent::BeforeShellExecution, Some("rm"), grep));
+    assert!(matches(
+        CursorEvent::PreToolUse,
+        Some("^Grep$"),
+        grep.clone()
+    ));
+    assert!(!matches(
+        CursorEvent::BeforeShellExecution,
+        Some("rm"),
+        grep
+    ));
 }

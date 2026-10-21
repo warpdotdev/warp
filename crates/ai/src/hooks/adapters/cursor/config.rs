@@ -195,8 +195,8 @@ fn validate_definition(
             })?,
     };
 
-    let loop_limit = validate_loop_limit(spec, index, raw.loop_limit.as_ref(), warnings)
-        .map_err(invalid)?;
+    let loop_limit =
+        validate_loop_limit(spec, index, raw.loop_limit.as_ref(), warnings).map_err(invalid)?;
 
     let matcher = match raw.matcher {
         None => None,
@@ -221,7 +221,9 @@ fn validate_definition(
 
     for name in raw.other.keys() {
         if !PROMPT_HOOK_FIELDS.contains(&name.as_str()) {
-            warnings.push(format!("{event}[{index}]: unknown field {name} was ignored"));
+            warnings.push(format!(
+                "{event}[{index}]: unknown field {name} was ignored"
+            ));
         }
     }
     match spec.boundary {

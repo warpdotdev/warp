@@ -85,7 +85,10 @@ fn common_fields(spec: &CursorEventSpec, envelope: &HookEnvelope) -> Map<String,
     fields.insert("hook_event_name".to_owned(), json!(spec.name));
     fields.insert("cursor_version".to_owned(), json!(envelope.warp_version));
     fields.insert("warp_version".to_owned(), json!(envelope.warp_version));
-    fields.insert("workspace_roots".to_owned(), json!(workspace_roots(envelope)));
+    fields.insert(
+        "workspace_roots".to_owned(),
+        json!(workspace_roots(envelope)),
+    );
     fields.insert("user_email".to_owned(), json!(envelope.user_email));
     fields.insert("transcript_path".to_owned(), Value::Null);
     fields
@@ -429,8 +432,16 @@ fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) -> Value {
         AIAgentActionType::SearchCodebase(request) => {
             let mut fields = Map::new();
             fields.insert("query".to_owned(), json!(request.query));
-            insert_some(&mut fields, "partial_paths", request.partial_paths.as_deref());
-            insert_some(&mut fields, "codebase_path", request.codebase_path.as_deref());
+            insert_some(
+                &mut fields,
+                "partial_paths",
+                request.partial_paths.as_deref(),
+            );
+            insert_some(
+                &mut fields,
+                "codebase_path",
+                request.codebase_path.as_deref(),
+            );
             Value::Object(fields)
         }
         AIAgentActionType::RequestFileEdits { file_edits, title } => {
@@ -923,7 +934,14 @@ fn result_view(result: &AIAgentActionResultType) -> Value {
                 exit_code,
                 start_ts,
                 completed_ts,
-            } => finished_command_view(block_id, None, output, exit_code.value(), *start_ts, *completed_ts),
+            } => finished_command_view(
+                block_id,
+                None,
+                output,
+                exit_code.value(),
+                *start_ts,
+                *completed_ts,
+            ),
             WriteToLongRunningShellCommandResult::Cancelled => json!({ "kind": "cancelled" }),
             WriteToLongRunningShellCommandResult::Error(error) => {
                 json!({ "kind": "error", "error": serialized(error) })
@@ -1204,7 +1222,11 @@ fn result_view(result: &AIAgentActionResultType) -> Value {
                 let mut fields = Map::new();
                 fields.insert("kind".to_owned(), json!("success"));
                 fields.insert("recording_id".to_owned(), json!(started.recording_id));
-                insert_some(&mut fields, "started_at_ms", unix_millis(started.started_at));
+                insert_some(
+                    &mut fields,
+                    "started_at_ms",
+                    unix_millis(started.started_at),
+                );
                 fields.insert("width_px".to_owned(), json!(started.width_px));
                 fields.insert("height_px".to_owned(), json!(started.height_px));
                 Value::Object(fields)
@@ -1264,7 +1286,14 @@ fn result_view(result: &AIAgentActionResultType) -> Value {
                 exit_code,
                 start_ts,
                 completed_ts,
-            } => finished_command_view(block_id, None, output, exit_code.value(), *start_ts, *completed_ts),
+            } => finished_command_view(
+                block_id,
+                None,
+                output,
+                exit_code.value(),
+                *start_ts,
+                *completed_ts,
+            ),
             TransferShellCommandControlToUserResult::Cancelled => json!({ "kind": "cancelled" }),
             TransferShellCommandControlToUserResult::Error(error) => {
                 json!({ "kind": "error", "error": serialized(error) })

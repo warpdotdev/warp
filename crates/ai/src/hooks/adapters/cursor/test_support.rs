@@ -140,7 +140,11 @@ pub(super) fn tool_failure(
     }
 }
 
-pub(super) fn completed_shell(command: &str, output: &str, exit_code: i32) -> AIAgentActionResultType {
+pub(super) fn completed_shell(
+    command: &str,
+    output: &str,
+    exit_code: i32,
+) -> AIAgentActionResultType {
     AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
         block_id: BlockId::from("block-1".to_owned()),
         command: command.to_owned(),
