@@ -15,7 +15,7 @@ pub mod test_util;
 pub mod trust;
 
 pub use adapters::{
-    DecodePolicy, DeclaredBinding, HookConfigError, HookFormatAdapter, ParsedHookConfig,
+    DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
 pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
