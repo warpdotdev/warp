@@ -40,12 +40,17 @@ use warp_errors::{ErrorExt, register_error};
 mod discovery;
 pub mod metadata;
 pub mod spacectl;
+mod sub_projects;
 
 #[cfg(test)]
 use discovery::produce_candidates;
 use discovery::{CacheCandidate, CandidateKey, DETECTION_CONCURRENCY, candidate_receiver};
 use metadata::{CacheMetadataError, CacheUsage, lexically_normalized, normalized_cache_root};
-use spacectl::{Mount, MountContext, MountResponse, run_spacectl_mount};
+use spacectl::{
+    Mount, MountContext, MountResponse, failed_planning_mode, run_spacectl_modes,
+    run_spacectl_mount,
+};
+use sub_projects::{CargoWorkspace, needs_dry_run};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 4 * 1024;
@@ -398,6 +403,7 @@ struct CandidateDetection {
     invocation: CachePreparationReport,
     detected: Option<DetectedCacheModes>,
     scheduled: bool,
+    dry_run: bool,
 }
 
 /// Calculates cache modes corresponding to global tools like package managers, which are not
@@ -625,6 +631,7 @@ fn bounded_output(output: &[u8], stream: &str) -> String {
         tags.cloud_agent = true,
         detection_limit = DETECTION_CONCURRENCY,
         total_scheduled_detects = tracing::field::Empty,
+        total_dry_runs = tracing::field::Empty,
     )
 )]
 pub async fn setup_cache<F, Fut>(
@@ -644,40 +651,73 @@ where
     let prepare_cache_root = cache_root.clone();
     // Preparing inside the source stream prevents permission fallbacks from racing while still
     // allowing each preparation to overlap dry-run detections already in flight.
-    let candidates = stream::unfold(candidate_receiver(repositories), move |mut receiver| {
-        let run_command = Arc::clone(&prepare_run_command);
-        let cache_root = prepare_cache_root.clone();
-        async move {
-            let candidate = receiver.recv().await?;
-            let configuration_root = cache_root.join(&candidate.relative_cache_dir);
-            let preparation_error = create_cache_dir_all(&configuration_root, run_command.as_ref())
-                .await
-                .err();
-            Some(((candidate, configuration_root, preparation_error), receiver))
-        }
-    });
+    let candidates = stream::unfold(
+        (
+            candidate_receiver(repositories),
+            None::<Arc<CargoWorkspace>>,
+        ),
+        move |(mut receiver, cargo_workspace)| {
+            let run_command = Arc::clone(&prepare_run_command);
+            let cache_root = prepare_cache_root.clone();
+            async move {
+                let candidate = receiver.recv().await?;
+                // Discovery emits each repository root before its sub-projects.
+                let cargo_workspace = match cargo_workspace {
+                    Some(workspace) if candidate.key.normalized_relative_path.is_some() => {
+                        workspace
+                    }
+                    _ => Arc::new(CargoWorkspace::new(candidate.repository_root.clone())),
+                };
+                let configuration_root = cache_root.join(&candidate.relative_cache_dir);
+                let preparation_error =
+                    create_cache_dir_all(&configuration_root, run_command.as_ref())
+                        .await
+                        .err();
+                Some((
+                    (
+                        candidate,
+                        configuration_root,
+                        preparation_error,
+                        Arc::clone(&cargo_workspace),
+                    ),
+                    (receiver, Some(cargo_workspace)),
+                ))
+            }
+        },
+    );
     let detect_run_command = Arc::clone(&run_command);
     let mut detection_results = candidates
-        .map(move |(candidate, configuration_root, preparation_error)| {
-            let run_command = Arc::clone(&detect_run_command);
-            async move {
-                detect_candidate(
-                    candidate,
-                    configuration_root,
-                    preparation_error,
-                    run_command.as_ref(),
-                )
-                .await
-            }
-        })
+        .map(
+            move |(candidate, configuration_root, preparation_error, cargo_workspace)| {
+                let run_command = Arc::clone(&detect_run_command);
+                async move {
+                    detect_candidate(
+                        candidate,
+                        configuration_root,
+                        preparation_error,
+                        &cargo_workspace,
+                        run_command.as_ref(),
+                    )
+                    .await
+                }
+            },
+        )
         .buffer_unordered(DETECTION_CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
-    tracing::Span::current().record(
+    let span = tracing::Span::current();
+    span.record(
         "total_scheduled_detects",
         detection_results
             .iter()
             .filter(|result| result.scheduled)
+            .count() as u64,
+    );
+    span.record(
+        "total_dry_runs",
+        detection_results
+            .iter()
+            .filter(|result| result.dry_run)
             .count() as u64,
     );
     detection_results.sort_by(|left, right| left.order.cmp(&right.order));
@@ -711,57 +751,62 @@ where
     let mut global_env = None;
     for configuration in &plan.configurations {
         let configuration_root = plan.cache_root.join(&configuration.relative_cache_dir);
-        let invocation = if create_cache_dir_all(&configuration_root, run_command.as_ref())
+        let invocations = if create_cache_dir_all(&configuration_root, run_command.as_ref())
             .await
             .is_err()
         {
-            failed_invocation(
+            vec![failed_invocation(
                 configuration.scope.clone(),
                 configuration.modes.clone(),
                 configuration.relative_cache_dir.clone(),
                 CacheSetupError::RootCreationFailed,
                 Duration::ZERO,
-            )
+            )]
         } else {
             safe_info!(
                 safe: ("Mounting cache modes {:?} for scope kind '{}'", configuration.modes, configuration.scope.kind()),
                 full: ("Mounting cache modes {:?} for {:?}", configuration.modes, configuration.scope)
             );
-            run_spacectl_mount(
-                configuration.scope.clone(),
-                configuration.modes.clone(),
-                false,
-                MountContext {
-                    relative_cache_dir: configuration.relative_cache_dir.clone(),
-                    cache_root: configuration_root,
-                    cwd: configuration.cwd.clone(),
-                    stable_child_id: String::new(),
-                },
-                run_command.as_ref(),
-            )
-            .await
-        };
-
-        if let Some(response) = &invocation.response {
-            report.mounted_paths.extend(response.output.mounts.clone());
-            tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
-
             match &configuration.scope {
-                CacheScope::Repository { .. } => {
-                    for (name, value) in &response.output.add_envs {
-                        if repository_env.insert(name.clone(), value.clone()).is_some() {
-                            log::warn!(
-                                "repository build-cache environment conflict resolved by canonical repository order"
-                            );
-                        }
-                    }
-                }
+                CacheScope::Repository { .. } => vec![
+                    mount_modes(
+                        configuration,
+                        &configuration_root,
+                        configuration.modes.clone(),
+                        run_command.as_ref(),
+                    )
+                    .await,
+                ],
                 CacheScope::Global => {
-                    global_env = Some(response.output.add_envs.clone());
+                    mount_global(configuration, &configuration_root, run_command.as_ref()).await
                 }
             }
+        };
+
+        for invocation in invocations {
+            if let Some(response) = &invocation.response {
+                report.mounted_paths.extend(response.output.mounts.clone());
+                tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
+
+                match &configuration.scope {
+                    CacheScope::Repository { .. } => {
+                        for (name, value) in &response.output.add_envs {
+                            if repository_env.insert(name.clone(), value.clone()).is_some() {
+                                log::warn!(
+                                    "repository build-cache environment conflict resolved by canonical repository order"
+                                );
+                            }
+                        }
+                    }
+                    // Successful global invocations are in canonical mode order, so later modes
+                    // win conflicts.
+                    CacheScope::Global => global_env
+                        .get_or_insert_with(BTreeMap::new)
+                        .extend(response.output.add_envs.clone()),
+                }
+            }
+            report.invocations.push(invocation);
         }
-        report.invocations.push(invocation);
     }
 
     // The global response covers all detected modes; repository values are only a fallback.
@@ -781,10 +826,100 @@ where
     report
 }
 
+async fn mount_modes<F, Fut>(
+    configuration: &CacheConfiguration,
+    configuration_root: &Path,
+    modes: Vec<String>,
+    run_command: &F,
+) -> CachePreparationReport
+where
+    F: Fn(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    run_spacectl_mount(
+        configuration.scope.clone(),
+        modes,
+        false,
+        MountContext {
+            relative_cache_dir: configuration.relative_cache_dir.clone(),
+            cache_root: configuration_root.to_owned(),
+            cwd: configuration.cwd.clone(),
+            stable_child_id: String::new(),
+        },
+        run_command,
+    )
+    .await
+}
+
+/// Mounts the global configuration so that one failing mode cannot prevent caching for the
+/// others. When spacectl names the mode whose planning failed, that mode is dropped and the rest
+/// are retried. Otherwise, each remaining mode is mounted in its own invocation.
+///
+/// spacectl derives each mount's cache location from its destination alone, so splitting modes
+/// across invocations keeps the on-volume layout. The one exception is `swiftpm`, which also
+/// mounts Xcode's module cache when `xcode` is not part of the same invocation.
+///
+/// Every invocation either succeeds, drops a mode, or ends the retries, so this makes at most
+/// twice as many invocations as there are modes. Each dropped or failed mode is reported in its
+/// own failed invocation, and successful invocations are returned in canonical mode order.
+async fn mount_global<F, Fut>(
+    configuration: &CacheConfiguration,
+    configuration_root: &Path,
+    run_command: &F,
+) -> Vec<CachePreparationReport>
+where
+    F: Fn(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    let mut modes = configuration.modes.clone();
+    let mut invocations = Vec::new();
+    while !modes.is_empty() {
+        let invocation = mount_modes(
+            configuration,
+            configuration_root,
+            modes.clone(),
+            run_command,
+        )
+        .await;
+        let Some(error) = invocation.error.clone() else {
+            invocations.push(invocation);
+            break;
+        };
+        if let Some(mode) = failed_planning_mode(&error, &modes) {
+            tracing::warn!(mode, "Retrying global cache mount without failing mode");
+            modes.retain(|candidate| *candidate != mode);
+            invocations.push(failed_invocation(
+                CacheScope::Global,
+                vec![mode],
+                configuration.relative_cache_dir.clone(),
+                error,
+                invocation.duration,
+            ));
+            continue;
+        }
+        if modes.len() == 1 {
+            invocations.push(invocation);
+            break;
+        }
+        tracing::warn!("Mounting global cache modes individually after unattributed failure");
+        for mode in modes {
+            invocations.push(
+                mount_modes(configuration, configuration_root, vec![mode], run_command).await,
+            );
+        }
+        break;
+    }
+    invocations
+}
+
+/// Detects the cache modes for `candidate`. Repository roots always get a full dry run so their
+/// mount destinations are known. Sub-projects first use the cheaper mode-only detection and only
+/// escalate to a dry run if their modes might add an unclaimed destination inside the repository.
 async fn detect_candidate<F, Fut>(
     candidate: CacheCandidate,
     configuration_root: PathBuf,
     preparation_error: Option<CacheSetupError>,
+    cargo_workspace: &CargoWorkspace,
     run_command: &F,
 ) -> CandidateDetection
 where
@@ -807,7 +942,45 @@ where
             ),
             detected: None,
             scheduled: false,
+            dry_run: false,
         };
+    }
+
+    if let Some(stable_child_id) = &candidate.stable_child_id {
+        let invocation = run_spacectl_modes(
+            scope.clone(),
+            candidate.relative_cache_dir.clone(),
+            &candidate.source.cwd,
+            stable_child_id,
+            run_command,
+        )
+        .await;
+        if invocation.succeeded()
+            && (invocation.modes.is_empty()
+                || !needs_dry_run(
+                    &invocation.modes,
+                    &candidate.source.cwd,
+                    &candidate.repository_root,
+                    cargo_workspace,
+                    run_command,
+                )
+                .await)
+        {
+            let detected = (!invocation.modes.is_empty()).then(|| DetectedCacheModes {
+                order: candidate.key.clone(),
+                source: candidate.source,
+                relative_cache_dir: candidate.relative_cache_dir,
+                modes: invocation.modes.clone(),
+                repository_mount_paths: Some(BTreeSet::new()),
+            });
+            return CandidateDetection {
+                order: candidate.key,
+                invocation,
+                detected,
+                scheduled: true,
+                dry_run: false,
+            };
+        }
     }
 
     let invocation = run_spacectl_mount(
@@ -846,6 +1019,7 @@ where
         invocation,
         detected,
         scheduled: true,
+        dry_run: true,
     }
 }
 
