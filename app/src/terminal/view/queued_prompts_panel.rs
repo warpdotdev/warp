@@ -1219,7 +1219,9 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .finish()
         };
 
-        let prompt_text_or_editor = if is_command {
+        // The inline editor renders bare; only the preview carries the command prefix and the
+        // italic suffix explaining when rows that don't simply fire after the response will go.
+        let prompt_text_or_editor = if is_command && !is_in_edit_mode {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(4.)
@@ -1234,7 +1236,6 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         } else {
             prompt_text_or_editor
         };
-        // An italic suffix explains when rows that don't simply fire after the response will go.
         let suffix = match origin {
             QueuedQueryOrigin::LrcAutoQueue | QueuedQueryOrigin::PendingLrcAutoQueue => {
                 Some(LRC_AUTO_QUEUE_ROW_SUFFIX)
@@ -1247,7 +1248,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             | QueuedQueryOrigin::CompactAndSlashCommand
             | QueuedQueryOrigin::ForkAndCompactSlashCommand => None,
         };
-        let prompt_text_or_editor = if let Some(suffix) = suffix {
+        let prompt_text_or_editor = if let Some(suffix) = suffix.filter(|_| !is_in_edit_mode) {
             let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
