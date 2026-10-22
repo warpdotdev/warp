@@ -247,6 +247,46 @@ fn set_execute_commands(app: &mut App, terminal_view_id: EntityId, setting: Acti
     });
 }
 
+fn set_apply_code_diffs(app: &mut App, terminal_view_id: EntityId, setting: ActionPermission) {
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = profiles
+            .active_profile(Some(terminal_view_id), ctx)
+            .id()
+            .clone();
+        profiles.set_apply_code_diffs(&profile_id, &setting, ctx);
+    });
+}
+
+/// Turns on the conversation's auto-approval, so Warp runs its commands without asking.
+fn enable_run_to_completion(
+    app: &mut App,
+    harness: &HookTestApp,
+    conversation_id: AIConversationId,
+) {
+    let terminal_view_id = harness.terminal_view_id;
+    app.update(|ctx| {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.toggle_autoexecute_override(&conversation_id, terminal_view_id, ctx);
+        });
+    });
+}
+
+/// Tells the project hook file watcher that `hooks_file` changed on disk.
+fn notify_hook_file_modified(app: &mut App, hooks_file: &Path) {
+    let watcher = app
+        .read(|ctx| HookRuntime::as_ref(ctx).config_watcher_for_test())
+        .expect("the detected root started the watcher");
+    watcher.update(app, |watcher, ctx| {
+        watcher.handle_fs_event(
+            &BulkFilesystemWatcherEvent {
+                modified: [hooks_file.to_path_buf()].into_iter().collect(),
+                ..Default::default()
+            },
+            ctx,
+        )
+    });
+}
+
 /// Announces `root` the way terminal navigation detects a repository.
 fn detect_root(app: &mut App, root: &Path) {
     let canonical = StandardizedPath::from_local_canonicalized(root).expect("canonical");
@@ -374,12 +414,14 @@ async fn wait_until_blocked(
 }
 
 fn hook_denied_reason(result: &AIAgentActionResultType) -> Option<&str> {
-    match result {
-        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
-            reason,
-            ..
-        }) => Some(reason),
-        _ => None,
+    if let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
+        reason,
+        ..
+    }) = result
+    {
+        Some(reason)
+    } else {
+        None
     }
 }
 
@@ -590,11 +632,7 @@ fi"#,
         assert!(is_denylisted(&result), "{result:?}");
 
         let auto_approving = new_conversation(&mut app, &harness);
-        app.update(|ctx| {
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.toggle_autoexecute_override(&auto_approving, harness.terminal_view_id, ctx);
-            });
-        });
+        enable_run_to_completion(&mut app, &harness, auto_approving);
         let build = shell_action("build", "npm run build");
         queue(&mut app, &model, auto_approving, vec![build.clone()]);
         wait_until_running(&mut app, &model, &build).await;
@@ -664,9 +702,8 @@ printf '{"permission":"deny","agent_message":"The nested project allows no shell
     });
 }
 
-/// A driver started on `harness`'s terminal with `hook_dirs` as its run's hook directories, after
-/// the hook sources load. Returns the driver, which must stay alive for the run to, and the run's
-/// exit receiver.
+/// Starts a driver on `harness`'s terminal with `hook_dirs` loaded. Returns the driver handle
+/// (which must be kept alive for the duration of the run) and the run's exit receiver.
 fn start_driver(
     app: &mut App,
     harness: &ControllerHarness,
@@ -864,15 +901,8 @@ printf '{"env":{"E2E_SESSION":"yes"}}'"#,
     });
 }
 
-/// §11 "stale registry revision": the hook file changes while a pre-tool hook is deciding, so its
-/// verdict is dropped and the hook runs once more against the new configuration. Covered twice:
-/// through a run-delivered file loaded again before the run is pinned, which changes the active
-/// hooks and moves the revision; and through the project file watcher after the run is pinned,
-/// which leaves the active hooks and the revision as they were, so the verdict in flight stands
-/// and the hook does not run again.
-#[test]
-fn stale_registry_revision() {
-    const SLOW_DENY: &str = r#"cat > /dev/null
+/// A deny hook that logs each run to `runs.log` and holds its first run until `go` exists.
+const SLOW_DENY: &str = r#"cat > /dev/null
 echo run >> "$WARP_PROJECT_DIR/runs.log"
 runs=$(wc -l < "$WARP_PROJECT_DIR/runs.log" | tr -d ' ')
 if [ "$runs" -eq 1 ]; then
@@ -881,7 +911,11 @@ if [ "$runs" -eq 1 ]; then
 fi
 printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
 
-    // A run-delivered file reloaded before the run is pinned.
+/// §11 "stale registry revision": a run-delivered hook file is loaded again, before the run is
+/// pinned, while a pre-tool hook is deciding. The active hooks change and the revision moves, so
+/// the verdict is dropped and the hook runs once more against the new configuration.
+#[test]
+fn stale_registry_revision() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
@@ -923,8 +957,13 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
         let_background_work_settle(&mut app).await;
         assert_eq!(line_count(&runs), 2, "exactly one more run");
     });
+}
 
-    // A project file the watcher reloads after the run is pinned.
+/// The project hook file changes on disk after the run is pinned, while a pre-tool hook is
+/// deciding. The watcher publishes the change but the active hooks and the revision stay as they
+/// were, so the verdict in flight stands and the hook does not run again.
+#[test]
+fn a_pinned_hook_file_touch_keeps_the_verdict_in_flight() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
@@ -947,18 +986,7 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
         let before = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
         let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
         fs::write(&hooks_file, "{ \"version\": 1, \"hooks\": {} }").expect("rewrite");
-        let watcher = app
-            .read(|ctx| HookRuntime::as_ref(ctx).config_watcher_for_test())
-            .expect("the detected root started the watcher");
-        watcher.update(&mut app, |watcher, ctx| {
-            watcher.handle_fs_event(
-                &BulkFilesystemWatcherEvent {
-                    modified: [hooks_file.clone()].into_iter().collect(),
-                    ..Default::default()
-                },
-                ctx,
-            )
-        });
+        notify_hook_file_modified(&mut app, &hooks_file);
         let after = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
         assert!(
             after.generation > before.generation,
@@ -1221,13 +1249,11 @@ fn protected_hook_paths() {
             let root = sample_project(&mut app, &sandbox, &harness);
             load_hook_dir(&mut app, &root.join("run_hooks/hooks.json"));
             pin(&mut app, harness.terminal_view_id);
-            AIExecutionProfilesModel::handle(&app).update(&mut app, |profiles, ctx| {
-                let profile_id = profiles
-                    .active_profile(Some(harness.terminal_view_id), ctx)
-                    .id()
-                    .clone();
-                profiles.set_apply_code_diffs(&profile_id, &ActionPermission::AlwaysAllow, ctx);
-            });
+            set_apply_code_diffs(
+                &mut app,
+                harness.terminal_view_id,
+                ActionPermission::AlwaysAllow,
+            );
             let model = action_model(&mut app, &harness);
 
             let absolute = root.join(PROJECT_CURSOR_HOOKS_PATH).display().to_string();
@@ -1277,10 +1303,9 @@ fn protected_hook_paths() {
 }
 
 /// §11 "deny reason reaches the wire": the project's shell denial carries the script's own text
-/// into `permission_denied.hook_denied.reason`. A tool with no text slot denied by a `preToolUse`
-/// hook finishes with its cancelled result and the reason reaches only a `Denied` notice: the
-/// empty-result half of the clause is not met in Phase 1, as PR 6 decided (questions.md, "PR 6: a
-/// denied action with no text slot ends the turn as cancelled, or reports completion").
+/// into `permission_denied.hook_denied.reason`. A tool with no text slot in its wire result
+/// (`InitProject`) denied by a `preToolUse` hook finishes with its cancelled result and reports
+/// the reason through a `Denied` notice.
 #[test]
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {

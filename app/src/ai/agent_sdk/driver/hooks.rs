@@ -540,9 +540,8 @@ pub(crate) fn write_diagnostic<W: Write>(
 
 #[cfg(test)]
 impl AgentDriver {
-    /// Loads `options`' hook sources and starts the run with no initial turn, as the run loop does
-    /// after `prepare_hooks_for_run`, for tests outside this module. The runtime keeps whatever
-    /// messenger the test installed.
+    /// Loads `options`' hook sources and starts the run with no initial turn, keeping whatever
+    /// messenger is already installed on `HookRuntime`.
     pub(crate) fn start_run_with_hooks_for_test(
         &mut self,
         options: HookRunOptions,
