@@ -1,8 +1,11 @@
+pub mod cursor;
+
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use thiserror::Error;
 
+use self::cursor::CursorAdapter;
 use crate::hooks::model::{
     BindingCapabilities, HookBindingId, HookBoundary, HookDiagnostic, HookEffects, HookEnvelope,
     HookFormat, HookSourceId,
@@ -97,7 +100,12 @@ pub struct HookAdapterDefinition {
 }
 
 /// Every known format adapter. Formats are added here as their adapters land.
-pub static HOOK_ADAPTER_DEFINITIONS: LazyLock<Vec<HookAdapterDefinition>> = LazyLock::new(Vec::new);
+pub static HOOK_ADAPTER_DEFINITIONS: LazyLock<Vec<HookAdapterDefinition>> = LazyLock::new(|| {
+    vec![HookAdapterDefinition {
+        format: HookFormat::Cursor,
+        adapter: Arc::new(CursorAdapter::new()),
+    }]
+});
 
 /// The adapter for `format`, if one is registered.
 pub fn adapter_for(format: HookFormat) -> Option<Arc<dyn HookFormatAdapter>> {

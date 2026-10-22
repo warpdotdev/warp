@@ -1,3 +1,6 @@
+#[cfg(feature = "local_fs")]
+pub mod command;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;

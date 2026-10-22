@@ -672,6 +672,90 @@ mod hooks {
             assert!(app.read(|ctx| tool_result::observed_terminal_results(ctx).is_empty()));
         });
     }
+
+    /// End-to-end shell hook execution with no test doubles: a Cursor `hooks.json` on disk, a real
+    /// script, the process runner, and the registry loader.
+    #[cfg(all(feature = "local_fs", unix))]
+    mod real_process {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        use ai::hooks::{HookFormat, HookRegistry, HookSourceKind};
+        use tempfile::TempDir;
+        use warpui::{App, SingletonEntity};
+
+        use super::super::super::{NotExecutedReason, TryExecuteResult};
+        use super::{build_executor, reason_of, shapes, try_execute};
+        use crate::ai::blocklist::hooks::HookRuntime;
+        use crate::ai::blocklist::hooks::testing::{hook_test_app, settle, shell_action};
+        use crate::features::FeatureFlag;
+
+        #[test]
+        fn a_real_script_denies_a_real_shell_command() {
+            App::test((), |mut app| async move {
+                let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+                let harness = hook_test_app(&mut app);
+
+                let dir = TempDir::new().expect("tempdir");
+                let script = dir.path().join("hook.sh");
+                fs::write(
+                    &script,
+                    "#!/bin/sh\nprintf '{\"agent_message\":\"rm is not allowed in this repo\"}'\nexit 2\n",
+                )
+                .expect("write script");
+                fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+                let hooks_json = dir.path().join("hooks.json");
+                fs::write(
+                    &hooks_json,
+                    r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./hook.sh" } ] } }"#,
+                )
+                .expect("write hooks.json");
+
+                app.update(|ctx| {
+                    HookRuntime::install_command_runner(ctx);
+                    HookRegistry::handle(ctx)
+                        .update(ctx, |registry, _| {
+                            registry.install_explicit_source(
+                                &hooks_json,
+                                HookFormat::Cursor,
+                                HookSourceKind::RunDelivered,
+                            )
+                        })
+                        .expect("the file loads");
+                });
+                let (executor, events) = build_executor(&mut app, &harness);
+                let shell = shell_action("id-shell", "rm -rf build");
+
+                let first =
+                    try_execute(&mut app, &executor, &shell, harness.conversation_id, false);
+                assert_eq!(reason_of(&first), Some(NotExecutedReason::WaitingOnHooks));
+
+                let verdict_line = format!("verdict:{}:false", shell.id);
+                settle(&mut app, |_| {
+                    events.borrow().iter().any(|l| l == &verdict_line)
+                })
+                .await;
+
+                let second =
+                    try_execute(&mut app, &executor, &shell, harness.conversation_id, false);
+                assert!(matches!(second, TryExecuteResult::ExecutedSync));
+                assert_eq!(
+                    shapes(&events, &shell),
+                    vec![
+                        "verdict:<id>:false".to_owned(),
+                        "executing:<id>".to_owned(),
+                        "finished:<id>:hook_denied(rm -rf build;rm is not allowed in this repo)"
+                            .to_owned(),
+                    ]
+                );
+                assert_eq!(
+                    harness.hooks.adapter.encoded_count(),
+                    0,
+                    "the Cursor adapter, not the test double, encoded the input"
+                );
+            });
+        }
+    }
 }
 
 mod path_shell_quoting {
