@@ -808,6 +808,8 @@ pub enum BindingGroup {
     Notifications,
     EnvVarCollection,
     Terminal,
+    LaunchConfigurations,
+    TabConfigs,
 }
 
 impl BindingGroup {
@@ -826,6 +828,8 @@ impl BindingGroup {
             Self::Notifications => "notifications",
             Self::EnvVarCollection => "env_var_collections",
             Self::Terminal => "terminal",
+            Self::LaunchConfigurations => "launch_configurations",
+            Self::TabConfigs => "tab_configs",
         }
     }
 

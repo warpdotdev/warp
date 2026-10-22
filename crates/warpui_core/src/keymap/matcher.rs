@@ -130,6 +130,32 @@ impl Matcher {
         self.keymap.register_editable_bindings(actions.into_iter());
     }
 
+    /// Removes every editable binding whose name starts with `prefix`, then registers
+    /// `bindings` in their place.
+    pub fn replace_editable_bindings_with_prefix<A: IntoIterator<Item = EditableBinding>>(
+        &mut self,
+        prefix: &str,
+        bindings: A,
+    ) {
+        self.pending.clear();
+
+        let bindings = match &self.custom_trigger_to_keystroke_fn {
+            None => Either::Left(bindings),
+            Some(custom_tag_to_keystroke) => {
+                let bindings = bindings.into_iter().map(|mut editable_binding| {
+                    editable_binding.trigger = Self::convert_custom_trigger_to_keystroke_trigger(
+                        editable_binding.trigger,
+                        custom_tag_to_keystroke,
+                    );
+                    editable_binding
+                });
+                Either::Right(bindings)
+            }
+        };
+        self.keymap
+            .replace_editable_bindings_with_prefix(prefix, bindings.into_iter());
+    }
+
     /// Set a custom trigger for a given editable binding name.
     ///
     /// This will override the default trigger for that action.

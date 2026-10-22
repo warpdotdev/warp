@@ -34,6 +34,15 @@ impl LaunchConfig {
     }
 }
 
+/// Case-insensitive lookup of a launch configuration by its `name` — the identifier
+/// `warp://launch/<name>` URIs and `launch_config:open:<name>` keybindings use.
+pub fn find_by_name<'a>(configs: &'a [LaunchConfig], name: &str) -> Option<&'a LaunchConfig> {
+    let name = name.to_lowercase();
+    configs
+        .iter()
+        .find(|config| config.name.to_lowercase() == name)
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct WindowTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
