@@ -27,6 +27,7 @@ use crate::ai::blocklist::permissions::{
 use crate::ai::execution_profiles::ActionPermission;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::workspaces::user_workspaces::TeamScope;
 
@@ -499,9 +500,14 @@ pub(crate) fn permission_floors(
             scope,
             ctx,
         ),
-        AIAgentActionType::RequestFileEdits { file_edits, .. } => {
-            file_write_floors(conversation_id, file_edits, terminal_view_id, scope, ctx)
-        }
+        AIAgentActionType::RequestFileEdits { file_edits, .. } => file_write_floors(
+            conversation_id,
+            file_edits,
+            active_session,
+            terminal_view_id,
+            scope,
+            ctx,
+        ),
         AIAgentActionType::CallMCPTool {
             server_id, name, ..
         } => mcp_floors(
@@ -615,17 +621,30 @@ fn shell_floors(
     }
 }
 
-/// The floors for a file edit, from `can_write_files`'s reason.
+/// The floors for a file edit, from `can_write_files`'s reason. The model writes paths relative
+/// to the session's working directory and the protected paths are absolute, so the paths are
+/// resolved the way the file-edit executor resolves them before its own check.
 fn file_write_floors(
     conversation_id: &AIConversationId,
     file_edits: &[FileEdit],
+    active_session: &ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
     scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> PermissionFloors {
+    let session = active_session.as_ref(ctx);
+    let current_working_directory = session.current_working_directory().cloned();
+    let shell = session.shell_launch_data(ctx);
     let paths = file_edits
         .iter()
-        .filter_map(|edit| edit.file().map(PathBuf::from))
+        .filter_map(|edit| edit.file())
+        .map(|file| {
+            PathBuf::from(host_native_absolute_path(
+                file,
+                &shell,
+                &current_working_directory,
+            ))
+        })
         .collect::<Vec<_>>();
     match BlocklistAIPermissions::as_ref(ctx).can_write_files(
         conversation_id,

@@ -901,3 +901,109 @@ fn cancelling_a_conversation_clears_only_its_entries() {
         ));
     });
 }
+
+/// The protected-path floor is read against resolved paths, the way the file-edit executor
+/// checks them, so an edit the model writes relative to the session's working directory
+/// carries the floor when it touches a hook file.
+#[cfg(feature = "local_fs")]
+mod floors {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use ai::agent::action::FileEdit;
+    use ai::hooks::{
+        HookFormat, HookRegistry, HookSourceId, HookSourceKind, HookSourceLocation,
+        PROJECT_CURSOR_HOOKS_PATH, PermissionFloors, SourceUpdate, TrustDecision,
+    };
+    use tempfile::TempDir;
+    use warpui::{App, SingletonEntity};
+
+    use super::*;
+    use crate::ai::blocklist::hooks::testing::{HookTestApp, hook_test_app, set_working_directory};
+    use crate::workspaces::user_workspaces::UserWorkspaces;
+
+    /// A project whose hook file is loaded into the registry under its root, with the session's
+    /// working directory at that root.
+    fn project_with_a_hook_file(app: &mut App, harness: &HookTestApp) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("tempdir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        fs::create_dir_all(root.join(".cursor")).expect("mkdir");
+        fs::write(root.join("README.md"), "notes").expect("write");
+        let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
+        let hooks_json =
+            r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "./a.sh" } ] } }"#;
+        fs::write(&hooks_file, hooks_json).expect("write");
+        app.update(|ctx| {
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.upsert_source(SourceUpdate {
+                    source: HookSourceId {
+                        kind: HookSourceKind::ProjectCursorFile,
+                        location: HookSourceLocation::CanonicalPath(hooks_file),
+                    },
+                    format: HookFormat::Cursor,
+                    bytes: hooks_json.as_bytes(),
+                    project_root: Some(root.clone()),
+                    trust: TrustDecision::Inert {
+                        reason: "not the point of this test".to_owned(),
+                    },
+                });
+            });
+        });
+        set_working_directory(app, harness, &root);
+        (dir, root)
+    }
+
+    fn edit_of(file: &str) -> AIAgentActionType {
+        AIAgentActionType::RequestFileEdits {
+            file_edits: vec![FileEdit::Create {
+                file: Some(file.to_owned()),
+                content: Some(String::new()),
+                allow_overwrite: true,
+            }],
+            title: None,
+        }
+    }
+
+    fn floors_for(app: &mut App, harness: &HookTestApp, file: &str) -> PermissionFloors {
+        let action = edit_of(file);
+        app.read(|ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
+            permission_floors(
+                &action,
+                &harness.conversation_id,
+                false,
+                &harness.active_session,
+                harness.terminal_view_id,
+                &scope,
+                ctx,
+            )
+        })
+    }
+
+    #[test]
+    fn a_relative_path_to_a_protected_hook_file_carries_the_protected_write_floor() {
+        App::test((), |mut app| async move {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(&mut app);
+            let (_project, root) = project_with_a_hook_file(&mut app, &harness);
+
+            assert!(
+                floors_for(&mut app, &harness, ".cursor/hooks.json").protected_write_path,
+                "the model's relative spelling resolves to the protected file"
+            );
+            assert!(
+                floors_for(
+                    &mut app,
+                    &harness,
+                    &root.join(".cursor/hooks.json").display().to_string()
+                )
+                .protected_write_path,
+                "the absolute spelling does too"
+            );
+            assert!(
+                !floors_for(&mut app, &harness, "README.md").protected_write_path,
+                "a file beside the hook file is not protected"
+            );
+        });
+    }
+}
