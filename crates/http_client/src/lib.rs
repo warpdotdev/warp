@@ -13,7 +13,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use http::HeaderValue;
 pub use http::header::AUTHORIZATION;
-use http::header::HeaderName;
+use http::header::{HeaderName, PROXY_AUTHORIZATION};
 pub use http::{HeaderMap, StatusCode};
 use reqwest::IntoUrl;
 use reqwest_eventsource::RequestBuilderExt;
@@ -633,10 +633,26 @@ impl<'a> RequestBuilder<'a> {
         HeaderValue: TryFrom<V>,
         <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
     {
-        Self {
-            wrapped: self.wrapped.header(key, value),
-            ..self
-        }
+        let header = HeaderName::try_from(key)
+            .map_err(Into::into)
+            .and_then(|key| {
+                let mut value = HeaderValue::try_from(value).map_err(Into::into)?;
+                if key == AUTHORIZATION
+                    || key == PROXY_AUTHORIZATION
+                    || key == "x-warp-ambient-workload-token"
+                {
+                    value.set_sensitive(true);
+                }
+                Ok((key, value))
+            });
+        let wrapped = match header {
+            Ok((key, value)) => self.wrapped.header::<HeaderName, HeaderValue>(key, value),
+            // Let Reqwest retain conversion failures until the request is built or sent.
+            Err(error) => self
+                .wrapped
+                .header::<InvalidHeader, &str>(InvalidHeader(error), ""),
+        };
+        Self { wrapped, ..self }
     }
 
     pub fn body<T: Into<reqwest::Body>>(self, body: T) -> RequestBuilder<'a> {
@@ -681,6 +697,16 @@ impl<'a> RequestBuilder<'a> {
             prevent_sleep_reason: Some(reason),
             ..self
         }
+    }
+}
+
+struct InvalidHeader(http::Error);
+
+impl TryFrom<InvalidHeader> for HeaderName {
+    type Error = http::Error;
+
+    fn try_from(header: InvalidHeader) -> Result<Self, Self::Error> {
+        Err(header.0)
     }
 }
 
