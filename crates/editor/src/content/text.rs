@@ -160,10 +160,11 @@ impl fmt::Debug for TableCache {
 pub const CODE_BLOCK_DEFAULT_DISPLAY_LANG: &str = "Code";
 pub const CODE_BLOCK_SHELL_DISPLAY_LANG: &str = "Shell";
 
-#[cfg(test)]
+/// Maximum byte length of a single `BufferText::Text` fragment. Chosen to comfortably fit a
+/// typical source line in one fragment (avoiding per-line fragmentation) while keeping
+/// `size_of::<BufferText>()` — and therefore the per-element cost of every item in the buffer's
+/// content `SumTree`, including zero-payload items like `BufferText::Newline` — small.
 pub const TEXT_FRAGMENT_SIZE: usize = 64;
-#[cfg(not(test))]
-pub const TEXT_FRAGMENT_SIZE: usize = 128;
 
 #[cfg(test)]
 #[path = "text_tests.rs"]
