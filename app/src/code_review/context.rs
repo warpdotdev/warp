@@ -84,6 +84,9 @@ pub fn create_attachment_reference_and_key(
                 DiffMode::OtherBranch(branch_name) => {
                     format!("diffset against {branch_name}")
                 }
+                DiffMode::PullRequestLayer { pr_number, .. } => {
+                    format!("diffset against PR #{pr_number}")
+                }
             };
             let key = diff_set_description.clone();
             (format!("<change:{key}>"), key)
