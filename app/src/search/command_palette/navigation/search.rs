@@ -212,6 +212,31 @@ pub struct FuzzySessionSearcher {
     pub(crate) session_source_handle: ModelHandle<SessionSource>,
 }
 
+/// Search backend used in autonomous execution modes (e.g. the SDK/agent driver, or the
+/// remote server daemon), where there is no user to open the command palette. Indexes
+/// nothing and always reports no results, since [`DataSource::run_query`] is never reached
+/// in these modes.
+pub struct NoOpSessionSearcher {
+    pub(crate) session_source_handle: ModelHandle<SessionSource>,
+}
+
+impl SessionSearcher for NoOpSessionSearcher {
+    fn search(
+        &self,
+        _search_term: &str,
+        _app: &AppContext,
+    ) -> anyhow::Result<Vec<QueryResult<SearcherAction>>> {
+        Ok(Vec::new())
+    }
+
+    fn active_session_id(&self, app: &AppContext) -> Option<PaneId> {
+        match self.session_source_handle.as_ref(app) {
+            SessionSource::None => None,
+            SessionSource::Set { active_pane_id, .. } => Some(*active_pane_id),
+        }
+    }
+}
+
 impl SessionSearcher for FuzzySessionSearcher {
     fn search(
         &self,
