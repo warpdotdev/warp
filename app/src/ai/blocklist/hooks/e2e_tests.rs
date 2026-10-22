@@ -39,8 +39,8 @@ use super::test_utils::{
     ControllerHarness, HookTestApp, action_model, add_messages_event, controller_harness,
     conversation_status, create_task_with_messages, done_event, exchange_count,
     finish_turn_with_text, hook_test_app, init_project_action, let_background_work_settle,
-    record_statuses, root_task_id, set_working_directory, shell_action, shell_tool_call_message,
-    stream_init_event, text_message,
+    record_statuses, root_task_id, shell_action, shell_tool_call_message, stream_init_event,
+    text_message,
 };
 use super::{HookRuntime, RunIdentity, RunSurface};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -55,6 +55,13 @@ use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::features::FeatureFlag;
 use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::terminal::ShellLaunchData;
+use crate::terminal::event::BlockMetadataReceivedEvent;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::{SessionId, SessionInfo};
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::model_events::ModelEvent;
+use crate::terminal::shell::ShellType;
 
 /// The `PATH` every hook in these tests runs with. The fixture scripts need only POSIX tools.
 const HOOK_PATH: &str = "/usr/bin:/bin";
@@ -64,6 +71,8 @@ const HOOK_PATH: &str = "/usr/bin:/bin";
 const PROCESS_WAIT: Duration = Duration::from_secs(30);
 
 const SAMPLE_RM_REASON: &str = "This project's hook does not allow rm -rf. Remove files one at a time, or ask the user to do it.";
+const SAMPLE_PUSH_REASON: &str = "This project's hook does not allow force pushes. Push without \
+                                  --force, or ask the user to do it.";
 
 /// A temporary directory holding hook directories and the `HOME` hooks run with.
 struct Sandbox {
@@ -195,6 +204,7 @@ fn load_hook_dir(app: &mut App, hooks_file: &Path) {
 /// A command-line run in a test app with a real hook runner.
 fn command_line_run(app: &mut App, setting: ActionPermission) -> (Sandbox, HookTestApp) {
     let harness = hook_test_app(app);
+    give_session_a_shell(app, &harness);
     let sandbox = Sandbox::new();
     install_real_runner(app, &sandbox.home);
     record_command_line_run(app);
@@ -257,22 +267,6 @@ async fn finished_result(
     })
 }
 
-async fn wait_until_blocked(
-    app: &mut App,
-    model: &ModelHandle<BlocklistAIActionModel>,
-    action: &AIAgentAction,
-) {
-    let id = action.id.clone();
-    wait_for(app, &format!("{id} to wait for confirmation"), |app| {
-        model.read(app, |model, _| {
-            model
-                .get_action_status(&id)
-                .is_some_and(|status| status.is_blocked())
-        })
-    })
-    .await;
-}
-
 fn hook_denied_reason(result: &AIAgentActionResultType) -> Option<&str> {
     match result {
         AIAgentActionResultType::DeniedByHook { reason } => Some(reason),
@@ -284,17 +278,101 @@ fn line_count(path: &Path) -> usize {
     fs::read_to_string(path).map_or(0, |text| text.lines().count())
 }
 
-/// §11 "permission matrix under run-to-completion": on a command-line run, a hook's deny holds
-/// when the conversation auto-approves and when the user approves; a headless `ask` denies with
-/// the approval-unavailable reason; and a denylisted command stays behind Warp's confirmation even
-/// though the hook allowed it.
+fn session_id() -> SessionId {
+    SessionId::from(7)
+}
+
+/// Registers a Bash session as the harness's active session.
+fn give_session_a_shell(app: &mut App, harness: &HookTestApp) {
+    harness.sessions.update(app, |sessions, _| {
+        let mut session = SessionInfo::new_for_test().with_id(session_id());
+        session.launch_data = Some(ShellLaunchData::Executable {
+            executable_path: PathBuf::from("/bin/bash"),
+            shell_type: ShellType::Bash,
+        });
+        sessions.register_session_for_test(session);
+    });
+    harness.dispatcher.update(app, |dispatcher, _| {
+        dispatcher.set_active_session_id(session_id());
+    });
+}
+
+/// Moves the harness's shell session to `cwd`, the way its prompt would report it.
+fn move_session(app: &mut App, harness: &HookTestApp, cwd: &Path) {
+    let cwd = cwd.display().to_string();
+    harness.dispatcher.update(app, |_, ctx| {
+        ctx.emit(ModelEvent::BlockMetadataReceived(
+            BlockMetadataReceivedEvent {
+                block_metadata: BlockMetadata::new(Some(session_id()), Some(cwd)),
+                block_index: BlockIndex::zero(),
+                is_after_in_band_command: false,
+                is_done_bootstrapping: true,
+            },
+        ));
+    });
+}
+
+async fn wait_until_running(
+    app: &mut App,
+    model: &ModelHandle<BlocklistAIActionModel>,
+    action: &AIAgentAction,
+) {
+    let id = action.id.clone();
+    wait_for(app, &format!("{id} to start running"), |app| {
+        model.read(app, |model, _| {
+            model
+                .get_action_status(&id)
+                .is_some_and(|status| status.is_running())
+        })
+    })
+    .await;
+}
+
+/// Ends a command the mock terminal started and will never report finished.
+async fn end_running_command(
+    app: &mut App,
+    model: &ModelHandle<BlocklistAIActionModel>,
+    conversation_id: AIConversationId,
+    action: &AIAgentAction,
+) {
+    model.update(app, |model, ctx| {
+        model.cancel_action_with_id(
+            conversation_id,
+            &action.id,
+            CancellationReason::ManuallyCancelled,
+            ctx,
+        )
+    });
+    finished_result(app, model, action).await;
+}
+
+fn add_to_denylist(app: &mut App, harness: &HookTestApp, pattern: &str) {
+    let predicate = AgentModeCommandExecutionPredicate::new_regex(pattern).unwrap();
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = profiles
+            .active_profile(Some(harness.terminal_view_id), ctx)
+            .id()
+            .clone();
+        profiles.add_to_command_denylist(&profile_id, &predicate, ctx);
+    });
+}
+
+fn is_denylisted(result: &AIAgentActionResultType) -> bool {
+    matches!(
+        result,
+        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Denylisted { .. })
+    )
+}
+
+/// §11 "permission matrix under run-to-completion": an explicitly configured hook cannot bypass
+/// Warp's command policy, and its asks and denials still hold when Warp would run the command.
 #[test]
 fn permission_matrix_run_to_completion() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
-        set_working_directory(&mut app, &harness, &work);
+        move_session(&mut app, &harness, &work);
         let policy = sandbox.dir("run-policy");
         load_hook_dir(
             &mut app,
@@ -312,8 +390,8 @@ case "$input" in
     i=0
     while [ ! -f "$PWD/release-go" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
     printf '{"permission":"deny","agent_message":"Releases are frozen."}' ;;
-  *'"command":"rm -rf build"'*)
-    printf '{"permission":"deny","agent_message":"This project'\''s hook does not allow rm -rf. Remove files one at a time, or ask the user to do it."}' ;;
+  *'"command":"git push --force origin main"'*)
+    printf '{"permission":"deny","agent_message":"This project'\''s hook does not allow force pushes. Push without --force, or ask the user to do it."}' ;;
   *) printf '{"permission":"allow"}' ;;
 esac"#,
                     json!({}),
@@ -321,38 +399,25 @@ esac"#,
             ),
         );
         let model = action_model(&mut app, &harness);
-        app.update(|ctx| {
-            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                let profile_id = profiles
-                    .active_profile(Some(harness.terminal_view_id), ctx)
-                    .id()
-                    .clone();
-                profiles.add_to_command_denylist(
-                    &profile_id,
-                    &AgentModeCommandExecutionPredicate::new_regex("curl .*").unwrap(),
-                    ctx,
-                );
-            });
-        });
 
-        // The explicit hook allows this command, but the denylist still refuses it.
+        // The explicit hook allows the command, and Warp runs it under the active profile.
         let conversation = new_conversation(&mut app, &harness);
-        let curl = shell_action("curl", "curl https://example.com");
-        queue(&mut app, &model, conversation, vec![curl.clone()]);
-        let result = finished_result(&mut app, &model, &curl).await;
-        assert!(
-            matches!(
-                result,
-                AIAgentActionResultType::RequestCommandOutput(
-                    RequestCommandOutputResult::Denylisted { .. }
-                )
-            ),
-            "{result:?}"
-        );
+        let make = shell_action("make-before", "make docs");
+        queue(&mut app, &model, conversation, vec![make.clone()]);
+        wait_until_running(&mut app, &model, &make).await;
+        end_running_command(&mut app, &model, conversation, &make).await;
+
+        // Adding the same command to Warp's denylist still refuses it.
+        add_to_denylist(&mut app, &harness, "make .*");
+        let conversation = new_conversation(&mut app, &harness);
+        let make = shell_action("make", "make docs");
+        queue(&mut app, &model, conversation, vec![make.clone()]);
+        let result = finished_result(&mut app, &model, &make).await;
+        assert!(is_denylisted(&result), "{result:?}");
         assert!(
             fs::read_to_string(policy.join("inputs.log"))
                 .expect("the explicit hook ran")
-                .contains("curl https://example.com"),
+                .contains("make docs"),
             "the hook saw the command and allowed it"
         );
 
@@ -381,17 +446,35 @@ esac"#,
         let result = finished_result(&mut app, &model, &release).await;
         assert_eq!(hook_denied_reason(&result), Some("Releases are frozen."));
 
-        // The conversation auto-approves everything: the explicit hook's deny still holds.
-        let conversation = new_conversation(&mut app, &harness);
+        // When the profile asks, a headless run refuses the command until the conversation opts
+        // into auto-approval.
+        set_execute_commands(&mut app, harness.terminal_view_id, ActionPermission::AlwaysAsk);
+        let asking = new_conversation(&mut app, &harness);
+        let build = shell_action("build-asking", "npm run build");
+        queue(&mut app, &model, asking, vec![build.clone()]);
+        let result = finished_result(&mut app, &model, &build).await;
+        assert!(is_denylisted(&result), "{result:?}");
+
+        let auto_approving = new_conversation(&mut app, &harness);
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.toggle_autoexecute_override(&conversation, harness.terminal_view_id, ctx);
+                history.toggle_autoexecute_override(
+                    &auto_approving,
+                    harness.terminal_view_id,
+                    ctx,
+                );
             });
         });
-        let rm = shell_action("rm", "rm -rf build");
-        queue(&mut app, &model, conversation, vec![rm.clone()]);
-        let result = finished_result(&mut app, &model, &rm).await;
-        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
+        let build = shell_action("build", "npm run build");
+        queue(&mut app, &model, auto_approving, vec![build.clone()]);
+        wait_until_running(&mut app, &model, &build).await;
+        end_running_command(&mut app, &model, auto_approving, &build).await;
+
+        // Auto-approval does not override the explicit hook's denial.
+        let push = shell_action("push", "git push --force origin main");
+        queue(&mut app, &model, auto_approving, vec![push.clone()]);
+        let result = finished_result(&mut app, &model, &push).await;
+        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_PUSH_REASON));
     });
 }
 
@@ -406,7 +489,7 @@ fn batch_denial_with_cwd_changes() {
         let outer = sandbox.dir("outer");
         let nested = outer.join("nested");
         fs::create_dir_all(&nested).expect("mkdir nested");
-        set_working_directory(&mut app, &harness, &outer);
+        move_session(&mut app, &harness, &outer);
         let policy = sandbox.dir("run-policy");
         load_hook_dir(
             &mut app,
@@ -428,12 +511,6 @@ esac"#,
             ),
         );
         let model = action_model(&mut app, &harness);
-        // The mock terminal has no shell type, so Warp cannot classify a command it would run on
-        // its own, and a headless run refuses such a command outright. Interactive mode asks
-        // instead, so the test can approve the `cd` and have it start.
-        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
-            *mode = AppExecutionMode::new(ExecutionMode::App, false, ctx);
-        });
 
         let delete = shell_action("delete", "rm -rf build");
         let enter = shell_action("enter", "cd nested");
@@ -447,31 +524,11 @@ esac"#,
         let result = finished_result(&mut app, &model, &delete).await;
         assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
 
-        // The outer project allows `cd`, and once approved it runs. The mock terminal never reports
-        // it finished, so the test moves the session the way the shell's prompt would and then
-        // ends the command.
-        wait_until_blocked(&mut app, &model, &enter).await;
-        model.update(&mut app, |model, ctx| {
-            model.execute_action(&enter.id, harness.conversation_id, ctx)
-        });
-        let enter_id = enter.id.clone();
-        wait_for(&mut app, "the cd to start running", |app| {
-            model.read(app, |model, _| {
-                model
-                    .get_action_status(&enter_id)
-                    .is_some_and(|status| status.is_running())
-            })
-        })
-        .await;
-        set_working_directory(&mut app, &harness, &nested);
-        model.update(&mut app, |model, ctx| {
-            model.cancel_action_with_id(
-                harness.conversation_id,
-                &enter.id,
-                CancellationReason::ManuallyCancelled,
-                ctx,
-            )
-        });
+        // The explicit source allows `cd`; the shell reports its new directory before the test
+        // ends the mock command.
+        wait_until_running(&mut app, &model, &enter).await;
+        move_session(&mut app, &harness, &nested);
+        end_running_command(&mut app, &model, harness.conversation_id, &enter).await;
 
         let result = finished_result(&mut app, &model, &list).await;
         assert_eq!(
@@ -783,17 +840,15 @@ printf '%s\n' "$input" >> "$PWD/audit.log""#;
     });
 }
 
-/// §11 "deny reason reaches the wire": the explicit shell denial carries the script's own text
-/// into `permission_denied.hook_denied.reason`; a tool with no text slot denied by a `preToolUse`
-/// hook finishes with its cancelled result and the reason reaches only a `Denied` notice (the
-/// recorded gap in §9.3).
+/// §11 "deny reason reaches the wire": explicit shell and non-shell denials carry the script's
+/// text in the generic `denied_by_hook` result and emit a `Denied` notice.
 #[test]
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
-        set_working_directory(&mut app, &harness, &work);
+        move_session(&mut app, &harness, &work);
         load_hook_dir(
             &mut app,
             &write_hook_dir(
