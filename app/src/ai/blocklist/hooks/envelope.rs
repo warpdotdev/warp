@@ -12,7 +12,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use super::HookRuntime;
+use super::{HookRuntime, RunSurface};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -61,7 +61,7 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
         .filter(|email| !email.is_empty());
     let runtime = HookRuntime::as_ref(ctx);
     let run = runtime.run_metadata().cloned();
-    let surface = surface_for_conversation(site.conversation_id, run.is_some(), ctx);
+    let surface = surface_for_conversation(site.conversation_id, runtime.run_surface(), ctx);
 
     HookEnvelope {
         schema_version: ENVELOPE_SCHEMA_VERSION,
@@ -87,19 +87,18 @@ fn build(site: &EnvelopeSite<'_>, payload: HookPayload, ctx: &AppContext) -> Hoo
     }
 }
 
-/// The surface this process fires boundaries from. `has_run_metadata` tells an Oz run apart from
-/// a local command-line run, which share an execution mode.
-pub(super) fn surface(has_run_metadata: bool, ctx: &AppContext) -> HookSurface {
+/// The surface this process fires boundaries from. `run_surface` tells an Oz run apart from a
+/// local command-line run, which share an execution mode; a headless process with no recorded
+/// run is a command-line run.
+pub(super) fn surface(run_surface: Option<RunSurface>, ctx: &AppContext) -> HookSurface {
     if !ctx.has_singleton_model::<AppExecutionMode>() {
         return HookSurface::CliRun;
     }
     let mode = AppExecutionMode::as_ref(ctx);
     if mode.is_autonomous() {
-        if has_run_metadata {
-            HookSurface::OzRun
-        } else {
-            HookSurface::CliRun
-        }
+        run_surface
+            .unwrap_or(RunSurface::CommandLine)
+            .hook_surface()
     } else if mode.is_tui() {
         HookSurface::Tui
     } else {
@@ -113,10 +112,10 @@ pub(super) fn surface(has_run_metadata: bool, ctx: &AppContext) -> HookSurface {
 /// an Oz run of its own.
 pub(super) fn surface_for_conversation(
     conversation_id: AIConversationId,
-    has_run_metadata: bool,
+    run_surface: Option<RunSurface>,
     ctx: &AppContext,
 ) -> HookSurface {
-    let process_surface = surface(has_run_metadata, ctx);
+    let process_surface = surface(run_surface, ctx);
     match process_surface {
         HookSurface::Gui | HookSurface::Tui => {
             let is_child = ctx.has_singleton_model::<BlocklistAIHistoryModel>()
@@ -232,6 +231,7 @@ pub(crate) fn cancellation_reason_name(reason: CancellationReason) -> &'static s
         CancellationReason::CommandFinishedDuringInlineAgentView => "command_finished",
         CancellationReason::CLISubagentUserTakeover => "user_took_control",
         CancellationReason::AgentExitedShell => "shell_exited",
+        CancellationReason::HookEndedRun => "hook_ended_run",
     }
 }
 

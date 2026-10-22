@@ -5,6 +5,7 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::CancellationReason;
+use crate::ai::blocklist::hooks::RunIdentity;
 use crate::ai::blocklist::hooks::testing::{
     add_child_conversation, hook_test_app, install_test_hooks, mock_active_session, shell_action,
 };
@@ -113,6 +114,7 @@ fn cancellation_reason_names_are_stable() {
             "user_took_control",
         ),
         (CancellationReason::AgentExitedShell, "shell_exited"),
+        (CancellationReason::HookEndedRun, "hook_ended_run"),
     ];
     for (reason, name) in expected {
         assert_eq!(cancellation_reason_name(reason), name, "{reason:?}");
@@ -173,7 +175,7 @@ fn envelopes_carry_the_conversations_turn_id_once_a_turn_started() {
 }
 
 #[test]
-fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
+fn run_metadata_reaches_the_envelope_and_the_run_surface_decides_oz_or_cli() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
@@ -196,19 +198,27 @@ fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
             parent_run_id: None,
             task_id: Some("task-1".to_owned()),
         };
-        app.update(|ctx| {
-            HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-                runtime.set_run_metadata(Some(run.clone()));
+        for (surface, expected) in [
+            (RunSurface::CommandLine, HookSurface::CliRun),
+            (RunSurface::Oz, HookSurface::OzRun),
+        ] {
+            app.update(|ctx| {
+                HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+                    runtime.set_run(Some(RunIdentity {
+                        metadata: run.clone(),
+                        surface,
+                    }));
+                });
             });
-        });
-        let after = app.read(|ctx| {
-            envelope_for_session_start(
-                true,
-                &EnvelopeSite::new(conversation_id, &active_session),
-                ctx,
-            )
-        });
-        assert_eq!(after.run, Some(run));
-        assert_eq!(after.surface, HookSurface::OzRun);
+            let after = app.read(|ctx| {
+                envelope_for_session_start(
+                    true,
+                    &EnvelopeSite::new(conversation_id, &active_session),
+                    ctx,
+                )
+            });
+            assert_eq!(after.run.as_ref(), Some(&run));
+            assert_eq!(after.surface, expected);
+        }
     });
 }

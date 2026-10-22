@@ -638,6 +638,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         snapshot_disabled: None,
         snapshot_upload_timeout: None,
         snapshot_script_timeout: None,
+        hooks: Default::default(),
         checkpoint_interval: None,
         skip_initial_turn: false,
         strict_mcp_startup: false,

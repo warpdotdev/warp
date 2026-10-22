@@ -569,6 +569,26 @@ pub mod text {
         writeln!(w, "Sharing session at: {join_url}")
     }
 
+    /// Report a notice from the run's agent hooks, as one line.
+    pub fn hook_notice<W: Write>(kind: &str, text: &str, w: &mut W) -> io::Result<()> {
+        writeln!(w, "hook: {kind}: {}", super::single_line(text))
+    }
+
+    /// Report a problem with one of the run's hook sources, as one line.
+    pub fn hook_diagnostic<W: Write>(
+        source: &str,
+        severity: &str,
+        message: &str,
+        w: &mut W,
+    ) -> io::Result<()> {
+        writeln!(
+            w,
+            "hook: {severity}: {}: {}",
+            super::single_line(source),
+            super::single_line(message)
+        )
+    }
+
     /// Format a list of query patterns.
     fn format_queries<I: IntoIterator<Item = S>, S: fmt::Display>(queries: I) -> String {
         match queries.into_iter().exactly_one() {
@@ -655,6 +675,20 @@ pub mod json {
         ArtifactCreated(JsonArtifact<'a>),
         SkillInvoked {
             name: &'a str,
+        },
+        #[serde(rename = "hook_notice")]
+        HookNotice {
+            kind: &'a str,
+            conversation_id: Option<&'a str>,
+            local_conversation_id: &'a str,
+            action_id: Option<&'a str>,
+            text: &'a str,
+        },
+        #[serde(rename = "hook_diagnostic")]
+        HookDiagnostic {
+            source: &'a str,
+            severity: &'a str,
+            message: &'a str,
         },
     }
 
@@ -1375,6 +1409,41 @@ pub mod json {
         let message = JsonMessage::System(JsonSystemEvent::SharedSessionEstablished { join_url });
         write_message(&message, w)
     }
+
+    /// Write a notice from the run's agent hooks as a `hook_notice` record. `conversation_id` is
+    /// the server token `conversation_started` reports, once the server has assigned one.
+    pub fn hook_notice<W: Write>(
+        kind: &str,
+        conversation_id: Option<&str>,
+        local_conversation_id: &str,
+        action_id: Option<&str>,
+        text: &str,
+        w: &mut W,
+    ) -> io::Result<()> {
+        let message = JsonMessage::HookNotice {
+            kind,
+            conversation_id,
+            local_conversation_id,
+            action_id,
+            text,
+        };
+        write_message(&message, w)
+    }
+
+    /// Write a problem with one of the run's hook sources as a `hook_diagnostic` record.
+    pub fn hook_diagnostic<W: Write>(
+        source: &str,
+        severity: &str,
+        message: &str,
+        w: &mut W,
+    ) -> io::Result<()> {
+        let message = JsonMessage::HookDiagnostic {
+            source,
+            severity,
+            message,
+        };
+        write_message(&message, w)
+    }
 }
 
 use std::io::{self, BufWriter, Write};
@@ -1388,6 +1457,11 @@ use crate::code::editor_management::CodeSource;
 fn run_url(run_id: &str) -> String {
     let oz_root_url = ChannelState::oz_root_url();
     format!("{oz_root_url}/runs/{run_id}")
+}
+
+/// Joins `text`'s lines with spaces, so a record in text output stays on one line.
+fn single_line(text: &str) -> String {
+    text.lines().collect::<Vec<_>>().join(" ")
 }
 
 /// Execute a closure with a buffered stdout writer and flush it afterwards.

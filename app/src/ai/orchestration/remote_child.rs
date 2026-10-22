@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
 use std::str::FromStr;
 
+use ai::hooks::{HookNotice, HookNoticeKind};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use prost::Message as _;
@@ -26,6 +27,7 @@ use crate::ai::ambient_agents::{
     OUT_OF_CREDITS_TASK_FAILURE_MESSAGE, SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, github_auth_url,
 };
 use crate::ai::blocklist::StartAgentRequest;
+use crate::ai::blocklist::hooks::HookRuntime;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
@@ -111,6 +113,12 @@ pub enum PrepareRemoteChildLaunchError {
     MissingParentRunId,
     #[error("Failed to resolve child agent skills: {}", references.join(", "))]
     UnresolvedSkills { references: Vec<String> },
+    #[error(
+        "A remote child agent cannot be given this run's agent hook sources ({}), and the run \
+         uses the strict hook policy, so the child was not started.",
+        sources.join(", ")
+    )]
+    HookSourcesNotForwarded { sources: Vec<String> },
 }
 
 impl PrepareRemoteChildLaunchError {
@@ -250,6 +258,7 @@ pub fn prepare_remote_child_launch(
     };
     let runtime_skills = resolve_runtime_skills(&skill_references, &working_dir, ctx)?;
     let agent_name = normalize_orchestrator_agent_name(&request.name);
+    check_hook_sources_for_remote_child(request, agent_name.as_deref(), ctx)?;
     let display_name = agent_name.clone().unwrap_or_default();
     let environment_id = Some(environment_id).filter(|id| !id.trim().is_empty());
     let mut model_id = (!model_id.is_empty()).then_some(model_id);
@@ -328,6 +337,45 @@ pub fn prepare_remote_child_launch(
         orchestration_harness,
         spawn_request,
     })
+}
+
+/// A remote child runs on another machine, and the launch request has no way to give it the hook
+/// sources this run was configured with: the server starts the child without them. The child
+/// still runs the hooks of its own checkout under the posture rule. When this run uses the strict
+/// hook policy, a child without the run's sources is not started; otherwise the parent
+/// conversation gets a warning.
+fn check_hook_sources_for_remote_child(
+    request: &StartAgentRequest,
+    agent_name: Option<&str>,
+    ctx: &AppContext,
+) -> Result<(), PrepareRemoteChildLaunchError> {
+    if !HookRuntime::is_installed(ctx) {
+        return Ok(());
+    }
+    let runtime = HookRuntime::as_ref(ctx);
+    let sources = runtime
+        .delivered_sources()
+        .iter()
+        .map(|source| source.path.display().to_string())
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        return Ok(());
+    }
+    if runtime.strict_policy().enabled {
+        return Err(PrepareRemoteChildLaunchError::HookSourcesNotForwarded { sources });
+    }
+    let child = agent_name.unwrap_or("the child agent");
+    runtime.messenger().notify(HookNotice {
+        conversation_id: request.parent_conversation_id,
+        action_id: None,
+        kind: HookNoticeKind::Warning,
+        text: format!(
+            "Remote child agent {child} does not receive this run's hook sources ({}); it runs \
+             only the hooks of its own repository.",
+            sources.join(", ")
+        ),
+    });
+    Ok(())
 }
 
 /// Maps server/client launch failures into shared startup presentation.

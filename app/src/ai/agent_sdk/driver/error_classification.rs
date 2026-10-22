@@ -124,6 +124,22 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+        AgentDriverError::HookSourcesUnavailable { details } => {
+            let source_lines = details
+                .iter()
+                .map(|detail| format!("- {detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    format!(
+                        "One or more agent hook sources could not be loaded, and this run uses the strict hook policy:\n\n{source_lines}\n\nCheck that each hook directory exists on the machine running the agent and holds a valid hooks.json."
+                    ),
+                    PlatformErrorCode::EnvironmentSetupFailed,
+                ),
+            )
+        }
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

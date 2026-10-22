@@ -543,6 +543,24 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
     }
 }
 
+/// Prepares the run's agent hooks before its first request: records how hooks behave in the run,
+/// waits until the working directory's repository is known, and loads the explicit sources from
+/// `WARP_HOOK_DIRS`, `--hook-dir`, and the configuration file. Fails only when a source cannot be
+/// loaded and the run uses the strict hook policy; otherwise each problem is a diagnostic.
+pub(crate) async fn setup_hooks_for_run(
+    foreground: &ModelSpawner<AgentDriver>,
+) -> Result<(), AgentDriverError> {
+    let detection = foreground
+        .spawn(|me, ctx| me.prepare_hooks_for_run(ctx))
+        .await?;
+    if let Some(detection) = detection {
+        detection.await;
+    }
+    foreground
+        .spawn(|me, ctx| me.load_hook_sources_for_run(ctx))
+        .await?
+}
+
 /// Loads the bundled instructions that let an active Factory run discover and clone deferred repos.
 pub(crate) async fn load_factory_deferred_repositories_skill(
     foreground: &ModelSpawner<AgentDriver>,

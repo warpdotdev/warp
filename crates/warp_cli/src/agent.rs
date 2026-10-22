@@ -411,6 +411,16 @@ impl fmt::Display for Harness {
     }
 }
 
+/// What a hook's `ask` does in a run, where nobody is there to answer it.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Default, ValueEnum)]
+pub enum HooksOnAsk {
+    /// Deny the action with a reason the agent can read, and keep going.
+    #[default]
+    Deny,
+    /// Deny the action and end the run as a failure.
+    FailRun,
+}
+
 /// How the agent driver talks to a third-party harness.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, ValueEnum)]
 pub enum HarnessTransport {
@@ -697,6 +707,22 @@ pub struct RunAgentArgs {
     /// Remove the origin remote from environment repositories after setup.
     #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
     pub remove_repository_origins: bool,
+
+    /// Turn on the strict hook policy: a hook that times out, crashes, or prints output Warp
+    /// cannot read denies the operation it was checking, and a hook source that cannot be loaded
+    /// fails the run before the agent starts.
+    #[arg(long = "hooks-strict", hide = true)]
+    pub hooks_strict: bool,
+
+    /// Choose how to handle a hook's `ask` in a headless run (`deny` or `fail-run`).
+    #[arg(long = "hooks-on-ask", value_name = "BEHAVIOR", hide = true)]
+    pub hooks_on_ask: Option<HooksOnAsk>,
+
+    /// A directory holding a `hooks.json` to load for this run. Can be repeated. Added after the
+    /// directories in `WARP_HOOK_DIRS`; relative paths are resolved against the run's working
+    /// directory.
+    #[arg(long = "hook-dir", value_name = "PATH", hide = true)]
+    pub hook_dirs: Vec<PathBuf>,
 }
 
 impl RunAgentArgs {
