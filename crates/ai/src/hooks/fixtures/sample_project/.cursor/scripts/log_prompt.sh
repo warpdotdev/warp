@@ -1,7 +1,6 @@
 #!/bin/sh
-# beforeSubmitPrompt hook for the sample project: appends the prompt's length, and the variable
-# the sessionStart hook set, to .hook-prompts.log in the project, then lets the prompt through.
-# The length counts the prompt as it appears in the JSON input, escapes included.
+# jq is not assumed, so the prompt is cut out of the JSON text with sed. Its length counts the
+# prompt as it appears in the JSON input, escapes included.
 
 input=$(cat)
 prompt=$(printf '%s' "$input" | sed -nE 's/.*"prompt":[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p')

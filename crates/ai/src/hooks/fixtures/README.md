@@ -33,13 +33,20 @@ object spread over several lines.
    chmod +x .cursor/scripts/*.sh
    ```
 
-2. Run `warp agent run` with the feature flag on, from that directory, with a profile whose
-   "execute commands" setting is "always allow". A project's own hook file only takes effect on a
-   command-line or Oz run whose profile already lets the agent run commands without asking.
+2. With a `warp` binary built with the `AgentHooks` flag on, run the agent in that directory.
+   A project's own hook file only takes effect on a command-line or Oz run whose profile already
+   lets the agent run commands without asking; the built-in "Default (CLI)" profile does, and
+   `warp agent run` uses it when no `--profile` is passed.
 
-3. Ask the agent to run `rm -rf ./scratch` and then list files. The `rm -rf` is denied with the
-   hook's reason, `.hook-audit.log` gains one line per command that ran, and
-   `.hook-prompts.log` gains one line per prompt.
+   ```sh
+   mkdir scratch && touch scratch/keep-me
+   warp agent run --cwd "$fixture" --output-format ndjson \
+     --prompt "Run this exact command: rm -rf ./scratch. Then list the files in the current directory."
+   ```
+
+3. The `rm -rf` is denied with the hook's reason (`scratch/keep-me` is still there, and stdout has
+   a `hook_notice` line of kind `denied`), `.hook-audit.log` gains one line per command that ran,
+   and `.hook-prompts.log` gains one line per prompt.
 
 `sample_project/run_hooks/hooks.json` binds the same scripts for use as a source delivered with
 the run (`--hook-dir` or `WARP_HOOK_DIRS`). Such a file runs its commands from the directory that

@@ -1,7 +1,6 @@
 #!/bin/sh
-# beforeShellExecution hook for the sample project: denies `rm -rf` and `git push --force`, and
-# allows every other command. The input is one JSON object on stdin. jq is not assumed, so the
-# command is matched with grep against the JSON text of the "command" field.
+# jq is not assumed, so the command is matched with grep against the JSON text of the "command"
+# field.
 
 input=$(cat)
 project_dir=${WARP_PROJECT_DIR:-.}
