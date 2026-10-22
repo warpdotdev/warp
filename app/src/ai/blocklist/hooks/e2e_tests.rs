@@ -774,9 +774,10 @@ printf '{"env":{"E2E_SESSION":"yes"}}'"#,
 
 /// §11 "stale registry revision": the hook file changes while a pre-tool hook is deciding, so its
 /// verdict is dropped and the hook runs once more against the new configuration. Covered twice:
-/// through a run-delivered file loaded again before the run is pinned, and through the project
-/// file watcher after the run is pinned, which moves the revision even though the active hooks
-/// stay as they were.
+/// through a run-delivered file loaded again before the run is pinned, which changes the active
+/// hooks and moves the revision; and through the project file watcher after the run is pinned,
+/// which leaves the active hooks and the revision as they were, so the verdict in flight stands
+/// and the hook does not run again.
 #[test]
 fn stale_registry_revision() {
     const SLOW_DENY: &str = r#"cat > /dev/null
@@ -851,7 +852,7 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
         );
         let runs = root.join("runs.log");
         wait_for(&mut app, "the first hook run", |_| line_count(&runs) == 1).await;
-        let before = app.read(|ctx| HookRegistry::as_ref(ctx).revision());
+        let before = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
         let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
         fs::write(&hooks_file, "{ \"version\": 1, \"hooks\": {} }").expect("rewrite");
         let watcher = app
@@ -866,17 +867,33 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
                 ctx,
             )
         });
-        assert!(app.read(|ctx| HookRegistry::as_ref(ctx).revision()) > before);
+        let after = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
+        assert!(
+            after.generation > before.generation,
+            "the change was published"
+        );
+        assert_eq!(
+            after.revision, before.revision,
+            "the active hooks did not change, so the revision did not either"
+        );
+        assert!(
+            after
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("after the run started")),
+            "{:?}",
+            after.diagnostics
+        );
         fs::write(root.join("go"), "").expect("let the first run answer");
 
         let result = finished_result(&mut app, &model, &action).await;
         assert_eq!(
             hook_denied_reason(&result),
-            Some("denied on run 2"),
-            "the pinned hooks ran again under the new revision"
+            Some("denied on run 1"),
+            "the verdict in flight stands"
         );
         let_background_work_settle(&mut app).await;
-        assert_eq!(line_count(&runs), 2, "exactly one more run");
+        assert_eq!(line_count(&runs), 1, "the hook did not run again");
     });
 }
 

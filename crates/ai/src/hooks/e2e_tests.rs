@@ -653,29 +653,36 @@ fn reload_valid_malformed_valid_with_pinning() {
                 .read(app, |registry, _| registry.source_status(&source))
                 .expect("the sample is a known source")
         };
-        async fn revision_moves_past(
+        /// Waits for the registry to publish a snapshot past generation `from`.
+        async fn generation_moves_past(
             app: &mut App,
             registry: &warpui_core::ModelHandle<HookRegistry>,
             from: u64,
         ) -> u64 {
             let deadline = Instant::now() + Duration::from_secs(15);
             while Instant::now() < deadline {
-                let revision = registry.read(app, |registry, _| registry.revision());
-                if revision > from {
-                    return revision;
+                let generation = registry.read(app, |registry, _| registry.generation());
+                if generation > from {
+                    return generation;
                 }
                 Timer::after(Duration::from_millis(25)).await;
             }
             panic!("the file change never reached the registry");
         }
 
-        let valid = snapshot(&app).revision;
+        let valid = snapshot(&app).generation;
+        let valid_revision = snapshot(&app).revision;
         assert_eq!(shell_bindings(&app), 1);
         assert!(!status(&app).stale);
 
         fs::write(&hooks_file, &sample[..sample.len() / 2]).expect("truncate");
-        let stale = revision_moves_past(&mut app, &registry, valid).await;
+        let stale = generation_moves_past(&mut app, &registry, valid).await;
         assert_eq!(shell_bindings(&app), 1, "the last valid bindings stay");
+        assert_eq!(
+            snapshot(&app).revision,
+            valid_revision,
+            "so the revision stays too"
+        );
         assert!(status(&app).stale);
         assert!(snapshot(&app).diagnostics.iter().any(|diagnostic| {
             diagnostic.severity == DiagnosticSeverity::Error
@@ -689,8 +696,12 @@ fn reload_valid_malformed_valid_with_pinning() {
             r#"{ "command": ".cursor/scripts/deny_dangerous.sh" }, { "command": "true" }"#,
         );
         fs::write(&hooks_file, &two_shell_hooks).expect("rewrite");
-        let fixed = revision_moves_past(&mut app, &registry, stale).await;
+        let fixed = generation_moves_past(&mut app, &registry, stale).await;
         assert_eq!(shell_bindings(&app), 2, "the new content is active");
+        assert!(
+            snapshot(&app).revision > valid_revision,
+            "the active hooks changed"
+        );
         assert!(!status(&app).stale);
         assert!(
             !snapshot(&app)
@@ -702,14 +713,20 @@ fn reload_valid_malformed_valid_with_pinning() {
         HookRegistry::change(&registry, &mut app, |registry| {
             registry.pin(CommandExecutionPosture::AutoApproves)
         });
-        let pinned = registry.read(&app, |registry, _| registry.revision());
+        let pinned = registry.read(&app, |registry, _| registry.generation());
         assert!(pinned > fixed);
+        let pinned_revision = snapshot(&app).revision;
         fs::write(&hooks_file, &sample).expect("rewrite after pinning");
-        revision_moves_past(&mut app, &registry, pinned).await;
+        generation_moves_past(&mut app, &registry, pinned).await;
         assert_eq!(
             shell_bindings(&app),
             2,
             "a change after pinning does not apply"
+        );
+        assert_eq!(
+            snapshot(&app).revision,
+            pinned_revision,
+            "and does not move the revision verdicts are keyed on"
         );
         assert!(snapshot(&app).diagnostics.iter().any(|diagnostic| {
             diagnostic.severity == DiagnosticSeverity::Warning
