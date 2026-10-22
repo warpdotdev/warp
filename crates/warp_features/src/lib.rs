@@ -375,9 +375,6 @@ pub enum FeatureFlag {
     /// Enables multiple agent profiles in settings for managing different AI agent configurations.
     MultiProfile,
 
-    /// Enables displaying imported PR review comments in the blocklist.
-    PRCommentsV2,
-
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
 
