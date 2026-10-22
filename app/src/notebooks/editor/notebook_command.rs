@@ -50,7 +50,6 @@ use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::editor::InteractionState;
-use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::notebooks::file::MarkdownDisplayMode;
 use crate::notebooks::styles::block_footer_action_button;
@@ -663,9 +662,7 @@ impl RunnableCommandModel for NotebookCommand {
                 .finish(),
             )
         }
-        if matches!(block_style, CodeBlockType::Mermaid)
-            && FeatureFlag::MarkdownMermaid.is_enabled()
-        {
+        if matches!(block_style, CodeBlockType::Mermaid) {
             let is_raw = matches!(self.mermaid_display_mode, MarkdownDisplayMode::Raw);
             let start_anchor_raw = self.start.clone();
             let start_anchor_rendered = self.start.clone();

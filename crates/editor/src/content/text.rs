@@ -25,7 +25,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use string_offset::{ByteOffset, CharOffset, impl_offset};
 use sum_tree::{Cursor, SeekBias, SumTree};
-use warp_core::features::FeatureFlag;
 use warpui_core::AppContext;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::{Properties, Style, Weight};
@@ -726,9 +725,7 @@ impl From<&CodeBlockText> for CodeBlockType {
 
         if MARKDOWN_SHELL_LANGUAGES.contains(lang.as_str()) {
             CodeBlockType::Shell
-        } else if FeatureFlag::MarkdownMermaid.is_enabled()
-            && mermaid_to_svg::is_mermaid_diagram(code_block_text.lang.as_str())
-        {
+        } else if mermaid_to_svg::is_mermaid_diagram(code_block_text.lang.as_str()) {
             CodeBlockType::Mermaid
         } else {
             // Parse all the recognized languages supported by the code block.
