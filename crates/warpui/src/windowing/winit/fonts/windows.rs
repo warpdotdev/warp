@@ -13,7 +13,12 @@ use super::font_handle::FontHandle;
 use super::{FontFamily, LoadedSystemFonts, TextLayoutSystem, ValidateFontSupportsEn};
 use crate::fonts::FontId;
 
-const EN_US_LOCALE: &str = "en-US";
+/// Locale passed to `IDWriteFontFallback::MapCharacters` when requesting fallback fonts.
+///
+/// An empty string instructs DirectWrite to use the system locale rather than biasing
+/// toward any specific script, which produces correct font selection for non-Latin scripts
+/// such as Thai, Arabic, and CJK characters instead of always preferring Latin-script fonts.
+const DIRECTWRITE_FALLBACK_LOCALE: &str = "";
 
 /// Windows symbol fonts that are used to render window control icons. We specifically do not do any
 /// validation of these fonts (i.e. to check if the font contains english characters).
@@ -164,7 +169,7 @@ impl TextLayoutSystem {
         })?;
 
         let fallback_result =
-            loaded_font.get_fallbacks(character.to_string().as_str(), EN_US_LOCALE);
+            loaded_font.get_fallbacks(character.to_string().as_str(), DIRECTWRITE_FALLBACK_LOCALE);
 
         // Convert each font-kit fallback `Font` into a UI framework `FontHandle` and load it into
         // fontdb. We deliberately avoid `font_kit::Font::handle()` here: its default impl reads
