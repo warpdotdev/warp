@@ -181,8 +181,12 @@ fn idle_timeout_sender_later_send_after_supersedes_earlier() {
     // Second timer: short timeout. The first is implicitly cancelled.
     idle_timeout.end_run_after(Duration::from_millis(50), 2);
 
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(rx.try_recv().unwrap(), Some(2));
+    block_on(async {
+        assert_eventually!(
+            400 => rx.try_recv().unwrap() == Some(2),
+            "the latest idle timeout did not deliver its value"
+        );
+    });
 }
 
 #[test]
