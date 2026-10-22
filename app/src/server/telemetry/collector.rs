@@ -183,7 +183,7 @@ impl TelemetryCollector {
                         Utc.timestamp_opt(last_active_timestamp, 0)
                 {
                     warpui::telemetry::record_app_active_event(
-                        auth_state.user_id().map(|uid| uid.as_string()),
+                        auth_state.telemetry_user_id(),
                         auth_state.anonymous_id(),
                         timestamp,
                     );
