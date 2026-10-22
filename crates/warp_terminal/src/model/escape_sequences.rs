@@ -182,6 +182,7 @@ pub mod EscCodes {
     // Mouse-related escape codes
     pub const MOUSE_LEFT: u8 = 0;
     pub const MOUSE_RIGHT: u8 = 2;
+    pub const MOUSE_RELEASE: u8 = 3;
     pub const MOUSE_DRAG: u8 = 32;
     pub const MOUSE_MOVE: u8 = 35;
     pub const MOUSE_WHEEL_UP: u8 = 64;
@@ -325,42 +326,110 @@ fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
     }
 }
 
+enum MouseEncoding {
+    Normal,
+    Utf8,
+}
+
+fn mouse_button_and_repeats(mouse_state: &MouseState) -> Option<(u8, usize)> {
+    match mouse_state.button() {
+        MouseButton::Left => Some((EscCodes::MOUSE_LEFT, 1)),
+        MouseButton::Right => Some((EscCodes::MOUSE_RIGHT, 1)),
+        MouseButton::LeftDrag => Some((EscCodes::MOUSE_DRAG, 1)),
+        MouseButton::Move => Some((EscCodes::MOUSE_MOVE, 1)),
+        MouseButton::Wheel => {
+            let MouseAction::Scrolled { delta } = mouse_state.action() else {
+                return None;
+            };
+            let lines = delta.unsigned_abs() as usize;
+            if *delta > 0 {
+                Some((EscCodes::MOUSE_WHEEL_UP, lines))
+            } else {
+                Some((EscCodes::MOUSE_WHEEL_DOWN, lines))
+            }
+        }
+    }
+}
+
+fn mouse_button_with_modifiers(button: u8, mouse_state: &MouseState) -> u8 {
+    let modifiers = mouse_state.modifiers();
+    button
+        + if modifiers.shift { 4 } else { 0 }
+        + if modifiers.alt { 8 } else { 0 }
+        + if modifiers.ctrl { 16 } else { 0 }
+}
+
+fn sgr_mouse_escape_sequence(button: u8, action: char, point: Point) -> Vec<u8> {
+    format!(
+        "{}<{};{};{}{}",
+        C1::to_utf8(C1::CSI),
+        button,
+        point.col + 1,
+        point.row + 1,
+        action
+    )
+    .into_bytes()
+}
+
+fn normal_mouse_escape_sequence(
+    button: u8,
+    point: Point,
+    encoding: MouseEncoding,
+) -> Option<Vec<u8>> {
+    let col = point.col.checked_add(1)?.checked_add(32)?;
+    let row = point.row.checked_add(1)?.checked_add(32)?;
+    let mut sequence = vec![C0::ESC, b'[', b'M'];
+    match encoding {
+        MouseEncoding::Normal => {
+            sequence.push(button.checked_add(32)?);
+            sequence.push(u8::try_from(col).ok()?);
+            sequence.push(u8::try_from(row).ok()?);
+        }
+        MouseEncoding::Utf8 => {
+            let button = button.checked_add(32)?;
+            push_utf8_mouse_byte(&mut sequence, button.into())?;
+            push_utf8_mouse_byte(&mut sequence, col)?;
+            push_utf8_mouse_byte(&mut sequence, row)?;
+        }
+    }
+    Some(sequence)
+}
+
+fn push_utf8_mouse_byte(sequence: &mut Vec<u8>, value: usize) -> Option<()> {
+    let mut buffer = [0; 4];
+    sequence.extend_from_slice(
+        char::from_u32(u32::try_from(value).ok()?)?
+            .encode_utf8(&mut buffer)
+            .as_bytes(),
+    );
+    Some(())
+}
 impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
-    fn to_escape_sequence(&self, _mode_provider: &T) -> Option<Vec<u8>> {
+    fn to_escape_sequence(&self, mode_provider: &T) -> Option<Vec<u8>> {
         let action = match self.action() {
             MouseAction::Released => 'm',
             _ => 'M',
         };
-        let (button, repeats) = match self.button() {
-            MouseButton::Left => (EscCodes::MOUSE_LEFT, 1),
-            MouseButton::Right => (EscCodes::MOUSE_RIGHT, 1),
-            MouseButton::LeftDrag => (EscCodes::MOUSE_DRAG, 1),
-            MouseButton::Move => (EscCodes::MOUSE_MOVE, 1),
-            MouseButton::Wheel => {
-                if let MouseAction::Scrolled { delta } = self.action() {
-                    let lines = delta.unsigned_abs() as usize;
-                    if *delta > 0 {
-                        (EscCodes::MOUSE_WHEEL_UP, lines)
-                    } else {
-                        (EscCodes::MOUSE_WHEEL_DOWN, lines)
-                    }
-                } else {
-                    panic!("Currently only scroll is supported for the Wheel button")
-                }
-            }
-        };
 
         let point = self.maybe_point()?;
-        let msg = format!(
-            "{}<{};{};{}{}",
-            C1::to_utf8(C1::CSI),
-            button,
-            point.col + 1,
-            point.row + 1,
-            action
-        )
-        .repeat(repeats);
-        Some(msg.into_bytes())
+        let (button, repeats) = mouse_button_and_repeats(self)?;
+        let button = mouse_button_with_modifiers(button, self);
+        if mode_provider.is_term_mode_set(TermMode::SGR_MOUSE) {
+            return Some(sgr_mouse_escape_sequence(button, action, point).repeat(repeats));
+        }
+
+        let button = if matches!(self.action(), MouseAction::Released) {
+            mouse_button_with_modifiers(EscCodes::MOUSE_RELEASE, self)
+        } else {
+            button
+        };
+        let encoding = if mode_provider.is_term_mode_set(TermMode::UTF8_MOUSE) {
+            MouseEncoding::Utf8
+        } else {
+            MouseEncoding::Normal
+        };
+        normal_mouse_escape_sequence(button, point, encoding)
+            .map(|sequence| sequence.repeat(repeats))
     }
 }
 
