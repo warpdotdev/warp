@@ -34,6 +34,7 @@ use anyhow::{Context as _, Result};
 use command::Stdio;
 use command::r#async::Command;
 use futures::future::join_all;
+use futures_lite::io::AsyncReadExt as _;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
@@ -1314,6 +1315,9 @@ fn oversized_error(size_bytes: u64) -> String {
         "exceeds the per-file snapshot limit of {MAX_SNAPSHOT_FILE_SIZE_BYTES} bytes ({size_bytes} bytes)"
     )
 }
+fn oversized_repo_patch_error() -> String {
+    format!("exceeds the per-file snapshot limit of {MAX_SNAPSHOT_FILE_SIZE_BYTES} bytes")
+}
 
 /// Gather a repo entry: run `build_repo_patch` and append an upload blob + manifest stub.
 async fn gather_repo(
@@ -1328,7 +1332,7 @@ async fn gather_repo(
     let metadata = repo_metadata(repo).await;
     match build_repo_patch(repo).await {
         Ok(patch) if patch.len() as u64 > MAX_SNAPSHOT_FILE_SIZE_BYTES => {
-            let err_str = oversized_error(patch.len() as u64);
+            let err_str = oversized_repo_patch_error();
             log::warn!("Skipping repo '{repo_path}': {err_str}");
             repos.push(RepoManifestEntry {
                 path: repo_path.to_string(),
@@ -1721,18 +1725,40 @@ async fn repo_metadata(repo_dir: &Path) -> RepoMetadata {
 }
 
 async fn build_repo_patch(repo_dir: &Path) -> Result<Vec<u8>> {
-    let mut patch = git_output_bytes(repo_dir, ["diff", "--binary", "HEAD"], &[0]).await?;
-    let untracked_listing = git_output_bytes(
+    build_repo_patch_with_limit(repo_dir, MAX_SNAPSHOT_FILE_SIZE_BYTES as usize).await
+}
+
+async fn build_repo_patch_with_limit(repo_dir: &Path, max_patch_bytes: usize) -> Result<Vec<u8>> {
+    let tracked = git_output_bytes_bounded(
+        repo_dir,
+        ["diff", "--binary", "HEAD"],
+        &[0],
+        max_patch_bytes,
+    )
+    .await?;
+    if tracked.exceeded_limit {
+        return Ok(tracked.stdout);
+    }
+    let mut patch = tracked.stdout;
+
+    let untracked_listing = git_output_bytes_bounded(
         repo_dir,
         ["ls-files", "--others", "--exclude-standard", "-z"],
         &[0],
+        max_patch_bytes,
     )
     .await?;
+    if untracked_listing.exceeded_limit {
+        return Ok(untracked_listing.stdout);
+    }
 
-    for raw_path in untracked_listing.split(|byte| *byte == 0) {
+    for raw_path in untracked_listing.stdout.split(|byte| *byte == 0) {
         if raw_path.is_empty() {
             continue;
         }
+        let separator_len = usize::from(!patch.is_empty() && !patch.ends_with(b"\n"));
+        let remaining_bytes = max_patch_bytes.saturating_sub(patch.len());
+        let output_limit = remaining_bytes.saturating_sub(separator_len);
         let path = untracked_path_arg(raw_path);
         let args = [
             OsString::from("diff"),
@@ -1742,14 +1768,19 @@ async fn build_repo_patch(repo_dir: &Path) -> Result<Vec<u8>> {
             OsString::from("/dev/null"),
             path,
         ];
-        let untracked_patch = git_output_bytes(repo_dir, args, &[0, 1]).await?;
-        if untracked_patch.is_empty() {
+        let untracked_patch =
+            git_output_bytes_bounded(repo_dir, args, &[0, 1], output_limit).await?;
+        if untracked_patch.exceeded_limit {
+            patch.resize(max_patch_bytes.saturating_add(1), 0);
+            return Ok(patch);
+        }
+        if untracked_patch.stdout.is_empty() {
             continue;
         }
-        if !patch.is_empty() && !patch.ends_with(b"\n") {
+        if separator_len != 0 {
             patch.push(b'\n');
         }
-        patch.extend_from_slice(&untracked_patch);
+        patch.extend_from_slice(&untracked_patch.stdout);
     }
 
     Ok(patch)
@@ -1915,6 +1946,80 @@ where
     Ok(output.stdout)
 }
 
+struct BoundedGitOutput {
+    stdout: Vec<u8>,
+    exceeded_limit: bool,
+}
+
+/// Run `git <args>` while retaining at most `max_output_bytes + 1` stdout bytes. The extra byte
+/// reports that the limit was exceeded without waiting for git to finish producing the output.
+async fn git_output_bytes_bounded<I, S>(
+    repo_dir: &Path,
+    args: I,
+    allowed_exit_codes: &[i32],
+    max_output_bytes: usize,
+) -> Result<BoundedGitOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect::<Vec<_>>();
+    let mut command = Command::new("git");
+    command
+        .args(&args)
+        .current_dir(repo_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+
+    let operation = async {
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("Failed to run git {:?} in {}", args, repo_dir.display()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("git process did not expose piped stdout")?;
+        let mut stdout = stdout.take(max_output_bytes.saturating_add(1) as u64);
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).await?;
+        if bytes.len() > max_output_bytes {
+            let _ = child.kill();
+            let _ = child.status().await;
+            return Ok(BoundedGitOutput {
+                stdout: bytes,
+                exceeded_limit: true,
+            });
+        }
+
+        let status = child
+            .status()
+            .await
+            .with_context(|| format!("Failed to await git {:?} in {}", args, repo_dir.display()))?;
+        let status_code = status.code().unwrap_or(-1);
+        if !allowed_exit_codes.contains(&status_code) {
+            anyhow::bail!("git {:?} failed in {}", args, repo_dir.display());
+        }
+        Ok(BoundedGitOutput {
+            stdout: bytes,
+            exceeded_limit: false,
+        })
+    };
+
+    match operation.with_timeout(GIT_COMMAND_TIMEOUT).await {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "git {:?} timed out after {:?} in {}",
+            args,
+            GIT_COMMAND_TIMEOUT,
+            repo_dir.display()
+        ),
+    }
+}
 // Snapshot upload is cloud-agent-only and only ever runs inside a Linux Docker container, so
 // skip the tests on Windows rather than teach every fixture to emit POSIX paths.
 #[cfg(all(test, not(windows)))]
