@@ -100,4 +100,16 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.auto_save",
         description: "Whether the Warp text editor automatically saves changes as you type and when the editor loses focus.",
     },
+    // Controls whether code editor tabs show their close button in place of the file icon on
+    // hover, which keeps narrow tabs closable when many files are open.
+    tab_close_button_in_icon_slot: TabCloseButtonInIconSlot {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "code.editor.tab_close_button_in_icon_slot",
+        description: "Whether code editor tabs show the close button in place of the file icon on hover, instead of after the file name.",
+    },
 ]);
