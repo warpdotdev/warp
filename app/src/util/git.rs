@@ -227,14 +227,21 @@ pub async fn get_repo_git_summary(repo_root: &Path) -> Option<RepoGitSummary> {
     log::debug!(
         "[GIT OPERATION] git.rs get_repo_git_summary git ls-files --others --exclude-standard"
     );
-    if let Ok(untracked_output) =
-        run_git_command(repo_root, &["ls-files", "--others", "--exclude-standard"]).await
+    if let Ok(untracked_output) = run_git_command(
+        repo_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .await
     {
-        for file_name in untracked_output.lines() {
-            if file_name.is_empty() {
-                continue;
+        let untracked: Vec<&str> = untracked_output
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .collect();
+        let diff_unset = paths_with_diff_attr_unset(repo_root, &untracked).await;
+        for file_name in untracked {
+            if !diff_unset.contains(file_name) {
+                lines_added += count_lines_if_text_file(&repo_root.join(file_name));
             }
-            lines_added += count_lines_if_text_file(&repo_root.join(file_name));
         }
     }
 
@@ -295,14 +302,20 @@ pub async fn get_file_change_entries(
 
     // Also include untracked files when showing all changes.
     if include_unstaged
-        && let Ok(untracked) =
-            run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"]).await
+        && let Ok(untracked) = run_git_command(
+            repo_path,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )
+        .await
     {
-        for file_name in untracked.lines() {
-            if file_name.is_empty() {
-                continue;
-            }
-            let additions = count_lines_if_text_file(&repo_path.join(file_name)) as usize;
+        let untracked: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
+        let diff_unset = paths_with_diff_attr_unset(repo_path, &untracked).await;
+        for file_name in untracked {
+            let additions = if diff_unset.contains(file_name) {
+                0
+            } else {
+                count_lines_if_text_file(&repo_path.join(file_name)) as usize
+            };
             entries.push(FileChangeEntry {
                 path: file_name.to_string(),
                 additions,
@@ -597,13 +610,12 @@ pub async fn get_diff_for_commit_message(
         // Cap the read to cover both the binary-check window and the
         // synthesised-hunk budget.
         let read_cap = BINARY_CHECK_BYTES.max(MAX_UNTRACKED_FILE_BYTES);
-        for file_name_bytes in untracked.as_bytes().split(|b| *b == 0) {
-            if file_name_bytes.is_empty() {
+        let untracked: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
+        let diff_unset = paths_with_diff_attr_unset(repo_path, &untracked).await;
+        for file_name in untracked {
+            if diff_unset.contains(file_name) {
                 continue;
             }
-            let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
-                continue;
-            };
             let file_path = repo_path.join(file_name);
             // Async + bounded so a large untracked file doesn't block
             // the executor or balloon memory.
@@ -1252,6 +1264,32 @@ pub(crate) fn parse_unified_diff_header(header_line: &str) -> Result<UnifiedDiff
         new_start_line,
         new_line_count,
     })
+}
+
+/// Returns the subset of `paths` whose `diff` attribute is unset (e.g. `-diff` or `binary` in
+/// `.gitattributes`), which git diffs as binary.
+pub async fn paths_with_diff_attr_unset(repo_path: &Path, paths: &[&str]) -> HashSet<String> {
+    let mut unset = HashSet::new();
+    // Chunked to stay under Windows' ~32K command-line limit.
+    for chunk in paths.chunks(100) {
+        let mut args = vec!["check-attr", "-z", "diff", "--"];
+        args.extend_from_slice(chunk);
+        let output = match run_git_command(repo_path, &args).await {
+            Ok(output) => output,
+            Err(err) => {
+                log::debug!("git check-attr failed, counting chunk as text: {err}");
+                continue;
+            }
+        };
+        // `-z` output is a flat sequence of `<path>\0<attr>\0<value>\0` records.
+        let fields: Vec<&str> = output.split('\0').collect();
+        for record in fields.chunks_exact(3) {
+            if record[2] == "unset" {
+                unset.insert(record[0].to_string());
+            }
+        }
+    }
+    unset
 }
 
 /// Counts newlines in a file, returning 0 for binary or oversized files.
