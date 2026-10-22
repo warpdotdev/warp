@@ -11,6 +11,8 @@
 
 use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,24 +21,32 @@ use std::time::Duration;
 use ai_types::{AIAgentActionId, AIConversationId};
 use futures::executor::block_on;
 use instant::Instant;
+#[cfg(unix)]
+use nix::sys::signal::kill;
+#[cfg(unix)]
+use nix::unistd::Pid;
 use serde_json::json;
 use tempfile::TempDir;
+use warpui_core::r#async::{FutureExt as _, Timer};
+use warpui_core::{App, ModelHandle};
 
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::adapter_for;
 use crate::hooks::dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher};
 use crate::hooks::model::{
-    CanonicalToolName, DiagnosticSeverity, HookBoundary, HookEnvelope, HookFormat, HookPayload,
-    HookSourceId, HookSourceKind, HookSourceLocation, HookVerdict, PromptProvenance,
+    CanonicalToolName, DiagnosticSeverity, HookBoundary, HookEnvelope, HookExecutionHost,
+    HookFormat, HookPayload, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface,
+    HookVerdict, PromptProvenance,
 };
 use crate::hooks::registry::{HookRegistry, SourceUpdate};
 use crate::hooks::runner::ProcessExit;
-use crate::hooks::runner::command::CommandHookRunner;
+use crate::hooks::runner::command::{CommandHookRunner, HOOK_KILL_GRACE};
 use crate::hooks::sources::{
     ExplicitHookSource, ExplicitSourceScope, PROJECT_CURSOR_HOOKS_PATH, load_explicit_sources,
 };
-use crate::hooks::test_util::{RecordingMessenger, test_envelope};
-use crate::hooks::trust::TrustDecision;
+use crate::hooks::test_util::{RecordingMessenger, StaticTrust, test_envelope};
+use crate::hooks::trust::{CommandExecutionPosture, TrustDecision};
+use crate::hooks::watcher::HookConfigWatcher;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hooks/fixtures");
 
@@ -61,6 +71,21 @@ impl Fixture {
         copy_tree(&Path::new(FIXTURES).join(name), &root);
         make_scripts_executable(&root);
         let home = base.join("home");
+        fs::create_dir_all(&home).expect("mkdir home");
+        Self {
+            _dir: dir,
+            root,
+            home,
+        }
+    }
+
+    /// An empty working directory and `HOME`, for tests whose hooks are written by the test.
+    fn empty() -> Self {
+        let dir = TempDir::new().expect("tempdir");
+        let base = dunce::canonicalize(dir.path()).expect("canonical tempdir");
+        let root = base.join("work");
+        let home = base.join("home");
+        fs::create_dir_all(&root).expect("mkdir work");
         fs::create_dir_all(&home).expect("mkdir home");
         Self {
             _dir: dir,
@@ -102,7 +127,6 @@ fn copy_tree(from: &Path, to: &Path) {
 /// Sets the executable bit on every `.sh` file, whatever mode the checkout gave it.
 #[cfg(unix)]
 fn make_scripts_executable(root: &Path) {
-    use std::os::unix::fs::PermissionsExt;
     for entry in fs::read_dir(root).expect("read dir") {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
@@ -165,7 +189,6 @@ fn load_run_file(registry: &mut HookRegistry, hooks_file: &Path) {
 /// Writes `body` as an executable `sh` script.
 #[cfg(unix)]
 fn write_script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
     fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
 }
@@ -251,7 +274,6 @@ fn reasons(outcome: &DispatchOutcome) -> Vec<&str> {
         .collect()
 }
 
-/// Waits for `path` to be written, for scripts that record a pid once they are running.
 fn wait_for_file(path: &Path, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
@@ -272,11 +294,8 @@ fn recorded_pid(path: &Path) -> i32 {
         .expect("a pid")
 }
 
-/// Whether process `pid` is gone within `within`.
 #[cfg(unix)]
-fn gone_within(pid: i32, within: Duration) -> bool {
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
+fn process_gone_within(pid: i32, within: Duration) -> bool {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
         // Signal 0 only checks that the pid exists.
@@ -437,7 +456,7 @@ fn real_subprocess_stdin() {
 #[cfg(unix)]
 #[test]
 fn malformed_and_empty_output() {
-    let fixture = Fixture::copy("sample_project");
+    let fixture = Fixture::empty();
     let (dispatcher, _) = dispatcher(&fixture.home);
     let garbage = "cat > /dev/null; echo 'this is not json'";
     let silence = "cat > /dev/null";
@@ -508,7 +527,7 @@ fn malformed_and_empty_output() {
 #[cfg(unix)]
 #[test]
 fn timeout_cancellation_output_limit() {
-    let fixture = Fixture::copy("sample_project");
+    let fixture = Fixture::empty();
     let (dispatcher, _) = dispatcher(&fixture.home);
     let sleeper = r#"cat > /dev/null
 echo $$ > "$PWD/pid"
@@ -536,7 +555,7 @@ printf '{"permission":"deny"}'"#;
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     let pid = recorded_pid(&dir.path().join("pid"));
     assert!(
-        gone_within(pid, Duration::from_secs(5)),
+        process_gone_within(pid, Duration::from_secs(5)),
         "process {pid} survived the timeout"
     );
 
@@ -572,7 +591,7 @@ printf '{"permission":"deny"}'"#;
     assert!(started.elapsed() < Duration::from_secs(25));
     let pid = recorded_pid(&pid_file);
     assert!(
-        gone_within(pid, Duration::from_secs(5)),
+        process_gone_within(pid, Duration::from_secs(5)),
         "process {pid} survived cancellation"
     );
 
@@ -601,20 +620,25 @@ dd if=/dev/zero bs=1024 count=2048 2>/dev/null | tr '\000' ' '"#,
     );
 }
 
+/// Waits for `registry` to publish a snapshot past generation `from`.
+async fn generation_moves_past(app: &mut App, registry: &ModelHandle<HookRegistry>, from: u64) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let generation = registry.read(app, |registry, _| registry.generation());
+        if generation > from {
+            return generation;
+        }
+        Timer::after(Duration::from_millis(25)).await;
+    }
+    panic!("the file change never reached the registry");
+}
+
 /// §11 "reload valid, malformed, valid, with pinning", through the real file watcher: before the
 /// run is pinned the three writes give an active snapshot, a stale one that keeps the bindings,
 /// and an active one with the new content; after pinning a change is only a diagnostic.
 #[cfg(unix)]
 #[test]
 fn reload_valid_malformed_valid_with_pinning() {
-    use warpui_core::App;
-    use warpui_core::r#async::{FutureExt as _, Timer};
-
-    use crate::hooks::model::{HookExecutionHost, HookSurface};
-    use crate::hooks::test_util::StaticTrust;
-    use crate::hooks::trust::CommandExecutionPosture;
-    use crate::hooks::watcher::HookConfigWatcher;
-
     App::test((), |mut app| async move {
         let fixture = Fixture::copy("sample_project");
         let hooks_file = fixture.project_hooks_file();
@@ -653,23 +677,6 @@ fn reload_valid_malformed_valid_with_pinning() {
                 .read(app, |registry, _| registry.source_status(&source))
                 .expect("the sample is a known source")
         };
-        /// Waits for the registry to publish a snapshot past generation `from`.
-        async fn generation_moves_past(
-            app: &mut App,
-            registry: &warpui_core::ModelHandle<HookRegistry>,
-            from: u64,
-        ) -> u64 {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            while Instant::now() < deadline {
-                let generation = registry.read(app, |registry, _| registry.generation());
-                if generation > from {
-                    return generation;
-                }
-                Timer::after(Duration::from_millis(25)).await;
-            }
-            panic!("the file change never reached the registry");
-        }
-
         let valid = snapshot(&app).generation;
         let valid_revision = snapshot(&app).revision;
         assert_eq!(shell_bindings(&app), 1);
@@ -735,12 +742,10 @@ fn reload_valid_malformed_valid_with_pinning() {
     });
 }
 
-/// Pins what happens today when a project's own `.cursor` directory is also named as a hook
-/// directory for the run (PR 5's suggested way to force a repository's hooks on): the registry
-/// runs the file once, as the run-delivered source, so its commands run from `.cursor` instead of
-/// the project root. A Cursor-style command written relative to the root then is not found, and
-/// `beforeShellExecution` fails open. Reported under Findings in PR 9 and as a design question in
-/// the run's questions file; this test pins today's behavior until that is decided.
+/// When a project's `.cursor` directory is also loaded as a run-delivered hook directory, the
+/// registry runs the file once, as the run-delivered source, so its commands run from `.cursor`
+/// instead of the project root. A command written relative to the project root then exits 127,
+/// and `beforeShellExecution` fails open.
 #[cfg(unix)]
 #[test]
 fn a_project_file_also_named_as_a_hook_dir_runs_from_its_cursor_directory() {
@@ -813,9 +818,7 @@ fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
 #[cfg(unix)]
 #[test]
 fn no_orphans_after_timeout() {
-    use crate::hooks::runner::command::HOOK_KILL_GRACE;
-
-    let fixture = Fixture::copy("sample_project");
+    let fixture = Fixture::empty();
     let (dispatcher, _) = dispatcher(&fixture.home);
     let dir = TempDir::new().expect("tempdir");
     let hooks = write_run_hooks(
@@ -840,7 +843,7 @@ sleep 60"#,
     for name in ["pid", "grandchild.pid"] {
         let pid = recorded_pid(&dir.path().join(name));
         assert!(
-            gone_within(pid, HOOK_KILL_GRACE + Duration::from_secs(5)),
+            process_gone_within(pid, HOOK_KILL_GRACE + Duration::from_secs(5)),
             "{name} {pid} outlived the hook"
         );
     }
@@ -852,7 +855,7 @@ sleep 60"#,
 #[test]
 #[ignore = "written without a Windows machine to run it on; run it on Windows to verify"]
 fn no_orphans_after_timeout() {
-    let fixture = Fixture::copy("sample_project");
+    let fixture = Fixture::empty();
     let (dispatcher, _) = dispatcher(&fixture.home);
     let dir = TempDir::new().expect("tempdir");
     fs::write(
@@ -927,13 +930,14 @@ fn a_trivial_hook_adds_under_two_seconds() {
     assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
 }
 
-/// The `beforeShellExecution` slice PR 2 proved first, kept here with the rest of the suite.
+/// `beforeShellExecution` exit codes, output decoding, environment, working directory, and
+/// explicit source loading, each with a script the test writes.
 #[cfg(unix)]
 mod shell_slice {
     use super::*;
 
     struct Harness {
-        fixture: Fixture,
+        scratch: Fixture,
         dir: TempDir,
         registry: HookRegistry,
         dispatcher: HookDispatcher,
@@ -946,16 +950,16 @@ mod shell_slice {
         }
 
         fn with_definition(script_body: &str, definition: serde_json::Value) -> Self {
-            let fixture = Fixture::copy("sample_project");
+            let scratch = Fixture::empty();
             let dir = TempDir::new().expect("tempdir");
             let hooks =
                 write_run_hooks(dir.path(), "beforeShellExecution", script_body, definition);
             let mut registry = HookRegistry::new();
             load_run_file(&mut registry, &hooks);
             assert!(!registry.snapshot().is_empty(), "the file loads");
-            let (dispatcher, messenger) = dispatcher(&fixture.home);
+            let (dispatcher, messenger) = dispatcher(&scratch.home);
             Self {
-                fixture,
+                scratch,
                 dir,
                 registry,
                 dispatcher,
@@ -1089,7 +1093,7 @@ exit 2"#,
         let recorded = fs::read_to_string(harness.dir.path().join("env.txt")).expect("env file");
         assert_eq!(
             recorded.lines().collect::<Vec<_>>(),
-            vec![harness.fixture.home.to_string_lossy().as_ref(), HOOK_PATH]
+            vec![harness.scratch.home.to_string_lossy().as_ref(), HOOK_PATH]
         );
     }
 
