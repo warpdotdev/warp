@@ -83,9 +83,25 @@ impl RequestFileEditsExecutor {
             return false;
         };
 
+        // The model writes paths relative to the session's working directory; the permission
+        // check compares them with absolute protected paths, so resolve them the way the applied
+        // diffs are.
+        let current_working_directory = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned();
+        let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
         let paths: Vec<PathBuf> = file_edits
             .iter()
-            .filter_map(|edit| edit.file().map(PathBuf::from))
+            .filter_map(|edit| edit.file())
+            .map(|file| {
+                PathBuf::from(host_native_absolute_path(
+                    file,
+                    &shell,
+                    &current_working_directory,
+                ))
+            })
             .collect();
 
         // Don't allow autoexecution if the diff was generated passively.

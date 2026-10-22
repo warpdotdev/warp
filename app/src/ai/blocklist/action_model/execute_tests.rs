@@ -673,6 +673,228 @@ mod hooks {
         });
     }
 
+    /// File edits the model writes relative to the session's working directory, checked against
+    /// the registry's protected paths through the executor.
+    #[cfg(feature = "local_fs")]
+    mod protected_file_edits {
+        use std::fs;
+        use std::path::Path;
+
+        use ai::agent::action::FileEdit;
+        use ai::hooks::{
+            HookFormat, HookRegistry, HookSourceId, HookSourceKind, HookSourceLocation,
+            PROJECT_CURSOR_HOOKS_PATH, SourceUpdate, TrustDecision,
+        };
+        use chrono::Local;
+        use tempfile::TempDir;
+        use warp_core::execution_mode::AppExecutionMode;
+        use warpui::{App, SingletonEntity};
+
+        use super::super::super::NotExecutedReason;
+        use super::{build_executor, reason_of, try_execute};
+        use crate::ai::agent::task::TaskId;
+        use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
+        use crate::ai::blocklist::hooks::testing::{HookTestApp, hook_test_app};
+        use crate::ai::blocklist::{BlocklistAIHistoryModel, RequestInput, ResponseStreamId};
+        use crate::ai::execution_profiles::ActionPermission;
+        use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+        use crate::ai::llms::LLMId;
+        use crate::features::FeatureFlag;
+        use crate::terminal::event::BlockMetadataReceivedEvent;
+        use crate::terminal::model::block::BlockMetadata;
+        use crate::terminal::model::terminal_model::BlockIndex;
+        use crate::terminal::model_events::ModelEvent;
+
+        /// A project whose hook file names a script, loaded into the registry as a project file
+        /// found under its root, with the session's working directory at that root and code
+        /// diffs set to auto-approve.
+        fn project_with_hooks(app: &mut App, harness: &HookTestApp) -> TempDir {
+            let dir = TempDir::new().expect("tempdir");
+            let root = dunce::canonicalize(dir.path()).expect("canonical");
+            fs::create_dir_all(root.join(".cursor")).expect("mkdir");
+            fs::create_dir_all(root.join("scripts")).expect("mkdir");
+            fs::write(root.join("scripts/check.sh"), "#!/bin/sh\nexit 0\n").expect("write");
+            fs::write(root.join("README.md"), "notes").expect("write");
+            let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
+            let hooks_json = r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "scripts/check.sh" } ] } }"#;
+            fs::write(&hooks_file, hooks_json).expect("write");
+            app.update(|ctx| {
+                HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                    registry.upsert_source(SourceUpdate {
+                        source: HookSourceId {
+                            kind: HookSourceKind::ProjectCursorFile,
+                            location: HookSourceLocation::CanonicalPath(hooks_file.clone()),
+                        },
+                        format: HookFormat::Cursor,
+                        bytes: hooks_json.as_bytes(),
+                        project_root: Some(root.clone()),
+                        trust: TrustDecision::Inert {
+                            reason: "not the point of this test".to_owned(),
+                        },
+                    });
+                });
+            });
+            set_working_directory(app, harness, &root);
+            attach_an_exchange(app, harness);
+            AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+                let profile_id = profiles
+                    .active_profile(Some(harness.terminal_view_id), ctx)
+                    .id()
+                    .clone();
+                profiles.set_apply_code_diffs(&profile_id, &ActionPermission::AlwaysAllow, ctx);
+            });
+            dir
+        }
+
+        fn set_working_directory(app: &mut App, harness: &HookTestApp, directory: &Path) {
+            harness.dispatcher.update(app, |_, ctx| {
+                ctx.emit(ModelEvent::BlockMetadataReceived(
+                    BlockMetadataReceivedEvent {
+                        block_metadata: BlockMetadata::new(
+                            None,
+                            Some(directory.display().to_string()),
+                        ),
+                        block_index: BlockIndex::zero(),
+                        is_after_in_band_command: false,
+                        is_done_bootstrapping: true,
+                    },
+                ));
+            });
+        }
+
+        /// The file-edit executor only auto-approves an edit the model asked for in a request
+        /// of its own, so the conversation needs one exchange.
+        fn attach_an_exchange(app: &mut App, harness: &HookTestApp) {
+            BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+                let task_id = history
+                    .conversation(&harness.conversation_id)
+                    .expect("the harness conversation")
+                    .get_root_task_id()
+                    .clone();
+                history
+                    .update_conversation_for_new_request_input_for_test(
+                        RequestInput {
+                            conversation_id: harness.conversation_id,
+                            input_messages: vec![(task_id, Vec::new())],
+                            working_directory: None,
+                            model_id: LLMId::from("test-model"),
+                            coding_model_id: LLMId::from("test-coding-model"),
+                            cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                            computer_use_model_id: LLMId::from("test-computer-use-model"),
+                            shared_session_response_initiator: None,
+                            request_start_ts: Local::now(),
+                            supported_tools_override: None,
+                        },
+                        ResponseStreamId::new_for_test(),
+                        harness.terminal_view_id,
+                        ctx,
+                    )
+                    .expect("the exchange is recorded");
+            });
+        }
+
+        fn edit_action(id: &str, file: &str) -> AIAgentAction {
+            AIAgentAction {
+                id: AIAgentActionId::from(id.to_owned()),
+                task_id: TaskId::new("task".to_owned()),
+                requires_result: true,
+                action: AIAgentActionType::RequestFileEdits {
+                    file_edits: vec![FileEdit::Create {
+                        file: Some(file.to_owned()),
+                        content: Some(String::new()),
+                        allow_overwrite: true,
+                    }],
+                    title: None,
+                },
+            }
+        }
+
+        /// Runs the three edits through the executor: the hook file and its script, written the
+        /// way the model writes them, wait for confirmation even though diffs auto-approve; a
+        /// file beside them goes through to execution, which has no diff prepared.
+        async fn relative_hook_paths_need_confirmation(app: &mut App) {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(app);
+            let _project = project_with_hooks(app, &harness);
+            let (executor, _) = build_executor(app, &harness);
+
+            for (id, file) in [
+                ("hook-file", ".cursor/hooks.json"),
+                ("script", "scripts/check.sh"),
+            ] {
+                let result = try_execute(
+                    app,
+                    &executor,
+                    &edit_action(id, file),
+                    harness.conversation_id,
+                    false,
+                );
+                assert_eq!(
+                    reason_of(&result),
+                    Some(NotExecutedReason::NeedsConfirmation),
+                    "{file} is protected"
+                );
+            }
+            let result = try_execute(
+                app,
+                &executor,
+                &edit_action("readme", "README.md"),
+                harness.conversation_id,
+                false,
+            );
+            assert_eq!(
+                reason_of(&result),
+                Some(NotExecutedReason::NotReady),
+                "a file beside the hook file passes the permission check"
+            );
+        }
+
+        #[test]
+        fn a_relative_path_to_a_hook_file_is_not_auto_approved() {
+            App::test((), |mut app| async move {
+                relative_hook_paths_need_confirmation(&mut app).await;
+            });
+        }
+
+        #[test]
+        fn a_relative_path_to_a_hook_file_is_not_auto_approved_in_a_sandbox() {
+            App::test((), |mut app| async move {
+                // The harness builds an unsandboxed app; the flag is flipped before any check.
+                relative_hook_paths_need_confirmation_sandboxed(&mut app).await;
+            });
+        }
+
+        async fn relative_hook_paths_need_confirmation_sandboxed(app: &mut App) {
+            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+            let harness = hook_test_app(app);
+            AppExecutionMode::handle(app).update(app, |mode, _| mode.set_sandboxed_for_test(true));
+            assert!(app.read(|ctx| AppExecutionMode::as_ref(ctx).is_sandboxed()));
+            let _project = project_with_hooks(app, &harness);
+            let (executor, _) = build_executor(app, &harness);
+
+            let result = try_execute(
+                app,
+                &executor,
+                &edit_action("hook-file", ".cursor/hooks.json"),
+                harness.conversation_id,
+                false,
+            );
+            assert_eq!(
+                reason_of(&result),
+                Some(NotExecutedReason::NeedsConfirmation),
+                "the hook file is protected in a sandbox too"
+            );
+            let result = try_execute(
+                app,
+                &executor,
+                &edit_action("readme", "README.md"),
+                harness.conversation_id,
+                false,
+            );
+            assert_eq!(reason_of(&result), Some(NotExecutedReason::NotReady));
+        }
+    }
+
     /// End-to-end shell hook execution with no test doubles: a Cursor `hooks.json` on disk, a real
     /// script, the process runner, and the registry loader.
     #[cfg(all(feature = "local_fs", unix))]
@@ -680,7 +902,10 @@ mod hooks {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
-        use ai::hooks::{HookFormat, HookRegistry, HookSourceKind};
+        use ai::hooks::{
+            ExplicitHookSource, ExplicitSourceScope, HookFormat, HookRegistry,
+            load_explicit_sources,
+        };
         use tempfile::TempDir;
         use warpui::{App, SingletonEntity};
 
@@ -713,15 +938,17 @@ mod hooks {
 
                 app.update(|ctx| {
                     HookRuntime::install_command_runner(ctx);
-                    HookRegistry::handle(ctx)
-                        .update(ctx, |registry, _| {
-                            registry.install_explicit_source(
-                                &hooks_json,
-                                HookFormat::Cursor,
-                                HookSourceKind::RunDelivered,
-                            )
-                        })
-                        .expect("the file loads");
+                    let failures = HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                        load_explicit_sources(
+                            &[ExplicitHookSource {
+                                path: hooks_json.clone(),
+                                format: HookFormat::Cursor,
+                                scope: ExplicitSourceScope::Run,
+                            }],
+                            registry,
+                        )
+                    });
+                    assert!(failures.is_empty(), "the file loads: {failures:?}");
                 });
                 let (executor, events) = build_executor(&mut app, &harness);
                 let shell = shell_action("id-shell", "rm -rf build");

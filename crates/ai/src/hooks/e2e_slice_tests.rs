@@ -19,15 +19,15 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::agent::action::AIAgentActionType;
-use crate::hooks::adapters::HookConfigError;
 use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
 use crate::hooks::model::{
-    CanonicalToolName, HookBoundary, HookEnvelope, HookFormat, HookPayload, HookSourceKind,
+    CanonicalToolName, DiagnosticSeverity, HookBoundary, HookEnvelope, HookFormat, HookPayload,
     HookVerdict,
 };
 use crate::hooks::registry::HookRegistry;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::runner::command::CommandHookRunner;
+use crate::hooks::sources::{ExplicitHookSource, ExplicitSourceScope, load_explicit_sources};
 use crate::hooks::test_util::{RecordingMessenger, test_envelope};
 
 struct Harness {
@@ -59,13 +59,9 @@ impl Harness {
         .expect("write hooks.json");
 
         let mut registry = HookRegistry::new();
-        registry
-            .install_explicit_source(
-                &hooks_json,
-                HookFormat::Cursor,
-                HookSourceKind::RunDelivered,
-            )
-            .expect("the file loads");
+        let failures = load_explicit_sources(&[run_source(&hooks_json)], &mut registry);
+        assert!(failures.is_empty(), "the file loads: {failures:?}");
+        assert!(!registry.snapshot().is_empty(), "the file loads");
 
         let messenger = Arc::new(RecordingMessenger::new());
         let dispatcher = HookDispatcher::new(
@@ -86,6 +82,14 @@ impl Harness {
             self.registry.snapshot(),
             Arc::new(AtomicBool::new(false)),
         ))
+    }
+}
+
+fn run_source(path: &Path) -> ExplicitHookSource {
+    ExplicitHookSource {
+        path: path.to_path_buf(),
+        format: HookFormat::Cursor,
+        scope: ExplicitSourceScope::Run,
     }
 }
 
@@ -300,10 +304,8 @@ fn loading_the_same_file_again_replaces_its_bindings() {
         ] } }"#,
     )
     .expect("rewrite hooks.json");
-    harness
-        .registry
-        .install_explicit_source(&path, HookFormat::Cursor, HookSourceKind::RunDelivered)
-        .expect("reloads");
+    let failures = load_explicit_sources(&[run_source(&path)], &mut harness.registry);
+    assert!(failures.is_empty(), "reloads: {failures:?}");
     let snapshot = harness.registry.snapshot();
     assert_eq!(snapshot.revision, 2);
     assert_eq!(snapshot.bindings.len(), 2);
@@ -311,20 +313,36 @@ fn loading_the_same_file_again_replaces_its_bindings() {
 }
 
 #[test]
-fn a_missing_or_invalid_file_is_an_error_and_changes_nothing() {
+fn a_missing_or_invalid_file_is_reported_and_activates_nothing() {
     let dir = TempDir::new().expect("tempdir");
     let mut registry = HookRegistry::new();
     let missing = dir.path().join("hooks.json");
-    let error = registry
-        .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
-        .expect_err("missing file");
-    assert!(matches!(error, HookConfigError::Unreadable(_)));
+    let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
+    assert_eq!(
+        failures.len(),
+        1,
+        "a missing file is a failure the caller sees"
+    );
+    assert_eq!(failures[0].severity, DiagnosticSeverity::Error);
+    assert!(registry.snapshot().is_empty());
 
     fs::write(&missing, "{ not json").expect("write");
-    let error = registry
-        .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
-        .expect_err("invalid file");
-    assert!(matches!(error, HookConfigError::Parse(_)));
-    assert_eq!(registry.revision(), 0);
+    let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
+    assert_eq!(
+        failures.len(),
+        1,
+        "a file that does not parse is a failure the caller sees: {failures:?}"
+    );
+    assert!(failures[0].message.contains("is not active"));
     assert!(registry.snapshot().is_empty());
+    assert!(
+        registry
+            .snapshot()
+            .diagnostics
+            .iter()
+            .any(
+                |diagnostic| diagnostic.severity == DiagnosticSeverity::Error
+                    && diagnostic.message.contains("is not active")
+            )
+    );
 }
