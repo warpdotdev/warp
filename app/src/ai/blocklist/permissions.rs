@@ -768,7 +768,9 @@ impl BlocklistAIPermissions {
         }
     }
 
-    /// Returns whether or not Agent Mode can automatically write to files.
+    /// Returns whether or not Agent Mode can automatically write to files. Protected files are
+    /// matched by absolute path, so `paths` must already be resolved against the session's
+    /// working directory; a path left relative cannot match one.
     pub fn can_write_files(
         &self,
         conversation_id: &AIConversationId,
@@ -1261,8 +1263,8 @@ fn check_protected_write_paths(paths: &[PathBuf], ctx: &AppContext) -> Option<Fi
 
 /// Whether any of `paths` is a hook configuration file or a script one names. Paths are compared
 /// after resolving symlinks when the file exists, so a different spelling of the same file does
-/// not slip past. This is an agent file-edit guard only; shell commands can still change these
-/// files.
+/// not slip past; they must be absolute, since the protected paths are. This is an agent
+/// file-edit guard only; shell commands can still change these files.
 fn touches_hook_source(paths: &[PathBuf], ctx: &AppContext) -> bool {
     if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<HookRegistry>() {
         return false;

@@ -267,6 +267,7 @@ mod loading {
             &mut registry,
         );
         assert_eq!(registry.snapshot().bindings.len(), 1);
-        assert_eq!(registry.revision(), 2);
+        assert_eq!(registry.generation(), 2, "both names were loaded");
+        assert_eq!(registry.revision(), 1, "the second changed nothing");
     }
 }

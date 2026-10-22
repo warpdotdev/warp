@@ -52,7 +52,13 @@ impl std::fmt::Debug for ActiveBinding {
 /// revision.
 #[derive(Debug, Default)]
 pub struct RegistrySnapshot {
+    /// Moves only when the bindings that can run, or the project roots that scope them, differ
+    /// from the previous snapshot. A decision made against an earlier revision was made against
+    /// a different active set; one made against the same revision still holds.
     pub revision: u64,
+    /// Counts every snapshot published, including one that changed only diagnostics or
+    /// protected paths.
+    pub generation: u64,
     pub bindings: Vec<ActiveBinding>,
     pub diagnostics: Vec<HookDiagnostic>,
     /// Every project root the registry knows, whether or not it has a hook file. The nearest one
@@ -99,6 +105,20 @@ impl RegistrySnapshot {
         self.bindings
             .iter()
             .any(|active| active.binding.boundary == boundary)
+    }
+
+    /// Whether `bindings` and `project_roots` would give every `bindings_for` call the same
+    /// answer this snapshot gives. Adapters are not compared: a binding's definition and source
+    /// decide its adapter.
+    fn has_same_active_set(&self, bindings: &[ActiveBinding], project_roots: &[PathBuf]) -> bool {
+        self.project_roots == project_roots
+            && self.bindings.len() == bindings.len()
+            && self.bindings.iter().zip(bindings).all(|(current, next)| {
+                current.binding == next.binding
+                    && current.scope == next.scope
+                    && current.host == next.host
+                    && current.working_directory == next.working_directory
+            })
     }
 
     /// The deepest project root that contains `cwd`. Roots are canonical paths, so `cwd` is
@@ -378,19 +398,20 @@ fn root_source(root: &Path) -> HookSourceId {
     }
 }
 
-/// Emitted whenever the snapshot changes, including reload attempts that left the active bindings
-/// as they were.
+/// Emitted whenever a snapshot is published, including reload attempts that left the active
+/// bindings as they were.
 pub enum HookRegistryEvent {
     SnapshotChanged { revision: u64 },
 }
 
 /// Holds every known source and publishes immutable snapshots of the bindings that may run.
 ///
-/// Each change, including a failed reload, publishes a new snapshot with a higher revision, so a
-/// decision keyed by revision is invalidated whenever a source changes. Every mutator returns the
-/// resulting revision. A source whose reload fails keeps its last valid configuration in effect
-/// and is marked stale. Once the run is pinned, changes to sources and to the set of project
-/// roots are reported and never applied.
+/// Each change, including a failed reload and a change after the run is pinned, publishes a new
+/// snapshot. The snapshot's revision moves only when the active set changed, so a decision keyed
+/// by revision survives a change that was only reported; its generation moves every time. Every
+/// mutator returns the resulting revision. A source whose reload fails keeps its last valid
+/// configuration in effect and is marked stale. Once the run is pinned, changes to sources and to
+/// the set of project roots are reported and never applied.
 pub struct HookRegistry {
     snapshot: Arc<RegistrySnapshot>,
     sources: IndexMap<HookSourceId, SourceState>,
@@ -400,6 +421,7 @@ pub struct HookRegistry {
     /// this run.
     roots_after_pin: Vec<HookDiagnostic>,
     revision: u64,
+    generation: u64,
     pinned: Option<PinnedRun>,
     /// Bindings a test installed directly. They ride along with every snapshot the sources
     /// produce, so pinning or reloading a source does not drop them.
@@ -421,6 +443,7 @@ impl HookRegistry {
             project_roots: BTreeSet::new(),
             roots_after_pin: Vec::new(),
             revision: 0,
+            generation: 0,
             pinned: None,
             #[cfg(any(test, feature = "test-util"))]
             installed_for_test: (Vec::new(), Vec::new()),
@@ -433,6 +456,10 @@ impl HookRegistry {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn pinned(&self) -> Option<PinnedRun> {
@@ -469,16 +496,16 @@ impl HookRegistry {
     }
 
     /// Applies `change` to the registry behind `handle` and, when it published a new snapshot,
-    /// tells subscribers which revision it produced.
+    /// tells subscribers which revision it carries.
     pub fn change(
         handle: &ModelHandle<Self>,
         ctx: &mut impl UpdateModel,
         change: impl FnOnce(&mut Self) -> u64,
     ) -> u64 {
         handle.update(ctx, |registry, ctx| {
-            let before = registry.revision;
+            let before = registry.generation;
             let revision = change(registry);
-            if revision != before {
+            if registry.generation != before {
                 ctx.emit(HookRegistryEvent::SnapshotChanged { revision });
             }
             revision
@@ -712,7 +739,7 @@ impl HookRegistry {
 
     /// Publishes a new snapshot from the current source states.
     fn rebuild(&mut self) -> u64 {
-        self.revision += 1;
+        self.generation += 1;
         let mut bindings = Vec::new();
         let mut diagnostics = Vec::new();
         let mut protected_paths = BTreeSet::new();
@@ -775,11 +802,16 @@ impl HookRegistry {
             diagnostics.extend(self.installed_for_test.1.iter().cloned());
         }
 
+        let project_roots = self.project_roots.iter().cloned().collect::<Vec<_>>();
+        if !self.snapshot.has_same_active_set(&bindings, &project_roots) {
+            self.revision += 1;
+        }
         self.snapshot = Arc::new(RegistrySnapshot {
             revision: self.revision,
+            generation: self.generation,
             bindings,
             diagnostics,
-            project_roots: self.project_roots.iter().cloned().collect(),
+            project_roots,
             protected_paths: protected_paths.into_iter().collect(),
         });
         self.revision

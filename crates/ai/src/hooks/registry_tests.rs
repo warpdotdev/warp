@@ -206,7 +206,8 @@ fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale(
         Some(root),
         TrustDecision::Activate,
     ));
-    assert_eq!(second, 2);
+    assert_eq!(second, 1, "the active set did not change");
+    assert_eq!(registry.generation(), 2, "but a snapshot was published");
     assert_eq!(
         tool_pre_bindings(&registry, "/repo/src").len(),
         1,
@@ -226,7 +227,8 @@ fn a_reload_that_fails_keeps_the_last_valid_bindings_and_marks_the_source_stale(
         Some(root),
         TrustDecision::Activate,
     ));
-    assert_eq!(third, 3);
+    assert_eq!(third, 2);
+    assert_eq!(registry.generation(), 3);
     assert_eq!(tool_pre_bindings(&registry, "/repo/src").len(), 2);
     assert!(!registry.source_status(&source).expect("known source").stale);
     assert!(self::errors(&registry).is_empty());
@@ -242,7 +244,7 @@ fn a_source_whose_first_load_fails_is_inactive_with_an_error() {
         Some(Path::new("/repo")),
         TrustDecision::Activate,
     ));
-    assert_eq!(revision, 1);
+    assert_eq!(revision, 1, "the root became a project");
     assert!(registry.snapshot().is_empty());
     let status = registry.source_status(&source).expect("known source");
     assert!(!status.loaded && !status.stale);
@@ -333,7 +335,8 @@ fn a_root_found_after_pinning_does_not_become_a_project_until_the_next_run() {
     registry.pin(CommandExecutionPosture::AutoApproves);
 
     let revision = registry.add_project_root(Path::new("/work/inner"));
-    assert_eq!(revision, 3);
+    assert_eq!(revision, 1, "the active set did not change");
+    assert_eq!(registry.generation(), 3);
     assert_eq!(
         tool_pre_bindings(&registry, "/work/inner/src").len(),
         1,
@@ -352,7 +355,7 @@ fn a_root_found_after_pinning_does_not_become_a_project_until_the_next_run() {
     );
     assert_eq!(
         registry.remove_project_root(Path::new("/work")),
-        3,
+        1,
         "the project set does not shrink after pinning either"
     );
     assert_eq!(tool_pre_bindings(&registry, "/work/src").len(), 1);
@@ -365,7 +368,11 @@ fn a_read_failure_behaves_like_a_failed_parse() {
     let mut registry = HookRegistry::new();
     registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate));
     let revision = registry.record_read_failure(&source, "permission denied");
-    assert_eq!(revision, 2);
+    assert_eq!(
+        revision, 1,
+        "the last valid bindings stay, so the revision does too"
+    );
+    assert_eq!(registry.generation(), 2);
     assert_eq!(tool_pre_bindings(&registry, "/repo").len(), 1);
     assert!(registry.source_status(&source).expect("known source").stale);
 
@@ -383,12 +390,13 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
     let mut registry = HookRegistry::new();
     registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate));
     let pinned_at = registry.pin(CommandExecutionPosture::AutoApproves);
-    assert_eq!(pinned_at, 2);
+    assert_eq!(pinned_at, 1, "pinning does not change the active set");
+    assert_eq!(registry.generation(), 2);
     assert_eq!(
         registry.pinned(),
         Some(PinnedRun {
             posture: CommandExecutionPosture::AutoApproves,
-            revision: 2,
+            revision: 1,
         })
     );
     assert!(
@@ -404,7 +412,11 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
         Some(root),
         TrustDecision::Activate,
     ));
-    assert_eq!(revision, 3, "the revision still moves on");
+    assert_eq!(
+        revision, 1,
+        "a decision keyed by the revision still holds: the hooks that can run did not change"
+    );
+    assert_eq!(registry.generation(), 3, "the change was published");
     assert_eq!(
         tool_pre_bindings(&registry, "/repo").len(),
         1,
@@ -417,14 +429,15 @@ fn after_pinning_a_changed_project_file_is_reported_and_not_applied() {
         "{warnings:?}"
     );
 
-    // A second identical change does not pile up diagnostics, but still bumps the revision.
+    // A second identical change does not pile up diagnostics; it is still published.
     let again = registry.upsert_source(update(
         &source,
         VALID_TWO,
         Some(root),
         TrustDecision::Activate,
     ));
-    assert_eq!(again, 4);
+    assert_eq!(again, 1);
+    assert_eq!(registry.generation(), 4);
     assert_eq!(self::warnings(&registry).len(), 1);
 }
 
@@ -434,7 +447,11 @@ fn after_pinning_a_new_project_file_is_protected_and_waits_for_the_next_run() {
     let mut registry = HookRegistry::new();
     registry.pin(CommandExecutionPosture::AutoApproves);
     let revision = registry.upsert_source(project.update(TrustDecision::Activate));
-    assert_eq!(revision, 2);
+    assert_eq!(
+        revision, 0,
+        "nothing can run, so the revision has never moved"
+    );
+    assert_eq!(registry.generation(), 2);
     assert!(registry.snapshot().is_empty());
     let status = registry.source_status(&project.source()).expect("known");
     assert!(status.loaded && !status.pinned);
@@ -484,7 +501,8 @@ fn after_pinning_an_explicit_source_cannot_change() {
     registry.upsert_source(run.update(TrustDecision::Activate));
     registry.pin(CommandExecutionPosture::AutoApproves);
     let revision = registry.upsert_source(run.update_with(VALID_TWO, TrustDecision::Activate));
-    assert_eq!(revision, 3);
+    assert_eq!(revision, 1);
+    assert_eq!(registry.generation(), 3);
     assert_eq!(registry.snapshot().bindings.len(), 1);
     assert!(
         warnings(&registry)[0].contains("cannot change after it starts"),
@@ -502,15 +520,18 @@ fn after_pinning_removing_or_re_trusting_a_source_keeps_its_bindings() {
     registry.pin(CommandExecutionPosture::AutoApproves);
 
     let revision = registry.remove_source(&source);
-    assert_eq!(revision, 3);
+    assert_eq!(revision, 1);
+    assert_eq!(registry.generation(), 3);
     assert_eq!(tool_pre_bindings(&registry, "/repo").len(), 1);
 
     let revision = registry.set_trust(&source, inert());
-    assert_eq!(revision, 4);
+    assert_eq!(revision, 1);
+    assert_eq!(registry.generation(), 4);
     assert_eq!(tool_pre_bindings(&registry, "/repo").len(), 1);
 
     let revision = registry.remove_source_root(&source, root);
-    assert_eq!(revision, 5);
+    assert_eq!(revision, 1);
+    assert_eq!(registry.generation(), 5);
     assert_eq!(tool_pre_bindings(&registry, "/repo").len(), 1);
     assert!(
         warnings(&registry)
@@ -533,33 +554,55 @@ fn pinning_twice_changes_nothing() {
     );
 }
 
+/// Every change publishes a snapshot; the revision moves with the hooks that can run and never
+/// goes back.
 #[test]
-fn the_revision_only_moves_forward_through_every_kind_of_change() {
+fn the_generation_moves_on_every_change_and_the_revision_with_the_active_set() {
     let source = project_source("/repo/.cursor/hooks.json");
     let root = Path::new("/repo");
     let mut registry = HookRegistry::new();
-    let mut last = 0;
-    for revision in [
-        registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate)),
-        registry.upsert_source(update(
-            &source,
-            MALFORMED,
-            Some(root),
-            TrustDecision::Activate,
-        )),
-        registry.set_trust(&source, inert()),
-        registry.record_read_failure(&source, "gone"),
-        registry.remove_source(&source),
-        registry.pin(CommandExecutionPosture::Unknown),
-    ] {
-        assert!(revision > last, "{revision} after {last}");
-        last = revision;
+    let mut changes = Vec::new();
+    let mut record = |registry: &HookRegistry, active_set_changed: bool| {
+        changes.push((
+            registry.revision(),
+            registry.generation(),
+            active_set_changed,
+        ));
+    };
+    registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate));
+    record(&registry, true);
+    registry.upsert_source(update(
+        &source,
+        MALFORMED,
+        Some(root),
+        TrustDecision::Activate,
+    ));
+    record(&registry, false);
+    registry.set_trust(&source, inert());
+    record(&registry, true);
+    registry.record_read_failure(&source, "gone");
+    record(&registry, false);
+    registry.remove_source(&source);
+    record(&registry, false);
+    registry.pin(CommandExecutionPosture::Unknown);
+    record(&registry, false);
+
+    let mut last = (0, 0);
+    for (revision, generation, active_set_changed) in changes {
+        assert_eq!(generation, last.1 + 1, "every change is published");
+        if active_set_changed {
+            assert_eq!(revision, last.0 + 1, "at generation {generation}");
+        } else {
+            assert_eq!(revision, last.0, "at generation {generation}");
+        }
+        last = (revision, generation);
     }
-    assert_eq!(registry.snapshot().revision, last);
+    assert_eq!(registry.snapshot().revision, last.0);
+    assert_eq!(registry.snapshot().generation, last.1);
 }
 
 #[test]
-fn changing_an_unknown_source_does_not_change_the_revision() {
+fn changing_an_unknown_source_does_not_publish_anything() {
     let mut registry = HookRegistry::new();
     assert_eq!(registry.remove_source(&test_source_id("nope")), 0);
     assert_eq!(registry.set_trust(&test_source_id("nope"), inert()), 0);
@@ -567,6 +610,21 @@ fn changing_an_unknown_source_does_not_change_the_revision() {
         registry.remove_source_root(&test_source_id("nope"), Path::new("/x")),
         0
     );
+    assert_eq!(registry.generation(), 0);
+}
+
+/// Reloading a file whose definitions did not change, or whose only change is a diagnostic,
+/// keeps a decision keyed by the revision valid.
+#[test]
+fn a_reload_with_the_same_definitions_keeps_the_revision() {
+    let source = project_source("/repo/.cursor/hooks.json");
+    let root = Path::new("/repo");
+    let mut registry = HookRegistry::new();
+    registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate));
+    let same_again =
+        registry.upsert_source(update(&source, VALID, Some(root), TrustDecision::Activate));
+    assert_eq!(same_again, 1);
+    assert_eq!(registry.generation(), 2);
 }
 
 #[test]
@@ -719,7 +777,8 @@ fn a_file_reached_through_a_symlink_is_one_source_and_two_files_are_two() {
             trust: TrustDecision::Activate,
         });
     }
-    assert_eq!(registry.revision(), 2);
+    assert_eq!(registry.generation(), 2);
+    assert_eq!(registry.revision(), 1, "the second load changed nothing");
     assert_eq!(
         registry.snapshot().bindings.len(),
         1,

@@ -160,6 +160,12 @@ impl AppExecutionMode {
     pub fn is_sandboxed(&self) -> bool {
         self.is_sandboxed
     }
+
+    /// Marks a test app as sandboxed, or not, after it was built.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_sandboxed_for_test(&mut self, is_sandboxed: bool) {
+        self.is_sandboxed = is_sandboxed;
+    }
 }
 
 impl Entity for AppExecutionMode {

@@ -190,6 +190,11 @@ impl Harness {
         self.snapshot(app).revision
     }
 
+    /// How many snapshots the registry has published.
+    fn generation(&self, app: &App) -> u64 {
+        self.snapshot(app).generation
+    }
+
     fn tool_pre_bindings_under(&self, app: &App, root: &Path) -> usize {
         self.snapshot(app)
             .bindings_for(
@@ -200,11 +205,11 @@ impl Harness {
             .len()
     }
 
-    /// Yields to the app until the revision moves past `from`, or `timeout` passes.
-    async fn wait_for_revision_past(&self, app: &mut App, from: u64, timeout: Duration) -> bool {
+    /// Yields to the app until the generation moves past `from`, or `timeout` passes.
+    async fn wait_for_generation_past(&self, app: &mut App, from: u64, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if self.revision(app) > from {
+            if self.generation(app) > from {
                 return true;
             }
             Timer::after(Duration::from_millis(25)).await;
@@ -222,9 +227,10 @@ fn adding_a_root_loads_its_hook_file_scoped_to_that_root() {
 
         let snapshot = harness.snapshot(&app);
         assert_eq!(
-            snapshot.revision, 2,
+            snapshot.generation, 2,
             "the root is announced, then its file loads"
         );
+        assert_eq!(snapshot.revision, 2, "both changed what can run");
         assert_eq!(snapshot.bindings.len(), 1);
         let binding = &snapshot.bindings[0];
         assert_eq!(
@@ -252,7 +258,7 @@ fn adding_the_same_root_twice_loads_it_once() {
         let harness = Harness::activating(&mut app);
         harness.add_root(&mut app, &root.path);
         harness.add_root(&mut app, &root.path);
-        assert_eq!(harness.revision(&app), 2);
+        assert_eq!(harness.generation(&app), 2);
     });
 }
 
@@ -263,7 +269,7 @@ fn create_modify_and_delete_each_update_the_registry_once() {
         let harness = Harness::activating(&mut app);
         harness.add_root(&mut app, &root.path);
         assert_eq!(
-            harness.revision(&app),
+            harness.generation(&app),
             1,
             "the root is a known project; there is no file to load"
         );
@@ -274,17 +280,18 @@ fn create_modify_and_delete_each_update_the_registry_once() {
 
         root.write(VALID);
         harness.event(&mut app, added(root.hooks_file()));
-        assert_eq!(harness.revision(&app), 2);
+        assert_eq!(harness.generation(&app), 2);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
 
         root.write(VALID_TWO);
         harness.event(&mut app, modified(root.hooks_file()));
-        assert_eq!(harness.revision(&app), 3);
+        assert_eq!(harness.generation(&app), 3);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 2);
 
         root.remove();
         harness.event(&mut app, deleted(root.hooks_file()));
-        assert_eq!(harness.revision(&app), 4);
+        assert_eq!(harness.generation(&app), 4);
+        assert_eq!(harness.revision(&app), 4, "every step changed what can run");
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 0);
         assert!(harness.snapshot(&app).protected_paths.is_empty());
         assert_eq!(
@@ -314,7 +321,7 @@ fn one_event_that_touches_the_file_several_ways_loads_it_once() {
                 moved: HashMap::new(),
             },
         );
-        assert_eq!(harness.revision(&app), 3);
+        assert_eq!(harness.generation(&app), 3);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 2);
     });
 }
@@ -327,7 +334,7 @@ fn an_event_for_an_unrelated_path_does_not_reload() {
         harness.add_root(&mut app, &root.path);
         harness.event(&mut app, modified(root.path.join("src/main.rs")));
         harness.event(&mut app, modified(root.path.join(".cursor/rules.md")));
-        assert_eq!(harness.revision(&app), 2);
+        assert_eq!(harness.generation(&app), 2);
     });
 }
 
@@ -339,7 +346,7 @@ fn removing_the_cursor_directory_withdraws_the_source() {
         harness.add_root(&mut app, &root.path);
         fs::remove_dir_all(root.path.join(".cursor")).expect("remove .cursor");
         harness.event(&mut app, deleted(root.path.join(".cursor")));
-        assert_eq!(harness.revision(&app), 3);
+        assert_eq!(harness.generation(&app), 3);
         assert!(harness.snapshot(&app).is_empty());
     });
 }
@@ -353,7 +360,11 @@ fn a_rewrite_that_does_not_parse_keeps_the_previous_bindings() {
         root.write("{ not json");
         harness.event(&mut app, modified(root.hooks_file()));
         let snapshot = harness.snapshot(&app);
-        assert_eq!(snapshot.revision, 3);
+        assert_eq!(snapshot.generation, 3);
+        assert_eq!(
+            snapshot.revision, 2,
+            "the hooks that can run did not change"
+        );
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
         assert!(
             snapshot
@@ -376,7 +387,7 @@ fn two_roots_are_loaded_and_scoped_independently() {
         assert_eq!(harness.tool_pre_bindings_under(&app, &second.path), 2);
 
         harness.event(&mut app, modified(second.hooks_file()));
-        assert_eq!(harness.revision(&app), 5);
+        assert_eq!(harness.generation(&app), 5);
         assert_eq!(harness.tool_pre_bindings_under(&app, &first.path), 1);
     });
 }
@@ -509,7 +520,11 @@ fn a_change_after_the_run_is_pinned_is_reported_and_not_applied() {
         root.write(VALID_TWO);
         harness.event(&mut app, modified(root.hooks_file()));
         let snapshot = harness.snapshot(&app);
-        assert_eq!(snapshot.revision, 4);
+        assert_eq!(snapshot.generation, 4, "the change was published");
+        assert_eq!(
+            snapshot.revision, 2,
+            "a decision keyed by the revision still holds"
+        );
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
         assert!(
             snapshot
@@ -540,7 +555,7 @@ fn rapid_writes_seen_by_the_real_watcher_load_the_file_once() {
         harness
             .add_root_and_wait_for_the_watch(&mut app, &root.path)
             .await;
-        let loaded = harness.revision(&app);
+        let loaded = harness.generation(&app);
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 1);
 
         for _ in 0..5 {
@@ -549,13 +564,17 @@ fn rapid_writes_seen_by_the_real_watcher_load_the_file_once() {
         }
         assert!(
             harness
-                .wait_for_revision_past(&mut app, loaded, Duration::from_secs(15))
+                .wait_for_generation_past(&mut app, loaded, Duration::from_secs(15))
                 .await,
             "the file change never reached the watcher"
         );
         // Two debounce windows later nothing else has arrived.
         Timer::after(HOOK_CONFIG_DEBOUNCE * 2).await;
-        assert_eq!(harness.revision(&app), loaded + 1, "the burst loaded once");
+        assert_eq!(
+            harness.generation(&app),
+            loaded + 1,
+            "the burst loaded once"
+        );
         assert_eq!(harness.tool_pre_bindings_under(&app, &root.path), 2);
 
         fs::write(root.path.join("notes.txt"), "unrelated").expect("write");
@@ -563,7 +582,7 @@ fn rapid_writes_seen_by_the_real_watcher_load_the_file_once() {
         fs::write(root.path.join("src/main.rs"), "fn main() {}").expect("write");
         Timer::after(HOOK_CONFIG_DEBOUNCE * 2).await;
         assert_eq!(
-            harness.revision(&app),
+            harness.generation(&app),
             loaded + 1,
             "files the filter does not report change nothing"
         );
