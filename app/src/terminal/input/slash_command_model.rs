@@ -27,9 +27,10 @@ pub struct DetectedCommand {
     /// The command in the input.
     pub command: StaticCommand,
 
-    /// The space-delimited argument to the command, if any. Does not include the leading space.
+    /// The whitespace-delimited argument to the command, if any. Does not include the leading
+    /// delimiter.
     ///
-    /// If there is no trailing space after the command, then `None`.
+    /// If there is no trailing whitespace after the command, then `None`.
     pub argument: Option<String>,
 }
 
@@ -42,7 +43,7 @@ pub struct DetectedSkillCommand {
     /// The skill name (without the leading '/').
     pub name: String,
 
-    /// The space-delimited argument to the skill command (the user's prompt).
+    /// The whitespace-delimited argument to the skill command (the user's prompt).
     pub argument: Option<String>,
 }
 
@@ -127,7 +128,7 @@ impl SlashCommandEntryState {
 pub fn slash_command_composition_filter(input: &str) -> Option<&str> {
     let pending_command = input.strip_prefix('/')?;
     let command_token = pending_command
-        .split_once(' ')
+        .split_once(char::is_whitespace)
         .map_or(pending_command, |(command, _)| command);
     if command_token.contains('/') {
         None
