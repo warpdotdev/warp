@@ -163,6 +163,18 @@ pub fn find_secrets_in_text(text: &str) -> Vec<StringRange> {
         .collect()
 }
 
+/// Returns the ranges of detected secrets in the given text, excluding matches that parse as IP
+/// addresses.
+pub fn find_secrets_in_text_excluding_ips(text: &str) -> Vec<StringRange> {
+    find_secrets_in_text(text)
+        .into_iter()
+        .filter(|range| {
+            let matched_text = text.get(range.byte_range.clone()).unwrap_or("");
+            matched_text.parse::<std::net::IpAddr>().is_err()
+        })
+        .collect()
+}
+
 /// Returns the ranges of detected secrets in the given text along with their SecretLevel.
 pub fn find_secrets_in_text_with_levels(text: &str) -> Vec<(StringRange, SecretLevel)> {
     let secrets_regex: Arc<SecretsRegex> = { SECRETS_REGEX.lock().clone() };

@@ -154,3 +154,37 @@ fn test_jwt() {
     assert_regex_match_not_found(regexes::JWT, missing_periods);
     assert_regex_match_not_found(regexes::JWT, not_a_jwt);
 }
+
+#[test]
+fn test_find_secrets_excluding_ips() {
+    let ipv4_regex = Regex::new(regexes::IPV4_ADDRESS).unwrap();
+    let ipv6_regex = Regex::new(regexes::IPV6_ADDRESS).unwrap();
+    let openai_regex = Regex::new(regexes::OPENAI_API_KEY).unwrap();
+
+    set_user_and_enterprise_secret_regexes(
+        [&ipv4_regex, &ipv6_regex, &openai_regex],
+        std::iter::empty(),
+    );
+
+    let local_mcp = r#"{"paper": {"type": "http", "url": "http://127.0.0.1:29979/mcp"}}"#;
+    assert!(!find_secrets_in_text(local_mcp).is_empty());
+    assert!(find_secrets_in_text_excluding_ips(local_mcp).is_empty());
+
+    let ipv6_mcp = r#"{"paper": {"type": "http", "url": "http://[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:8080/mcp"}}"#;
+    assert!(!find_secrets_in_text(ipv6_mcp).is_empty());
+    assert!(find_secrets_in_text_excluding_ips(ipv6_mcp).is_empty());
+
+    let secret_mcp =
+        r#"{"openai": {"key": "sk-123456789012345678901234567890123456789012345678"}}"#;
+    assert_eq!(find_secrets_in_text_excluding_ips(secret_mcp).len(), 1);
+
+    let mixed_mcp = r#"{"url": "http://127.0.0.1:8080", "key": "sk-123456789012345678901234567890123456789012345678"}"#;
+    assert_eq!(find_secrets_in_text(mixed_mcp).len(), 2);
+    let filtered = find_secrets_in_text_excluding_ips(mixed_mcp);
+    assert_eq!(filtered.len(), 1);
+    let secret_text = &mixed_mcp[filtered[0].byte_range.clone()];
+    assert_eq!(
+        secret_text,
+        "sk-123456789012345678901234567890123456789012345678"
+    );
+}
