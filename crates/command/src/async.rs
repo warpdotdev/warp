@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::future::Future;
 use std::path::Path;
 use std::process::{ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt, io};
 
 use async_process::Child;
@@ -93,6 +94,30 @@ impl Command {
 
         let inner: async_process::Command = command.into();
         Self::new_internal(inner)
+    }
+
+    /// Same as [`Command::new`], configured to be spawned with [`Command::spawn_in_job`] so the
+    /// child's whole process tree can be stopped as a unit through the returned [`JobGuard`].
+    pub fn new_in_job<S: AsRef<OsStr>>(program: S) -> Command {
+        #[cfg(windows)]
+        {
+            #[allow(unused_mut)]
+            let mut command = Self::new(program);
+            // `new_internal` adds `CREATE_BREAKAWAY_FROM_JOB`; a child that must stay in the job
+            // `spawn_in_job` puts it in cannot have it. `creation_flags` replaces the flags.
+            #[cfg(not(feature = "test-util"))]
+            {
+                use async_process::windows::CommandExt;
+                command
+                    .inner
+                    .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+            }
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            Self::new_with_process_group(program)
+        }
     }
 
     #[allow(unused_mut)]
@@ -374,6 +399,20 @@ impl Command {
         self.inner.spawn()
     }
 
+    /// Spawns a command built with [`Command::new_in_job`] and returns the child with the
+    /// [`JobGuard`] that controls its process tree. If attaching the guard fails, the child is
+    /// killed before the error is returned.
+    pub fn spawn_in_job(&mut self) -> io::Result<(Child, JobGuard)> {
+        let mut child = self.spawn()?;
+        match JobGuard::for_child(&child) {
+            Ok(guard) => Ok((child, guard)),
+            Err(error) => {
+                let _ = child.kill();
+                Err(error)
+            }
+        }
+    }
+
     /// Executes the command, waits for it to exit, and returns the exit status.
     ///
     /// If not configured, stdin, stdout and stderr will be set to [`Stdio::null()`].
@@ -436,3 +475,163 @@ impl Command {
         self.inner.output()
     }
 }
+
+/// Control over the process tree of a child spawned with [`Command::spawn_in_job`]: the process
+/// group on Unix, the Job Object on Windows. Dropping the guard ends whatever is still running
+/// in the tree.
+///
+/// Once the tree has been seen to have ended, the guard never signals its id again: on Unix a
+/// process group id becomes reusable the moment its last member is gone, and a signal sent after
+/// that could reach an unrelated process group that took the id.
+#[derive(Debug)]
+pub struct JobGuard {
+    #[cfg(unix)]
+    process_group: libc::pid_t,
+    #[cfg(windows)]
+    job: crate::windows::ProcessJob,
+    ended: AtomicBool,
+}
+
+impl JobGuard {
+    fn for_child(child: &Child) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                process_group: child.id() as libc::pid_t,
+                ended: AtomicBool::new(false),
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                job: crate::windows::ProcessJob::create_for(child.id())?,
+                ended: AtomicBool::new(false),
+            })
+        }
+    }
+
+    /// Asks the tree to stop. On Unix this is `SIGTERM` to the process group, which a process may
+    /// handle or ignore; on Windows it ends the job outright, since there is no gentler signal.
+    /// Returns whether anything was sent.
+    pub fn request_stop(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            self.signal_group(libc::SIGTERM)
+        }
+        #[cfg(windows)]
+        {
+            self.terminate_job()
+        }
+    }
+
+    /// Ends everything still running in the tree now. Returns whether anything was sent.
+    pub fn terminate(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            self.signal_group(libc::SIGKILL)
+        }
+        #[cfg(windows)]
+        {
+            self.terminate_job()
+        }
+    }
+
+    /// Whether any process in the tree still exists. A finished-but-unreaped process counts, so
+    /// callers should keep collecting the child's exit status while polling this.
+    pub fn is_alive(&self) -> bool {
+        if self.has_ended() {
+            return false;
+        }
+        #[cfg(unix)]
+        // Signal 0 only checks that the group exists.
+        // SAFETY: `killpg` has no memory-safety preconditions.
+        let alive = !self.group_is_gone(unsafe { libc::killpg(self.process_group, 0) });
+        #[cfg(windows)]
+        let alive = self.job.active_processes().is_ok_and(|count| count > 0);
+        if !alive {
+            self.ended.store(true, Ordering::Release);
+        }
+        alive
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn active_processes(&self) -> io::Result<u32> {
+        self.job.active_processes()
+    }
+
+    fn has_ended(&self) -> bool {
+        self.ended.load(Ordering::Acquire)
+    }
+
+    /// Drops the guard without an explicit terminate, so a test can observe that closing the job
+    /// handle alone ends the tree.
+    #[cfg(all(test, windows))]
+    pub(crate) fn close_without_terminating(self) {
+        self.ended.store(true, Ordering::Release);
+    }
+
+    #[cfg(unix)]
+    fn signal_group(&self, signal: libc::c_int) -> bool {
+        // SAFETY: `killpg` has no memory-safety preconditions.
+        let result = unsafe { libc::killpg(self.process_group, signal) };
+        if result == 0 {
+            return true;
+        }
+        if !self.group_is_gone(result) {
+            log::debug!(
+                "could not send signal {signal} to process group {}: {}",
+                self.process_group,
+                io::Error::last_os_error()
+            );
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn group_is_gone(&self, killpg_result: libc::c_int) -> bool {
+        let gone = killpg_says_gone(killpg_result, io::Error::last_os_error().raw_os_error());
+        if gone {
+            self.ended.store(true, Ordering::Release);
+        }
+        gone
+    }
+
+    #[cfg(windows)]
+    fn terminate_job(&self) -> bool {
+        match self.job.terminate() {
+            Ok(()) => true,
+            Err(error) => {
+                log::debug!("could not terminate the child's job: {error}");
+                false
+            }
+        }
+    }
+}
+
+/// Only `ESRCH` means the process group is gone; `EPERM` means the group still exists and holds
+/// a process this user cannot signal.
+#[cfg(unix)]
+fn killpg_says_gone(result: libc::c_int, errno: Option<i32>) -> bool {
+    result != 0 && errno == Some(libc::ESRCH)
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        // Checked first so a tree that already ended is never signalled by an id that may have
+        // been reused since. On Windows closing the job handle would end the tree anyway;
+        // terminating first makes the order explicit.
+        if self.is_alive() {
+            self.terminate();
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "async_tests.rs"]
+mod tests;
