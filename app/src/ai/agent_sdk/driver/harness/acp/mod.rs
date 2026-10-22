@@ -87,8 +87,8 @@ use super::transcript_persistence::{
     UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, install_docs_url, validate_cli_installed,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
+    SavePoint, ThirdPartyHarness, install_docs_url, validate_cli_installed,
 };
 use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
@@ -291,7 +291,7 @@ impl ThirdPartyHarness for AcpHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         self.prepare_harness_environment(
@@ -302,7 +302,7 @@ impl ThirdPartyHarness for AcpHarness {
             skill_dirs,
             factory_repository_contract,
             resolved_secrets,
-            resolved_mcp_servers,
+            &resolved_mcp_servers.configs,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -351,13 +351,18 @@ impl ThirdPartyHarness for AcpHarness {
             terminal_driver,
             attachments: Arc::new(attachments),
             mcp_servers: resolved_mcp_servers
+                .configs
                 .iter()
                 .filter(|_| self.harness != Harness::Pi)
                 .map(|(name, server)| mcp_server_for_acp(name, server))
                 .collect(),
             mcp_server_identities: resolved_mcp_servers
-                .iter()
-                .map(|(name, server)| (name.clone(), tool_call_server_identity(name, server)))
+                .configs
+                .keys()
+                .map(|name| {
+                    let warp_id = resolved_mcp_servers.warp_ids.get(name).map(String::as_str);
+                    (name.clone(), tool_call_server_identity(name, warp_id))
+                })
                 .collect(),
             conversation: OnceLock::new(),
             boundary_snapshot: Arc::default(),
@@ -1393,14 +1398,10 @@ async fn write_text_file(context: &AgentRequestContext, params: Value) -> Result
 
 /// The identity of an MCP server as its tool calls carry it. No server request sees these calls,
 /// so the display name warp-server would otherwise fill in is set here.
-fn tool_call_server_identity(name: &str, server: &JSONMCPServer) -> McpServerIdentity {
+fn tool_call_server_identity(name: &str, warp_id: Option<&str>) -> McpServerIdentity {
     McpServerIdentity {
         display_name: name.to_owned(),
-        ..server
-            .warp_id
-            .as_deref()
-            .and_then(mcp_server_identity)
-            .unwrap_or_default()
+        ..warp_id.and_then(mcp_server_identity).unwrap_or_default()
     }
 }
 

@@ -374,14 +374,8 @@ impl MCPServerExt for MCPServer {
             },
         };
         serde_json::to_string_pretty(
-            &std::iter::once((
-                self.name.to_owned(),
-                JSONMCPServer {
-                    transport_type,
-                    warp_id: None,
-                },
-            ))
-            .collect::<HashMap<_, _>>(),
+            &std::iter::once((self.name.to_owned(), JSONMCPServer { transport_type }))
+                .collect::<HashMap<_, _>>(),
         )
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.
@@ -422,14 +416,8 @@ impl MCPServerExt for MCPServer {
         };
 
         let json = serde_json::to_string_pretty(
-            &std::iter::once((
-                self.name.to_owned(),
-                JSONMCPServer {
-                    transport_type,
-                    warp_id: None,
-                },
-            ))
-            .collect::<HashMap<_, _>>(),
+            &std::iter::once((self.name.to_owned(), JSONMCPServer { transport_type }))
+                .collect::<HashMap<_, _>>(),
         )
         // serde_json::to_string_pretty should never fail on our JSONMCPServer type, but better to
         // not crash the app if it does.

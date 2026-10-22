@@ -3112,10 +3112,10 @@ impl AgentDriver {
         let resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
-        if !resolved_mcp_servers.is_empty() {
+        if !resolved_mcp_servers.configs.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",
-                resolved_mcp_servers.len()
+                resolved_mcp_servers.configs.len()
             );
         }
 

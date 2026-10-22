@@ -37,8 +37,8 @@ use super::transcript_persistence::{
 };
 use super::usage_reporting::CaptureIdentity;
 use super::{
-    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, install_docs_url,
-    write_temp_file,
+    HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
+    install_docs_url, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -141,7 +141,7 @@ impl ThirdPartyHarness for CodexHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
@@ -150,7 +150,7 @@ impl ThirdPartyHarness for CodexHarness {
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
-            resolved_mcp_servers,
+            &resolved_mcp_servers.configs,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {

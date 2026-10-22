@@ -178,7 +178,7 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                 &[],
                 false,
                 &HashMap::new(),
-                &HashMap::new(),
+                &ResolvedMCPServers::default(),
                 None,
             );
             match old_codex_home {

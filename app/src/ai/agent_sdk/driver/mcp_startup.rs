@@ -23,6 +23,7 @@ use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 use warpui::r#async::{FutureExt as _, TimeoutError};
 use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
+use super::harness::ResolvedMCPServers;
 use super::{AgentDriver, AgentDriverError};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -627,15 +628,15 @@ impl AgentDriver {
             .await
     }
 
-    /// Resolve MCP specs into a map of MCP name to `JSONMCPServer` for use in
-    /// third-party harnesses. Each spec is fully resolved (secrets applied, templates
-    /// rendered) so harnesses can serialize directly into their native config format.
+    /// Resolve MCP specs into the MCP servers of a third-party harness run. Each spec is fully
+    /// resolved (secrets applied, templates rendered) so harnesses can serialize directly into
+    /// their native config format.
     pub(super) async fn resolve_mcp_specs_to_json(
         specs: &[MCPSpec],
         secrets: Arc<HashMap<String, ManagedSecretValue>>,
         managed_mcp_client: Arc<dyn ManagedMcpClient>,
         foreground: &ModelSpawner<Self>,
-    ) -> Result<HashMap<String, JSONMCPServer>, AgentDriverError> {
+    ) -> Result<ResolvedMCPServers, AgentDriverError> {
         let task_id = foreground.spawn(|me, _| me.task_id).await?;
         let resolved_specs =
             resolve_mcp_specs(specs, managed_mcp_client, task_id, foreground).await?;
@@ -685,8 +686,8 @@ impl AgentDriver {
     fn mcp_installations_to_json(
         mut installations: Vec<TemplatableMCPServerInstallation>,
         secrets: &HashMap<String, ManagedSecretValue>,
-    ) -> Result<HashMap<String, JSONMCPServer>, AgentDriverError> {
-        let mut result = HashMap::new();
+    ) -> Result<ResolvedMCPServers, AgentDriverError> {
+        let mut result = ResolvedMCPServers::default();
 
         for installation in installations.iter_mut() {
             let unresolved_secret_names = installation.apply_secrets(secrets);
@@ -699,16 +700,14 @@ impl AgentDriver {
             let resolved = resolve_json(installation);
             let servers: HashMap<String, JSONMCPServer> = serde_json::from_str(&resolved)
                 .map_err(|e| AgentDriverError::MCPJsonParseError(e.to_string()))?;
-            let warp_id = installation.warp_id().map(str::to_owned);
-            result.extend(servers.into_iter().map(|(name, server)| {
-                (
-                    name,
-                    JSONMCPServer {
-                        warp_id: warp_id.clone(),
-                        ..server
-                    },
-                )
-            }));
+            for name in servers.keys() {
+                match installation.warp_id() {
+                    Some(warp_id) => result.warp_ids.insert(name.clone(), warp_id.to_owned()),
+                    // A later server of the same name replaces the earlier one's identity too.
+                    None => result.warp_ids.remove(name),
+                };
+            }
+            result.configs.extend(servers);
         }
 
         Ok(result)

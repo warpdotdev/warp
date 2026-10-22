@@ -140,6 +140,16 @@ pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
     })
 }
 
+/// The MCP servers resolved for a third-party harness run, keyed by server name.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedMCPServers {
+    /// The config each harness writes into its native format.
+    pub(crate) configs: HashMap<String, JSONMCPServer>,
+    /// The `warp_id` of each server resolved from a managed MCP server or a well-known
+    /// integration, with the semantics of `MCPServerConfig.warp_id`.
+    pub(crate) warp_ids: HashMap<String, String>,
+}
+
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.
 ///
 /// Each new external harness (e.g. Claude, Codex) implements this to be used with cloud agents.
@@ -258,7 +268,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError>;
 }
