@@ -1,0 +1,20 @@
+{
+  "preToolUse": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "Blocked by policy",
+      "updatedInput": { "command": "npm ci" }
+    }
+  },
+  "stop": {
+    "hookSpecificOutput": {
+      "decision": "block",
+      "reason": "Tasks incomplete, continue working"
+    }
+  },
+  "stop_flat": {
+    "decision": "block",
+    "reason": "Tasks incomplete, continue working"
+  }
+}

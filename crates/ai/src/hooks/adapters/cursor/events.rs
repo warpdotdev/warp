@@ -1,0 +1,505 @@
+//! Cursor's 21 hook events and what the adapter knows about each one: the Warp boundary it
+//! projects onto, whether Warp fires it in Phase 1, what its matcher is tested against, which
+//! output fields Cursor documents for it, and how it fails. Every other part of the adapter reads
+//! an event's facts from this table and matches on `CursorEvent` only to pick per-event code.
+
+use std::collections::HashSet;
+use std::time::Duration;
+
+use strum::EnumCount as _;
+use strum_macros::EnumCount;
+
+use super::config::ParsedDefinition;
+use crate::hooks::adapters::DeclaredBinding;
+use crate::hooks::model::{
+    BindingCapabilities, EffectKind, EmptyOutputPolicy, FailurePolicy, HandlerKind, HookBindingId,
+    HookBoundary, HookSourceId, MalformedOutputPolicy, MatcherTarget, POST_AND_OTHER_TIMEOUT,
+};
+
+/// Cursor's default per-definition cap on the follow-ups a stop hook may request.
+pub(super) const DEFAULT_LOOP_LIMIT: u32 = 5;
+
+/// Warp's cap on hook-requested follow-ups in one continuation chain. A definition that asks for
+/// more, or for no limit, gets this value.
+pub(super) const LOOP_LIMIT_HOST_CAP: u32 = 8;
+
+/// One of the event names Cursor's `hooks.json` accepts, in the order Cursor's reference lists
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumCount)]
+pub(super) enum CursorEvent {
+    SessionStart,
+    SessionEnd,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    SubagentStart,
+    SubagentStop,
+    BeforeShellExecution,
+    AfterShellExecution,
+    BeforeMcpExecution,
+    AfterMcpExecution,
+    BeforeReadFile,
+    AfterFileEdit,
+    BeforeSubmitPrompt,
+    PreCompact,
+    Stop,
+    AfterAgentResponse,
+    AfterAgentThought,
+    BeforeTabFileRead,
+    AfterTabFileEdit,
+    WorkspaceOpen,
+}
+
+impl CursorEvent {
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        CURSOR_EVENTS
+            .iter()
+            .find(|spec| spec.name == name)
+            .map(|spec| spec.event)
+    }
+
+    #[cfg(test)]
+    pub(super) fn name(self) -> &'static str {
+        self.spec().name
+    }
+
+    pub(super) fn spec(self) -> &'static CursorEventSpec {
+        CURSOR_EVENTS
+            .iter()
+            .find(|spec| spec.event == self)
+            .expect("every Cursor event has a table entry")
+    }
+}
+
+/// The value a definition's `matcher` is tested against when its event fires. Finer than the
+/// shared `MatcherTarget` so the adapter can distinguish variants that report the same target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MatchedValue {
+    /// The canonical tool name (`Shell`, `Read`, `MCP:<tool>`, and Warp's own names).
+    ToolName,
+    /// The model's full shell command.
+    CommandText,
+    /// The MCP tool's own name, without the `MCP:` prefix.
+    McpToolName,
+    /// The subagent type. No Phase 1 payload carries one.
+    SubagentType,
+    /// A fixed word Cursor documents for the event.
+    Literal(&'static str),
+    /// Cursor documents no value; a matcher on the event is ignored.
+    Everything,
+}
+
+/// Whether a hook on the event can change what the agent does, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ControlEffect {
+    /// The hook returns a permission decision.
+    Verdict(VerdictRules),
+    /// The hook can stop a prompt from being sent.
+    HaltTurn,
+    /// Nothing the hook returns changes what the agent does.
+    ObserveOnly,
+}
+
+impl ControlEffect {
+    /// Cursor says output that does not fit a permission hook's schema blocks; it states no rule
+    /// for the other events, so they follow `failClosed`.
+    pub(super) fn malformed_output(self) -> MalformedOutputPolicy {
+        match self {
+            Self::Verdict(_) => MalformedOutputPolicy::Deny,
+            Self::HaltTurn | Self::ObserveOnly => MalformedOutputPolicy::FollowFailurePolicy,
+        }
+    }
+
+    /// Silence is a missing decision where the hook decides something, and the normal answer
+    /// where it only observes or may request a follow-up.
+    pub(super) fn empty_output(self) -> EmptyOutputPolicy {
+        match self {
+            Self::Verdict(_) | Self::HaltTurn => EmptyOutputPolicy::FollowFailurePolicy,
+            Self::ObserveOnly => EmptyOutputPolicy::NoOpinion,
+        }
+    }
+}
+
+/// What a permission hook's output means beyond `allow` and `deny`, which every permission hook
+/// reads the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VerdictRules {
+    /// The noun Warp's own denial reasons use for what was blocked, as in "so the command was
+    /// denied".
+    pub subject: &'static str,
+    /// Cursor documents `user_message` on this event as shown only when the hook denies, so on
+    /// an allow it is dropped. The shell and MCP hooks document it as "shown in client" with no
+    /// such condition.
+    pub user_message_on_deny_only: bool,
+    pub ask: AskRule,
+}
+
+/// What `permission: "ask"` means on a permission hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AskRule {
+    /// The user is asked, as Cursor documents for the shell and MCP hooks.
+    Honor,
+    /// Cursor accepts the value but does not enforce it, so it is no opinion unless Warp's strict
+    /// hook policy is on.
+    IgnoreUnlessStrict,
+    /// Cursor documents `ask` as a denial on this event.
+    Deny,
+    /// Cursor's schema for the event has no `ask`, so it is a schema mismatch.
+    NotInSchema,
+}
+
+/// What the adapter knows about one event.
+#[derive(Debug)]
+pub(super) struct CursorEventSpec {
+    pub event: CursorEvent,
+    /// The event name as `hooks.json` spells it.
+    pub name: &'static str,
+    /// The Warp boundary the event projects onto; `None` when Warp has no such moment.
+    pub boundary: Option<HookBoundary>,
+    /// Whether Warp fires the event in Phase 1. False for a facet whose boundary fires but whose
+    /// payload does not exist yet (`afterFileEdit`) as well as for events whose boundary does not
+    /// fire.
+    pub fires_in_phase_1: bool,
+    pub matched_value: MatchedValue,
+    /// The output fields Cursor documents for the event. Anything else on stdout is ignored.
+    pub documented_output: &'static [&'static str],
+    /// The effect channels those fields feed.
+    pub may_produce: &'static [EffectKind],
+    pub control: ControlEffect,
+}
+
+impl CursorEventSpec {
+    pub(super) fn may_continue(&self) -> bool {
+        self.may_produce.contains(&EffectKind::Continuation)
+    }
+
+    pub(super) fn has_matcher_target(&self) -> bool {
+        self.matched_value != MatchedValue::Everything
+    }
+
+    pub(super) fn matcher_target(&self) -> MatcherTarget {
+        match self.matched_value {
+            MatchedValue::ToolName | MatchedValue::McpToolName => MatcherTarget::ToolName,
+            MatchedValue::CommandText => MatcherTarget::CommandText,
+            MatchedValue::SubagentType => MatcherTarget::SubagentType,
+            MatchedValue::Literal(literal) => MatcherTarget::Literal(literal.to_owned()),
+            MatchedValue::Everything => MatcherTarget::None,
+        }
+    }
+
+    pub(super) fn default_timeout(&self) -> Duration {
+        self.boundary
+            .map(|boundary| boundary.default_timeout())
+            .unwrap_or(POST_AND_OTHER_TIMEOUT)
+    }
+
+    pub(super) fn capabilities(&self, fail_closed: bool) -> BindingCapabilities {
+        BindingCapabilities {
+            may_produce: self.may_produce.iter().copied().collect::<HashSet<_>>(),
+            failure: if fail_closed {
+                FailurePolicy::FailClosed
+            } else {
+                FailurePolicy::FailOpen
+            },
+            malformed_output: self.control.malformed_output(),
+            empty_output: self.control.empty_output(),
+            matcher_target: self.matcher_target(),
+            handler: HandlerKind::Command,
+        }
+    }
+}
+
+const NO_OUTPUT: &[&str] = &[];
+const NO_EFFECTS: &[EffectKind] = &[];
+const PERMISSION_OUTPUT: &[&str] = &["permission", "user_message", "agent_message"];
+const PERMISSION_EFFECTS: &[EffectKind] = &[EffectKind::Verdict, EffectKind::UserNotice];
+/// The follow-up fields for `stop` and `subagentStop`: Cursor's own `followup_message` plus the
+/// Claude shapes it translates.
+const FOLLOW_UP_OUTPUT: &[&str] = &[
+    "followup_message",
+    "hookSpecificOutput",
+    "decision",
+    "reason",
+];
+
+/// Cursor's events, in the order its reference lists them. Bindings from one source are declared
+/// in this order, so two events that project onto the same boundary merge in a fixed order.
+pub(super) static CURSOR_EVENTS: [CursorEventSpec; CursorEvent::COUNT] = [
+    CursorEventSpec {
+        event: CursorEvent::SessionStart,
+        name: "sessionStart",
+        boundary: Some(HookBoundary::SessionStart),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::Everything,
+        documented_output: &["env", "additional_context", "continue", "user_message"],
+        may_produce: &[EffectKind::SessionEnv, EffectKind::ModelContext],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::SessionEnd,
+        name: "sessionEnd",
+        boundary: Some(HookBoundary::SessionEnd),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Everything,
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::PreToolUse,
+        name: "preToolUse",
+        boundary: Some(HookBoundary::ToolPre),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::ToolName,
+        documented_output: &[
+            "permission",
+            "user_message",
+            "agent_message",
+            "updated_input",
+            "hookSpecificOutput",
+        ],
+        may_produce: &[
+            EffectKind::Verdict,
+            EffectKind::UserNotice,
+            EffectKind::ReplacementInput,
+        ],
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the tool call",
+            user_message_on_deny_only: true,
+            ask: AskRule::IgnoreUnlessStrict,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::PostToolUse,
+        name: "postToolUse",
+        boundary: Some(HookBoundary::ToolResult),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::ToolName,
+        documented_output: &["updated_mcp_tool_output", "additional_context"],
+        may_produce: &[EffectKind::ReplacementResult, EffectKind::ModelContext],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::PostToolUseFailure,
+        name: "postToolUseFailure",
+        boundary: Some(HookBoundary::ToolFailure),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::ToolName,
+        documented_output: &["additional_context"],
+        may_produce: &[EffectKind::ModelContext],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::SubagentStart,
+        name: "subagentStart",
+        boundary: Some(HookBoundary::SubagentStart),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::SubagentType,
+        documented_output: &["permission", "user_message"],
+        may_produce: PERMISSION_EFFECTS,
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the subagent",
+            user_message_on_deny_only: true,
+            ask: AskRule::Deny,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::SubagentStop,
+        name: "subagentStop",
+        boundary: Some(HookBoundary::SubagentStop),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::SubagentType,
+        documented_output: FOLLOW_UP_OUTPUT,
+        may_produce: &[EffectKind::Continuation],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::BeforeShellExecution,
+        name: "beforeShellExecution",
+        boundary: Some(HookBoundary::ToolPre),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::CommandText,
+        documented_output: PERMISSION_OUTPUT,
+        may_produce: PERMISSION_EFFECTS,
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the command",
+            user_message_on_deny_only: false,
+            ask: AskRule::Honor,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterShellExecution,
+        name: "afterShellExecution",
+        boundary: Some(HookBoundary::ToolResult),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::CommandText,
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::BeforeMcpExecution,
+        name: "beforeMCPExecution",
+        boundary: Some(HookBoundary::ToolPre),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::McpToolName,
+        documented_output: PERMISSION_OUTPUT,
+        may_produce: PERMISSION_EFFECTS,
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the MCP tool call",
+            user_message_on_deny_only: false,
+            ask: AskRule::Honor,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterMcpExecution,
+        name: "afterMCPExecution",
+        boundary: Some(HookBoundary::ToolResult),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::McpToolName,
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::BeforeReadFile,
+        name: "beforeReadFile",
+        boundary: Some(HookBoundary::FileExposure),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Literal("Read"),
+        documented_output: &["permission", "user_message"],
+        may_produce: PERMISSION_EFFECTS,
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the file read",
+            user_message_on_deny_only: true,
+            ask: AskRule::NotInSchema,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterFileEdit,
+        name: "afterFileEdit",
+        boundary: Some(HookBoundary::ToolResult),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Literal("Write"),
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::BeforeSubmitPrompt,
+        name: "beforeSubmitPrompt",
+        boundary: Some(HookBoundary::PromptSubmit),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::Literal("UserPromptSubmit"),
+        documented_output: &["continue", "user_message"],
+        may_produce: &[EffectKind::HaltTurn, EffectKind::UserNotice],
+        control: ControlEffect::HaltTurn,
+    },
+    CursorEventSpec {
+        event: CursorEvent::PreCompact,
+        name: "preCompact",
+        boundary: Some(HookBoundary::CompactionPre),
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Everything,
+        documented_output: &["user_message"],
+        may_produce: &[EffectKind::UserNotice],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::Stop,
+        name: "stop",
+        boundary: Some(HookBoundary::TurnStop),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::Literal("Stop"),
+        documented_output: FOLLOW_UP_OUTPUT,
+        may_produce: &[EffectKind::Continuation],
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterAgentResponse,
+        name: "afterAgentResponse",
+        boundary: Some(HookBoundary::ResponseComplete),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::Literal("AgentResponse"),
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterAgentThought,
+        name: "afterAgentThought",
+        boundary: Some(HookBoundary::ReasoningComplete),
+        fires_in_phase_1: true,
+        matched_value: MatchedValue::Literal("AgentThought"),
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::BeforeTabFileRead,
+        name: "beforeTabFileRead",
+        boundary: None,
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Literal("TabRead"),
+        documented_output: &["permission"],
+        may_produce: &[EffectKind::Verdict],
+        control: ControlEffect::Verdict(VerdictRules {
+            subject: "the file read",
+            user_message_on_deny_only: false,
+            ask: AskRule::NotInSchema,
+        }),
+    },
+    CursorEventSpec {
+        event: CursorEvent::AfterTabFileEdit,
+        name: "afterTabFileEdit",
+        boundary: None,
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Literal("TabWrite"),
+        documented_output: NO_OUTPUT,
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+    CursorEventSpec {
+        event: CursorEvent::WorkspaceOpen,
+        name: "workspaceOpen",
+        boundary: None,
+        fires_in_phase_1: false,
+        matched_value: MatchedValue::Everything,
+        documented_output: &["pluginPaths"],
+        may_produce: NO_EFFECTS,
+        control: ControlEffect::ObserveOnly,
+    },
+];
+
+/// Declares one binding per parsed definition whose event has a Warp boundary. Definitions are
+/// already in table order, then array order, which is the order they merge in.
+pub(super) fn declare_bindings(
+    definitions: &[ParsedDefinition],
+    source: &HookSourceId,
+) -> Vec<DeclaredBinding> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let spec = definition.event.spec();
+            let boundary = spec.boundary?;
+            Some(DeclaredBinding {
+                id: HookBindingId {
+                    source: source.clone(),
+                    event: spec.name.to_owned(),
+                    index: definition.index,
+                },
+                boundary,
+                vendor_event: spec.name.to_owned(),
+                capabilities: spec.capabilities(definition.fail_closed),
+                matcher: definition.matcher_text().map(str::to_owned),
+                command: definition.command.clone(),
+                timeout: definition.timeout,
+                loop_limit: definition.loop_limit,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "events_tests.rs"]
+mod tests;

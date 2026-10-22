@@ -1,0 +1,1 @@
+{ "version": 1, "hooks": { "beforeMCPExecution": [ { "command": "./hooks/before-mcp.sh", "matcher": "write_file", "failClosed": true } ] } }

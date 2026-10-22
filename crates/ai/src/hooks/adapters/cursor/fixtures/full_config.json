@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "./hooks/session-start.sh", "type": "command", "timeout": 10 }
+    ],
+    "sessionEnd": [
+      { "command": "./hooks/session-end.sh", "timeout": 3 }
+    ],
+    "preToolUse": [
+      { "command": "./hooks/pre-tool.sh", "matcher": "Shell|Write", "timeout": 20, "failClosed": true }
+    ],
+    "postToolUse": [
+      { "command": "./hooks/post-tool.sh", "matcher": "MCP:.*" }
+    ],
+    "postToolUseFailure": [
+      { "command": "./hooks/post-tool-failure.sh", "matcher": "" }
+    ],
+    "subagentStart": [
+      { "command": "./hooks/subagent-start.sh", "matcher": "explore", "failClosed": true }
+    ],
+    "subagentStop": [
+      { "command": "./hooks/subagent-stop.sh", "matcher": "*", "loop_limit": 3 }
+    ],
+    "beforeShellExecution": [
+      { "command": "./hooks/before-shell.sh", "matcher": "^git ", "timeout": 5, "failClosed": true },
+      { "type": "prompt", "prompt": "Is this command safe to run? $ARGUMENTS", "model": "fast", "timeout": 10 }
+    ],
+    "afterShellExecution": [
+      { "command": "./hooks/after-shell.sh", "matcher": "cargo" }
+    ],
+    "beforeMCPExecution": [
+      { "command": "./hooks/before-mcp.sh", "matcher": "write_file", "failClosed": true }
+    ],
+    "afterMCPExecution": [
+      { "command": "./hooks/after-mcp.sh" }
+    ],
+    "beforeReadFile": [
+      { "command": "./hooks/before-read.sh", "matcher": "Read", "failClosed": true }
+    ],
+    "afterFileEdit": [
+      { "command": "./hooks/format.sh", "matcher": "Write" }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "./hooks/before-prompt.sh", "matcher": "UserPromptSubmit", "timeout": 2 }
+    ],
+    "preCompact": [
+      { "command": "./hooks/pre-compact.sh" }
+    ],
+    "stop": [
+      { "command": "./hooks/stop.sh", "matcher": "Stop", "loop_limit": null, "timeout": 15 }
+    ],
+    "afterAgentResponse": [
+      { "command": "./hooks/after-response.sh", "matcher": "AgentResponse" }
+    ],
+    "afterAgentThought": [
+      { "command": "./hooks/after-thought.sh", "matcher": "AgentThought" }
+    ],
+    "beforeTabFileRead": [
+      { "command": "./hooks/tab-read.sh", "matcher": "TabRead", "failClosed": true }
+    ],
+    "afterTabFileEdit": [
+      { "command": "./hooks/tab-edit.sh", "matcher": "TabWrite" }
+    ],
+    "workspaceOpen": [
+      { "command": "./hooks/workspace-open.sh" }
+    ]
+  }
+}

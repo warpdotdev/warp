@@ -1,0 +1,6 @@
+{
+  "permission": "allow",
+  "user_message": "Using the lockfile-respecting install.",
+  "agent_message": "Install with npm ci instead of npm install.",
+  "updated_input": { "command": "npm ci" }
+}

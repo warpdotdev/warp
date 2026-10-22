@@ -1,35 +1,22 @@
-use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use ai_types::{AIAgentActionId, AIConversationId};
+use futures::executor::block_on;
 
 use super::*;
-use crate::LLMId;
-use crate::agent::action::ReadFilesRequest;
 use crate::hooks::adapters::adapter_for;
-use crate::hooks::model::{CanonicalToolName, HookTurnId, TurnStopStatus};
-use crate::hooks::test_util::{test_envelope, test_source_id};
-
-fn shell_action(command: &str) -> AIAgentActionType {
-    AIAgentActionType::RequestCommandOutput {
-        command: command.to_owned(),
-        is_read_only: None,
-        is_risky: None,
-        wait_until_completion: true,
-        uses_pager: None,
-        rationale: None,
-        citations: Vec::new(),
-    }
-}
-
-fn shell_envelope(command: &str) -> HookEnvelope {
-    let action = shell_action(command);
-    let tool_name = CanonicalToolName::for_action(&action);
-    test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action, tool_name },
-    )
-}
+use crate::hooks::adapters::cursor::events::CursorEvent;
+use crate::hooks::adapters::cursor::test_support::{
+    FULL_CONFIG, INVALID_MATCHER, completed_shell, event_fixture, fixture_envelope, json, outcome,
+    shell_action, tool_pre, tool_result,
+};
+use crate::hooks::dispatch::HookDispatcher;
+use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
+use crate::hooks::registry::{BindingScope, RegistrySnapshot};
+use crate::hooks::runner::ProcessExit;
+use crate::hooks::test_util::{
+    RecordingMessenger, ScriptedRunner, active_binding, test_binding, test_source_id,
+};
 
 fn parsed(text: &str) -> ParsedHookConfig {
     CursorAdapter::new()
@@ -44,193 +31,206 @@ fn the_cursor_adapter_is_registered() {
 }
 
 #[test]
-fn bindings_are_declared_per_definition_in_file_order() {
-    let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": {
-            "afterShellExecution": [ { "command": "./audit.sh" } ],
-            "beforeShellExecution": [
-                { "command": "./first.sh", "matcher": "rm", "timeout": 3, "failClosed": true },
-                { "command": "./second.sh" }
-            ]
-        } }"#,
-    );
-    assert_eq!(config.warnings.len(), 1);
-    assert!(
-        config.warnings[0].message.contains("afterShellExecution"),
-        "{}",
-        config.warnings[0].message
-    );
-
-    let bindings = adapter.bindings(&config);
-    assert_eq!(bindings.len(), 2);
-
-    let first = &bindings[0];
-    assert_eq!(first.id.source, config.source);
-    assert_eq!(first.id.event, "beforeShellExecution");
-    assert_eq!(first.id.index, 0);
-    assert_eq!(first.boundary, HookBoundary::ToolPre);
-    assert_eq!(first.vendor_event, "beforeShellExecution");
-    assert_eq!(first.command, "./first.sh");
-    assert_eq!(first.matcher.as_deref(), Some("rm"));
-    assert_eq!(first.timeout, Duration::from_secs(3));
-    assert_eq!(first.capabilities, shell_permission_capabilities(true));
-
-    let second = &bindings[1];
-    assert_eq!(second.id.index, 1);
-    assert_eq!(second.command, "./second.sh");
-    assert_eq!(second.capabilities, shell_permission_capabilities(false));
+fn parse_turns_file_warnings_into_diagnostics_on_the_source() {
+    let config = parsed(FULL_CONFIG);
+    assert_eq!(config.format, HookFormat::Cursor);
+    assert_eq!(config.source, test_source_id("hooks.json"));
+    assert_eq!(config.warnings.len(), 11);
+    for warning in &config.warnings {
+        assert_eq!(warning.source, config.source);
+        assert_eq!(warning.severity, DiagnosticSeverity::Warning);
+    }
+    assert!(config.warnings.iter().any(|warning| warning.message
+        == "workspaceOpen[0]: Warp has no workspaceOpen moment; this hook will never run"));
+    assert_eq!(config.document, json(FULL_CONFIG));
 }
 
 #[test]
-fn a_prompt_hook_becomes_a_warning_and_the_command_hook_after_it_keeps_its_index() {
+fn bindings_come_from_the_kept_document_and_carry_activation_warnings_where_due() {
     let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": { "beforeShellExecution": [
-            { "type": "prompt", "prompt": "Is this safe?" },
-            { "command": "./check.sh" }
-        ] } }"#,
+    let config = parsed(FULL_CONFIG);
+    let bindings = adapter.bindings(&config);
+    assert_eq!(bindings.len(), 18);
+    assert!(
+        bindings
+            .iter()
+            .all(|binding| binding.id.source == config.source)
     );
-    assert_eq!(config.warnings.len(), 1);
-    assert_eq!(
-        config.warnings[0].message,
-        "beforeShellExecution[0]: prompt hooks are not supported yet; it was skipped"
-    );
-    assert_eq!(config.warnings[0].severity, DiagnosticSeverity::Warning);
 
+    let warned = bindings
+        .iter()
+        .filter(|binding| {
+            !validate_capabilities(binding.boundary, &binding.capabilities).is_empty()
+        })
+        .map(|binding| binding.vendor_event.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        warned,
+        vec![
+            "sessionStart",
+            "preToolUse",
+            "postToolUse",
+            "postToolUseFailure",
+        ],
+        "only events that document context or rewrites get an activation warning"
+    );
+}
+
+#[test]
+fn a_bad_matcher_skips_only_that_definition() {
+    let adapter = CursorAdapter::new();
+    let config = parsed(INVALID_MATCHER);
+    assert_eq!(config.warnings.len(), 1);
     let bindings = adapter.bindings(&config);
     assert_eq!(bindings.len(), 1);
-    assert_eq!(
-        bindings[0].id.index, 1,
-        "the id keeps the position in the file"
-    );
-    assert_eq!(bindings[0].command, "./check.sh");
+    assert_eq!(bindings[0].id.index, 1);
+    assert_eq!(bindings[0].command, "./hooks/second.sh");
 }
 
 #[test]
-fn matching_tests_the_command_text_with_an_unanchored_case_sensitive_regex() {
+fn the_trait_methods_work_end_to_end_for_a_shell_hook() {
     let adapter = CursorAdapter::new();
-    let config = parsed(
-        r#"{ "version": 1, "hooks": { "beforeShellExecution": [
-            { "command": "a", "matcher": "rm -rf" },
-            { "command": "b", "matcher": "" },
-            { "command": "c", "matcher": "*" },
-            { "command": "d" },
-            { "command": "e", "matcher": "^git (push|commit)" }
-        ] } }"#,
+    let fixture = event_fixture(CursorEvent::BeforeShellExecution);
+    let config = parsed(fixture.hooks);
+    let binding = &adapter.bindings(&config)[0];
+    assert_eq!(binding.boundary, HookBoundary::ToolPre);
+    assert_eq!(binding.matcher.as_deref(), Some("^git push"));
+
+    let envelope = fixture_envelope(tool_pre(shell_action("git push --force")));
+    assert!(adapter.matches(binding, &envelope));
+    assert!(!adapter.matches(binding, &fixture_envelope(tool_pre(shell_action("ls")))));
+    assert_eq!(
+        adapter.encode_input(binding, &envelope),
+        json(fixture.stdin)
+    );
+
+    let effects = adapter.decode_output(
+        binding,
+        &outcome(ProcessExit::Code(0), fixture.stdout),
+        &DecodePolicy::default(),
+    );
+    assert_eq!(effects.verdict, HookVerdict::Deny);
+    assert_eq!(
+        effects.reasons[0].text,
+        "Push without --force, or open a pull request."
+    );
+    assert_eq!(
+        effects.user_notices,
+        vec!["Force pushes are blocked in this repository."]
+    );
+}
+
+#[test]
+fn a_binding_declared_under_an_unknown_event_never_fires() {
+    let adapter = CursorAdapter::new();
+    let mut binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    binding.vendor_event = "notACursorEvent".to_owned();
+    let envelope = fixture_envelope(tool_pre(shell_action("ls")));
+    assert!(!adapter.matches(&binding, &envelope));
+    assert_eq!(adapter.encode_input(&binding, &envelope), json("{}"));
+    assert_eq!(
+        adapter.decode_output(
+            &binding,
+            &outcome(ProcessExit::Code(2), ""),
+            &DecodePolicy::default()
+        ),
+        HookEffects::default()
+    );
+}
+
+#[test]
+fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
+    let adapter = Arc::new(CursorAdapter::new());
+    let config = parsed(event_fixture(CursorEvent::AfterShellExecution).hooks);
+    let binding = adapter.bindings(&config).remove(0);
+
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"permission":"deny","additional_context":"ctx"}"#),
+    );
+    let messenger = Arc::new(RecordingMessenger::new());
+    let dispatcher = HookDispatcher::new(runner, messenger.clone());
+    let snapshot = Arc::new(RegistrySnapshot {
+        revision: 1,
+        bindings: vec![active_binding(
+            binding.clone(),
+            adapter.clone(),
+            BindingScope::Everywhere,
+        )],
+        diagnostics: Vec::new(),
+    });
+    let envelope = fixture_envelope(tool_result(
+        shell_action("cargo test"),
+        completed_shell("cargo test", "ok", 0),
+        None,
+    ));
+
+    let outcome =
+        block_on(dispatcher.dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false))));
+    assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
+    assert_eq!(outcome.effects.unsupported.len(), 1);
+
+    let diagnostics = messenger.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].source, binding.id.source);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("afterShellExecution does not use permission; it was ignored"),
+        "{}",
+        diagnostics[0].message
+    );
+    assert!(
+        messenger.notices().is_empty(),
+        "additional_context is only logged"
+    );
+}
+
+#[test]
+fn a_document_that_stopped_parsing_yields_no_bindings() {
+    let adapter = CursorAdapter::new();
+    let mut config = parsed(r#"{ "version": 1, "hooks": { "stop": [ { "command": "x" } ] } }"#);
+    config.document = json(r#"{ "version": 2 }"#);
+    assert!(adapter.bindings(&config).is_empty());
+}
+
+#[test]
+fn bindings_reuse_what_parse_kept_and_a_fresh_adapter_reads_the_document_again() {
+    let text = r#"{ "version": 1, "hooks": { "beforeShellExecution": [
+        { "command": "a", "matcher": "^git " },
+        { "command": "b", "matcher": "^rm " }
+    ] } }"#;
+    let source = test_source_id("hooks.json");
+
+    let adapter = CursorAdapter::new();
+    let config = adapter.parse(text.as_bytes(), &source).expect("parses");
+    assert_eq!(
+        adapter.sources.pattern_count(&source),
+        2,
+        "parse keeps the compiled matchers"
+    );
+    assert_eq!(
+        adapter
+            .sources
+            .definitions(&source, &config.document)
+            .map(|d| d.len()),
+        Some(2)
     );
     let bindings = adapter.bindings(&config);
-    let envelope = shell_envelope("sudo rm -rf /tmp/x");
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(adapter.sources.pattern_count(&source), 2);
 
-    assert!(adapter.matches(&bindings[0], &envelope));
-    assert!(adapter.matches(&bindings[1], &envelope));
-    assert!(adapter.matches(&bindings[2], &envelope));
-    assert!(adapter.matches(&bindings[3], &envelope));
-    assert!(!adapter.matches(&bindings[4], &envelope));
-
-    assert!(!adapter.matches(&bindings[0], &shell_envelope("RM -RF /tmp/x")));
-    assert!(adapter.matches(&bindings[4], &shell_envelope("git push origin main")));
-    assert!(!adapter.matches(&bindings[4], &shell_envelope("echo git push")));
-}
-
-#[test]
-fn only_shell_commands_match() {
-    let adapter = CursorAdapter::new();
-    let config =
-        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
-    let binding = &adapter.bindings(&config)[0];
-
-    let read = AIAgentActionType::ReadFiles(ReadFilesRequest {
-        locations: Vec::new(),
-    });
-    let tool_name = CanonicalToolName::for_action(&read);
-    let read_envelope = test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre {
-            action: read,
-            tool_name,
-        },
-    );
-    assert!(!adapter.matches(binding, &read_envelope));
-
-    let turn_stop = test_envelope(
-        AIConversationId::new(),
-        HookPayload::TurnStop {
-            status: TurnStopStatus::Completed,
-            continuation_count: 0,
-        },
-    );
-    assert!(!adapter.matches(binding, &turn_stop));
-}
-
-#[test]
-fn stdin_is_cursors_before_shell_execution_shape() {
-    let adapter = CursorAdapter::new();
-    let config =
-        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
-    let binding = &adapter.bindings(&config)[0];
-
-    let mut envelope = shell_envelope("rm -rf /tmp/x");
-    envelope.cwd = Some(PathBuf::from("/work/repo/src"));
-    envelope.roots = vec![PathBuf::from("/work/repo")];
-    envelope.model_id = Some(LLMId::from("claude-sonnet".to_owned()));
-    envelope.user_email = Some("dev@example.com".to_owned());
-    envelope.action_id = Some(AIAgentActionId::from("call_1".to_owned()));
-    envelope.warp_version = "v0.2026.01.01".to_owned();
-    let turn = HookTurnId::new();
-    envelope.turn_id = Some(turn);
-
-    let input = adapter.encode_input(binding, &envelope);
-    assert_eq!(input["hook_event_name"], "beforeShellExecution");
+    let fresh = CursorAdapter::new();
+    assert_eq!(fresh.sources.definitions(&source, &config.document), None);
     assert_eq!(
-        input["conversation_id"],
-        envelope.conversation_id.to_string()
+        fresh.bindings(&config),
+        bindings,
+        "an adapter that did not parse the document declares the same bindings from it"
     );
-    assert_eq!(input["generation_id"], turn.as_uuid().to_string());
-    assert_eq!(input["model"], "claude-sonnet");
-    assert_eq!(input["cursor_version"], "v0.2026.01.01");
-    assert_eq!(input["workspace_roots"], serde_json::json!(["/work/repo"]));
-    assert_eq!(input["user_email"], "dev@example.com");
-    assert_eq!(input["transcript_path"], serde_json::Value::Null);
-    assert_eq!(input["command"], "rm -rf /tmp/x");
-    assert_eq!(input["cwd"], "/work/repo/src");
-    assert_eq!(input["tool_use_id"], "call_1");
-}
-
-#[test]
-fn unknown_common_fields_are_absent_or_null_rather_than_invented() {
-    let adapter = CursorAdapter::new();
-    let config =
-        parsed(r#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a" } ] } }"#);
-    let binding = &adapter.bindings(&config)[0];
-
-    let mut envelope = shell_envelope("ls");
-    envelope.cwd = Some(PathBuf::from("/work/elsewhere"));
-    let input = adapter.encode_input(binding, &envelope);
-    let object = input.as_object().expect("an object");
-
     assert_eq!(
-        input["generation_id"],
-        envelope.conversation_id.to_string(),
-        "no turn id yet, so the conversation id stands in"
+        fresh.sources.pattern_count(&source),
+        2,
+        "and keeps that parse for matching"
     );
-    assert_eq!(input["user_email"], serde_json::Value::Null);
-    assert!(!object.contains_key("model"));
-    assert!(!object.contains_key("tool_use_id"));
-    assert_eq!(
-        input["workspace_roots"],
-        serde_json::json!(["/work/elsewhere"]),
-        "with no detected root the working directory is the workspace"
-    );
-}
-
-#[test]
-fn a_bad_matcher_rejects_the_whole_file() {
-    let error = CursorAdapter::new()
-        .parse(
-            br#"{ "version": 1, "hooks": { "beforeShellExecution": [ { "command": "a", "matcher": "[" } ] } }"#,
-            &test_source_id("hooks.json"),
-        )
-        .expect_err("rejects");
-    assert!(matches!(error, HookConfigError::Invalid(_)));
 }
