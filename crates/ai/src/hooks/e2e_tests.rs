@@ -173,7 +173,12 @@ fn write_script(path: &Path, body: &str) {
 /// A hook directory delivered with the run: `hooks.json` with one `definition` for `event`, whose
 /// command runs `./hook.sh` with `body`.
 #[cfg(unix)]
-fn write_run_hooks(dir: &Path, event: &str, body: &str, mut definition: serde_json::Value) -> PathBuf {
+fn write_run_hooks(
+    dir: &Path,
+    event: &str,
+    body: &str,
+    mut definition: serde_json::Value,
+) -> PathBuf {
     write_script(&dir.join("hook.sh"), body);
     definition["command"] = json!("./hook.sh");
     let hooks_file = dir.join("hooks.json");
@@ -283,10 +288,8 @@ fn gone_within(pid: i32, within: Duration) -> bool {
     false
 }
 
-const SAMPLE_RM_REASON: &str =
-    "This project's hook does not allow rm -rf. Remove files one at a time, or ask the user to do it.";
-const SAMPLE_PUSH_REASON: &str =
-    "This project's hook does not allow force pushes. Push without --force, or ask the user to do it.";
+const SAMPLE_RM_REASON: &str = "This project's hook does not allow rm -rf. Remove files one at a time, or ask the user to do it.";
+const SAMPLE_PUSH_REASON: &str = "This project's hook does not allow force pushes. Push without --force, or ask the user to do it.";
 
 /// §11 "adapter and reducer fixtures": the sample parses into the bindings it declares, and a
 /// denial from two sources reduces in precedence order with both reasons kept.
@@ -383,7 +386,10 @@ printf '{"permission":"deny","agent_message":"The run policy forbids deleting di
         .collect::<Vec<_>>();
     assert_eq!(
         ran,
-        vec![HookSourceKind::RunDelivered, HookSourceKind::ProjectCursorFile]
+        vec![
+            HookSourceKind::RunDelivered,
+            HookSourceKind::ProjectCursorFile
+        ]
     );
 }
 
@@ -557,7 +563,10 @@ printf '{"permission":"deny"}'"#;
         DispatchPolicy::default(),
         cancel,
     ));
-    assert!(canceller.join().expect("canceller"), "the script never started");
+    assert!(
+        canceller.join().expect("canceller"),
+        "the script never started"
+    );
     assert!(outcome.cancelled, "a cancelled firing is not a verdict");
     assert_eq!(outcome.invocations[0].exit, ProcessExit::Cancelled);
     assert!(started.elapsed() < Duration::from_secs(25));
@@ -709,6 +718,42 @@ fn reload_valid_malformed_valid_with_pinning() {
     });
 }
 
+/// Pins what happens today when a project's own `.cursor` directory is also named as a hook
+/// directory for the run (PR 5's suggested way to force a repository's hooks on): the registry
+/// runs the file once, as the run-delivered source, so its commands run from `.cursor` instead of
+/// the project root. A Cursor-style command written relative to the root then is not found, and
+/// `beforeShellExecution` fails open. Reported under Findings in PR 9.
+#[cfg(unix)]
+#[test]
+fn a_project_file_also_named_as_a_hook_dir_runs_from_its_cursor_directory() {
+    let fixture = Fixture::copy("sample_project");
+    let mut registry = HookRegistry::new();
+    load_project_file(&mut registry, &fixture.root);
+    load_run_file(&mut registry, &fixture.project_hooks_file());
+    let (dispatcher, _) = dispatcher(&fixture.home);
+
+    let outcome = dispatch(
+        &dispatcher,
+        &registry,
+        shell_envelope("rm -rf build", &fixture.root, Some(&fixture.root)),
+    );
+    assert_eq!(outcome.invocations.len(), 1, "the file runs once");
+    assert_eq!(
+        outcome.invocations[0].binding.source.kind,
+        HookSourceKind::RunDelivered
+    );
+    assert_eq!(
+        outcome.invocations[0].exit,
+        ProcessExit::Code(127),
+        "`.cursor/scripts/deny_dangerous.sh` is not found from inside `.cursor`"
+    );
+    assert_eq!(
+        outcome.effects.verdict,
+        HookVerdict::NoOpinion,
+        "so the project's deny does not apply"
+    );
+}
+
 /// The malformed fixture loads its one valid definition and reports the rest.
 #[test]
 fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
@@ -719,7 +764,12 @@ fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
     let active = snapshot
         .bindings
         .iter()
-        .map(|active| (active.binding.vendor_event.as_str(), active.binding.id.index))
+        .map(|active| {
+            (
+                active.binding.vendor_event.as_str(),
+                active.binding.id.index,
+            )
+        })
         .collect::<Vec<_>>();
     assert_eq!(active, vec![("beforeShellExecution", 1)]);
     let warnings = snapshot
@@ -733,7 +783,9 @@ fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
         "{warnings:?}"
     );
     assert!(
-        warnings.iter().any(|message| message.contains("onTabClosed")),
+        warnings
+            .iter()
+            .any(|message| message.contains("onTabClosed")),
         "{warnings:?}"
     );
 }
@@ -866,12 +918,8 @@ mod shell_slice {
         fn with_definition(script_body: &str, definition: serde_json::Value) -> Self {
             let fixture = Fixture::copy("sample_project");
             let dir = TempDir::new().expect("tempdir");
-            let hooks = write_run_hooks(
-                dir.path(),
-                "beforeShellExecution",
-                script_body,
-                definition,
-            );
+            let hooks =
+                write_run_hooks(dir.path(), "beforeShellExecution", script_body, definition);
             let mut registry = HookRegistry::new();
             load_run_file(&mut registry, &hooks);
             assert!(!registry.snapshot().is_empty(), "the file loads");
@@ -971,8 +1019,7 @@ exit 2"#,
 
     #[test]
     fn the_script_receives_cursor_shaped_json_on_stdin() {
-        let harness =
-            Harness::new(r#"cat > "$PWD/stdin.json"; printf '{"permission":"allow"}'"#);
+        let harness = Harness::new(r#"cat > "$PWD/stdin.json"; printf '{"permission":"allow"}'"#);
         let outcome = harness.dispatch("git push --force");
         assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
 
@@ -994,8 +1041,7 @@ exit 2"#,
 
     #[test]
     fn the_hook_runs_in_the_directory_that_holds_the_file() {
-        let harness =
-            Harness::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#);
+        let harness = Harness::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#);
         harness.dispatch("ls");
         let recorded = fs::read_to_string(harness.dir.path().join("cwd.txt")).expect("cwd file");
         assert_eq!(
