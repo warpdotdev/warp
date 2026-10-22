@@ -465,12 +465,6 @@ impl ExecutionProfileEditorView {
                         },
                     ),
                     DropdownItem::new(
-                        "Ask unless auto-approve",
-                        ExecutionProfileEditorViewAction::SetAskUserQuestion {
-                            permission: super::AskUserQuestionPermission::AskExceptInAutoApprove,
-                        },
-                    ),
-                    DropdownItem::new(
                         "Always ask",
                         ExecutionProfileEditorViewAction::SetAskUserQuestion {
                             permission: super::AskUserQuestionPermission::AlwaysAsk,
@@ -1164,9 +1158,8 @@ impl ExecutionProfileEditorView {
 
             let active = match current_permission {
                 super::AskUserQuestionPermission::Never => 0,
-                super::AskUserQuestionPermission::AskExceptInAutoApprove
+                super::AskUserQuestionPermission::AlwaysAsk
                 | super::AskUserQuestionPermission::Unknown => 1,
-                super::AskUserQuestionPermission::AlwaysAsk => 2,
             };
 
             menu.set_selected_by_index(active, ctx);

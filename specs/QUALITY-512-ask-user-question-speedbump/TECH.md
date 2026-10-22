@@ -31,7 +31,7 @@ The `action_id` pins the footer to the Ask-User-Question action that triggered i
 ## 5. Trigger and one-shot consumption
 `AIBlock::handle_complete_output` uses `first_ask_user_question_action_id(output)` to find the first Ask-User-Question action in the completed agent output. It seeds the speedbump when the feature flag is enabled, autonomy is allowed, and the local one-shot setting is still `true`.
 
-Unlike the original design, auto-approve is not excluded. Auto-approve skipped Ask Question actions can seed the same first-use footer.
+Auto-approve does not skip Ask Question actions. A pending question can seed the same first-use footer.
 
 The local one-shot flag is not consumed at seed time. `sync_ask_user_question_speedbump_footer` returns `true` only after it finds a matching `AskUserQuestionView` and installs the footer. Callers then invoke `mark_ask_user_question_speedbump_as_shown` only on that successful path. If output completion happens before the view exists, the flag remains `true`; `handle_ask_user_question_stream_update` calls the same sync helper after creating/replacing the view and consumes the flag when installation succeeds.
 ## 6. Dropdown ownership and action flow

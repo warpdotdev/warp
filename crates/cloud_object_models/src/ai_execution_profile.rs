@@ -164,9 +164,7 @@ impl RunAgentsPermission {
 pub enum AskUserQuestionPermission {
     /// Never pause; skip questions and continue with best judgment.
     Never,
-    /// Pause and wait for the user, unless auto-approve mode is enabled.
-    AskExceptInAutoApprove,
-    /// Always pause and wait for the user to answer before continuing, even in auto-approve mode.
+    /// Pause and wait for the user to answer before continuing, even in auto-approve mode.
     #[default]
     AlwaysAsk,
 
@@ -179,7 +177,6 @@ impl AskUserQuestionPermission {
     pub fn label(&self) -> &'static str {
         match self {
             AskUserQuestionPermission::Never => "Never ask",
-            AskUserQuestionPermission::AskExceptInAutoApprove => "Ask unless auto-approve",
             AskUserQuestionPermission::AlwaysAsk | AskUserQuestionPermission::Unknown => {
                 "Always ask"
             }
@@ -188,14 +185,10 @@ impl AskUserQuestionPermission {
 
     pub fn description(&self) -> &'static str {
         match self {
-            AskUserQuestionPermission::AskExceptInAutoApprove
-            | AskUserQuestionPermission::Unknown => {
-                "The Agent may ask a question and pause for your response, but will continue automatically when auto-approve is on."
-            }
             AskUserQuestionPermission::Never => {
                 "The Agent will not ask questions and will continue with its best judgment."
             }
-            AskUserQuestionPermission::AlwaysAsk => {
+            AskUserQuestionPermission::AlwaysAsk | AskUserQuestionPermission::Unknown => {
                 "The Agent may ask a question and will pause for your response even when auto-approve is on."
             }
         }

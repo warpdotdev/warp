@@ -1216,20 +1216,15 @@ impl BlocklistAIPermissions {
             .extend(files.into_iter().map(Into::into));
     }
 
-    /// Returns whether the agent can ask the user a question in the given conversation.
+    /// Returns whether the active profile allows the agent to ask the user a question.
     pub fn can_ask_user_question(
         &self,
-        conversation_id: &AIConversationId,
         terminal_view_id: Option<EntityId>,
         ctx: &AppContext,
     ) -> bool {
         match self.get_ask_user_question_setting(ctx, terminal_view_id) {
             AskUserQuestionPermission::Never => false,
-            AskUserQuestionPermission::AskExceptInAutoApprove
-            | AskUserQuestionPermission::Unknown => !BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(conversation_id)
-                .is_some_and(|convo| convo.autoexecute_any_action()),
-            AskUserQuestionPermission::AlwaysAsk => true,
+            AskUserQuestionPermission::AlwaysAsk | AskUserQuestionPermission::Unknown => true,
         }
     }
 }

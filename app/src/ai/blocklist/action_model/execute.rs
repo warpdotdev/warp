@@ -1062,7 +1062,7 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::AskUserQuestion { .. } => self
                 .ask_user_question_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+                .update(ctx, |executor, ctx| executor.should_autoexecute(ctx)),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
