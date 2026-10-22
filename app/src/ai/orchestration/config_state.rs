@@ -207,26 +207,6 @@ impl OrchestrationConfigState {
         }
     }
 
-    /// Fills in empty fields from the approved orchestration config.
-    /// When the LLM omits harness/model/execution_mode to inherit from
-    /// the active config, the raw request arrives with defaults (empty
-    /// harness, empty model, Local mode). This resolves those to the
-    /// config values so the UI shows the intended settings.
-    pub fn resolve_from_config(&mut self, config: &OrchestrationConfig) {
-        if self.harness_type.is_empty() && !config.harness_type.is_empty() {
-            self.harness_type = config.harness_type.clone();
-        }
-        if self.model_id.is_empty() && !config.model_id.is_empty() {
-            self.model_id = config.model_id.clone();
-        }
-        if !self.execution_mode.is_remote() && config.execution_mode.is_remote() {
-            self.execution_mode = Self::from_orchestration_config(config).execution_mode;
-        }
-        if matches!(self.execution_mode, RunAgentsExecutionMode::Local) {
-            self.sanitize_for_local_execution();
-        }
-    }
-
     /// Unconditionally overrides model, harness, and execution mode
     /// from the approved orchestration config. The plan config is the
     /// user-approved source of truth — the LLM's run_agents call may

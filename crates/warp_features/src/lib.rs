@@ -723,6 +723,9 @@ pub enum FeatureFlag {
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
 
+    /// Enables per-child orchestration model approval, validation, and dispatch.
+    ChildModelRouting,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -1073,6 +1076,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::MultiLevelOrchestration,
+    FeatureFlag::ChildModelRouting,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,

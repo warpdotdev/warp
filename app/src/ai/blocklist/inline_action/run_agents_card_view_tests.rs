@@ -8,7 +8,7 @@ use ai::agent::action_result::{
 use ai::skills::SkillReference;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::{RunAgentsCardFields, RunAgentsEditState};
+use super::{RunAgentsCardFields, RunAgentsEditState, format_launch_details};
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationConfigState;
 
 fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest {
@@ -35,6 +35,38 @@ fn confirmation_preserves_metadata_defaults_and_child_overrides() {
     assert_eq!(
         confirmed.agent_run_configs[0].metadata,
         request.agent_run_configs[0].metadata
+    );
+}
+
+#[test]
+fn launch_details_keep_each_child_model_and_outcome() {
+    let result = RunAgentsResult::Launched {
+        model_id: "batch".to_string(),
+        harness_type: "oz".to_string(),
+        execution_mode: RunAgentsLaunchedExecutionMode::Local,
+        agents: vec![
+            RunAgentsAgentOutcome {
+                name: "review".to_string(),
+                resolved_model_id: "child-model".to_string(),
+                kind: RunAgentsAgentOutcomeKind::Launched {
+                    agent_id: "run-1".to_string(),
+                },
+            },
+            RunAgentsAgentOutcome {
+                name: "test".to_string(),
+                resolved_model_id: String::new(),
+                kind: RunAgentsAgentOutcomeKind::Failed {
+                    error: "not installed".to_string(),
+                },
+            },
+        ],
+    };
+    assert_eq!(
+        format_launch_details(&result),
+        [
+            "review · child-model · Started (run-1)",
+            "test · Agent default (not reported) · Failed: not installed",
+        ]
     );
 }
 

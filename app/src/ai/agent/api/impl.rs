@@ -108,6 +108,8 @@ pub async fn generate_multi_agent_output(
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             supports_orchestration_runners: params.orchestration_enabled
                 && FeatureFlag::CloudAgentRunners.is_enabled(),
+            supports_child_model_routing: params.orchestration_enabled
+                && FeatureFlag::ChildModelRouting.is_enabled(),
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
             supports_stored_screenshots: FeatureFlag::StoredScreenshots.is_enabled(),

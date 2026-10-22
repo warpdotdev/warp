@@ -940,6 +940,19 @@ impl LLMPreferences {
             .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
+    pub(crate) fn can_use_agent_mode_model(
+        &self,
+        team_uid: Option<ServerId>,
+        model_id: &LLMId,
+        ctx: &AppContext,
+    ) -> bool {
+        let available = &UserWorkspaces::as_ref(ctx)
+            .feature_model_choice_for_team_uid(team_uid)
+            .agent_mode;
+        self.usable_model_info_for_id(available, model_id, ctx)
+            .is_some()
+    }
+
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
     fn get_preferred_base_model<'a>(
         &'a self,
