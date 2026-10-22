@@ -93,7 +93,7 @@ fn create_test_metadata(
     end_line: usize,
 ) -> FragmentMetadata {
     FragmentMetadata {
-        absolute_path: PathBuf::from(path),
+        absolute_path: Arc::from(PathBuf::from(path)),
         location: FragmentLocation {
             start_line,
             end_line,
