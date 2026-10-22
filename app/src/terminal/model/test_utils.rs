@@ -337,6 +337,24 @@ impl TerminalModel {
         )
     }
 
+    /// Creates a [`TerminalModel`] like [`TerminalModel::mock`], but whose blocks keep at most
+    /// `max_block_scroll_limit` lines of scrollback, so tests can truncate scrollback cheaply.
+    pub fn mock_with_max_block_scroll_limit(max_block_scroll_limit: usize) -> TerminalModel {
+        let mut sizes = block_size();
+        sizes.max_block_scroll_limit = max_block_scroll_limit;
+        TerminalModel::new_for_test(
+            sizes,
+            color::List::from(&Colors::default()),
+            ChannelEventListener::new_for_test(),
+            Arc::new(Background::default()),
+            false,
+            None,
+            false,
+            false, /* is_inverted */
+            None,
+        )
+    }
+
     /// Simulates the creation of a block as if the `input` command
     /// was run and it produced `output` bytes.
     ///
