@@ -166,6 +166,10 @@ fn test_get_launch_config_path() {
         Some(String::from("yes! this_works,too-even[braces}and(parens'."))
     );
     assert_eq!(
+        get_launch_config_path(&format!("/{}", urlencoding::encode("a+b & c=d"))),
+        Some(String::from("a+b & c=d"))
+    );
+    assert_eq!(
         get_launch_config_path("/%F0%9F%8D%9E"),
         Some(String::from("🍞"))
     );
