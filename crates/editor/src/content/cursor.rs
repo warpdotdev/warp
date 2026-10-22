@@ -1,3 +1,4 @@
+use std::mem;
 use std::ops::Range;
 
 use arrayvec::ArrayString;
@@ -360,63 +361,155 @@ impl BufferSumTree for SumTree<BufferText> {
     }
 
     fn append_str(&mut self, s: &str) {
-        let trailing_newline = s.ends_with('\n');
-        let mut is_first = true;
-        let mut new_fragments = Vec::new();
+        // Try to fill up the trailing text fragment first, if 1) it exists 2) it has extra
+        // byte space. Only the text before the first linebreak can go there.
+        let mut consumed = 0;
+        let first_line = s.lines().next().unwrap_or_default();
+        if !first_line.is_empty() && !self.is_empty() {
+            self.update_last(|last_text| {
+                if let BufferText::Text {
+                    fragment,
+                    char_count,
+                } = last_text
+                {
+                    let split_ix = if fragment.len() + first_line.len() <= TEXT_FRAGMENT_SIZE {
+                        first_line.len()
+                    } else {
+                        let mut split_ix = TEXT_FRAGMENT_SIZE
+                            .saturating_sub(fragment.len())
+                            .min(first_line.len());
+                        while !first_line.is_char_boundary(split_ix) {
+                            split_ix -= 1;
+                        }
+                        split_ix
+                    };
 
-        // Split str into lines first. For linebreaks, we need to push BufferText::Newline.
-        let mut lines = s.lines().peekable();
-        while let Some(line) = lines.next() {
-            let mut text = line;
-            // For the first fragment we are pushing, try to fill up the trailing text fragment if 1) it exists 2) it has extra byte space.
-            if is_first && !self.is_empty() {
-                self.update_last(|last_text| {
-                    if let BufferText::Text {
-                        fragment,
-                        char_count,
-                    } = last_text
-                    {
-                        let split_ix = if fragment.len() + text.len() <= TEXT_FRAGMENT_SIZE {
-                            text.len()
-                        } else {
-                            let mut split_ix = TEXT_FRAGMENT_SIZE
-                                .saturating_sub(fragment.len())
-                                .min(text.len());
-                            while !text.is_char_boundary(split_ix) {
-                                split_ix -= 1;
-                            }
-                            split_ix
-                        };
-
-                        let (suffix, remainder) = text.split_at(split_ix);
-                        fragment.push_str(suffix);
-                        *char_count = fragment.chars().count() as u8;
-
-                        text = remainder;
-                    }
-                });
-            }
-            is_first = false;
-
-            // If there are still remaining text, push it as a new fragment.
-            while !text.is_empty() {
-                let mut split_ix = text.len().min(TEXT_FRAGMENT_SIZE);
-                while !text.is_char_boundary(split_ix) {
-                    split_ix -= 1;
+                    fragment.push_str(&first_line[..split_ix]);
+                    *char_count = fragment.chars().count() as u8;
+                    consumed = split_ix;
                 }
-                let (chunk, remainder) = text.split_at(split_ix);
-                new_fragments.push(BufferText::Text {
-                    char_count: chunk.chars().count() as u8,
-                    fragment: ArrayString::from(chunk).unwrap(),
-                });
-                text = remainder;
-            }
-
-            if lines.peek().is_some() || trailing_newline {
-                new_fragments.push(BufferText::Newline);
-            }
+            });
         }
+
+        let mut new_fragments = Vec::new();
+        push_text_items(&mut new_fragments, &s[consumed..]);
         self.extend(new_fragments);
+    }
+}
+
+/// Splits `s` into [`BufferText`] items appended to `items`: runs of text become fragments of
+/// at most [`TEXT_FRAGMENT_SIZE`] bytes, and linebreaks become [`BufferText::Newline`].
+fn push_text_items(items: &mut Vec<BufferText>, s: &str) {
+    let trailing_newline = s.ends_with('\n');
+    let mut lines = s.lines().peekable();
+    while let Some(line) = lines.next() {
+        let mut text = line;
+        while !text.is_empty() {
+            let mut split_ix = text.len().min(TEXT_FRAGMENT_SIZE);
+            while !text.is_char_boundary(split_ix) {
+                split_ix -= 1;
+            }
+            let (chunk, remainder) = text.split_at(split_ix);
+            items.push(BufferText::Text {
+                char_count: chunk.chars().count() as u8,
+                fragment: ArrayString::from(chunk).unwrap(),
+            });
+            text = remainder;
+        }
+
+        if lines.peek().is_some() || trailing_newline {
+            items.push(BufferText::Newline);
+        }
+    }
+}
+
+/// Accumulates the items of a buffer region being rebuilt so that they can all be appended to
+/// the destination [`SumTree`] in one batch.
+///
+/// [`SumTree::push`] does not pack an item into the rightmost leaf: it appends a fresh leaf
+/// holding that single item, which costs a whole tree node (kilobytes, since a node inlines
+/// its items and their summaries) per item. [`SumTree::extend`] packs items into shared
+/// leaves instead, so a region rebuilt item by item is an order of magnitude more expensive
+/// in live heap than the same region appended in one go (APP-5567).
+pub(super) struct BufferTextBatch<'a> {
+    content: &'a mut SumTree<BufferText>,
+    items: Vec<BufferText>,
+    text: String,
+}
+
+impl<'a> BufferTextBatch<'a> {
+    pub(super) fn new(content: &'a mut SumTree<BufferText>) -> Self {
+        Self {
+            content,
+            items: Vec::new(),
+            text: String::new(),
+        }
+    }
+
+    /// Queue a character. Consecutive characters are coalesced into as few text fragments as
+    /// possible.
+    pub(super) fn push_char(&mut self, c: char) {
+        // The queued text is split with `str::lines`, which drops a carriage return that comes
+        // right before a newline. Flushing between the two keeps the pair out of one split, so
+        // a lone carriage return stays ordinary text instead of silently disappearing.
+        if c == '\n' && self.text.ends_with('\r') {
+            self.flush_text();
+        }
+        self.text.push(c);
+    }
+
+    /// Queue a color marker.
+    ///
+    /// Only markers can be queued directly. That, together with the newline that always
+    /// follows [`Self::push_char`]'s own flush, is what lets [`Self::flush_text`] assume the
+    /// queue never ends in a text fragment that later text could have been packed into.
+    pub(super) fn push_marker(&mut self, marker: ColorMarker) {
+        self.flush_text();
+        self.items.push(BufferText::Color(marker));
+    }
+
+    /// Append everything queued so far to the destination tree.
+    pub(super) fn finish(mut self) {
+        self.flush_text();
+        self.content.extend(mem::take(&mut self.items));
+    }
+
+    fn flush_text(&mut self) {
+        if self.text.is_empty() {
+            return;
+        }
+
+        if self.items.is_empty() {
+            // Nothing is queued ahead of this text, so it can go straight to the tree, where
+            // `append_str` tops up the trailing text fragment before starting a new one.
+            self.content.append_str(&self.text);
+        } else {
+            // The queue can only end in a text fragment right after `push_char` flushed a
+            // carriage return, and then this text starts with the newline that forced that
+            // flush, so `append_str` would have found no first line to top up either. Every
+            // other flush is followed by a marker, which ends the trailing fragment anyway.
+            push_text_items(&mut self.items, &self.text);
+        }
+
+        self.text.clear();
+    }
+}
+
+impl Drop for BufferTextBatch<'_> {
+    /// Dropping a batch that still holds queued items would discard that content silently, so
+    /// catch a caller that returns early without calling [`BufferTextBatch::finish`].
+    fn drop(&mut self) {
+        // A batch is live across the whole rebuild, so an unrelated panic in that window would
+        // unwind through here. Asserting then would panic during cleanup, which aborts the
+        // process and buries the original failure.
+        if std::thread::panicking() {
+            return;
+        }
+
+        debug_assert!(
+            self.items.is_empty() && self.text.is_empty(),
+            "BufferTextBatch dropped without finish(); the queued content would be lost"
+        );
     }
 }
 
