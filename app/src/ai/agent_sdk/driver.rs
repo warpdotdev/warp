@@ -904,6 +904,7 @@ fn split_run_options(
 
 /// The workspace setup a standby sandbox completed before its assignment arrived.
 pub(crate) struct StandbyWorkspace {
+    pub harness: Harness,
     /// What was prepared. An assignment is accepted only when its own workspace matches this.
     pub configuration: environment::WorkspaceConfiguration,
     /// Repositories to scan for skills, carried over from the preparation.

@@ -31,6 +31,15 @@ pub(super) fn team_scope(team_id: Option<&cynic::Id>) -> anyhow::Result<Headless
     }
 }
 
+pub(super) fn validate_prewarmed_harness(harness: Harness) -> anyhow::Result<()> {
+    match harness {
+        Harness::Oz | Harness::Claude | Harness::Codex => Ok(()),
+        Harness::Gemini | Harness::OpenCode | Harness::Pi | Harness::Unknown => {
+            bail!("Pre-warmed sandboxes do not support the {harness} harness")
+        }
+    }
+}
+
 pub(super) fn harness(value: &AgentHarness) -> anyhow::Result<Harness> {
     match value {
         AgentHarness::Oz => Ok(Harness::Oz),

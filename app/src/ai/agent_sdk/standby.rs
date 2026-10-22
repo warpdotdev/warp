@@ -484,7 +484,7 @@ fn wait_window(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
         .saturating_sub(EXPIRY_MARGIN)
 }
 
-/// Prepares an Oz sandbox through the shared driver without a prompt or run-only setup.
+/// Prepares a sandbox through the shared driver without a prompt or run-only setup.
 async fn prepare(
     foreground: &ModelSpawner<AgentDriverRunner>,
     config: PrewarmedSandboxConfiguration,
@@ -492,13 +492,14 @@ async fn prepare(
 ) -> Result<ModelSpawner<AgentDriver>, AgentDriverError> {
     let preparation = config.preparation;
     let harness = Harness::from_config_name(&preparation.harness)
-        .filter(|harness| *harness == Harness::Oz)
         .with_context(|| {
             format!(
-                "Pre-warmed sandboxes support only the Oz harness, not '{}'",
+                "Unknown pre-warmed sandbox harness '{}'",
                 preparation.harness,
             )
         })
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
+    execution_config::validate_prewarmed_harness(harness)
         .map_err(AgentDriverError::ConfigBuildFailed)?;
     // Deferred checkouts belong to the claiming task, so the standby workspace declares none and
     // only validates them.
@@ -602,7 +603,8 @@ async fn prepare(
         environment_variables: config.environment_variables,
         workspace,
         cloud_providers,
-        computer_use_config: Some((preparation.computer_use_enabled, None)),
+        computer_use_config: (harness == Harness::Oz)
+            .then_some((preparation.computer_use_enabled, None)),
         selected_harness: harness,
         ..Default::default()
     };
@@ -612,7 +614,14 @@ async fn prepare(
             Ok::<_, AgentDriverError>(driver.update(ctx, |_, ctx| ctx.spawner()))
         })
         .await??;
-    AgentDriver::prepare_resources(&driver_spawner, mcp_specs, global_skills, setup_events).await?;
+    AgentDriver::prepare_resources(
+        &driver_spawner,
+        harness,
+        mcp_specs,
+        global_skills,
+        setup_events,
+    )
+    .await?;
     Ok(driver_spawner)
 }
 

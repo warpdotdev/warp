@@ -45,6 +45,7 @@ impl AgentDriver {
     #[cfg_attr(all(target_family = "wasm", not(test)), expect(dead_code))]
     pub(crate) async fn prepare_resources(
         foreground: &ModelSpawner<Self>,
+        harness: Harness,
         mcp_specs: Vec<MCPSpec>,
         global_skills: GlobalSkillResolution,
         setup_events: &SetupClientEventReporter,
@@ -100,7 +101,7 @@ impl AgentDriver {
             .await?;
         let prepared = prepare_workspace(
             foreground,
-            Harness::Oz,
+            harness,
             workspace,
             setup_events,
             snapshot_reporter,
@@ -112,11 +113,15 @@ impl AgentDriver {
             .spawn(move |me, _| {
                 me.harness_working_dir = working_dir;
                 me.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+                    harness,
                     configuration: prepared_configuration,
                     repositories,
                 }));
             })
             .await?;
+        if harness != Harness::Oz {
+            return Ok(prepared.harness_working_dir);
+        }
         let managed_mcp_client = foreground
             .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
             .await?;

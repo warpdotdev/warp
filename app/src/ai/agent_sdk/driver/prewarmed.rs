@@ -1,3 +1,4 @@
+use clap::ValueEnum as _;
 use warp_cli::skill::SkillSpec;
 use warp_graphql::queries::execution_config::ExecutionConfiguration;
 
@@ -12,10 +13,7 @@ use crate::terminal::view::load_ai_conversation::{
 };
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        execution_config::harness(&config.harness)? == Harness::Oz,
-        "Pre-warmed assignment requires the Oz harness"
-    );
+    execution_config::validate_prewarmed_harness(execution_config::harness(&config.harness)?)?;
     anyhow::ensure!(
         FeatureFlag::FactoryDeferredRepositories.is_enabled()
             || config
@@ -25,6 +23,16 @@ fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
         "Pre-warmed assignment has deferred repositories this client cannot prepare"
     );
     Ok(())
+}
+
+fn assignment_harness_transport(
+    runtime_env: &HashMap<String, String>,
+) -> anyhow::Result<HarnessTransport> {
+    runtime_env
+        .get("WARP_HARNESS_TRANSPORT")
+        .map(|value| HarnessTransport::from_str(value, false).map_err(anyhow::Error::msg))
+        .transpose()
+        .map(|transport| transport.unwrap_or_default())
 }
 
 impl AgentDriver {
@@ -185,10 +193,13 @@ impl AgentDriver {
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
         let (first_skill, discovery_dirs) =
             resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;
+        let harness_transport = assignment_harness_transport(&runtime_env)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
         let (mut options, mut task, conversation_id, providers) = spawner
             .spawn(move |me, ctx| {
                 let (options, task, conversation_id, providers) = build_execution_task_and_options(
                     None,
+                    harness_transport,
                     config,
                     RepositoryContract {
                         supports_deferred_repositories: FeatureFlag::FactoryDeferredRepositories
@@ -204,7 +215,8 @@ impl AgentDriver {
                     anyhow::bail!("Standby resources were not prepared");
                 };
                 anyhow::ensure!(
-                    prepared.configuration.same_preparation(&options.workspace),
+                    prepared.harness == options.selected_harness
+                        && prepared.configuration.same_preparation(&options.workspace),
                     "Assignment workspace does not match prepared resources"
                 );
                 Ok::<_, anyhow::Error>((options, task, conversation_id, providers))
@@ -246,6 +258,9 @@ impl AgentDriver {
             &mut task,
         )
         .await?;
+        if let HarnessKind::ThirdParty(harness) = &task.harness {
+            harness.validate()?;
+        }
         if let Some(conversation_id) = conversation_id {
             options.resume = setup_events
                 .record_result(
@@ -285,8 +300,11 @@ impl AgentDriver {
             })
             .await??;
         Self::replace_shell_with_resolved_env(spawner).await?;
-        let mcp_restart = Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
-        Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
+        if matches!(task.harness, HarnessKind::Oz) {
+            let mcp_restart =
+                Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
+            Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
+        }
         spawner
             .spawn(move |me, ctx| {
                 let scope = me

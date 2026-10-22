@@ -632,8 +632,10 @@ struct RepositoryContract {
     use_factory_repositories: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_execution_task_and_options(
     args: Option<&RunAgentArgs>,
+    harness_transport: HarnessTransport,
     config: ExecutionConfiguration,
     repository_contract: RepositoryContract,
     working_dir: PathBuf,
@@ -674,9 +676,6 @@ fn build_execution_task_and_options(
         !execution_id.is_empty() && config.execution_id.inner() == execution_id,
         "Execution configuration execution mismatch"
     );
-    let harness_transport = args
-        .and_then(|args| args.harness_transport)
-        .unwrap_or_default();
     let selected_harness = execution_config::harness(&config.harness)?;
     let model = if selected_harness == Harness::Oz {
         config
@@ -1459,6 +1458,7 @@ impl AgentDriverRunner {
                 .spawn(move |_, ctx| {
                     build_execution_task_and_options(
                         Some(&args),
+                        args.harness_transport.unwrap_or_default(),
                         config,
                         repository_contract,
                         working_dir,

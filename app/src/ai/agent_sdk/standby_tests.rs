@@ -18,6 +18,47 @@ use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
 mod support;
 
 #[test]
+fn supported_harnesses_validate_the_workspace_before_metadata_access() {
+    App::test((), |mut app| async move {
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let setup_events = SetupClientEventReporter::standby(
+            Arc::new(MockAIClient::new()),
+            app.background_executor(),
+        );
+        let mut claude = parse_configuration();
+        claude.preparation.harness = "claude".into();
+        claude.preparation.factory_skill_dirs = vec!["../outside".into()];
+        let error = prepare(&foreground, claude, &setup_events)
+            .await
+            .err()
+            .unwrap();
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected invalid workspace");
+        };
+        assert_eq!(
+            source.to_string(),
+            "Execution skill directory must stay within the working directory"
+        );
+
+        let mut codex = parse_configuration();
+        codex.preparation.harness = "codex".into();
+        codex.preparation.factory_skill_dirs = vec!["../outside".into()];
+        let error = prepare(&foreground, codex, &setup_events)
+            .await
+            .err()
+            .unwrap();
+        let AgentDriverError::ConfigBuildFailed(source) = error else {
+            panic!("expected invalid workspace");
+        };
+        assert_eq!(
+            source.to_string(),
+            "Execution skill directory must stay within the working directory"
+        );
+    });
+}
+
+#[test]
 fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
     App::test((), |mut app| async move {
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -27,7 +68,7 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             app.background_executor(),
         );
         let mut wrong_harness = parse_configuration();
-        wrong_harness.preparation.harness = "claude".to_string();
+        wrong_harness.preparation.harness = "gemini".to_string();
         let mut escaping_skills = parse_configuration();
         escaping_skills.preparation.factory_skill_dirs = vec!["../outside".to_string()];
         let mut duplicate_repository = parse_configuration();
