@@ -410,6 +410,7 @@ fn write_codex_mcp_servers_cli_server() {
                 env: HashMap::from([("TOKEN".to_string(), "abc".to_string())]),
                 working_directory: None,
             },
+            warp_id: None,
         },
     )]);
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
@@ -441,6 +442,7 @@ fn write_codex_mcp_servers_sse_server() {
                 url: "https://mcp.example.com/sse".to_string(),
                 headers: HashMap::from([("X-Key".to_string(), "val".to_string())]),
             },
+            warp_id: None,
         },
     )]);
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
@@ -467,6 +469,7 @@ fn write_codex_mcp_servers_cli_server_with_cwd() {
                 env: HashMap::new(),
                 working_directory: Some("/opt/mcp-server".to_string()),
             },
+            warp_id: None,
         },
     )]);
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
@@ -493,6 +496,7 @@ fn write_codex_mcp_servers_cli_server_without_cwd_omits_key() {
                 env: HashMap::new(),
                 working_directory: None,
             },
+            warp_id: None,
         },
     )]);
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();

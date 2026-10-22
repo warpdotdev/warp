@@ -173,6 +173,7 @@ pub(crate) fn normalize_codex_toml_to_json(file_contents: &str) -> Result<String
                                 name.clone(),
                                 JSONMCPServer {
                                     transport_type: JSONTransportType::from(entry),
+                                    warp_id: None,
                                 },
                             )
                         })

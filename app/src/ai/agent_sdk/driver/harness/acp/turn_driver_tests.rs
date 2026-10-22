@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -575,7 +576,7 @@ fn start(
     let (cancel_tx, cancel_rx) = async_channel::unbounded();
     let (save_tx, _save_rx) = async_channel::unbounded();
     let turn = block_on(host.begin_turn(None)).unwrap();
-    let mapper = AcpTurnMapper::new("task-1".to_owned(), turn.request_id.clone());
+    let mapper = AcpTurnMapper::new("task-1".to_owned(), turn.request_id.clone(), HashMap::new());
     let driver = TurnDriver {
         connection: connection.clone(),
         notifications,

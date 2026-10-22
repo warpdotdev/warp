@@ -189,6 +189,7 @@ fn resolve_mcp_specs_to_json_skips_preview_urls_without_ambient_task() {
                             "Bearer wk-test-key".to_string(),
                         )]),
                     },
+                    warp_id: None,
                 },
             )])
         );
@@ -429,6 +430,11 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 
     assert!(resolved.local_uuids.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let rendered = render_installations(
+        resolved.ephemeral_installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("token"))]),
+    );
+    assert_eq!(rendered["GitHub MCP"].warp_id, Some(uuid.to_string()));
 }
 
 #[test]
@@ -1272,6 +1278,7 @@ fn explicit_http_server(url: &str) -> JSONMCPServer {
             url: url.to_string(),
             headers: HashMap::new(),
         },
+        warp_id: None,
     }
 }
 

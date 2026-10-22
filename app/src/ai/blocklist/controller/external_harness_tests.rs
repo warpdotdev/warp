@@ -2,8 +2,8 @@ use std::time::SystemTime;
 
 use session_sharing_protocol::common::AgentAttachment;
 use uuid::Uuid;
-use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
-use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
+use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask, UpdateTaskMessage};
+use warp_multi_agent_api::message::tool_call::{CallMcpTool, RunShellCommand, Tool};
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::{
     AgentOutput, Message as MessageKind, ToolCall, ToolCallResult, UserQuery,
@@ -17,6 +17,7 @@ use warp_multi_agent_api::{
 use warpui::{App, AppContext};
 
 use super::*;
+use crate::ai::agent::api::serde_json_to_prost;
 use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentInput, CancellationReason};
 use crate::ai::blocklist::controller::ParticipantId;
@@ -745,6 +746,79 @@ fn tool_call_results_are_applied_as_finished_and_settle_in_the_next_stream() {
 
                 controller.apply_external_harness_event(&second.stream_id, done(), ctx);
                 assert_eq!(status(ctx, id), ConversationStatus::Success);
+            });
+        });
+    });
+}
+
+#[test]
+fn a_tool_call_rewritten_by_a_message_update_is_stored_with_its_new_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                let turn = begin_turn_with_query(controller, id, "post in slack", ctx);
+                let task_id = root_task_id(ctx, id);
+                let mcp_call = |args: serde_json::Value| {
+                    MessageKind::ToolCall(ToolCall {
+                        tool_call_id: "call-1".to_owned(),
+                        tool: Some(Tool::CallMcpTool(CallMcpTool {
+                            name: "send_message_to_thread".to_owned(),
+                            args: match serde_json_to_prost(args).unwrap().kind {
+                                Some(prost_types::value::Kind::StructValue(args)) => Some(args),
+                                other => panic!("expected a struct, got {other:?}"),
+                            },
+                            ..Default::default()
+                        })),
+                    })
+                };
+                let announced =
+                    message(&task_id, &turn.request_id, mcp_call(serde_json::json!({})));
+                let message_id = announced.id.clone();
+                controller.apply_external_harness_event(
+                    &turn.stream_id,
+                    client_actions(vec![add_messages(&task_id, vec![announced])]),
+                    ctx,
+                );
+                controller.apply_external_harness_event(
+                    &turn.stream_id,
+                    client_actions(vec![action(client_action::Action::UpdateTaskMessage(
+                        UpdateTaskMessage {
+                            task_id: task_id.clone(),
+                            message: Some(Message {
+                                id: message_id.clone(),
+                                task_id: task_id.clone(),
+                                request_id: turn.request_id.clone(),
+                                message: Some(mcp_call(serde_json::json!({ "message": "Done" }))),
+                                ..Default::default()
+                            }),
+                            mask: Some(prost_types::FieldMask {
+                                paths: vec!["tool_call".to_owned()],
+                            }),
+                        },
+                    ))]),
+                    ctx,
+                );
+
+                let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&id)
+                    .unwrap();
+                let stored = conversation
+                    .get_root_task()
+                    .unwrap()
+                    .messages()
+                    .find(|message| message.id == message_id)
+                    .expect("the announced call is stored");
+                let Some(MessageKind::ToolCall(ToolCall {
+                    tool: Some(Tool::CallMcpTool(call)),
+                    ..
+                })) = &stored.message
+                else {
+                    panic!("expected a CallMcpTool, got {:?}", stored.message);
+                };
+                assert!(call.args.as_ref().unwrap().fields.contains_key("message"));
             });
         });
     });

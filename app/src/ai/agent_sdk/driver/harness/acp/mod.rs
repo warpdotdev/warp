@@ -48,7 +48,7 @@ use warp_core::safe_warn;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::StreamFinished;
-use warp_multi_agent_api::{ClientAction, ResponseEvent, response_event};
+use warp_multi_agent_api::{ClientAction, McpServerIdentity, ResponseEvent, response_event};
 use warp_util::path::{EscapeChar, ShellFamily};
 use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
@@ -91,7 +91,7 @@ use super::{
     ThirdPartyHarness, install_docs_url, validate_cli_installed,
 };
 use crate::ai::agent::CancellationReason;
-use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -355,6 +355,10 @@ impl ThirdPartyHarness for AcpHarness {
                 .filter(|_| self.harness != Harness::Pi)
                 .map(|(name, server)| mcp_server_for_acp(name, server))
                 .collect(),
+            mcp_server_identities: resolved_mcp_servers
+                .iter()
+                .map(|(name, server)| (name.clone(), tool_call_server_identity(name, server)))
+                .collect(),
             conversation: OnceLock::new(),
             boundary_snapshot: Arc::default(),
             cli_session,
@@ -413,6 +417,8 @@ pub(crate) struct AcpHarnessRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
     attachments: Arc<AttachmentResolver>,
     mcp_servers: Vec<McpServer>,
+    /// Stamped on the agent's MCP tool calls, keyed by server name.
+    mcp_server_identities: HashMap<String, McpServerIdentity>,
     /// Set before the first turn.
     conversation: OnceLock<RunConversation>,
     /// The encoded conversation as captured at the most recent request-stream boundary and not
@@ -837,13 +843,20 @@ impl HarnessRunner for AcpHarnessRunner {
 
         let (mut mapper, opening_actions) = match restored_root_task_id {
             Some(root_task_id) => {
-                let mapper = AcpTurnMapper::new(root_task_id, turn.request_id.clone());
+                let mapper = AcpTurnMapper::new(
+                    root_task_id,
+                    turn.request_id.clone(),
+                    self.mcp_server_identities.clone(),
+                );
                 let actions = vec![mapper.user_query_action(&self.user_prompt, None)];
                 (mapper, actions)
             }
             None => {
-                let mapper =
-                    AcpTurnMapper::new(Uuid::new_v4().to_string(), turn.request_id.clone());
+                let mapper = AcpTurnMapper::new(
+                    Uuid::new_v4().to_string(),
+                    turn.request_id.clone(),
+                    self.mcp_server_identities.clone(),
+                );
                 let actions = mapper.initial_actions(&self.user_prompt);
                 (mapper, actions)
             }
@@ -1376,6 +1389,19 @@ async fn write_text_file(context: &AgentRequestContext, params: Value) -> Result
         Ok(Value::Null)
     })
     .await
+}
+
+/// The identity of an MCP server as its tool calls carry it. No server request sees these calls,
+/// so the display name warp-server would otherwise fill in is set here.
+fn tool_call_server_identity(name: &str, server: &JSONMCPServer) -> McpServerIdentity {
+    McpServerIdentity {
+        display_name: name.to_owned(),
+        ..server
+            .warp_id
+            .as_deref()
+            .and_then(mcp_server_identity)
+            .unwrap_or_default()
+    }
 }
 
 fn mcp_server_for_acp(name: &str, server: &JSONMCPServer) -> McpServer {

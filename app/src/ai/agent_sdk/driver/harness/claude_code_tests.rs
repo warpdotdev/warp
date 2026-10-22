@@ -141,6 +141,7 @@ fn serialize_claude_mcp_config_cli_server() {
                 env: HashMap::from([("API_KEY".to_string(), "secret".to_string())]),
                 working_directory: None,
             },
+            warp_id: None,
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
@@ -163,6 +164,7 @@ fn serialize_claude_mcp_config_cli_server_with_cwd() {
                 env: HashMap::new(),
                 working_directory: Some("/opt/mcp".to_string()),
             },
+            warp_id: None,
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
@@ -182,6 +184,7 @@ fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
                 env: HashMap::new(),
                 working_directory: None,
             },
+            warp_id: None,
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
@@ -202,6 +205,7 @@ fn serialize_claude_mcp_config_preserves_factory_mcp_auth() {
                     "Bearer wk-test-key".to_string(),
                 )]),
             },
+            warp_id: None,
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();

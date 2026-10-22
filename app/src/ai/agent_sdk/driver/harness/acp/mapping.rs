@@ -6,7 +6,9 @@ use std::time::SystemTime;
 use prost_types::FieldMask;
 use serde_json::Value;
 use uuid::Uuid;
-use warp_multi_agent_api::client_action::{AddMessagesToTask, AppendToMessageContent, CreateTask};
+use warp_multi_agent_api::client_action::{
+    AddMessagesToTask, AppendToMessageContent, CreateTask, UpdateTaskMessage,
+};
 use warp_multi_agent_api::message::tool_call::apply_file_diffs::{FileDiff, NewFile};
 use warp_multi_agent_api::message::tool_call::read_files::File as ReadFilesFile;
 use warp_multi_agent_api::message::tool_call::{
@@ -20,9 +22,9 @@ use warp_multi_agent_api::message::{
 };
 use warp_multi_agent_api::{
     ApplyFileDiffsResult, CallMcpToolResult, ClientAction, CreateTodoList, FileContent,
-    FileContentLineRange, MarkTodosCompleted, Message, ReadFilesResult, RunShellCommandResult,
-    ShellCommandFinished, Task, TodoItem, apply_file_diffs_result, call_mcp_tool_result,
-    client_action, read_files_result, run_shell_command_result,
+    FileContentLineRange, MarkTodosCompleted, McpServerIdentity, Message, ReadFilesResult,
+    RunShellCommandResult, ShellCommandFinished, Task, TodoItem, apply_file_diffs_result,
+    call_mcp_tool_result, client_action, read_files_result, run_shell_command_result,
 };
 
 use super::protocol::{
@@ -33,6 +35,7 @@ use crate::ai::agent::api::serde_json_to_prost;
 
 const AGENT_OUTPUT_TEXT_PATH: &str = "agent_output.text";
 const AGENT_REASONING_TEXT_PATH: &str = "agent_reasoning.reasoning";
+const TOOL_CALL_PATH: &str = "tool_call";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
@@ -70,6 +73,8 @@ enum ToolProjection {
     Generic {
         name: String,
         args: prost_types::Struct,
+        /// Set when the call is a tool of one of the MCP servers the agent was given.
+        server_identity: Option<McpServerIdentity>,
     },
 }
 
@@ -79,6 +84,7 @@ impl ToolProjection {
         title: &str,
         raw_input: Option<&Value>,
         content: Option<&[ToolCallContent]>,
+        mcp_servers: &HashMap<String, McpServerIdentity>,
     ) -> Self {
         if let Some(command) = command_from_raw_input(raw_input, kind, title) {
             return Self::Shell { command };
@@ -100,9 +106,18 @@ impl ToolProjection {
                 line_range: line_range_from_raw_input(raw_input),
             };
         }
-        Self::Generic {
-            name: mcp_tool_name(kind, title),
-            args: generic_args(raw_input),
+        let args = generic_args(raw_input);
+        match split_mcp_tool_name(title, mcp_servers) {
+            Some((tool, identity)) => Self::Generic {
+                name: tool.to_owned(),
+                args,
+                server_identity: Some(identity.clone()),
+            },
+            None => Self::Generic {
+                name: mcp_tool_name(kind, title),
+                args,
+                server_identity: None,
+            },
         }
     }
 
@@ -141,9 +156,14 @@ impl ToolProjection {
                     line_ranges: line_range.iter().copied().collect(),
                 }],
             }),
-            Self::Generic { name, args } => Tool::CallMcpTool(CallMcpTool {
+            Self::Generic {
+                name,
+                args,
+                server_identity,
+            } => Tool::CallMcpTool(CallMcpTool {
                 name: name.clone(),
                 args: Some(args.clone()),
+                server_identity: server_identity.clone(),
                 ..Default::default()
             }),
         }
@@ -246,6 +266,8 @@ struct ToolCallState {
     /// the action model indexes results by id across conversations, and agents are free to
     /// reuse their ids across turns.
     action_id: String,
+    /// The id of the conversation message announcing the call.
+    message_id: String,
     kind: Option<ToolKind>,
     title: String,
     projection: ToolProjection,
@@ -281,10 +303,16 @@ pub(super) struct AcpTurnMapper {
     /// Whether a tool call was announced in the current request stream, so the next result
     /// must be preceded by a segment boundary.
     tool_call_announced_in_segment: bool,
+    /// Identities of the MCP servers the agent was given, keyed by server name.
+    mcp_servers: HashMap<String, McpServerIdentity>,
 }
 
 impl AcpTurnMapper {
-    pub(super) fn new(task_id: String, request_id: String) -> Self {
+    pub(super) fn new(
+        task_id: String,
+        request_id: String,
+        mcp_servers: HashMap<String, McpServerIdentity>,
+    ) -> Self {
         Self {
             task_id,
             request_id,
@@ -293,6 +321,7 @@ impl AcpTurnMapper {
             thoughts: HashMap::new(),
             todo_list_created: false,
             tool_call_announced_in_segment: false,
+            mcp_servers,
         }
     }
 
@@ -487,11 +516,16 @@ impl AcpTurnMapper {
             &title,
             call.raw_input.as_ref(),
             call.content.as_deref(),
+            &self.mcp_servers,
         );
         let action_id = Uuid::new_v4().to_string();
-        let tool = projection.tool(&title);
+        let message = self.new_message(MessageKind::ToolCall(ToolCall {
+            tool_call_id: action_id.clone(),
+            tool: Some(projection.tool(&title)),
+        }));
         let state = ToolCallState {
-            action_id: action_id.clone(),
+            action_id,
+            message_id: message.id.clone(),
             kind: call.kind,
             title,
             projection,
@@ -501,12 +535,7 @@ impl AcpTurnMapper {
         self.tool_calls.insert(call.tool_call_id.clone(), state);
         self.tool_call_announced_in_segment = true;
 
-        let mut events = vec![TurnEvent::Actions(vec![self.add_messages(vec![
-            self.new_message(MessageKind::ToolCall(ToolCall {
-                tool_call_id: action_id,
-                tool: Some(tool),
-            })),
-        ])])];
+        let mut events = vec![TurnEvent::Actions(vec![self.add_messages(vec![message])])];
         if let Some(result) = self.result_if_finished(&call.tool_call_id, call.status) {
             events.extend(self.boundary_before_results());
             events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
@@ -534,13 +563,18 @@ impl AcpTurnMapper {
         if call.kind.is_some() {
             state.kind = call.kind;
         }
+        // Agents may announce a call before its input has streamed in, so input that arrives
+        // later is written back onto the announced call.
+        let mut input_changed = false;
         match &mut state.projection {
             ToolProjection::Shell { command } => {
                 if call.raw_input.is_some()
                     && let Some(updated) =
                         command_from_raw_input(call.raw_input.as_ref(), state.kind, "")
+                    && *command != updated
                 {
                     *command = updated;
+                    input_changed = true;
                 }
             }
             // The announced call already carries the diff; a later one (e.g. the applied
@@ -555,20 +589,48 @@ impl AcpTurnMapper {
                     *new_text = updated_new;
                 }
             }
-            ToolProjection::ReadFiles { .. } | ToolProjection::Generic { .. } => {}
+            ToolProjection::Generic { args, .. } => {
+                if call.raw_input.is_some() {
+                    let updated = generic_args(call.raw_input.as_ref());
+                    if *args != updated {
+                        *args = updated;
+                        input_changed = true;
+                    }
+                }
+            }
+            ToolProjection::ReadFiles { .. } => {}
         }
         let output = tool_output_text(call.content.as_deref(), call.raw_output.as_ref());
         if !output.is_empty() {
             state.output = output;
         }
-        match self.result_if_finished(&call.tool_call_id, call.status) {
-            Some(result) => {
-                let mut events = self.boundary_before_results();
-                events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
-                events
-            }
-            None => Vec::new(),
+        let mut events = Vec::new();
+        if input_changed {
+            let message = Message {
+                id: state.message_id.clone(),
+                task_id: self.task_id.clone(),
+                request_id: self.request_id.clone(),
+                message: Some(MessageKind::ToolCall(ToolCall {
+                    tool_call_id: state.action_id.clone(),
+                    tool: Some(state.projection.tool(&state.title)),
+                })),
+                ..Default::default()
+            };
+            events.push(TurnEvent::Actions(vec![action(
+                client_action::Action::UpdateTaskMessage(UpdateTaskMessage {
+                    task_id: self.task_id.clone(),
+                    message: Some(message),
+                    mask: Some(FieldMask {
+                        paths: vec![TOOL_CALL_PATH.to_owned()],
+                    }),
+                }),
+            )]));
         }
+        if let Some(result) = self.result_if_finished(&call.tool_call_id, call.status) {
+            events.extend(self.boundary_before_results());
+            events.push(TurnEvent::Actions(vec![self.add_messages(vec![result])]));
+        }
+        events
     }
 
     /// Some agents announce an edit before they know what it changes and attach the diff only
@@ -841,6 +903,33 @@ fn generic_args(raw_input: Option<&Value>) -> prost_types::Struct {
         Some(prost_types::value::Kind::StructValue(fields)) => fields,
         _ => prost_types::Struct::default(),
     }
+}
+
+/// Splits a Claude Code MCP tool name, `mcp__<server>__<tool>`, into the tool's own name and the
+/// identity of the server it belongs to. Claude Code writes the server name with every character
+/// outside `[A-Za-z0-9_-]` replaced by `_`; when several server names match, the longest wins.
+fn split_mcp_tool_name<'a>(
+    title: &'a str,
+    mcp_servers: &'a HashMap<String, McpServerIdentity>,
+) -> Option<(&'a str, &'a McpServerIdentity)> {
+    let qualified = title.strip_prefix("mcp__")?;
+    mcp_servers
+        .iter()
+        .filter_map(|(name, identity)| {
+            let server: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let tool = qualified.strip_prefix(&server)?.strip_prefix("__")?;
+            (!tool.is_empty()).then_some((tool, identity))
+        })
+        .min_by_key(|(tool, _)| tool.len())
 }
 
 fn mcp_tool_name(kind: Option<ToolKind>, title: &str) -> String {

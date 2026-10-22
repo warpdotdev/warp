@@ -699,7 +699,16 @@ impl AgentDriver {
             let resolved = resolve_json(installation);
             let servers: HashMap<String, JSONMCPServer> = serde_json::from_str(&resolved)
                 .map_err(|e| AgentDriverError::MCPJsonParseError(e.to_string()))?;
-            result.extend(servers);
+            let warp_id = installation.warp_id().map(str::to_owned);
+            result.extend(servers.into_iter().map(|(name, server)| {
+                (
+                    name,
+                    JSONMCPServer {
+                        warp_id: warp_id.clone(),
+                        ..server
+                    },
+                )
+            }));
         }
 
         Ok(result)

@@ -16,6 +16,10 @@ use crate::{JsonModel, JsonSerializer};
 pub struct JSONMCPServer {
     #[serde(flatten)]
     pub transport_type: JSONTransportType,
+    /// The managed MCP server uid or well-known integration id the server was resolved from,
+    /// with the semantics of `MCPServerConfig.warp_id`. Not part of the server's JSON config.
+    #[serde(skip)]
+    pub warp_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
