@@ -3,6 +3,8 @@
 //! at that moment. Every entry point returns early when hooks are off or nothing is configured,
 //! so the inactive path adds no work beyond that check.
 
+#[cfg(all(test, feature = "local_fs"))]
+mod e2e_tests;
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
 pub(crate) mod prompt;
@@ -420,6 +422,12 @@ impl HookRuntime {
                 })
             })
             .clone()
+    }
+
+    /// The project hook file watcher, once a detected root started it.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn config_watcher_for_test(&self) -> Option<ModelHandle<HookConfigWatcher>> {
+        self.config_watcher.clone()
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
