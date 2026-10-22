@@ -135,6 +135,7 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
+use ::ai::hooks::{HookRegistry, LogOnlyMessenger, UnavailableRunner};
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 #[cfg(feature = "local_fs")]
 use ::ai::index::full_source_code_embedding::SnapshotStorage;
@@ -148,6 +149,7 @@ pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
+use ai::blocklist::hooks::HookRuntime;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
@@ -2310,6 +2312,11 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
+    // The hook runtime reads the registry handle, so the registry is registered first.
+    ctx.add_singleton_model(|_| HookRegistry::new());
+    ctx.add_singleton_model(|ctx| {
+        HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
+    });
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,

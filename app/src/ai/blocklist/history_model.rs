@@ -22,9 +22,9 @@ use warp_multi_agent_api::response_event::stream_finished::{
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use super::RequestInput;
 use super::controller::response_stream::ResponseStreamId;
 use super::persistence::{PersistedAIInput, PersistedAIInputType};
+use super::{RequestInput, hooks};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -1443,6 +1443,10 @@ impl BlocklistAIHistoryModel {
             new_conversation_id,
             terminal_surface_id,
         });
+
+        if !is_viewing_shared_session && !is_cli_agent_transcript {
+            hooks::session::notify_session_start(new_conversation_id, ctx);
+        }
 
         new_conversation_id
     }

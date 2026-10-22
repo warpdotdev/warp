@@ -1002,6 +1002,9 @@ pub enum FeatureFlag {
     /// mirrors kept in the persistent build cache instead of cloning each one
     /// from the remote. Disabling it restores direct, network-only checkouts.
     GitMirrorCache,
+
+    /// Runs user-configured agent hooks at fixed points in Warp's agent loop.
+    AgentHooks,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

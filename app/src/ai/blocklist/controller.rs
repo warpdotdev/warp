@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::hooks::TurnStopStatus;
 use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
@@ -45,7 +46,7 @@ use super::orchestration_event_streamer::{
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
-use super::{BlocklistAIInputModel, ResponseStreamId};
+use super::{BlocklistAIInputModel, ResponseStreamId, hooks};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -595,6 +596,12 @@ impl BlocklistAIController {
                         .all(|result| result.result.is_successful())
                         || treat_as_success
                     {
+                        hooks::turn::notify_turn_stop(
+                            TurnStopStatus::Completed,
+                            *conversation_id,
+                            &me.active_session,
+                            ctx,
+                        );
                         ConversationStatus::Success
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
@@ -820,6 +827,14 @@ impl BlocklistAIController {
             return;
         }
 
+        let is_user_submitted_prompt = matches!(
+            input_query.input_query,
+            InputQueryType::UserSubmittedQueryFromInput { .. }
+        );
+        // Hooks see the prompt as the user typed it, including any mode prefix. The copy is only
+        // made when a hook could fire, so the inactive path adds nothing beyond the check.
+        let submitted_prompt =
+            (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx)).then(|| query.clone());
         let (query, user_query_mode) = extract_user_query_mode(query);
 
         // Attribute /orchestrate queries to the slash-command entry surface.
@@ -837,10 +852,7 @@ impl BlocklistAIController {
             );
         }
 
-        let should_prepend_finished_action_results = matches!(
-            input_query.input_query,
-            InputQueryType::UserSubmittedQueryFromInput { .. }
-        );
+        let should_prepend_finished_action_results = is_user_submitted_prompt;
 
         let completed_action_results = self.action_model.update(ctx, |action_model, ctx| {
             action_model.cancel_all_pending_actions(
@@ -850,6 +862,18 @@ impl BlocklistAIController {
             );
             action_model.drain_finished_action_results(conversation_id)
         });
+
+        // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
+        // turn's `prompt.submit`.
+        if let Some(prompt) = &submitted_prompt {
+            hooks::prompt::notify_prompt_submit(
+                prompt,
+                Vec::new(),
+                conversation_id,
+                &self.active_session,
+                ctx,
+            );
+        }
 
         let context = input_context_for_request(
             false,
@@ -3603,6 +3627,8 @@ impl BlocklistAIController {
             }
             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                 let client_actions = actions.actions;
+                let hook_observations =
+                    hooks::stream::collect_observations(&client_actions, conversation_id, ctx);
                 let skill_path_origin =
                     SessionContext::from_session(self.active_session.as_ref(ctx), ctx)
                         .skill_path_origin();
@@ -3620,6 +3646,19 @@ impl BlocklistAIController {
                     report_error!(
                         anyhow::Error::new(e)
                             .context("Failed to apply client actions to conversation")
+                    );
+                }
+                if !hook_observations.is_empty() {
+                    let conversation_after = history_model
+                        .as_ref(ctx)
+                        .conversation_for_response_stream(stream_id);
+                    hooks::stream::observe(
+                        stream_id,
+                        conversation_id,
+                        conversation_after,
+                        hook_observations,
+                        &self.active_session,
+                        ctx,
                     );
                 }
                 self.record_streamed_tool_call_results_as_finished(stream_id, conversation_id, ctx);
@@ -3786,6 +3825,15 @@ impl BlocklistAIController {
                 });
             }
             ResponseStreamEvent::AfterStreamFinished { cancellation } => {
+                // Before any early return, so a stream whose conversation is gone still drops
+                // its observer state.
+                hooks::stream::flush_on_stream_end(
+                    &stream_id,
+                    cancellation.is_some(),
+                    &self.active_session,
+                    ctx,
+                );
+
                 // Cancellations provide conversation_id (survives truncation); otherwise use dynamic lookup.
                 let conversation_id = match &cancellation {
                     Some(stream_cancellation) => stream_cancellation.conversation_id,
@@ -3828,6 +3876,20 @@ impl BlocklistAIController {
                     {
                         actions_to_queue.extend(output.get().actions().cloned());
                     }
+                }
+                // A stream that ended cleanly, left the conversation successful, and queued no
+                // actions is the end of the turn.
+                let turn_completed = cancellation.is_none()
+                    && !is_any_exchange_unfinished
+                    && actions_to_queue.is_empty()
+                    && matches!(conversation.status(), ConversationStatus::Success);
+                if turn_completed {
+                    hooks::turn::notify_turn_stop(
+                        TurnStopStatus::Completed,
+                        conversation_id,
+                        &self.active_session,
+                        ctx,
+                    );
                 }
 
                 if let Some(stream_cancellation) = &cancellation {

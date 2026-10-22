@@ -315,6 +315,7 @@ dependencies = [
 name = "ai"
 version = "0.1.0"
 dependencies = [
+ "ai_types",
  "anyhow",
  "arborium",
  "async-channel",
@@ -15936,7 +15937,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=c5aa18336af009426711f997591480d701280cf2#c5aa18336af009426711f997591480d701280cf2"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=3a84b9a36c4a00565da68ae18810a174be2d04be#3a84b9a36c4a00565da68ae18810a174be2d04be"
 dependencies = [
  "prost",
  "prost-reflect",
