@@ -21,6 +21,9 @@ directory.
 
 Every file the scripts write lands in `$WARP_PROJECT_DIR`, which Warp sets from the run's
 workspace roots.
+The scripts expect one JSON object on one line on stdin, which is what Warp sends; they match
+fields with `grep` and `sed`, so they tolerate spaces after a colon but not a pretty-printed
+object spread over several lines.
 
 `sample_project/run_hooks/hooks.json` binds the same scripts for use as a source delivered with
 the run (`--hook-dir`, `WARP_HOOK_DIRS`, or resolved agent configuration). A source runs commands
