@@ -101,9 +101,6 @@ pub enum FeatureFlag {
     /// Feature flag for cursor reflow fix (fixes part of the Alacritty resizing logic).
     ResizeFix,
 
-    /// Enable multiselect in Notebooks and Warp Text.
-    RichTextMultiselect,
-
     /// If enabled, the default input mode is set to waterfall for new users.
     DefaultWaterfallMode,
 

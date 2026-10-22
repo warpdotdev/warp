@@ -1435,7 +1435,7 @@ impl CodeEditorView {
             return;
         }
 
-        let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
+        let multiselect = modifiers.alt;
         self.model.update(ctx, |model, ctx| {
             model.select_at(offset, multiselect, ctx);
         });
