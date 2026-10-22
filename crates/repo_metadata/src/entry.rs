@@ -764,29 +764,74 @@ pub(crate) fn matches_force_included_path(path: &Path, force_included_paths: &[P
 /// For example, if the directory `/target` is ignored:
 /// - If `check_ancestors` is true, then `/target/debug` will match.
 /// - If `check_ancestors` is false, then `/target/debug` will not match.
+///
+/// The actual match dispatches to `gitignore_match_pool` (see its module docs for why);
+/// every caller of this function inherits that bound automatically.
 pub fn matches_gitignores(
     path: &Path,
     is_dir: bool,
     gitignores: &[Arc<Gitignore>],
     check_ancestors: bool,
 ) -> bool {
-    gitignores.iter().any(|gitignore| {
-        if let Ok(relative_path) = path.strip_prefix(gitignore.path()) {
-            // `matched_path_or_any_parents` panics if the path has a root.
-            // If not on windows, we allow paths with a root if the gitignore path is empty (since this denotes a global gitignore).
-            if relative_path.has_root() && (cfg!(windows) || gitignore.path() != Path::new("")) {
-                return false;
-            }
+    // Only gitignores whose directory is an ancestor of (or equal to) `path` can ever
+    // match it. Filtering here — cheap, since it never touches a matcher's regex —
+    // keeps the set of `Arc<Gitignore>` handed to the dedicated pool below proportional
+    // to `path`'s ancestor chain rather than to the full, potentially large, list of
+    // gitignores a long-lived accumulated stack may carry (see `gitignore_cache` docs).
+    let relevant: Vec<Arc<Gitignore>> = gitignores
+        .iter()
+        .filter(|gitignore| is_gitignore_relevant_to_path(path, gitignore))
+        .cloned()
+        .collect();
+    if relevant.is_empty() {
+        return false;
+    }
 
-            if check_ancestors {
-                gitignore
-                    .matched_path_or_any_parents(relative_path, is_dir)
-                    .is_ignore()
-            } else {
-                gitignore.matched(relative_path, is_dir).is_ignore()
-            }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let path = path.to_path_buf();
+        crate::gitignore_match_pool::run(move || {
+            match_relevant_gitignores(&path, is_dir, &relevant, check_ancestors)
+        })
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        match_relevant_gitignores(path, is_dir, &relevant, check_ancestors)
+    }
+}
+
+/// Returns whether `gitignore`'s directory is an ancestor of (or equal to) `path`, i.e.
+/// whether it could possibly apply to `path` at all. Never touches the matcher's regex.
+fn is_gitignore_relevant_to_path(path: &Path, gitignore: &Gitignore) -> bool {
+    match path.strip_prefix(gitignore.path()) {
+        // `matched_path_or_any_parents` panics if the path has a root. If not on
+        // windows, we allow paths with a root if the gitignore path is empty (since
+        // this denotes a global gitignore).
+        Ok(relative_path) => {
+            !relative_path.has_root() || (!cfg!(windows) && gitignore.path() == Path::new(""))
+        }
+        Err(_) => false,
+    }
+}
+
+/// Matches `path` against `gitignores`, which must already be pre-filtered by
+/// [`is_gitignore_relevant_to_path`].
+fn match_relevant_gitignores(
+    path: &Path,
+    is_dir: bool,
+    gitignores: &[Arc<Gitignore>],
+    check_ancestors: bool,
+) -> bool {
+    gitignores.iter().any(|gitignore| {
+        let relative_path = path
+            .strip_prefix(gitignore.path())
+            .expect("caller pre-filtered to only relevant gitignores");
+        if check_ancestors {
+            gitignore
+                .matched_path_or_any_parents(relative_path, is_dir)
+                .is_ignore()
         } else {
-            false
+            gitignore.matched(relative_path, is_dir).is_ignore()
         }
     })
 }
