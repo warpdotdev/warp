@@ -13,16 +13,18 @@ pub(crate) mod strict_policy;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
+use std::collections::HashMap;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
     CommandExecutionPosture, DispatchPolicy, HookDispatcher, HookEnvelope, HookMessenger,
-    HookRegistry, HookRunner, HookSurface, RegistrySnapshot, RunMetadata,
+    HookRegistry, HookRunner, HookSurface, HookTurnId, RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
@@ -38,8 +40,12 @@ use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
+use self::prompt::PendingPrompts;
+use self::session::SessionStarts;
 use self::stream::StreamObserverState;
 use self::strict_policy::StrictHookPolicy;
+use self::tool_result::ShellCompletions;
+use self::turn::TurnStops;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
@@ -92,6 +98,12 @@ pub struct HookRuntime {
     headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
+    /// The turn each conversation is in, allocated when a prompt starts a turn.
+    turn_ids: HashMap<AIConversationId, HookTurnId>,
+    session_starts: SessionStarts,
+    turn_stops: TurnStops,
+    pending_prompts: PendingPrompts,
+    shell_completions: ShellCompletions,
     #[cfg(feature = "local_fs")]
     config_watcher: Option<ModelHandle<HookConfigWatcher>>,
     #[cfg(test)]
@@ -116,6 +128,11 @@ impl HookRuntime {
             headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
+            turn_ids: HashMap::new(),
+            session_starts: SessionStarts::default(),
+            turn_stops: TurnStops::default(),
+            pending_prompts: PendingPrompts::default(),
+            shell_completions: ShellCompletions::default(),
             #[cfg(feature = "local_fs")]
             config_watcher: None,
             #[cfg(test)]
@@ -125,23 +142,92 @@ impl HookRuntime {
 
     /// The run starts when its first request goes out, which is when the first exchange is
     /// appended to a conversation. That is the latest moment before any tool can run, and it
-    /// comes after a command-line run has applied its profile.
+    /// comes after a command-line run has applied its profile. The same subscription drops a
+    /// conversation's state once the conversation is gone.
     fn subscribe_to_run_start(ctx: &mut ModelContext<Self>) {
         if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
             return;
         }
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
-            |me, _, event, ctx| {
-                if let BlocklistAIHistoryEvent::AppendedExchange {
+            |me, _, event, ctx| match event {
+                BlocklistAIHistoryEvent::AppendedExchange {
                     terminal_surface_id,
                     ..
-                } = event
-                {
-                    me.pin_for_run(Some(*terminal_surface_id), ctx);
+                } => me.pin_for_run(Some(*terminal_surface_id), ctx),
+                BlocklistAIHistoryEvent::RemoveConversation {
+                    conversation_id, ..
                 }
+                | BlocklistAIHistoryEvent::DeletedConversation {
+                    conversation_id, ..
+                } => me.forget_conversation(*conversation_id),
+                BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                    cleared_conversation_ids,
+                    ..
+                } => {
+                    for conversation_id in cleared_conversation_ids {
+                        me.forget_cleared_conversation(*conversation_id);
+                    }
+                }
+                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    ..
+                }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
             },
         );
+    }
+
+    /// Drops everything remembered about a conversation that no longer exists. A dispatch still
+    /// running for it is told to stop.
+    fn forget_conversation(&mut self, conversation_id: AIConversationId) {
+        self.forget_cleared_conversation(conversation_id);
+        self.turn_stops.forget(conversation_id);
+    }
+
+    /// Drops what is remembered about a conversation its surface cleared. The conversation still
+    /// exists, so a turn whose success is held keeps its hold: the surface's cancellation settles
+    /// it when the conversation was the active one, and otherwise the hooks' answer does.
+    fn forget_cleared_conversation(&mut self, conversation_id: AIConversationId) {
+        self.turn_ids.remove(&conversation_id);
+        self.session_starts.forget(conversation_id);
+        self.pending_prompts.forget(conversation_id);
+        self.shell_completions.forget(conversation_id);
+    }
+
+    /// The turn `conversation_id` is in, once a prompt has started one.
+    pub fn turn_id_for(&self, conversation_id: AIConversationId) -> Option<HookTurnId> {
+        self.turn_ids.get(&conversation_id).copied()
+    }
+
+    /// Starts a new turn for `conversation_id` and returns its id.
+    fn start_turn(&mut self, conversation_id: AIConversationId) -> HookTurnId {
+        let turn_id = HookTurnId::new();
+        self.turn_ids.insert(conversation_id, turn_id);
+        turn_id
+    }
+
+    /// The variables `conversation_id`'s `session.start` hooks asked to set, once they have run.
+    pub fn session_env_for(&self, conversation_id: AIConversationId) -> Vec<(String, String)> {
+        self.session_starts.env_for(conversation_id)
     }
 
     #[cfg(feature = "local_fs")]
@@ -431,6 +517,24 @@ fn posture_for_setting(setting: ActionPermission) -> CommandExecutionPosture {
     }
 }
 
+/// The longest timeout among the bindings in `snapshot` that would run for `envelope`, which is
+/// how long a boundary that waits for its hooks waits. `None` when no binding would run.
+fn longest_matching_timeout(
+    snapshot: &RegistrySnapshot,
+    envelope: &HookEnvelope,
+) -> Option<Duration> {
+    snapshot
+        .bindings_for(
+            envelope.boundary(),
+            envelope.cwd.as_deref(),
+            envelope.execution_host,
+        )
+        .into_iter()
+        .filter(|active| active.adapter.matches(&active.binding, envelope))
+        .map(|active| active.binding.timeout)
+        .max()
+}
+
 // Driver checks. Unknown conversations fail every check.
 
 /// Whether this client drives `conversation_id`'s turns.
@@ -462,34 +566,389 @@ fn driver_check(
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::Path;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime};
 
     use ai::hooks::test_util::{RecordingAdapter, RecordingMessenger, ScriptedRunner};
     use ai::hooks::{
         ActiveBinding, BindingScope, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner,
     };
     use async_channel::unbounded;
+    use chrono::Local;
     use parking_lot::FairMutex;
+    use warp_multi_agent_api::client_action::{AddMessagesToTask, CreateTask};
+    use warp_multi_agent_api::message::tool_call::{RunShellCommand, Tool};
+    use warp_multi_agent_api::message::{AgentOutput, Message as MessageKind, ToolCall};
+    use warp_multi_agent_api::response_event::{StreamFinished, StreamInit, stream_finished};
+    use warp_multi_agent_api::{
+        ClientAction, Message, ResponseEvent, Task, client_action, response_event,
+    };
     use warpui::r#async::Timer;
-    use warpui::{App, AppContext, ModelHandle, SingletonEntity};
+    use warpui::{
+        App, AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
+    };
 
     use super::HookRuntime;
-    use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+    use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
     use crate::ai::agent::task::TaskId;
     use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType, ReadFilesRequest};
+    use crate::ai::blocklist::history_model::ConversationStatusUpdate;
     use crate::ai::blocklist::{
-        BlocklistAIActionModel, BlocklistAIHistoryModel, RecordingController,
+        BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
+        BlocklistAIHistoryModel, RecordingController, RequestInput, ResponseStream,
+        ResponseStreamId,
     };
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+    use crate::ai::llms::LLMId;
+    use crate::terminal::TerminalView;
     use crate::terminal::event::BlockMetadataReceivedEvent;
     use crate::terminal::model::block::BlockMetadata;
     use crate::terminal::model::session::Sessions;
     use crate::terminal::model::session::active_session::ActiveSession;
     use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
     use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-    use crate::test_util::terminal::initialize_app_for_terminal_view;
+    use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
     use crate::workspaces::user_workspaces::UserWorkspaces;
+
+    /// A terminal view in a window with the hook doubles installed, for tests that drive the
+    /// controller the way a person or a response stream would.
+    pub(crate) struct ControllerHarness {
+        pub hooks: TestHooks,
+        pub terminal: ViewHandle<TerminalView>,
+    }
+
+    pub(crate) fn controller_harness(app: &mut App) -> ControllerHarness {
+        initialize_app_for_terminal_view(app);
+        let hooks = app.update(install_test_hooks);
+        let terminal = add_window_with_terminal(app, None);
+        ControllerHarness { hooks, terminal }
+    }
+
+    impl ControllerHarness {
+        pub(crate) fn terminal_id(&self) -> EntityId {
+            self.terminal.id()
+        }
+
+        pub(crate) fn controller(&self, app: &App) -> ModelHandle<BlocklistAIController> {
+            self.terminal
+                .read(app, |view, _| view.ai_controller().clone())
+        }
+
+        pub(crate) fn update_controller<T>(
+            &self,
+            app: &mut App,
+            update: impl FnOnce(
+                &mut BlocklistAIController,
+                &mut warpui::ModelContext<BlocklistAIController>,
+            ) -> T,
+        ) -> T {
+            let controller = self.controller(app);
+            controller.update(app, update)
+        }
+
+        /// Starts a new conversation on this surface and sends `text` into it as a typed prompt.
+        pub(crate) fn send_prompt(&self, app: &mut App, text: &str) -> AIConversationId {
+            let terminal_id = self.terminal_id();
+            let conversation_id = app.update(|ctx| {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(terminal_id, false, false, false, ctx)
+                })
+            });
+            self.send_prompt_in(app, conversation_id, text);
+            conversation_id
+        }
+
+        /// Sends `text` into `conversation_id` as a typed prompt.
+        pub(crate) fn send_prompt_in(
+            &self,
+            app: &mut App,
+            conversation_id: AIConversationId,
+            text: &str,
+        ) {
+            self.update_controller(app, |controller, ctx| {
+                controller.send_user_query_in_conversation(
+                    text.to_owned(),
+                    conversation_id,
+                    None,
+                    ctx,
+                );
+            });
+        }
+
+        /// A new conversation with one request in flight on a stream the test drives by hand.
+        pub(crate) fn mock_stream(
+            &self,
+            app: &mut App,
+        ) -> (AIConversationId, ModelHandle<ResponseStream>) {
+            let terminal_id = self.terminal_id();
+            let conversation_id = app.update(|ctx| {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(terminal_id, false, false, false, ctx)
+                })
+            });
+            let stream = self.mock_request(app, conversation_id);
+            (conversation_id, stream)
+        }
+
+        /// Puts one more request in flight on `conversation_id`, on a stream the test drives by
+        /// hand, the way a request that went out would.
+        pub(crate) fn mock_request(
+            &self,
+            app: &mut App,
+            conversation_id: AIConversationId,
+        ) -> ModelHandle<ResponseStream> {
+            self.terminal.update(app, |view, ctx| {
+                let terminal_surface_id = view.id();
+                let stream_id = ResponseStreamId::new_for_test();
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let task_id = history
+                        .conversation(&conversation_id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input_for_test(
+                            RequestInput {
+                                conversation_id,
+                                input_messages: Vec::from([(task_id, vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .unwrap();
+                    history.update_conversation_status(
+                        terminal_surface_id,
+                        conversation_id,
+                        ConversationStatus::InProgress,
+                        ctx,
+                    );
+                    // A request going out marks its conversation as the surface's active one.
+                    history.mark_active_conversation_id(conversation_id, terminal_surface_id, ctx);
+                });
+                let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+                view.ai_controller().update(ctx, |controller, ctx| {
+                    controller.register_mock_stream_for_test(
+                        stream_id,
+                        conversation_id,
+                        stream.clone(),
+                        ctx,
+                    );
+                });
+                stream
+            })
+        }
+    }
+
+    pub(crate) fn root_task_id(app: &App, conversation_id: AIConversationId) -> String {
+        BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .expect("conversation exists")
+                .get_root_task_id()
+                .to_string()
+        })
+    }
+
+    pub(crate) fn conversation_status(
+        app: &App,
+        conversation_id: AIConversationId,
+    ) -> Option<ConversationStatus> {
+        BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .map(|conversation| conversation.status().clone())
+        })
+    }
+
+    pub(crate) fn exchange_count(app: &App, conversation_id: AIConversationId) -> usize {
+        BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+            history
+                .conversation(&conversation_id)
+                .map_or(0, |conversation| conversation.exchange_count())
+        })
+    }
+
+    pub(crate) fn stream_init_event() -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::Init(StreamInit {
+                request_id: "request".to_owned(),
+                conversation_id: "test-server-conversation".to_owned(),
+                run_id: String::new(),
+            })),
+        }
+    }
+
+    pub(crate) fn text_message(task_id: &str, text: &str) -> Message {
+        Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_owned(),
+            request_id: "request".to_owned(),
+            timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
+            message: Some(MessageKind::AgentOutput(AgentOutput {
+                text: text.to_owned(),
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// A tool call for a shell command, which waits for approval once queued.
+    pub(crate) fn shell_tool_call_message(task_id: &str, command: &str) -> Message {
+        Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_owned(),
+            request_id: "request".to_owned(),
+            timestamp: Some(prost_types::Timestamp::from(SystemTime::now())),
+            message: Some(MessageKind::ToolCall(ToolCall {
+                tool_call_id: uuid::Uuid::new_v4().to_string(),
+                tool: Some(Tool::RunShellCommand(RunShellCommand {
+                    command: command.to_owned(),
+                    ..Default::default()
+                })),
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// A batch that creates the root task (the stream's first action does this in production)
+    /// and adds `messages` to it.
+    pub(crate) fn create_task_with_messages(
+        task_id: &str,
+        messages: Vec<Message>,
+    ) -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::ClientActions(
+                response_event::ClientActions {
+                    actions: vec![
+                        ClientAction {
+                            action: Some(client_action::Action::CreateTask(CreateTask {
+                                task: Some(Task {
+                                    id: task_id.to_owned(),
+                                    ..Default::default()
+                                }),
+                            })),
+                        },
+                        ClientAction {
+                            action: Some(client_action::Action::AddMessagesToTask(
+                                AddMessagesToTask {
+                                    task_id: task_id.to_owned(),
+                                    messages,
+                                },
+                            )),
+                        },
+                    ],
+                },
+            )),
+        }
+    }
+
+    /// A batch that adds `messages` to a task the stream already created.
+    pub(crate) fn add_messages_event(task_id: &str, messages: Vec<Message>) -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::ClientActions(
+                response_event::ClientActions {
+                    actions: vec![ClientAction {
+                        action: Some(client_action::Action::AddMessagesToTask(
+                            AddMessagesToTask {
+                                task_id: task_id.to_owned(),
+                                messages,
+                            },
+                        )),
+                    }],
+                },
+            )),
+        }
+    }
+
+    pub(crate) fn done_event() -> ResponseEvent {
+        ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        }
+    }
+
+    /// Whether `conversation_id` has an action waiting to run or running on the harness's
+    /// surface.
+    pub(crate) fn has_unfinished_actions(
+        app: &App,
+        harness: &ControllerHarness,
+        conversation_id: AIConversationId,
+    ) -> bool {
+        harness.terminal.read(app, |view, ctx| {
+            view.ai_action_model()
+                .as_ref(ctx)
+                .has_unfinished_actions_for_conversation(conversation_id)
+        })
+    }
+
+    /// Streams one text message and ends the stream cleanly, the way a turn with no tool calls
+    /// ends.
+    pub(crate) fn finish_turn_with_text(
+        app: &mut App,
+        conversation_id: AIConversationId,
+        stream: &ModelHandle<ResponseStream>,
+        text: &str,
+    ) {
+        let task_id = root_task_id(app, conversation_id);
+        stream.update(app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                create_task_with_messages(&task_id, vec![text_message(&task_id, text)]),
+                ctx,
+            );
+            stream.emit_response_event_for_test(done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+    }
+
+    /// Every status change the history model reports for one conversation, in order.
+    pub(crate) struct StatusRecorder {
+        conversation_id: AIConversationId,
+        statuses: Arc<Mutex<Vec<ConversationStatus>>>,
+    }
+
+    impl Entity for StatusRecorder {
+        type Event = ();
+    }
+
+    pub(crate) fn record_statuses(
+        app: &mut App,
+        conversation_id: AIConversationId,
+    ) -> (
+        ModelHandle<StatusRecorder>,
+        Arc<Mutex<Vec<ConversationStatus>>>,
+    ) {
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let recorder = app.add_model(|ctx: &mut ModelContext<StatusRecorder>| {
+            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, _, event, _| {
+                if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id: id,
+                    update: ConversationStatusUpdate::Changed { .. },
+                    new_status,
+                    ..
+                } = event
+                    && *id == me.conversation_id
+                {
+                    me.statuses.lock().unwrap().push(new_status.clone());
+                }
+            });
+            StatusRecorder {
+                statuses: statuses.clone(),
+                conversation_id,
+            }
+        });
+        (recorder, statuses)
+    }
 
     /// A terminal-view-sized app with the hook doubles installed and one native conversation.
     pub(crate) struct HookTestApp {
@@ -503,11 +962,7 @@ pub(crate) mod testing {
     pub(crate) fn hook_test_app(app: &mut App) -> HookTestApp {
         initialize_app_for_terminal_view(app);
         let hooks = app.update(install_test_hooks);
-        let sessions = app.add_model(|_| Sessions::new_for_test());
-        let (_tx, rx) = unbounded();
-        let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
-        let active_session =
-            app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+        let (active_session, dispatcher) = mock_session(app);
         let terminal_view_id = warpui::EntityId::new();
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
@@ -523,6 +978,26 @@ pub(crate) mod testing {
             conversation_id,
             terminal_view_id,
         }
+    }
+
+    /// A session over a mock terminal, with the dispatcher that feeds it, for envelopes that
+    /// need a working directory to read.
+    fn mock_session(
+        app: &mut App,
+    ) -> (
+        ModelHandle<ActiveSession>,
+        ModelHandle<ModelEventDispatcher>,
+    ) {
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_tx, rx) = unbounded();
+        let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
+        let active_session =
+            app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
+        (active_session, dispatcher)
+    }
+
+    pub(crate) fn mock_active_session(app: &mut App) -> ModelHandle<ActiveSession> {
+        mock_session(app).0
     }
 
     /// Moves the harness's session to `cwd`, the way a shell's prompt would report it.

@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use ai::hooks::test_util::{test_binding_id, test_source_id};
+use ai::hooks::{FollowUpChainId, PromptProvenance};
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use warpui::{App, SingletonEntity};
 
@@ -129,6 +131,52 @@ fn clear_queue_removes_every_row_regardless_of_origin_in_fifo_order() {
             e,
             QueuedQueryEvent::Removed { conversation_id, .. } if *conversation_id == id
         )));
+    });
+}
+
+#[test]
+fn a_hook_follow_up_row_keeps_its_provenance_and_fires_like_a_prompt() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        let provenance = PromptProvenance::HookFollowUp {
+            binding: test_binding_id(test_source_id("stop"), "stop", 0),
+            chain_id: FollowUpChainId::new(),
+        };
+        let (person, hook) = model.update(&mut app, |queue, ctx| {
+            let person = queue.append(id, user_query("from a person"), ctx);
+            let hook = queue.append(
+                id,
+                QueuedQuery::new_hook_follow_up("from a hook".to_owned(), provenance.clone()),
+                ctx,
+            );
+            (person, hook)
+        });
+
+        model.read(&app, |queue, _| {
+            assert_eq!(queue.provenance_for(id, person), PromptProvenance::User);
+            assert_eq!(queue.provenance_for(id, hook), provenance);
+            let rows = queue.queue(id);
+            assert_eq!(rows[1].origin(), QueuedQueryOrigin::HookFollowUp);
+            assert!(!rows[1].is_locked());
+            assert!(!rows[1].is_command());
+            assert!(rows[1].attachments().is_empty());
+            // The person's row is ahead; the follow-up fires after it, as any other prompt.
+            assert!(matches!(
+                queue.peek_autofire(id),
+                Some(AutofireAction::Submit { query_id, .. }) if query_id == person
+            ));
+        });
+
+        model.update(&mut app, |queue, ctx| {
+            queue.remove_fired_row(id, hook, ctx);
+        });
+        model.read(&app, |queue, _| {
+            assert_eq!(
+                queue.provenance_for(id, hook),
+                PromptProvenance::User,
+                "a row that is gone reads as a person's"
+            );
+        });
     });
 }
 

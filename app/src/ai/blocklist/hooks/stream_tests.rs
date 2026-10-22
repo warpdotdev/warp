@@ -1,14 +1,20 @@
+use std::sync::Arc;
+
 use ai::hooks::test_util::{test_binding, test_source_id};
 use ai::hooks::{HookBoundary, HookPayload};
 use warp_multi_agent_api::client_action::{
     AddMessagesToTask, AppendToMessageContent, UpdateTaskMessage,
 };
 use warp_multi_agent_api::message::{AgentOutput, AgentReasoning, ToolCall};
+use warp_multi_agent_api::response_event;
 use warpui::App;
 
 use super::*;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, settle};
+use crate::ai::blocklist::hooks::testing::{
+    controller_harness, hook_test_app, root_task_id, settle, stream_init_event, text_message,
+};
 use crate::features::FeatureFlag;
+use crate::server::server_api::AIApiError;
 
 fn stream_id() -> ResponseStreamId {
     ResponseStreamId::new_for_test()
@@ -206,12 +212,91 @@ fn a_conversation_split_attributes_messages_to_the_right_conversation() {
     assert_eq!(completed[0].conversation_id, Some(after));
 }
 
+#[test]
+fn reasoning_completes_once_on_the_first_update_that_carries_a_duration() {
+    let mut state = StreamObserverState::default();
+    let stream = stream_id();
+    let conversation = AIConversationId::new();
+    let completed = state.apply_batch(
+        &stream,
+        conversation,
+        Some(conversation),
+        vec![
+            reasoning("r1", TextUpdate::Set("first ".to_owned()), None),
+            reasoning(
+                "r1",
+                TextUpdate::Append("thought".to_owned()),
+                Some(Duration::from_secs(1)),
+            ),
+            // A later replacement of the same message, as the server sometimes sends, is not
+            // a second completion.
+            reasoning(
+                "r1",
+                TextUpdate::Set("first thought, revised".to_owned()),
+                Some(Duration::from_secs(1)),
+            ),
+            reasoning("r1", TextUpdate::Append(" more".to_owned()), None),
+        ],
+    );
+    assert_eq!(completed_ids(&completed), vec![("r1", "first thought")]);
+    assert!(state.finish(&stream, false).is_empty());
+}
+
 fn message(id: &str, body: Message) -> api::Message {
     api::Message {
         id: id.to_owned(),
         message: Some(body),
         ..Default::default()
     }
+}
+
+#[test]
+fn a_stream_that_errors_still_reports_the_text_it_streamed() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = controller_harness(&mut app);
+        app.update(|ctx| {
+            harness.hooks.install_bindings(
+                vec![test_binding(
+                    test_source_id("s"),
+                    HookBoundary::ResponseComplete,
+                    0,
+                    None,
+                )],
+                ctx,
+            )
+        });
+        let (conversation_id, stream) = harness.mock_stream(&mut app);
+        let task_id = root_task_id(&app, conversation_id);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event(), ctx);
+            stream.emit_response_event_for_test(
+                api::ResponseEvent {
+                    r#type: Some(response_event::Type::ClientActions(
+                        response_event::ClientActions {
+                            actions: vec![api::ClientAction {
+                                action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                                    task_id: task_id.clone(),
+                                    messages: vec![text_message(&task_id, "Half an ans")],
+                                })),
+                            }],
+                        },
+                    )),
+                },
+                ctx,
+            );
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        settle(&mut app, |_| harness.hooks.adapter.encoded_count() == 1).await;
+        let envelope = &harness.hooks.adapter.encoded_envelopes()[0];
+        assert_eq!(envelope.conversation_id, conversation_id);
+        assert!(matches!(
+            &envelope.payload,
+            HookPayload::ResponseComplete { text, .. } if text == "Half an ans"
+        ));
+    });
 }
 
 #[test]

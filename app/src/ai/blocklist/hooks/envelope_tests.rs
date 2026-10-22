@@ -6,7 +6,7 @@ use warpui::App;
 use super::*;
 use crate::ai::agent::CancellationReason;
 use crate::ai::blocklist::hooks::testing::{
-    add_child_conversation, hook_test_app, install_test_hooks, shell_action,
+    add_child_conversation, hook_test_app, install_test_hooks, mock_active_session, shell_action,
 };
 use crate::features::FeatureFlag;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
@@ -141,18 +141,34 @@ fn a_child_conversation_in_a_desktop_process_is_a_local_child() {
 }
 
 #[test]
-fn a_new_conversation_site_builds_without_a_session_or_history_lookup() {
+fn envelopes_carry_the_conversations_turn_id_once_a_turn_started() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
-        let envelope = app.read(|ctx| {
-            let site = EnvelopeSite::for_new_conversation(harness.conversation_id);
+        let action = shell_action("a1", "ls");
+        let before = app.read(|ctx| {
+            let site = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
             envelope_for_session_start(false, &site, ctx)
         });
-        assert_eq!(envelope.boundary(), HookBoundary::SessionStart);
-        assert_eq!(envelope.cwd, None);
-        assert_eq!(envelope.exchange_id, None);
-        assert_eq!(envelope.model_id, None);
+        assert_eq!(before.boundary(), HookBoundary::SessionStart);
+        assert_eq!(before.turn_id, None);
+        assert_eq!(before.exchange_id, None);
+
+        let turn_id = app.update(|ctx| {
+            HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+                runtime.start_turn(harness.conversation_id)
+            })
+        });
+        let (same_conversation, other_conversation) = app.read(|ctx| {
+            let site = EnvelopeSite::new(harness.conversation_id, &harness.active_session);
+            let other = EnvelopeSite::new(AIConversationId::new(), &harness.active_session);
+            (
+                envelope_for_tool_pre(&action, &site, ctx).turn_id,
+                envelope_for_tool_pre(&action, &other, ctx).turn_id,
+            )
+        });
+        assert_eq!(same_conversation, Some(turn_id));
+        assert_eq!(other_conversation, None);
     });
 }
 
@@ -162,12 +178,13 @@ fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
         app.update(install_test_hooks);
+        let active_session = mock_active_session(&mut app);
         let conversation_id = AIConversationId::new();
 
         let before = app.read(|ctx| {
             envelope_for_session_start(
                 true,
-                &EnvelopeSite::for_new_conversation(conversation_id),
+                &EnvelopeSite::new(conversation_id, &active_session),
                 ctx,
             )
         });
@@ -187,7 +204,7 @@ fn run_metadata_reaches_the_envelope_and_marks_the_oz_surface() {
         let after = app.read(|ctx| {
             envelope_for_session_start(
                 true,
-                &EnvelopeSite::for_new_conversation(conversation_id),
+                &EnvelopeSite::new(conversation_id, &active_session),
                 ctx,
             )
         });

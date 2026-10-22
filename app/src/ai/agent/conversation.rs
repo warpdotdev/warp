@@ -2479,12 +2479,14 @@ impl AIConversation {
         Ok(())
     }
 
+    /// Marks the stream's exchanges as finished without updating the conversation status.
+    /// Returns `true` when the exchanges queued no actions, so the turn ended with them.
     pub fn mark_request_completed(
         &mut self,
         stream_id: &ResponseStreamId,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
-    ) -> Result<(), UpdateConversationError> {
+    ) -> Result<bool, UpdateConversationError> {
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
             report_error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
@@ -2525,13 +2527,7 @@ impl AIConversation {
             });
         }
         self.write_updated_conversation_state(ctx);
-
-        if !has_new_actions {
-            // Update conversation-level status to success if the output has no actions.
-            self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
-        }
-
-        Ok(())
+        Ok(!has_new_actions)
     }
 
     pub fn mark_completed_after_successful_split(

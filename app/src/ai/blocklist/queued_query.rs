@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ai::hooks::PromptProvenance;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
@@ -47,6 +48,8 @@ pub enum QueuedQueryOrigin {
     /// Filed as the follow-up prompt of a `/fork-and-compact <prompt>` slash command on the
     /// forked conversation, waiting for the fork's summarize to finish.
     ForkAndCompactSlashCommand,
+    /// Filed by an agent hook that asked for a follow-up when a turn ended.
+    HookFollowUp,
 }
 
 /// Whether a queued row is a local prompt, an attributed shared-session prompt, or a command.
@@ -75,6 +78,9 @@ pub struct QueuedQuery {
     text: String,
     origin: QueuedQueryOrigin,
     kind: QueuedQueryKind,
+    /// Who wrote the prompt. Rows a person filed, here or through a shared session, are the
+    /// person's; a stop hook's follow-up names the hook and the chain it continues.
+    provenance: PromptProvenance,
 }
 
 impl QueuedQuery {
@@ -98,6 +104,21 @@ impl QueuedQuery {
                 prepared_files,
                 base,
             },
+            provenance: PromptProvenance::User,
+        }
+    }
+
+    /// A prompt a stop hook asked for. It carries no attachments and is sent like any other
+    /// queued prompt, behind whatever a person queued before it.
+    pub(crate) fn new_hook_follow_up(text: String, provenance: PromptProvenance) -> Self {
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin: QueuedQueryOrigin::HookFollowUp,
+            kind: QueuedQueryKind::Prompt {
+                attachments: Vec::new(),
+            },
+            provenance,
         }
     }
 
@@ -134,6 +155,7 @@ impl QueuedQuery {
             text,
             origin,
             kind: QueuedQueryKind::Prompt { attachments },
+            provenance: PromptProvenance::User,
         }
     }
 
@@ -144,6 +166,7 @@ impl QueuedQuery {
             text,
             origin,
             kind: QueuedQueryKind::Command,
+            provenance: PromptProvenance::User,
         }
     }
 
@@ -986,6 +1009,19 @@ impl QueuedQueryModel {
             conversation_id,
             query_id,
         });
+    }
+
+    /// Who wrote the queued row `query_id` in `conversation_id`'s queue. A row that is no longer
+    /// queued is a person's.
+    pub(crate) fn provenance_for(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> PromptProvenance {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue.iter().find(|q| q.id == query_id))
+            .map_or(PromptProvenance::User, |row| row.provenance.clone())
     }
 
     /// Returns the attachments captured on the queued row `query_id` within `conversation_id`'s

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::hooks::TurnStopStatus;
+use ai::hooks::PromptProvenance;
 use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
@@ -45,7 +45,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin};
 use super::{BlocklistAIInputModel, ResponseStreamId, hooks};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -65,7 +65,7 @@ use crate::ai::agent_events::AgentMessageEventMetadata;
 use crate::ai::agent_sdk::ClaudeHarness;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
-    AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
+    AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus, DirtyOrchestrationEvent,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
@@ -466,6 +466,19 @@ impl InputQuery {
     }
 }
 
+/// A query [`BlocklistAIController::send_query`] has built and may send once the prompt's hooks
+/// have run.
+struct PreparedQuery {
+    inputs: Vec<AIAgentInput>,
+    task_id: TaskId,
+    conversation_id: AIConversationId,
+    entrypoint_type: EntrypointType,
+    is_queued_prompt: bool,
+    /// Orchestration config updates taken from the document model to ride along; put back if
+    /// the query is not sent.
+    taken_dirty_events: Vec<DirtyOrchestrationEvent>,
+}
+
 impl BlocklistAIController {
     /// Returns the bundled-skill catalog origin for this controller's active session.
     pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
@@ -591,18 +604,13 @@ impl BlocklistAIController {
                     //
                     // If the user does end up following up on the passive diff-originated conversation,
                     // the status will once again be updated to `InProgress`.
-                    let updated_conversation_status = if finished_action_results
+                    if finished_action_results
                         .iter()
                         .all(|result| result.result.is_successful())
                         || treat_as_success
                     {
-                        hooks::turn::notify_turn_stop(
-                            TurnStopStatus::Completed,
-                            *conversation_id,
-                            &me.active_session,
-                            ctx,
-                        );
-                        ConversationStatus::Success
+                        me.hold_or_finalize_turn(*conversation_id, ctx);
+                        me.start_held_turn_stop(*conversation_id, ctx);
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
                         //
@@ -611,16 +619,15 @@ impl BlocklistAIController {
                         // cancelled, error, and success) _and_ we don't automatically send back action
                         // results to the agent, then it'd be worth considering adding a new status
                         // variant.
-                        ConversationStatus::Cancelled
-                    };
-                    history_model.update(ctx, |history_model, ctx| {
-                        history_model.update_conversation_status(
-                            me.terminal_surface_id,
-                            *conversation_id,
-                            updated_conversation_status,
-                            ctx,
-                        );
-                    });
+                        history_model.update(ctx, |history_model, ctx| {
+                            history_model.update_conversation_status(
+                                me.terminal_surface_id,
+                                *conversation_id,
+                                ConversationStatus::Cancelled,
+                                ctx,
+                            );
+                        });
+                    }
                 }
                 // Unlock any pending-LRC row so it isn't left locked if the action
                 // completes without triggering a follow-up request.
@@ -810,7 +817,19 @@ impl BlocklistAIController {
             self.cancel_conversation_progress(active_conversation_id, cancellation_reason, ctx);
         }
 
-        if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
+        // A prompt an agent hook asked for is a message to the model, sent as written: it is not
+        // read for a slash command or a mode prefix, which would let a hook skip the prompt
+        // boundary.
+        let provenance = input_query
+            .queued_query_id
+            .map_or(PromptProvenance::User, |id| {
+                QueuedQueryModel::as_ref(ctx).provenance_for(conversation_id, id)
+            });
+        let is_hook_follow_up = provenance != PromptProvenance::User;
+
+        if !is_hook_follow_up
+            && let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str())
+        {
             // Only fired queued rows carry `queued_query_id`. For those rows, keep slash commands
             // (e.g. queued `/compact`) on the conversation they were queued on; direct slash
             // submissions still re-derive their target from the current UI selection.
@@ -831,11 +850,18 @@ impl BlocklistAIController {
             input_query.input_query,
             InputQueryType::UserSubmittedQueryFromInput { .. }
         );
-        // Hooks see the prompt as the user typed it, including any mode prefix. The copy is only
-        // made when a hook could fire, so the inactive path adds nothing beyond the check.
-        let submitted_prompt =
-            (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx)).then(|| query.clone());
-        let (query, user_query_mode) = extract_user_query_mode(query);
+        // Hooks see the prompt as it was typed, including any mode prefix. The copy is only made
+        // when a hook could fire, so the inactive path adds nothing beyond the check.
+        let submitted_prompt = (is_user_submitted_prompt && hooks::HookRuntime::is_active(ctx))
+            .then(|| hooks::prompt::SubmittedPrompt {
+                text: query.clone(),
+                provenance,
+            });
+        let (query, user_query_mode) = if is_hook_follow_up {
+            (query, UserQueryMode::Normal)
+        } else {
+            extract_user_query_mode(query)
+        };
 
         // Attribute /orchestrate queries to the slash-command entry surface.
         if matches!(user_query_mode, UserQueryMode::Orchestrate) {
@@ -862,18 +888,6 @@ impl BlocklistAIController {
             );
             action_model.drain_finished_action_results(conversation_id)
         });
-
-        // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
-        // turn's `prompt.submit`.
-        if let Some(prompt) = &submitted_prompt {
-            hooks::prompt::notify_prompt_submit(
-                prompt,
-                Vec::new(),
-                conversation_id,
-                &self.active_session,
-                ctx,
-            );
-        }
 
         let context = input_context_for_request(
             false,
@@ -972,6 +986,71 @@ impl BlocklistAIController {
             });
         }
 
+        let prepared = PreparedQuery {
+            inputs,
+            task_id,
+            conversation_id,
+            entrypoint_type,
+            is_queued_prompt,
+            taken_dirty_events,
+        };
+        // After the previous turn's actions are cancelled, so their `tool.failure` precedes this
+        // turn's `prompt.submit`. With no hook to wait for, the request goes out right here.
+        match hooks::prompt::prepare_turn(
+            submitted_prompt,
+            conversation_id,
+            self.terminal_surface_id,
+            &self.active_session,
+            ctx,
+        ) {
+            hooks::prompt::TurnPreparation::Ready => {
+                self.send_prepared_query(prepared, ctx);
+            }
+            hooks::prompt::TurnPreparation::Pending(decision) => {
+                ctx.spawn(decision, move |me, decision, ctx| {
+                    me.conclude_prepared_query(prepared, decision, ctx);
+                });
+            }
+        }
+    }
+
+    /// Sends a query whose wait ended in its favor, or puts back what a query that is not sent
+    /// took. A turn whose finalization was left to this query is finished if the query does not
+    /// go out.
+    fn conclude_prepared_query(
+        &mut self,
+        prepared: PreparedQuery,
+        decision: hooks::prompt::PromptDecision,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let conversation_id = prepared.conversation_id;
+        let outcome = hooks::prompt::finish_turn_preparation(conversation_id, &decision, ctx);
+        let sent = if outcome.send {
+            self.send_prepared_query(prepared, ctx)
+        } else {
+            Self::restore_dirty_events(conversation_id, prepared.taken_dirty_events, ctx);
+            false
+        };
+        if !sent && outcome.owes_earlier_turn {
+            self.settle_turn_after_stop(conversation_id, ctx);
+        }
+    }
+
+    /// The second half of [`Self::send_query`]: sends the inputs it prepared. Returns whether
+    /// the request went out.
+    fn send_prepared_query(
+        &mut self,
+        prepared: PreparedQuery,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let PreparedQuery {
+            inputs,
+            task_id,
+            conversation_id,
+            entrypoint_type,
+            is_queued_prompt,
+            taken_dirty_events,
+        } = prepared;
         let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let send_result = self.send_request_input(
             RequestInput::for_task(
@@ -998,12 +1077,128 @@ impl BlocklistAIController {
         // silently lost.
         if let Err(e) = &send_result {
             report_error!(e);
-            if !taken_dirty_events.is_empty() {
-                AIDocumentModel::handle(ctx).update(ctx, |model, _| {
-                    model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
-                });
-            }
+            Self::restore_dirty_events(conversation_id, taken_dirty_events, ctx);
         }
+        send_result.is_ok()
+    }
+
+    fn restore_dirty_events(
+        conversation_id: AIConversationId,
+        taken_dirty_events: Vec<DirtyOrchestrationEvent>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !taken_dirty_events.is_empty() {
+            AIDocumentModel::handle(ctx).update(ctx, |model, _| {
+                model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
+            });
+        }
+    }
+
+    /// Ends a turn that completed: marks the conversation successful, unless a stop hook applies,
+    /// in which case the status is held until [`Self::start_held_turn_stop`] has run the hooks
+    /// and they have answered.
+    fn hold_or_finalize_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !hooks::turn::hold_turn(conversation_id, &self.active_session, ctx) {
+            self.finalize_turn(conversation_id, ctx);
+        }
+    }
+
+    /// Runs the stop hooks of a turn [`Self::hold_or_finalize_turn`] held, once the turn's own
+    /// stream is out of the way so a follow-up can be sent.
+    fn start_held_turn_stop(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(stop) = hooks::turn::start_turn_stop(conversation_id, ctx) {
+            ctx.spawn(
+                stop,
+                move |me, outcome, ctx| match hooks::turn::resolve_turn_stop(
+                    conversation_id,
+                    outcome,
+                    ctx,
+                ) {
+                    hooks::turn::TurnStopResolution::Dropped => {}
+                    hooks::turn::TurnStopResolution::Finalize => {
+                        me.finalize_held_turn(conversation_id, ctx)
+                    }
+                    hooks::turn::TurnStopResolution::FollowUpQueued => {
+                        me.settle_turn_after_stop(conversation_id, ctx)
+                    }
+                },
+            );
+        }
+    }
+
+    /// Sends whatever is queued for a conversation whose stop hooks have finished, and marks the
+    /// turn successful if nothing took the conversation over. A conversation that is not the one
+    /// this surface is working in keeps its queue for the next drain: sending from here would go
+    /// through the surface's own prompt path and cancel the conversation the person is in.
+    fn settle_turn_after_stop(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.turn_in_flight(conversation_id, ctx) {
+            return;
+        }
+        let is_this_surfaces_conversation = self.native_prompt_conversation_id
+            == Some(conversation_id)
+            || BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation_id(self.terminal_surface_id)
+                == Some(conversation_id);
+        if is_this_surfaces_conversation {
+            self.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
+        }
+        if self.turn_in_flight(conversation_id, ctx) {
+            return;
+        }
+        hooks::turn::warn_if_follow_up_still_queued(conversation_id, ctx);
+        self.finalize_held_turn(conversation_id, ctx);
+    }
+
+    /// Whether a turn is under way in `conversation_id`: a prompt waiting to be sent, a stream
+    /// in flight, or actions still pending or running between a stream's end and the request
+    /// that carries their results.
+    fn turn_in_flight(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
+        hooks::prompt::is_pending(conversation_id, ctx)
+            || self.has_active_stream_for_conversation(conversation_id, ctx)
+            || self
+                .action_model
+                .as_ref(ctx)
+                .has_unfinished_actions_for_conversation(conversation_id)
+    }
+
+    /// Finalizes a turn whose success was held, unless something else settled the conversation's
+    /// status or a turn is under way in the meantime, and lets in orchestration events that
+    /// waited for the status.
+    fn finalize_held_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.status().is_in_progress());
+        if is_in_progress && !self.turn_in_flight(conversation_id, ctx) {
+            self.finalize_turn(conversation_id, ctx);
+            self.handle_pending_events_ready(conversation_id, ctx);
+        }
+    }
+
+    fn finalize_turn(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.update_conversation_status(
+                self.terminal_surface_id,
+                conversation_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
     }
 
     /// Populates plan documents from user query to AIDocumentModel if not already present.
@@ -1888,7 +2083,9 @@ impl BlocklistAIController {
             return None;
         }
         let row = QueuedQueryModel::as_ref(ctx).ready_head(conversation_id)?;
-        if row.is_command() {
+        // A prompt an agent hook asked for starts a turn of its own, through `send_query`, so
+        // it runs the prompt hooks and gets a turn id; it is never folded into a running turn.
+        if row.is_command() || row.origin() == QueuedQueryOrigin::HookFollowUp {
             return None;
         }
         if is_primary_injected_followup {
@@ -3377,6 +3574,14 @@ impl BlocklistAIController {
             model.remove_pending_lrc_rows(conversation_id, ctx);
         });
 
+        // A prompt still waiting on its hooks is given up on. A turn whose success is waiting on
+        // its stop hooks keeps waiting when the status stays in progress; otherwise this
+        // cancellation settles the status below and the hooks' answer no longer matters.
+        hooks::prompt::cancel_pending(conversation_id, ctx);
+        let outcome = reason.conversation_outcome();
+        let dropped_held_turn = !matches!(outcome, CancellationOutcome::KeepInProgress)
+            && hooks::turn::cancel_held_turn(conversation_id, ctx);
+
         if self.cancel_via_external_harness(conversation_id, ctx) {
             return CancellationRoute::ExternalHarness;
         }
@@ -3388,28 +3593,35 @@ impl BlocklistAIController {
             // No active stream whose cancellation would mark the conversation `Cancelled`.
             // A parked auto-resume was aborted above; nothing else will move the
             // conversation out of TransientError, so surface the cancellation directly.
+            // Likewise for a turn whose success was being held for its stop hooks.
             //
             // TODO(REMOTE-1950): Track the parked auto-resume as a first-class cancelable so its
             // cancellation flows through the same `AfterStreamFinished` path, dropping this special case.
-            if matches!(
-                reason.conversation_outcome(),
-                CancellationOutcome::Cancelled
-            ) {
-                let history_model = BlocklistAIHistoryModel::handle(ctx);
-                let is_recovering = history_model
-                    .as_ref(ctx)
-                    .conversation(&conversation_id)
-                    .is_some_and(|conversation| conversation.status().is_transient_error());
-                if is_recovering {
-                    history_model.update(ctx, |history_model, ctx| {
-                        history_model.update_conversation_status(
-                            self.terminal_surface_id,
-                            conversation_id,
-                            ConversationStatus::Cancelled,
-                            ctx,
-                        );
-                    });
+            let history_model = BlocklistAIHistoryModel::handle(ctx);
+            let settled_status = match outcome {
+                CancellationOutcome::Cancelled => {
+                    let is_recovering = history_model
+                        .as_ref(ctx)
+                        .conversation(&conversation_id)
+                        .is_some_and(|conversation| conversation.status().is_transient_error());
+                    (is_recovering || dropped_held_turn).then_some(ConversationStatus::Cancelled)
                 }
+                CancellationOutcome::Succeeded => {
+                    dropped_held_turn.then_some(ConversationStatus::Success)
+                }
+                CancellationOutcome::KeepInProgress | CancellationOutcome::FinalizedExternally => {
+                    None
+                }
+            };
+            if let Some(status) = settled_status {
+                history_model.update(ctx, |history_model, ctx| {
+                    history_model.update_conversation_status(
+                        self.terminal_surface_id,
+                        conversation_id,
+                        status,
+                        ctx,
+                    );
+                });
             }
 
             // Otherwise, cancel pending actions and update the input state.
@@ -3877,20 +4089,6 @@ impl BlocklistAIController {
                         actions_to_queue.extend(output.get().actions().cloned());
                     }
                 }
-                // A stream that ended cleanly, left the conversation successful, and queued no
-                // actions is the end of the turn.
-                let turn_completed = cancellation.is_none()
-                    && !is_any_exchange_unfinished
-                    && actions_to_queue.is_empty()
-                    && matches!(conversation.status(), ConversationStatus::Success);
-                if turn_completed {
-                    hooks::turn::notify_turn_stop(
-                        TurnStopStatus::Completed,
-                        conversation_id,
-                        &self.active_session,
-                        ctx,
-                    );
-                }
 
                 if let Some(stream_cancellation) = &cancellation {
                     // If this is a shared session, send a synthetic StreamFinished event to notify viewers
@@ -3959,6 +4157,9 @@ impl BlocklistAIController {
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
                     self.handle_pending_events_ready(conversation_id, ctx);
+                    // And run the stop hooks of a turn this stream ended, which may send a
+                    // follow-up now that nothing is in flight for the conversation.
+                    self.start_held_turn_stop(conversation_id, ctx);
                 }
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
@@ -4078,14 +4279,17 @@ impl BlocklistAIController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         match finished_event.reason {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
-                history_model.update(ctx, |history_model, ctx| {
+                let turn_ended = history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_successfully(
                         stream_id,
                         conversation_id,
                         self.terminal_surface_id,
                         ctx,
-                    );
+                    )
                 });
+                if turn_ended {
+                    self.hold_or_finalize_turn(conversation_id, ctx);
+                }
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)) => {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
