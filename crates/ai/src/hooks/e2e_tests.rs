@@ -621,7 +621,11 @@ dd if=/dev/zero bs=1024 count=2048 2>/dev/null | tr '\000' ' '"#,
 }
 
 /// Waits for `registry` to publish a snapshot past generation `from`.
-async fn generation_moves_past(app: &mut App, registry: &ModelHandle<HookRegistry>, from: u64) -> u64 {
+async fn generation_moves_past(
+    app: &mut App,
+    registry: &ModelHandle<HookRegistry>,
+    from: u64,
+) -> u64 {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let generation = registry.read(app, |registry, _| registry.generation());
