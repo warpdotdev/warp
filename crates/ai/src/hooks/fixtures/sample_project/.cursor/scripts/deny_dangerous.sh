@@ -11,7 +11,7 @@ printf '%s\n' "$input" > "$project_dir/.hook-last-shell-input.json"
 
 # Any JSON string character: anything but a quote or a backslash, or a backslash escape.
 char='([^"\\]|\\.)'
-in_command='"command":"'"$char"'*'
+in_command='"command":[[:space:]]*"'"$char"'*'
 rm_rf='rm[[:space:]]+-(rf|fr)'
 force_push='git[[:space:]]+push'"$char"'*--force'
 

@@ -19,6 +19,9 @@ every command is written relative to the project root, as Cursor's project hooks
 | `stop` | `true` | Asks for no follow-up. |
 
 Every file the scripts write lands in `$WARP_PROJECT_DIR`, which Warp sets to the project root.
+The scripts expect one JSON object on one line on stdin, which is what Warp sends; they match
+fields with `grep` and `sed`, so they tolerate spaces after a colon but not a pretty-printed
+object spread over several lines.
 
 ### Trying it by hand
 
