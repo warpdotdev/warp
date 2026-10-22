@@ -21,7 +21,7 @@ pub mod watcher;
 pub use adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
-pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
+pub use dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CanonicalToolName, CapabilityWarning, ContinuationRequest,
     DiagnosticSeverity, ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy,
@@ -34,8 +34,9 @@ pub use model::{
 };
 pub use notices::{HookMessenger, HookNotice, HookNoticeKind, LogOnlyMessenger};
 pub use permission::{
-    DEFAULT_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision, PermissionFloors,
-    REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
+    APPROVAL_UNAVAILABLE_PREFIX, DEFAULT_ASK_REASON, DEFAULT_DENY_REASON,
+    DEFERRAL_UNSUPPORTED_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision,
+    PermissionFloors, REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
 };
 pub use registry::{
     ActiveBinding, BindingScope, HookRegistry, HookRegistryEvent, PinnedRun, RegistrySnapshot,

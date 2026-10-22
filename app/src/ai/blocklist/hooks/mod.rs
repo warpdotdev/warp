@@ -3,11 +3,13 @@
 //! at that moment. Every entry point returns early when hooks are off or nothing is configured,
 //! so the inactive path adds no work beyond that check.
 
+pub(crate) mod denied_result;
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
 pub(crate) mod prompt;
 pub(crate) mod session;
 pub(crate) mod stream;
+pub(crate) mod strict_policy;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
@@ -19,8 +21,8 @@ use std::sync::atomic::AtomicBool;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    CommandExecutionPosture, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner,
-    HookSurface, RegistrySnapshot, RunMetadata,
+    CommandExecutionPosture, DispatchPolicy, HookDispatcher, HookEnvelope, HookMessenger,
+    HookRegistry, HookRunner, HookSurface, RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
@@ -37,6 +39,8 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 
 use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
+use self::strict_policy::StrictHookPolicy;
+use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
@@ -47,6 +51,35 @@ use crate::features::FeatureFlag;
 use crate::terminal::local_shell::LocalShellState;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
+/// What a hook's `ask` does on a surface with no one to ask. Like [`StrictHookPolicy`], it is
+/// run configuration a launcher sets on the runtime; there is no setting for it.
+// Only the run's launcher, which is later work, selects anything but the default.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HeadlessAskBehavior {
+    /// The action is denied with a reason that tells the model approval was unavailable.
+    #[default]
+    DenyWithReason,
+    /// The action is denied the same way, and the runtime also announces the refusal so the
+    /// run's owner can end the run.
+    FailRun,
+}
+
+/// Something the hook runtime did that the owner of the run may want to act on.
+// No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is
+// later work.
+#[allow(dead_code)]
+pub enum HookRuntimeEvent {
+    /// A hook asked for confirmation on a surface with no one to ask, and the run asked to end
+    /// when that happens. The action was already denied with a reason the model can read; the
+    /// run's owner decides whether the run goes on.
+    ApprovalUnavailable {
+        conversation_id: AIConversationId,
+        action_id: AIAgentActionId,
+        reason: String,
+    },
+}
+
 /// Process-wide hook state shared by every conversation and surface. It also wires discovery:
 /// it hands detected repository roots to the hook file watcher and pins the active set when the
 /// run's first request goes out.
@@ -55,6 +88,8 @@ pub struct HookRuntime {
     dispatcher: Arc<HookDispatcher>,
     messenger: Arc<dyn HookMessenger>,
     run_metadata: Option<RunMetadata>,
+    strict_policy: StrictHookPolicy,
+    headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
     #[cfg(feature = "local_fs")]
@@ -77,6 +112,8 @@ impl HookRuntime {
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
             messenger,
             run_metadata: None,
+            strict_policy: StrictHookPolicy::default(),
+            headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
             #[cfg(feature = "local_fs")]
@@ -148,6 +185,21 @@ impl HookRuntime {
     /// The surface this process fires boundaries from.
     fn surface(&self, ctx: &AppContext) -> HookSurface {
         envelope::surface(self.run_metadata.is_some(), ctx)
+    }
+
+    /// Whether nobody can answer a confirmation request for `conversation_id`: the process is a
+    /// run, or the conversation is a hidden local child.
+    pub fn is_headless_for(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
+        envelope::surface_for_conversation(conversation_id, self.run_metadata.is_some(), ctx)
+            .is_headless()
+    }
+
+    pub fn strict_policy(&self) -> StrictHookPolicy {
+        self.strict_policy
+    }
+
+    pub fn headless_ask_behavior(&self) -> HeadlessAskBehavior {
+        self.headless_ask_behavior
     }
 
     /// Whether hooks are on and this process is one that runs an agent. The remote server daemon
@@ -271,13 +323,25 @@ impl HookRuntime {
         });
     }
 
-    // No production caller yet: later work installs a surface-specific messenger and run metadata
-    // through these setters.
+    // No production caller yet: later work installs a surface-specific messenger, run metadata,
+    // and the run's hook policies through these setters.
 
     /// Records the run this process belongs to. Envelopes built afterwards carry it.
     #[allow(dead_code)]
     pub fn set_run_metadata(&mut self, run_metadata: Option<RunMetadata>) {
         self.run_metadata = run_metadata;
+    }
+
+    /// Turns the strict hook policy on or off for every dispatch from now on.
+    #[allow(dead_code)]
+    pub fn set_strict_policy(&mut self, policy: StrictHookPolicy) {
+        self.strict_policy = policy;
+    }
+
+    /// Chooses what a hook's `ask` does on a surface with no one to ask.
+    #[allow(dead_code)]
+    pub fn set_headless_ask_behavior(&mut self, behavior: HeadlessAskBehavior) {
+        self.headless_ask_behavior = behavior;
     }
 
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
@@ -290,11 +354,17 @@ impl HookRuntime {
         self.messenger = messenger;
     }
 
+    /// The run-wide choices every dispatch is made under.
+    pub(crate) fn dispatch_policy(&self) -> DispatchPolicy {
+        self.strict_policy.dispatch_policy()
+    }
+
     /// Starts a dispatch on the background executor and detaches its future.
     pub(crate) fn dispatch_detached(&self, envelope: HookEnvelope, ctx: &AppContext) {
         let future = self.dispatcher.dispatch(
             envelope,
             self.snapshot(ctx),
+            self.dispatch_policy(),
             Arc::new(AtomicBool::new(false)),
         );
         ctx.background_executor()
@@ -306,7 +376,7 @@ impl HookRuntime {
 }
 
 impl Entity for HookRuntime {
-    type Event = ();
+    type Event = HookRuntimeEvent;
 }
 
 impl SingletonEntity for HookRuntime {}
@@ -391,11 +461,14 @@ fn driver_check(
 
 #[cfg(test)]
 pub(crate) mod testing {
+    use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
 
     use ai::hooks::test_util::{RecordingAdapter, RecordingMessenger, ScriptedRunner};
-    use ai::hooks::{ActiveBinding, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner};
+    use ai::hooks::{
+        ActiveBinding, BindingScope, DeclaredBinding, HookDiagnostic, HookRegistry, HookRunner,
+    };
     use async_channel::unbounded;
     use parking_lot::FairMutex;
     use warpui::r#async::Timer;
@@ -409,10 +482,12 @@ pub(crate) mod testing {
         BlocklistAIActionModel, BlocklistAIHistoryModel, RecordingController,
     };
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+    use crate::terminal::event::BlockMetadataReceivedEvent;
+    use crate::terminal::model::block::BlockMetadata;
     use crate::terminal::model::session::Sessions;
     use crate::terminal::model::session::active_session::ActiveSession;
-    use crate::terminal::model::terminal_model::TerminalModel;
-    use crate::terminal::model_events::ModelEventDispatcher;
+    use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
+    use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
     use crate::test_util::terminal::initialize_app_for_terminal_view;
     use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -448,6 +523,21 @@ pub(crate) mod testing {
             conversation_id,
             terminal_view_id,
         }
+    }
+
+    /// Moves the harness's session to `cwd`, the way a shell's prompt would report it.
+    pub(crate) fn set_working_directory(app: &mut App, harness: &HookTestApp, cwd: &Path) {
+        let cwd = cwd.display().to_string();
+        harness.dispatcher.update(app, |_, ctx| {
+            ctx.emit(ModelEvent::BlockMetadataReceived(
+                BlockMetadataReceivedEvent {
+                    block_metadata: BlockMetadata::new(None, Some(cwd)),
+                    block_index: BlockIndex::zero(),
+                    is_after_in_band_command: false,
+                    is_done_bootstrapping: true,
+                },
+            ));
+        });
     }
 
     /// Adds a second native conversation that a parent conversation spawned, so a test can see
@@ -556,24 +646,42 @@ pub(crate) mod testing {
     }
 
     impl TestHooks {
-        /// Replaces the active snapshot with `bindings`, all using this adapter.
+        /// Replaces the active snapshot with `bindings`, all using this adapter and applying
+        /// everywhere.
         pub(crate) fn install_bindings(
             &self,
             bindings: Vec<DeclaredBinding>,
             ctx: &mut AppContext,
         ) {
+            self.install_scoped_bindings(
+                bindings
+                    .into_iter()
+                    .map(|binding| (binding, BindingScope::Everywhere))
+                    .collect(),
+                ctx,
+            );
+        }
+
+        /// Replaces the active snapshot with `bindings`, each applying within its own scope. A
+        /// root a binding is scoped to is also made a project the registry knows.
+        pub(crate) fn install_scoped_bindings(
+            &self,
+            bindings: Vec<(DeclaredBinding, BindingScope)>,
+            ctx: &mut AppContext,
+        ) {
             let adapter: Arc<dyn ai::hooks::HookFormatAdapter> = self.adapter.clone();
             let active = bindings
                 .into_iter()
-                .map(|binding| {
-                    ai::hooks::test_util::active_binding(
-                        binding,
-                        adapter.clone(),
-                        ai::hooks::BindingScope::Everywhere,
-                    )
+                .map(|(binding, scope)| {
+                    ai::hooks::test_util::active_binding(binding, adapter.clone(), scope)
                 })
                 .collect::<Vec<ActiveBinding>>();
             HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                for binding in &active {
+                    if let BindingScope::Root(root) = &binding.scope {
+                        registry.add_project_root(root);
+                    }
+                }
                 registry.install_snapshot_for_test(active, Vec::<HookDiagnostic>::new());
             });
         }

@@ -1,3 +1,4 @@
+mod latency_runner;
 mod recording_adapter;
 mod recording_messenger;
 mod scripted_runner;
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ai_types::AIConversationId;
+pub use latency_runner::LatencyRunner;
 pub use recording_adapter::RecordingAdapter;
 pub use recording_messenger::RecordingMessenger;
 pub use scripted_runner::{RunnerHold, ScriptedRunner};

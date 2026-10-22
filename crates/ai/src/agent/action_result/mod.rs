@@ -976,6 +976,7 @@ impl AIAgentActionResultType {
             | Self::FileGlobV2(FileGlobV2Result::Error(_))
             | Self::ReadMCPResource(ReadMCPResourceResult::Error(_))
             | Self::CallMCPTool(CallMCPToolResult::Error(_))
+            | Self::ReadSkill(ReadSkillResult::Error(_))
             | Self::ReadDocuments(ReadDocumentsResult::Error(_))
             | Self::EditDocuments(EditDocumentsResult::Error(_))
             | Self::CreateDocuments(CreateDocumentsResult::Error(_))
