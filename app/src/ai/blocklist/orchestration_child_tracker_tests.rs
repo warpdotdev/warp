@@ -2,9 +2,8 @@
 //!
 //! Each case drives `observe_child` inside a real
 //! `ModelContext<OrchestrationEventStreamer>` so the pill-bar broadcasts have
-//! somewhere to land, then asserts on the tracker's own bookkeeping. Metadata
-//! fetches are counted rather than issued, so no history or network plumbing
-//! is required.
+//! somewhere to land, then asserts on bookkeeping and production history projection. Metadata
+//! fetches are counted rather than issued, so no network plumbing is required.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,6 +20,146 @@ use crate::server::server_api::ai::{AIClient, MockAIClient};
 const PARENT_RUN_ID: &str = "11111111-1111-1111-1111-111111111111";
 const CHILD_A_RUN_ID: &str = "22222222-2222-2222-2222-222222222222";
 const SESSION_A: &str = "44444444-4444-4444-4444-444444444444";
+#[test]
+fn replayed_lifecycle_preserves_local_child_failure_and_updates_passive_sibling() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::ai::agent::RenderableAIError;
+    use crate::ai::agent::conversation::{
+        AIConversation, AIConversationId, LocalChildRestorationStatus,
+    };
+    use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let streamer = OrchestrationEventStreamer::handle(&app);
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let surface = warpui::EntityId::new();
+        let parent = AIConversation::new(false, false);
+        let parent_id = parent.id();
+        let child_id = AIConversationId::new();
+        let mut child = AIConversation::new_local_child_for_restoration(child_id);
+        child.set_task_id(child_task_id());
+        child.set_parent_conversation_id(parent_id);
+        let sibling_run = "33333333-3333-3333-3333-333333333333";
+        let sibling_id = history.update(&mut app, |history, ctx| {
+            history.restore_conversations(surface, vec![parent, child], ctx);
+            let child = history.conversation_mut(&child_id).unwrap();
+            child.set_local_child_restoration_status(LocalChildRestorationStatus::Error);
+            child.update_status_with_error(
+                ConversationStatus::Error,
+                Some(RenderableAIError::other(
+                    "child run: transcript conversion failed",
+                    false,
+                )),
+                surface,
+                ctx,
+            );
+            history.ensure_remote_child_conversation(
+                surface,
+                parent_id,
+                sibling_run.into(),
+                task_id(sibling_run),
+                "remote sibling".into(),
+                String::new(),
+                None,
+                ctx,
+            )
+        });
+        let broadcasts = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let broadcasts = broadcasts.clone();
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ChildStatusChanged {
+                    run_id, status, ..
+                } = event
+                {
+                    broadcasts
+                        .borrow_mut()
+                        .push((run_id.clone(), status.clone()));
+                }
+            });
+        });
+        streamer.update(&mut app, |_, ctx| {
+            let mut tracker = OrchestrationChildTracker::new(task_id(PARENT_RUN_ID));
+            tracker.observe_child(CHILD_A_RUN_ID, ChildSignal::Started, &no_killed_runs(), ctx);
+            tracker.observe_child(sibling_run, ChildSignal::Started, &no_killed_runs(), ctx);
+            tracker.observe_child(
+                CHILD_A_RUN_ID,
+                ChildSignal::Lifecycle(api::LifecycleEventType::Succeeded),
+                &no_killed_runs(),
+                ctx,
+            );
+            tracker.observe_child(
+                sibling_run,
+                ChildSignal::Lifecycle(api::LifecycleEventType::Succeeded),
+                &no_killed_runs(),
+                ctx,
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(
+                history.conversation(&child_id).unwrap().status(),
+                &ConversationStatus::Error
+            );
+            assert_eq!(
+                history
+                    .conversation(&child_id)
+                    .unwrap()
+                    .status_error_message()
+                    .as_deref(),
+                Some("child run: transcript conversion failed")
+            );
+            assert_eq!(
+                history.conversation(&sibling_id).unwrap().status(),
+                &ConversationStatus::Success
+            );
+
+            tracker.observe_child(
+                CHILD_A_RUN_ID,
+                ChildSignal::Lifecycle(api::LifecycleEventType::Errored),
+                &no_killed_runs(),
+                ctx,
+            );
+            tracker.observe_child(
+                sibling_run,
+                ChildSignal::Lifecycle(api::LifecycleEventType::Errored),
+                &no_killed_runs(),
+                ctx,
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let child = history.conversation(&child_id).unwrap();
+            assert_eq!(child.status(), &ConversationStatus::Error);
+            assert_eq!(
+                child.status_error_message().as_deref(),
+                Some("child run: transcript conversion failed")
+            );
+            assert_eq!(
+                child.local_child_restoration_status(),
+                Some(LocalChildRestorationStatus::Error)
+            );
+            assert!(!child.is_local_child_execution_ready());
+            assert_eq!(
+                history.conversation(&sibling_id).unwrap().status(),
+                &ConversationStatus::Error
+            );
+            assert_eq!(tracker.children.len(), 2);
+            assert_eq!(
+                tracker.child_conversation_status_from_lifecycle(CHILD_A_RUN_ID),
+                Some(ConversationStatus::Error)
+            );
+        });
+        assert_eq!(
+            *broadcasts.borrow(),
+            vec![
+                (CHILD_A_RUN_ID.into(), ConversationStatus::Success),
+                (sibling_run.into(), ConversationStatus::Success),
+                (CHILD_A_RUN_ID.into(), ConversationStatus::Error),
+                (sibling_run.into(), ConversationStatus::Error),
+            ]
+        );
+    });
+}
 
 fn task_id(s: &str) -> AmbientAgentTaskId {
     s.parse().expect("hardcoded task id parses")

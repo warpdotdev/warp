@@ -1956,6 +1956,63 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
 }
 
 #[test]
+fn restored_local_child_driver_status_isolation() {
+    use crate::ai::agent::conversation::AIConversation;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (parent_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal.id(), &controller);
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal.clone(), ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.run_conversation_id = Some(parent_id);
+            driver.skip_initial_turn = true;
+            driver.idle_on_complete = None;
+            driver
+        });
+        let mut completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        let child_id = AIConversationId::new();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.restore_conversations(
+                warpui::EntityId::new(),
+                vec![AIConversation::new_local_child_for_restoration(child_id)],
+                ctx,
+            );
+            history
+                .conversation_mut(&child_id)
+                .unwrap()
+                .update_status_with_error(
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::other("child setup failed", false)),
+                    terminal.id(),
+                    ctx,
+                );
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(parent_id),
+                "child status committed the parent exit"
+            );
+        });
+        assert!(completion.try_recv().unwrap().is_none());
+        complete_mock_stream_successfully(&mut app, &stream);
+        assert_eventually!(
+            OrchestrationEventService::handle(&app).read(&app, |service, _| service
+                .is_conversation_exiting(parent_id)),
+            "bound parent status did not commit exit"
+        );
+    });
+}
+#[test]
 fn prepared_native_followup_starts_before_the_last_queued_row_allows_exit() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

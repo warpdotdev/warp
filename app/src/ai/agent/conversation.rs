@@ -440,10 +440,23 @@ pub struct AIConversation {
     /// only matters for the live process that bootstrapped the conversation, and a restored
     /// conversation resumes ordinary synchronization.
     task_sync_mode: TaskSyncMode,
+    local_child_restoration_status: Option<LocalChildRestorationStatus>,
+    local_subtree_startup_pending: bool,
 
     /// Whether the user chose Warp-funded inference for this conversation after a ChatGPT
     /// token-sharing failure. Sticky for the rest of the conversation and inherited by forks.
     use_warp_credits_instead_of_chatgpt: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalChildRestorationStatus {
+    /// Waits for a message or pane open; history is not fetched in the background.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Pending,
+    Restoring,
+    /// History is installed; local-subtree startup may still block execution.
+    Restored,
+    Error,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -508,6 +521,8 @@ impl AIConversation {
             pinned: false,
             remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
+            local_child_restoration_status: None,
+            local_subtree_startup_pending: false,
             use_warp_credits_instead_of_chatgpt: false,
         }
     }
@@ -767,12 +782,51 @@ impl AIConversation {
             pinned,
             remote_run_updated_at: None,
             task_sync_mode: TaskSyncMode::default(),
+            local_child_restoration_status: None,
             use_warp_credits_instead_of_chatgpt,
+            local_subtree_startup_pending: false,
         })
     }
 
     pub fn id(&self) -> AIConversationId {
         self.id
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn new_local_child_for_restoration(id: AIConversationId) -> Self {
+        let mut conversation = Self::new(false, false);
+        conversation.id = id;
+        conversation.status = ConversationStatus::Success;
+        conversation.local_child_restoration_status = Some(LocalChildRestorationStatus::Pending);
+        conversation.local_subtree_startup_pending = true;
+        conversation
+    }
+
+    pub(crate) fn local_child_restoration_status(&self) -> Option<LocalChildRestorationStatus> {
+        self.local_child_restoration_status
+    }
+
+    pub(crate) fn set_local_child_restoration_status(
+        &mut self,
+        state: LocalChildRestorationStatus,
+    ) {
+        self.local_child_restoration_status = Some(state);
+    }
+
+    pub(crate) fn is_local_child_execution_ready(&self) -> bool {
+        !self.local_subtree_startup_pending
+            && self
+                .local_child_restoration_status
+                .is_none_or(|state| state == LocalChildRestorationStatus::Restored)
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn release_local_subtree_startup(&mut self) {
+        self.local_subtree_startup_pending = false;
+    }
+
+    pub(crate) fn preserve_local_subtree_startup(&mut self, current: &Self) {
+        self.local_subtree_startup_pending = current.local_subtree_startup_pending;
     }
 
     /// Assigns fresh exchange IDs to all exchanges in this conversation.

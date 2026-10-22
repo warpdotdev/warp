@@ -720,6 +720,7 @@ impl BlocklistAIController {
             } => {
                 me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
             }
+            OrchestrationEventStreamerEvent::LocalChildHistoryPrepared { .. } => {}
             // Viewer-mode events are handled by `OrchestrationViewerModel`.
             OrchestrationEventStreamerEvent::ChildSpawned { .. }
             | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
@@ -2236,7 +2237,7 @@ impl BlocklistAIController {
         let is_ready_status = matches!(
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
-        );
+        ) && conversation.is_local_child_execution_ready();
         // Injection is a native MAA request against the conversation's root task. When another
         // driver authors the turns (e.g. an ACP harness whose client-side mapper owns the task
         // tree), the server has no task to attach the events to and fails the run instead;
@@ -3007,6 +3008,11 @@ impl BlocklistAIController {
             };
 
             let active_tasks = conversation.compute_active_tasks();
+
+            anyhow::ensure!(
+                conversation.is_local_child_execution_ready(),
+                "Restored child startup or transcript is not ready"
+            );
 
             (
                 conversation.id(),
