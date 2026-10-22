@@ -11,7 +11,7 @@ use fuzzy_match::FuzzyMatchResult;
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use session_sharing_protocol::common::Role;
+use session_sharing_protocol::common::{ParticipantId, Role};
 use smol_str::SmolStr;
 use unindent::Unindent;
 #[cfg(feature = "voice_input")]
@@ -50,8 +50,8 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::changelog_model::ChangelogModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::context_chips::prompt::Prompt;
@@ -101,7 +101,9 @@ use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
 use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
+use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::Event as TerminalViewEvent;
@@ -142,6 +144,227 @@ fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
         apply_mode: ShellWidgetApplyMode::Splice,
         cursor_offset: Some(ByteOffset::from(5)),
     }
+}
+
+fn subscribe_to_execute_command_events(
+    app: &mut App,
+    terminal: &warpui::ViewHandle<TerminalView>,
+) -> Rc<RefCell<Vec<(String, CommandExecutionSource)>>> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let events_for_subscription = events.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
+            let TerminalViewEvent::ExecuteCommand(event) = event else {
+                return;
+            };
+            events_for_subscription
+                .borrow_mut()
+                .push((event.command.clone(), event.source.clone()));
+        });
+    });
+    events
+}
+
+#[test]
+fn unshared_terminal_executes_command_locally() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo local", ctx)
+        }));
+        assert_eventually!(
+            600 => events.borrow().len() == 1,
+            "a local command should reach the terminal surface"
+        );
+        let events = events.borrow();
+        assert_eq!(events[0].0, "echo local");
+        assert!(matches!(&events[0].1, CommandExecutionSource::User));
+    });
+}
+
+#[test]
+fn share_pending_creator_executes_setup_command_locally() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePending);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.read(&app, |input, _| {
+            assert!(input.shared_session_presence_manager.is_none());
+        });
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo setup", ctx)
+        }));
+        assert_eventually!(
+            600 => events.borrow().len() == 1,
+            "a pending sharer's setup command should reach the terminal surface"
+        );
+        let events = events.borrow();
+        assert_eq!(events[0].0, "echo setup");
+        assert!(matches!(&events[0].1, CommandExecutionSource::User));
+    });
+}
+
+#[test]
+fn prebootstrap_share_status_uses_local_path_when_shell_is_ready() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().set_shared_session_status(
+                SharedSessionStatus::SharePendingPreBootstrap {
+                    source: SharedSessionSource::ambient_agent(None),
+                },
+            );
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo setup", ctx)
+        }));
+        assert_eventually!(
+            600 => events.borrow().len() == 1,
+            "a pre-bootstrap share status should use the local path after shell bootstrap"
+        );
+        let events = events.borrow();
+        assert_eq!(events[0].0, "echo setup");
+        assert!(matches!(&events[0].1, CommandExecutionSource::User));
+    });
+}
+
+#[test]
+fn share_pending_queued_command_uses_queued_source() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePending);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(input.update(&mut app, |input, ctx| {
+            input.try_execute_command_with_options("echo queued", true, ctx)
+        }));
+        assert_eventually!(
+            600 => events.borrow().len() == 1,
+            "a queued setup command should reach the terminal surface"
+        );
+        let events = events.borrow();
+        assert_eq!(events[0].0, "echo queued");
+        assert!(matches!(
+            &events[0].1,
+            CommandExecutionSource::QueuedCommand
+        ));
+        assert!(events[0].1.should_preserve_input());
+    });
+}
+
+#[test]
+fn active_sharer_keeps_participant_attribution() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let active_sharer_terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let sharer_id = ParticipantId::new();
+        let firebase_uid = UserUid::new("mock_firebase_uid");
+        let sharer_id_for_manager = sharer_id.clone();
+        let presence_manager = app.add_model(move |_| {
+            PresenceManager::new_for_sharer(sharer_id_for_manager, firebase_uid)
+        });
+        active_sharer_terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+        });
+        let active_sharer_input = active_sharer_terminal.read(&app, |view, _| view.input().clone());
+        active_sharer_input.update(&mut app, |input, _| {
+            input.set_shared_session_presence_manager(presence_manager);
+        });
+
+        let active_sharer_events =
+            subscribe_to_execute_command_events(&mut app, &active_sharer_terminal);
+        assert!(active_sharer_input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo attributed", ctx)
+        }));
+        assert_eventually!(
+            600 => active_sharer_events.borrow().len() == 1,
+            "active sharer command should reach the terminal surface"
+        );
+        let events = active_sharer_events.borrow();
+        assert_eq!(events[0].0, "echo attributed");
+        match &events[0].1 {
+            CommandExecutionSource::SharedSession { participant_id, .. } => {
+                assert_eq!(participant_id, &sharer_id)
+            }
+            _ => panic!("active sharer command should retain its participant source"),
+        }
+    });
+}
+
+#[test]
+fn view_pending_viewer_cannot_execute_commands() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ViewPending);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(!input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo pending viewer", ctx)
+        }));
+        assert!(
+            events.borrow().is_empty(),
+            "a view-pending session must not emit a command intent"
+        );
+    });
+}
+
+#[test]
+fn reader_viewer_cannot_execute_commands() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::reader());
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+
+        assert!(!input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo reader", ctx)
+        }));
+        assert!(
+            events.borrow().is_empty(),
+            "a reader session must not emit a command intent"
+        );
+    });
 }
 
 #[test]
@@ -2647,6 +2870,138 @@ fn seed_in_progress_conversation(
         );
     });
     conversation_id
+}
+
+#[test]
+fn local_steering_captures_attachments_without_changing_full_response_queueing() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let _steering = FeatureFlag::AgentPromptSteering.override_enabled(true);
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let id = seed_in_progress_conversation(&mut app, &terminal);
+        select_conversation(&mut app, &terminal, id);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .default_prompt_submission_mode
+                .set_value(PromptSubmissionMode::Steer, ctx)
+                .unwrap();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(false, ctx);
+            input.execute_slash_command(
+                &commands::QUEUE,
+                Some(&"write tests".to_owned()),
+                SlashCommandTrigger::input(),
+                false,
+                None,
+                None,
+                ctx,
+            );
+            input.ai_context_model.update(ctx, |context, ctx| {
+                context.append_pending_attachments(
+                    vec![PendingAttachment::Image(ImageContext {
+                        data: "image".into(),
+                        mime_type: "image/png".into(),
+                        file_name: "diagram.png".into(),
+                        is_figma: false,
+                    })],
+                    ctx,
+                );
+            });
+            input.replace_buffer_content("do not modify X", ctx);
+            input.input_enter(ctx);
+            assert!(input.buffer_text(ctx).is_empty());
+            assert!(
+                input
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .is_empty()
+            );
+            let queue = QueuedQueryModel::as_ref(ctx).queue(id);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::QueueSlashCommand);
+            assert_eq!(queue[1].origin(), QueuedQueryOrigin::LocalSteering);
+            assert_eq!(queue[1].attachments().len(), 1);
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&id)
+                    .unwrap()
+                    .status(),
+                &ConversationStatus::InProgress
+            );
+            // The auto-queue chip overrides Steer for this conversation.
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.toggle_queue_next_prompt(id, ctx);
+            });
+            input.replace_buffer_content("queued instead", ctx);
+            input.input_enter(ctx);
+            let queue = QueuedQueryModel::as_ref(ctx).queue(id);
+            assert_eq!(queue.len(), 3);
+            assert_eq!(queue[2].origin(), QueuedQueryOrigin::AutoQueueToggle);
+        });
+    });
+}
+
+#[test]
+fn local_steering_does_not_capture_interrupt_slash_idle_or_external_prompts() {
+    use crate::ai::agent::conversation_driver::ConversationDriver;
+    App::test((), |mut app| async move {
+        let _queue = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let id = seed_in_progress_conversation(&mut app, &terminal);
+        select_conversation(&mut app, &terminal, id);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(false, ctx);
+            input.replace_buffer_content("prompt", ctx);
+            assert!(!input.maybe_steer_input_for_in_progress_conversation(ctx));
+        });
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .default_prompt_submission_mode
+                .set_value(PromptSubmissionMode::Steer, ctx)
+                .unwrap();
+        });
+        {
+            let _flag_off = FeatureFlag::AgentPromptSteering.override_enabled(false);
+            input.update(&mut app, |input, ctx| {
+                assert!(!input.maybe_steer_input_for_in_progress_conversation(ctx));
+                assert_eq!(input.buffer_text(ctx), "prompt");
+            });
+        }
+        let _steering = FeatureFlag::AgentPromptSteering.override_enabled(true);
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("/compact", ctx);
+            assert!(!input.maybe_steer_input_for_in_progress_conversation(ctx));
+            input.replace_buffer_content("prompt", ctx);
+        });
+        for driver in [
+            ConversationDriver::ExternalHarness,
+            ConversationDriver::SharedSessionViewer,
+        ] {
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+                history.conversation_mut(&id).unwrap().set_driver(driver)
+            });
+            input.update(&mut app, |input, ctx| {
+                assert!(!input.maybe_steer_input_for_in_progress_conversation(ctx))
+            });
+        }
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+            let conversation = history.conversation_mut(&id).unwrap();
+            conversation.set_driver(ConversationDriver::Native);
+            conversation.set_status_for_test(ConversationStatus::Success);
+        });
+        input.update(&mut app, |input, ctx| {
+            assert!(!input.maybe_steer_input_for_in_progress_conversation(ctx));
+            assert_eq!(input.buffer_text(ctx), "prompt");
+        });
+    });
 }
 
 /// Puts the active block into the agent-requested, agent-in-control LRC state.

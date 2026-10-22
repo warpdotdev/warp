@@ -368,9 +368,11 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
         let ai_context = context.clone() & id!(flags::IS_ANY_AI_ENABLED);
         let mode_bindings: Vec<FixedBinding> = PromptSubmissionMode::iter()
+            .filter(PromptSubmissionMode::is_available)
             .map(|mode| {
                 let context_flag = match mode {
                     PromptSubmissionMode::Interrupt => flags::PROMPT_SUBMISSION_INTERRUPT,
+                    PromptSubmissionMode::Steer => flags::PROMPT_SUBMISSION_STEER,
                     PromptSubmissionMode::Queue => flags::PROMPT_SUBMISSION_QUEUE,
                 };
                 FixedBinding::empty(
@@ -385,8 +387,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .collect();
         app.register_fixed_bindings(mode_bindings);
 
-        // The LRC submission mode only applies (and is only shown) when the default
-        // prompt submission mode is Interrupt, so its palette entries are gated on it.
+        // The LRC submission mode does not apply (and is not shown) when the default
+        // prompt submission mode is Queue, so its palette entries are gated on it.
         let lrc_mode_bindings: Vec<FixedBinding> = LongRunningCommandSubmissionMode::iter()
             .map(|mode| {
                 let context_flag = match mode {
@@ -402,9 +404,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     builder(SettingsAction::WarpAgent(
                         WarpAgentPageAction::SetLongRunningCommandSubmissionMode(mode),
                     )),
-                    ai_context.clone()
-                        & id!(flags::PROMPT_SUBMISSION_INTERRUPT)
-                        & !id!(context_flag),
+                    ai_context.clone() & !id!(flags::PROMPT_SUBMISSION_QUEUE) & !id!(context_flag),
                 )
                 .with_group(bindings::BindingGroup::WarpAi.as_str())
             })
@@ -3877,7 +3877,7 @@ impl SettingsWidget for PromptSubmissionModeWidget {
     type View = WarpAgentPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai default prompt submission mode queue interrupt auto-queue long-running long running lrc"
+        "oz agent ai default prompt submission mode queue interrupt steer next turn auto-queue long-running long running lrc"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
@@ -3912,9 +3912,9 @@ impl SettingsWidget for PromptSubmissionModeWidget {
             &view.default_prompt_submission_mode_dropdown,
         ));
 
-        // Only meaningful in Interrupt mode: with Queue selected, prompts already
-        // queue until the end of the full response, so the LRC mode is hidden.
-        if ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt {
+        // With Queue selected, prompts already queue until the end of the full response, so
+        // the LRC mode is hidden.
+        if ai_settings.default_prompt_submission_mode != PromptSubmissionMode::Queue {
             column.add_child(
                 Container::new(render_dropdown_item(
                     appearance,
@@ -4241,6 +4241,7 @@ impl OtherAIWidget {
         ctx: &mut ViewContext<WarpAgentPageView>,
     ) -> ViewHandle<Dropdown<WarpAgentPageAction>> {
         let items: Vec<DropdownItem<WarpAgentPageAction>> = PromptSubmissionMode::iter()
+            .filter(PromptSubmissionMode::is_available)
             .map(|mode| {
                 DropdownItem::new(
                     mode.display_name(),

@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
@@ -188,6 +189,79 @@ where
         let _ = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let model = app.add_singleton_model(QueuedQueryModel::new);
         test(app, model, AIConversationId::new());
+    });
+}
+
+#[test]
+fn mixed_queue_with_long_preview_and_inline_editor_lays_out() {
+    use warpui::elements::ChildView;
+    use warpui::{AppContext, Element, Entity, Presenter, View, WindowInvalidation};
+
+    struct PanelWindow(ViewHandle<QueuedPromptsPanelView>);
+    impl Entity for PanelWindow {
+        type Event = ();
+    }
+    impl TypedActionView for PanelWindow {
+        type Action = ();
+    }
+    impl View for PanelWindow {
+        fn ui_name() -> &'static str {
+            "PanelWindow"
+        }
+        fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+            ChildView::new(&self.0).finish()
+        }
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let id = BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            let id = history.start_new_conversation(terminal.id(), false, false, false, ctx);
+            history.set_active_conversation_id(id, terminal.id(), ctx);
+            id
+        });
+        let edited = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new("long preview ".repeat(100), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+            queue.append(
+                id,
+                QueuedQuery::new("correction".into(), QueuedQueryOrigin::LocalSteering),
+                ctx,
+            )
+        });
+        let panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .unwrap()
+                .clone()
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.enter_edit_mode(id, edited, ctx);
+        });
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test(
+                "long inline editor content ".repeat(40).as_str(),
+                ctx,
+            );
+        });
+        let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |_| PanelWindow(panel));
+        let mut presenter = Presenter::new(window_id);
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            let _scene = presenter.build_scene(vec2f(500., 400.), 1., None, ctx);
+        });
     });
 }
 

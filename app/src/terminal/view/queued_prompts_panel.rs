@@ -65,6 +65,9 @@ const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot sen
 /// Suffix on rows auto-queued during an agent-requested long-running command, which fire
 /// when that command completes rather than at the end of the full response.
 const LRC_AUTO_QUEUE_ROW_SUFFIX: &str = "(queued until the command finishes)";
+/// Suffix on rows filed in `Steer` mode, which fire at the agent's next request boundary rather
+/// than at the end of the full response.
+const LOCAL_STEERING_ROW_SUFFIX: &str = "(next turn)";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -1204,7 +1207,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .finish()
         } else {
             // Single-line preview that truncates by width with a trailing ellipsis.
-            let preview = Text::new(
+            Text::new(
                 preview_text.clone(),
                 appearance.ui_font_family(),
                 queued_input_font_size,
@@ -1213,52 +1216,59 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .with_selectable(false)
             .soft_wrap(false)
             .with_clip(ClipConfig::ellipsis())
-            .finish();
-            // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
-            // rows render their text directly. Rows auto-queued during an agent-requested
-            // long-running command carry an italic suffix explaining when they will fire.
-            if is_command {
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(4.)
-                    .with_child(
-                        Text::new("!", appearance.ui_font_family(), queued_input_font_size)
-                            .with_color(command_prefix_color)
-                            .with_selectable(false)
-                            .finish(),
-                    )
-                    .with_child(Expanded::new(1., preview).finish())
-                    .finish()
-            } else if origin == QueuedQueryOrigin::LrcAutoQueue
-                || origin == QueuedQueryOrigin::PendingLrcAutoQueue
-            {
-                let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
-                let suffix = Text::new(
-                    LRC_AUTO_QUEUE_ROW_SUFFIX.to_owned(),
-                    appearance.ui_font_family(),
-                    queued_input_font_size,
-                )
-                .with_color(suffix_color)
-                .with_style(Properties {
-                    style: Style::Italic,
-                    weight: Weight::Normal,
-                })
-                .with_selectable(false)
-                .soft_wrap(false)
-                .finish();
-                // The preview shrinks to its text (clipping with an ellipsis when long) so the
-                // suffix hugs it, mirroring the model picker's "(selected)" treatment.
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(6.)
-                    .with_child(Shrinkable::new(1., preview).finish())
-                    .with_child(suffix)
-                    .finish()
-            } else {
-                preview
-            }
+            .finish()
         };
 
+        // The inline editor renders bare; only the preview carries the command prefix and the
+        // italic suffix explaining when rows that don't simply fire after the response will go.
+        let prompt_text_or_editor = if is_command && !is_in_edit_mode {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.)
+                .with_child(
+                    Text::new("!", appearance.ui_font_family(), queued_input_font_size)
+                        .with_color(command_prefix_color)
+                        .with_selectable(false)
+                        .finish(),
+                )
+                .with_child(Expanded::new(1., prompt_text_or_editor).finish())
+                .finish()
+        } else {
+            prompt_text_or_editor
+        };
+        let suffix = match origin {
+            QueuedQueryOrigin::LrcAutoQueue | QueuedQueryOrigin::PendingLrcAutoQueue => {
+                Some(LRC_AUTO_QUEUE_ROW_SUFFIX)
+            }
+            QueuedQueryOrigin::LocalSteering => Some(LOCAL_STEERING_ROW_SUFFIX),
+            QueuedQueryOrigin::InitialCloudMode
+            | QueuedQueryOrigin::SharedSessionInjection
+            | QueuedQueryOrigin::QueueSlashCommand
+            | QueuedQueryOrigin::AutoQueueToggle
+            | QueuedQueryOrigin::CompactAndSlashCommand
+            | QueuedQueryOrigin::ForkAndCompactSlashCommand => None,
+        };
+        let prompt_text_or_editor = if let Some(suffix) = suffix.filter(|_| !is_in_edit_mode) {
+            let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.)
+                .with_child(Shrinkable::new(1., prompt_text_or_editor).finish())
+                .with_child(
+                    Text::new(suffix, appearance.ui_font_family(), queued_input_font_size)
+                        .with_color(suffix_color)
+                        .with_style(Properties {
+                            style: Style::Italic,
+                            weight: Weight::Normal,
+                        })
+                        .with_selectable(false)
+                        .soft_wrap(false)
+                        .finish(),
+                )
+                .finish()
+        } else {
+            prompt_text_or_editor
+        };
         let drag_handle: Box<dyn Element> = if !show_drag_handle {
             // Reserve the handle's footprint without drawing it (single-row queue).
             ConstrainedBox::new(Empty::new().finish())

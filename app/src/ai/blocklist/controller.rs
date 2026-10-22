@@ -44,7 +44,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, RequestRow};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -685,7 +685,23 @@ impl BlocklistAIController {
                 | QueuedQueryEvent::EditCancelled {
                     conversation_id, ..
                 } => {
-                    me.maybe_interrupt_command_for_injection(*conversation_id, ctx);
+                    // The queue changed; see whether its next request row needs a nudge.
+                    let next_row =
+                        QueuedQueryModel::as_ref(ctx).next_row_for_request(*conversation_id);
+                    match next_row {
+                        Some(RequestRow::InjectedFollowup(_)) => {
+                            me.maybe_interrupt_command_for_injection(*conversation_id, ctx);
+                        }
+                        Some(RequestRow::LocalSteering(row)) => {
+                            let query_id = row.id();
+                            me.maybe_dispatch_idle_local_steering_row(
+                                *conversation_id,
+                                query_id,
+                                ctx,
+                            );
+                        }
+                        Some(RequestRow::SteeredHead(_)) | None => {}
+                    }
                 }
                 QueuedQueryEvent::EditEntered { .. }
                 | QueuedQueryEvent::Cleared { .. }
@@ -1760,15 +1776,27 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         ctx: &AppContext,
     ) -> bool {
-        let queue = QueuedQueryModel::as_ref(ctx);
-        !queue.is_dispatch_blocked(conversation_id)
-            && queue.ready_head(conversation_id).is_some_and(|row| {
-                row.shared_session_prompt().is_some()
-                    && !row.base_user_query().is_some_and(|base| {
-                        base.is_agent_message_wake()
-                            || base.intended_agent() == Some(AgentType::Cli)
-                    })
-            })
+        matches!(
+            QueuedQueryModel::as_ref(ctx).next_row_for_request(conversation_id),
+            Some(RequestRow::InjectedFollowup(_))
+        )
+    }
+
+    /// A local steering row normally rides along with the turn's next request. When the
+    /// conversation is already idle (e.g. waiting for events) no such request is coming, so
+    /// start one for the row now.
+    fn maybe_dispatch_idle_local_steering_row(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let owns_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+            .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
+            .any(|conversation| conversation.id() == conversation_id);
+        if owns_conversation && self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx) {
+            self.dispatch_queued_warp_agent_prompt(conversation_id, Some(query_id), ctx);
+        }
     }
 
     fn maybe_interrupt_command_for_injection(
@@ -1847,36 +1875,74 @@ impl BlocklistAIController {
         )
     }
 
-    /// Takes one ready injected followup or steering prompt and updates its response attribution.
+    /// Whether `conversation_id` is in a state where a local steering prompt can be appended to
+    /// its current turn. The prompt must land on a turn this client authors, in a conversation
+    /// that is still healthy and whose next request will go to the primary agent: a subagent
+    /// or a summarization request cannot carry a user prompt, and a conversation that is
+    /// exiting, errored, or cancelled has no turn left to steer.
+    fn conversation_accepts_local_steering(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> bool {
+        if OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id) {
+            return false;
+        }
+        let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+        else {
+            return false;
+        };
+        let is_healthy = !matches!(
+            conversation.status(),
+            ConversationStatus::Error
+                | ConversationStatus::TransientError
+                | ConversationStatus::Cancelled
+        );
+        conversation.driver().owns_turn_lifecycle()
+            && !conversation.has_active_subagent()
+            && !conversation.is_summarizing()
+            && is_healthy
+    }
+
+    /// Takes the queued row that should ride along with the request being built (see
+    /// [`QueuedQueryModel::next_row_for_request`]) and updates its response attribution.
+    ///
+    /// `is_turn_continuation` says whether the request continues the current turn for the
+    /// primary agent (a tool-result follow-up or an event injection), which is the only kind
+    /// of request a local steering row may join.
     fn steer_head_prompt_for_request(
         &mut self,
         conversation_id: AIConversationId,
         task_id: &TaskId,
+        is_turn_continuation: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Option<AIAgentInput> {
         self.maybe_interrupt_command_for_injection(conversation_id, ctx);
-        let is_primary_injected_followup =
-            self.has_ready_primary_injected_followup(conversation_id, ctx);
-        if (!QueuedQueryModel::as_ref(ctx).is_steering(conversation_id)
-            && !is_primary_injected_followup)
-            || QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
-        {
-            return None;
-        }
-        let row = QueuedQueryModel::as_ref(ctx).ready_head(conversation_id)?;
-        if row.is_command() {
-            return None;
-        }
-        if is_primary_injected_followup {
-            let model = self.terminal_model.lock();
-            let block = model.block_list().active_block();
-            if block.ai_conversation_id() == Some(conversation_id)
-                && (block.is_executing() || block.is_active_and_long_running())
-            {
-                return None;
+        let request_row = QueuedQueryModel::as_ref(ctx).next_row_for_request(conversation_id)?;
+        let is_primary_injected_followup = match request_row {
+            RequestRow::InjectedFollowup(_) => {
+                // The injection waits for the interrupted command to actually stop.
+                let model = self.terminal_model.lock();
+                let block = model.block_list().active_block();
+                if block.ai_conversation_id() == Some(conversation_id)
+                    && (block.is_executing() || block.is_active_and_long_running())
+                {
+                    return None;
+                }
+                true
             }
-        }
-        let row = row.clone();
+            RequestRow::SteeredHead(_) => false,
+            RequestRow::LocalSteering(_) => {
+                if !is_turn_continuation
+                    || !self.conversation_accepts_local_steering(conversation_id, ctx)
+                {
+                    return None;
+                }
+                false
+            }
+        };
+        let row = request_row.row().clone();
         let query_id = row.id();
         let (participant_id, prompt_attachments) =
             if let Some((participant_id, attachments)) = row.shared_session_prompt() {
@@ -2108,17 +2174,10 @@ impl BlocklistAIController {
         let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .map(|conversation| conversation.get_root_task_id().clone());
-        let steered_input = root_task_id
-            .as_ref()
-            .and_then(|task_id| self.steer_head_prompt_for_request(conversation_id, task_id, ctx));
-        if finished_results.is_empty() && steered_input.is_none() {
-            return;
-        }
-
         // Check whether any result will trigger a server-side subagent (e.g. CLI
         // subagent for LRC), or if one is already active. If so, we must not
-        // piggyback orchestration events because the subagent cannot interpret
-        // them and inserting events breaks tool_use/tool_result ordering.
+        // piggyback orchestration events or steering inputs because the subagent
+        // cannot interpret them and inserting them breaks tool_use/tool_result ordering.
         let will_trigger_server_subagent = finished_results
             .iter()
             .any(|r| r.result.triggers_server_subagent());
@@ -2126,6 +2185,13 @@ impl BlocklistAIController {
             .conversation(&conversation_id)
             .map(|c| (c.has_active_subagent(), c.driver().owns_turn_lifecycle()))
             .unwrap_or((false, true));
+        let is_turn_continuation = !finished_results.is_empty() && !will_trigger_server_subagent;
+        let steered_input = root_task_id.as_ref().and_then(|task_id| {
+            self.steer_head_prompt_for_request(conversation_id, task_id, is_turn_continuation, ctx)
+        });
+        if finished_results.is_empty() && steered_input.is_none() {
+            return;
+        }
 
         let context = input_context_for_request(
             false,
@@ -2470,7 +2536,7 @@ impl BlocklistAIController {
             .conversation(&conversation_id)
             .map(|conversation| conversation.get_root_task_id().clone());
         let steered_input = root_task_id.as_ref().and_then(|root_task_id| {
-            self.steer_head_prompt_for_request(conversation_id, root_task_id, ctx)
+            self.steer_head_prompt_for_request(conversation_id, root_task_id, true, ctx)
         });
         // See the identical comment in `send_follow_up_for_conversation`: a steered input is
         // the only possible source of a `UserQuery` here, so its presence is exactly the signal

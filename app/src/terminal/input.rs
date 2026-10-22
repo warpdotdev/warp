@@ -185,7 +185,7 @@ use crate::ai::blocklist::{
     DRIVE_OBJECT_ATTACHMENT_REGEX, InputConfig, InputType, InputTypeAutoDetectionSource,
     PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
     QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
-    render_ai_agent_mode_icon, render_ai_follow_up_icon,
+    is_prompt_steering_enabled, render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
 use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -276,7 +276,7 @@ use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
     AppEditorSettingsChangedEvent, InputModeSettings, InputSettings, InputSettingsChangedEvent,
-    MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT, PrivacySettings,
+    MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT, PrivacySettings, PromptSubmissionMode,
 };
 use crate::settings_view::{SettingsSection, flags};
 use crate::suggestions::ignored_suggestions_model::{
@@ -7867,7 +7867,8 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let shared_session_status = self.model.lock().shared_session_status().clone();
-        if shared_session_status.is_sharer_or_viewer() {
+        if shared_session_status.is_sharer_or_viewer() && !shared_session_status.is_share_pending()
+        {
             // If this is a viewer who isn't also an executor, they should not
             // be allowed to execute commands.
             if shared_session_status.is_reader() {
@@ -14130,6 +14131,7 @@ impl Input {
             || self.maybe_queue_input_for_in_progress_conversation(ctx)
             || self.maybe_queue_input_during_cloud_setup(ctx)
             || self.maybe_handle_enter_for_slash_command(ctx)
+            || self.maybe_steer_input_for_in_progress_conversation(ctx)
         {
             return;
         } else if matches!(
@@ -14917,6 +14919,72 @@ impl Input {
         QueuedQueryModel::handle(ctx)
             .update(ctx, |model, ctx| model.append(conversation_id, query, ctx));
 
+        true
+    }
+
+    /// Files the current input as a steering row when the selected local conversation is
+    /// mid-turn and `Steer` is in effect for it. Runs after the queue capture, so `Queue`
+    /// (including the auto-queue chip and LRC auto-queue) always takes precedence. Returns
+    /// true when the input was captured.
+    fn maybe_steer_input_for_in_progress_conversation(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !is_prompt_steering_enabled()
+            || !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+            || CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
+            || self.ambient_agent_task_id(ctx).is_some()
+            || !resolve_ai_query_routing(
+                self.terminal_view_id,
+                self.ambient_agent_view_model(),
+                &self.model.lock(),
+                ctx,
+            )
+            .is_local()
+        {
+            return false;
+        }
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return false;
+        };
+        let queue = QueuedQueryModel::as_ref(ctx);
+        if queue.effective_prompt_submission_mode(conversation_id) != PromptSubmissionMode::Steer
+            || queue.is_dispatch_blocked(conversation_id)
+            || queue.has_command_in_flight(conversation_id)
+            || !BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|c| {
+                    c.driver().owns_turn_lifecycle()
+                        && !c.is_empty()
+                        && !c.is_summarizing()
+                        && (c.status().is_in_progress() || c.status().is_blocked())
+                })
+        {
+            return false;
+        }
+        let prompt = self.editor.as_ref(ctx).buffer_text(ctx);
+        if prompt.trim().is_empty() || prompt.trim_start().starts_with('/') {
+            return false;
+        }
+        let attachments = self
+            .ai_context_model
+            .update(ctx, |context, ctx| context.take_pending_attachments(ctx));
+        self.ai_input_model
+            .update(ctx, |model, ctx| model.handle_input_buffer_submitted(ctx));
+        self.emit_input_buffer_submitted_telemetry(ctx);
+        self.editor
+            .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
+        let query = QueuedQuery::new_with_attachments(
+            prompt,
+            QueuedQueryOrigin::LocalSteering,
+            attachments,
+        );
+        QueuedQueryModel::handle(ctx)
+            .update(ctx, |queue, ctx| queue.append(conversation_id, query, ctx));
         true
     }
 
