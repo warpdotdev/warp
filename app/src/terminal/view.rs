@@ -24397,9 +24397,6 @@ impl TerminalView {
 
     /// Returns the CLI agent currently active in this terminal, if any.
     pub fn active_cli_agent(&self, ctx: &AppContext) -> Option<super::CLIAgent> {
-        if !FeatureFlag::HoaCodeReview.is_enabled() {
-            return None;
-        }
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
             .map(|s| s.agent)
