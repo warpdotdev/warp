@@ -770,7 +770,6 @@ impl RepositoryUpdate {
 }
 
 /// An asynchronous task in a watched repository.
-#[derive(Clone)]
 enum Task {
     /// Perform an initial (or re-)scan for the given subscriber on the repository.
     Scan {
@@ -812,7 +811,7 @@ impl Task {
             } => {
                 if let Some(repository) = repository.upgrade(ctx) {
                     repository.update(ctx, |repository, ctx| {
-                        repository.notify_subscriber(subscriber_id, &update, ctx)
+                        repository.notify_subscriber(subscriber_id, update, ctx)
                     })
                 } else {
                     None
