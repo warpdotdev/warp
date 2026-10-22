@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use ai::agent::action::FileEdit;
 use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
@@ -22,6 +23,7 @@ use ai::hooks::{
     HookDiagnostic, HookExecutionHost, HookFormat, HookMessenger, HookNotice, HookNoticeKind,
     HookRegistry, HookSourceKind, PROJECT_CURSOR_HOOKS_PATH, RunMetadata, load_explicit_sources,
 };
+use chrono::Local;
 use instant::Instant;
 use repo_metadata::DirectoryWatcher;
 use repo_metadata::repositories::{
@@ -44,16 +46,26 @@ use watcher::BulkFilesystemWatcherEvent;
 use super::testing::{
     ControllerHarness, HookTestApp, action_model, controller_harness, conversation_status,
     create_task_with_messages, done_event, exchange_count, finish_turn_with_text, hook_test_app,
-    init_project_action, let_background_work_settle, record_statuses, root_task_id,
-    shell_action, shell_tool_call_message, stream_init_event, text_message,
+    init_project_action, let_background_work_settle, record_statuses, root_task_id, shell_action,
+    shell_tool_call_message, stream_init_event, text_message,
 };
 use super::{HookRuntime, RunIdentity, RunSurface};
-use ai::agent::action::FileEdit;
-use chrono::Local;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{AIAgentActionId, AIAgentActionType};
-use crate::ai::blocklist::{RequestInput, ResponseStreamId};
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, CancellationReason,
+};
+use crate::ai::agent_sdk::driver::hooks::{HookRunOptions, write_diagnostic, write_notice};
+use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
+use crate::ai::agent_sdk::driver::{AgentDriver, SDKConversationOutputStatus};
+use crate::ai::blocklist::{
+    BlocklistAIActionModel, BlocklistAIHistoryModel, RequestInput, ResponseStreamId,
+};
+use crate::ai::execution_profiles::ActionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMId;
+use crate::features::FeatureFlag;
+use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::BlockMetadata;
@@ -61,16 +73,6 @@ use crate::terminal::model::session::{SessionId, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
 use crate::terminal::shell::ShellType;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
-use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
-use crate::ai::agent_sdk::driver::hooks::{HookRunOptions, write_diagnostic, write_notice};
-use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
-use crate::ai::agent_sdk::driver::{AgentDriver, SDKConversationOutputStatus};
-use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel};
-use crate::ai::execution_profiles::ActionPermission;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::features::FeatureFlag;
-use crate::settings::AgentModeCommandExecutionPredicate;
 
 const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -476,7 +478,9 @@ fn add_to_denylist(app: &mut App, harness: &HookTestApp, pattern: &str) {
 fn is_denylisted(result: &AIAgentActionResultType) -> bool {
     matches!(
         result,
-        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Denylisted { .. })
+        AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::Denylisted { .. }
+        )
     )
 }
 
@@ -574,7 +578,11 @@ fi"#,
         // From here the profile asks before running commands (the posture was read when the run
         // pinned, so the project hooks stay active). A headless run refuses what Warp would ask
         // about, so only the conversation's auto-approval lets Warp run a command now.
-        set_execute_commands(&mut app, harness.terminal_view_id, ActionPermission::AlwaysAsk);
+        set_execute_commands(
+            &mut app,
+            harness.terminal_view_id,
+            ActionPermission::AlwaysAsk,
+        );
         let asking = new_conversation(&mut app, &harness);
         let build = shell_action("build-asking", "npm run build");
         queue(&mut app, &model, asking, vec![build.clone()]);
@@ -584,11 +592,7 @@ fi"#,
         let auto_approving = new_conversation(&mut app, &harness);
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.toggle_autoexecute_override(
-                    &auto_approving,
-                    harness.terminal_view_id,
-                    ctx,
-                );
+                history.toggle_autoexecute_override(&auto_approving, harness.terminal_view_id, ctx);
             });
         });
         let build = shell_action("build", "npm run build");
