@@ -36,7 +36,13 @@ use crate::safe_info;
 const OLD_EXECUTABLE_PATH: &str = "Contents/MacOS/old";
 
 // Name of the old executable file that was kept around during an autoupdate.
+//
+// TODO: This and relevant code should be deleted after auto-updates have been keeping the whole
+//      old app bundle (see `OLD_BUNDLE_NAME`) for a couple releases.
 const OLD_EXECUTABLE_FILE_NAME: &str = "old";
+
+// Name of the old app bundle that is kept around after an autoupdate until Warp relaunches.
+const OLD_BUNDLE_NAME: &str = "old.app";
 
 // Tmp file name used to check if the user has the correct permissions for autoupdate.
 const PERMISSIONS_TMP_FILE_NAME: &str = "permission_test";
@@ -45,9 +51,12 @@ fn old_executable_file_path() -> PathBuf {
     warp_core::paths::state_dir().join(OLD_EXECUTABLE_FILE_NAME)
 }
 
-/// Removes the old executable dir from the app bundle. This is necessary because after an
-/// autoupdate deleting the running executable causes the pty to not start for a reason we don't
-/// fully understand. This allows to clean up old executables when the app is first launched.
+fn old_bundle_path() -> PathBuf {
+    warp_core::paths::state_dir().join(OLD_BUNDLE_NAME)
+}
+
+/// Removes the previous version of the app that was kept around by an autoupdate so that it could
+/// keep running until relaunch. This is called when the app is first launched.
 pub(super) fn remove_old_executable() -> Result<()> {
     // TODO(vorporeal): This code should be deleted after auto-updates have been
     //      storing the old executable in the user application data directory for
@@ -66,6 +75,14 @@ pub(super) fn remove_old_executable() -> Result<()> {
         && metadata.is_file()
     {
         fs::remove_file(old_executable_file_path)?;
+    }
+
+    log::info!("Removing old app bundle...");
+    let old_bundle_path = old_bundle_path();
+    if let Ok(metadata) = fs::metadata(&old_bundle_path)
+        && metadata.is_dir()
+    {
+        fs::remove_dir_all(old_bundle_path)?;
     }
 
     Ok(())
@@ -397,39 +414,44 @@ async fn apply_update(channel: Channel, version_info: &VersionInfo, update_id: &
     Errno::result(unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_SWAP) })
         .context("Error swapping old and new app bundles")?;
 
-    // Move the current running executable into a temporary directory so we can delete the
-    // rest of the old bundle without removing the running executable (since removing it
-    // causes the `fork` syscall to fail).
-    let executable_temp_file = old_executable_file_path();
-    if async_fs::metadata(executable_temp_file.as_path())
-        .await
-        .is_ok()
-    {
-        // If we performed this process already but didn't relaunch Warp, the old executable will
-        // still be located in the user application data directory.  In that case, leave it there.
-        log::info!("Already autoupdated without relaunching; ignoring executable from old bundle");
-    } else {
-        // Compute the location of the old executable (which, after the swap of the app contents,
-        // is located in the "new app" directory).
-        let new_app_executable_path = staged_bundle.path.join(executable_path(channel));
-
-        log::info!(
-            "Moving old executable at path {new_app_executable_path:?} into user application data dir at path {executable_temp_file:?}"
-        );
-        let mv_output = Command::new("mv")
-            .arg(new_app_executable_path)
-            .arg(executable_temp_file)
-            .output()
-            .await?;
-
-        ensure!(
-            mv_output.status.success(),
-            "Failed to move old executable: {mv_output:?}"
-        );
-    }
+    // After the swap, the old bundle (containing the running executable) is at the staged path.
+    preserve_running_bundle(&staged_bundle.path, &old_bundle_path()).await?;
 
     log::info!("Setting installed version to {:?}", &version_info);
     log::info!("Applied update in {:?}", update_start.elapsed());
+
+    Ok(())
+}
+
+/// Moves the app bundle that an update swapped out, which contains the running executable, to
+/// `destination` so that it survives cleanup of the update's download directory.
+///
+/// Removing the running executable causes the `fork` syscall to fail, and Warp keeps running
+/// from it if the user cancels quitting after the update is applied. The whole bundle is kept
+/// rather than just the executable because macOS attributes privacy permissions (e.g. Full Disk
+/// Access) through the executable's signed app bundle; an executable moved out of its bundle
+/// loses access to protected locations.
+async fn preserve_running_bundle(swapped_out_bundle: &Path, destination: &Path) -> Result<()> {
+    if async_fs::metadata(destination).await.is_ok() {
+        // If we already applied an update but didn't relaunch Warp, the running executable is
+        // still in the bundle at `destination`, so leave it there.
+        log::info!("Already autoupdated without relaunching; ignoring old bundle");
+        return Ok(());
+    }
+
+    log::info!(
+        "Moving old bundle at path {swapped_out_bundle:?} into user application data dir at path {destination:?}"
+    );
+    let mv_output = Command::new("mv")
+        .arg(swapped_out_bundle)
+        .arg(destination)
+        .output()
+        .await?;
+
+    ensure!(
+        mv_output.status.success(),
+        "Failed to move old bundle: {mv_output:?}"
+    );
 
     Ok(())
 }
@@ -499,8 +521,9 @@ impl Drop for StagedBundle {
     fn drop(&mut self) {
         // Clean up in the destructor so that it happens even if the installation errors.
         // If we used the original temporary app bundle, it'll get removed by the final cleanup
-        // step, along with the dmg.
-        if self.in_app_directory {
+        // step, along with the dmg. Once the update is applied, this path holds the old bundle,
+        // which may have already been moved away by `preserve_running_bundle`.
+        if self.in_app_directory && self.path.exists() {
             log::info!("Removing temporary app bundle");
             if let Err(err) = fs::remove_dir_all(&self.path) {
                 report_error!(anyhow::Error::new(err).context("Failed to remove temporary bundle"));
@@ -756,3 +779,7 @@ fn executable_path(channel: Channel) -> String {
         executable_name(channel).to_owned()
     }
 }
+
+#[cfg(test)]
+#[path = "mac_tests.rs"]
+mod tests;
