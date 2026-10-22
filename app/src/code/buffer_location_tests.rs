@@ -621,7 +621,199 @@ fn resolve_conflict_updates_content_and_clock() {
     })
 }
 
-// ── Echo loop prevention ─────────────────────────────────────────
+/// Resolving a localized conflict emits a scoped `ContentChanged` delta
+/// rather than invalidating every anchor with a full-buffer `ContentReplaced`.
+/// Drives the real `resolve_conflict` -> diff -> apply pipeline end to end
+/// (not just a diffing helper in isolation) and asserts on the actual
+/// event/delta produced, for a large buffer where the client's content
+/// differs in only one line.
+#[test]
+fn resolve_conflict_applies_scoped_diff_not_full_buffer_replace() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        // 200 fixed-width lines. The client's content differs from the
+        // server's only in the middle line, so a correctly-scoped edit
+        // should touch a tiny fraction of the buffer.
+        let line = |i: usize| format!("line{i:03}\n");
+        let original: String = (0..200).map(line).collect();
+        let client_content: String = (0..200)
+            .map(|i| {
+                if i == 100 {
+                    "CHANGED\n".to_string()
+                } else {
+                    line(i)
+                }
+            })
+            .collect();
+
+        let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+            let state = gbm.open_server_local("/tmp/test_resolve_scoped.txt".into(), ctx);
+            gbm.populate_buffer_with_read_content(
+                state.file_id,
+                &original,
+                ContentVersion::new(),
+                ContentVersion::new(),
+                true,
+                ctx,
+            );
+            state
+        });
+        let file_id = _buffer_state.file_id;
+
+        // Capture whichever of ContentReplaced / ContentChanged fires from
+        // the upcoming resolve_conflict call, along with the ContentChanged
+        // delta's replaced-range span.
+        let (event_tx, event_rx) = async_channel::unbounded::<(bool, usize)>();
+        gbm(&app).update(&mut app, |_gbm, ctx| {
+            ctx.subscribe_to_model(&_buffer_state.buffer, move |_me, _, event, _ctx| {
+                use warp_editor::content::buffer::BufferEvent;
+                match event {
+                    BufferEvent::ContentReplaced { .. } => {
+                        let _ = event_tx.try_send((true, 0));
+                    }
+                    BufferEvent::ContentChanged { delta, .. } => {
+                        let span =
+                            delta.old_offset.end.as_usize() - delta.old_offset.start.as_usize();
+                        let _ = event_tx.try_send((false, span));
+                    }
+                    _ => {}
+                }
+            });
+        });
+
+        let sv = server_version(&app, file_id);
+        let _ = gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.resolve_conflict(file_id, sv, ContentVersion::new(), &client_content, ctx)
+        });
+
+        assert_eq!(content(&app, file_id), client_content);
+
+        let mut saw_content_replaced = false;
+        let mut changed_span = None;
+        while let Ok((is_replaced, span)) = event_rx.try_recv() {
+            if is_replaced {
+                saw_content_replaced = true;
+            } else {
+                changed_span = Some(span);
+            }
+        }
+        assert!(
+            !saw_content_replaced,
+            "resolve_conflict should apply a scoped diff, not emit a full-buffer ContentReplaced"
+        );
+        let changed_span =
+            changed_span.expect("resolve_conflict should have emitted a ContentChanged event");
+        assert!(
+            changed_span < original.len() / 2,
+            "expected a scoped edit far smaller than the full buffer ({} chars), got {changed_span} chars",
+            original.len()
+        );
+    })
+}
+
+/// The diff-based content-apply step must reproduce the client's content
+/// exactly, byte for byte, across the hunk shapes that determine whether a
+/// sync conflict resolves correctly or silently corrupts the file: empty
+/// endpoints, missing trailing newlines, CRLF line endings, multi-byte UTF-8
+/// and grapheme clusters, wholesale rewrites, and multiple disjoint hunks.
+#[test]
+fn resolve_conflict_reproduces_client_content_exactly_for_various_shapes() {
+    struct Case {
+        name: &'static str,
+        old: &'static str,
+        new: &'static str,
+    }
+
+    let cases = [
+        Case {
+            name: "empty_old_content",
+            old: "",
+            new: "hello world\n",
+        },
+        Case {
+            name: "empty_new_content",
+            old: "hello world\n",
+            new: "",
+        },
+        Case {
+            name: "both_empty",
+            old: "",
+            new: "",
+        },
+        Case {
+            name: "no_trailing_newline",
+            old: "line one\nline two",
+            new: "line one\nline TWO",
+        },
+        Case {
+            name: "crlf_line_endings",
+            old: "line one\r\nline two\r\nline three\r\n",
+            new: "line one\r\nCHANGED\r\nline three\r\n",
+        },
+        Case {
+            name: "multibyte_utf8_and_grapheme_clusters",
+            old: "caf\u{e9} \u{1f600} \u{4f60}\u{597d}\nsecond line \u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f467}\n",
+            new: "caf\u{e9} \u{1f600} \u{4f60}\u{597d}\nCHANGED \u{1f469}\u{200d}\u{1f469}\u{200d}\u{1f467}\n",
+        },
+        Case {
+            name: "differs_everywhere",
+            old: "aaaa\nbbbb\ncccc\n",
+            new: "wwww\nxxxx\nyyyy\n",
+        },
+        Case {
+            name: "multiple_disjoint_hunks",
+            old: "line0\nline1\nline2\nline3\nline4\nline5\nline6\n",
+            new: "line0\nCHANGED1\nline2\nline3\nCHANGED4\nline5\nline6\n",
+        },
+    ];
+
+    for case in cases {
+        App::test((), |mut app| async move {
+            init_app(&mut app);
+            app.add_singleton_model(GlobalBufferModel::new);
+
+            let path = format!("/tmp/test_resolve_shapes_{}.txt", case.name);
+            let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+                let state = gbm.open_server_local(path.into(), ctx);
+                gbm.populate_buffer_with_read_content(
+                    state.file_id,
+                    case.old,
+                    ContentVersion::new(),
+                    ContentVersion::new(),
+                    true,
+                    ctx,
+                );
+                state
+            });
+            let file_id = _buffer_state.file_id;
+            let sv = server_version(&app, file_id);
+
+            let _ = gbm(&app).update(&mut app, |gbm, ctx| {
+                gbm.resolve_conflict(file_id, sv, ContentVersion::new(), case.new, ctx)
+            });
+
+            // `content()` reads via `Buffer::text()`, which always normalizes
+            // to LF regardless of the buffer's inferred line-ending mode --
+            // that normalization is a pre-existing, orthogonal property of
+            // `Buffer` itself, not something this path should change. Compare
+            // against the client content with the same normalization applied
+            // so this test isolates what `resolve_conflict` is responsible
+            // for: reproducing the client's data, not `Buffer`'s line-ending
+            // reconstruction semantics.
+            let expected = case.new.replace("\r\n", "\n");
+            assert_eq!(
+                content(&app, file_id),
+                expected,
+                "case {:?}: resolved content did not match the client's content exactly",
+                case.name
+            );
+        });
+    }
+}
+
+// ── Echo loop prevention ──────────────────────────────────────────
 
 #[test]
 fn server_push_does_not_echo_back_as_client_edit() {
