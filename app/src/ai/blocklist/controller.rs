@@ -685,8 +685,23 @@ impl BlocklistAIController {
                 | QueuedQueryEvent::EditCancelled {
                     conversation_id, ..
                 } => {
-                    me.maybe_interrupt_command_for_injection(*conversation_id, ctx);
-                    me.maybe_dispatch_idle_local_steering_row(*conversation_id, ctx);
+                    // The queue changed; see whether its next request row needs a nudge.
+                    let next_row =
+                        QueuedQueryModel::as_ref(ctx).next_row_for_request(*conversation_id);
+                    match next_row {
+                        Some(RequestRow::InjectedFollowup(_)) => {
+                            me.maybe_interrupt_command_for_injection(*conversation_id, ctx);
+                        }
+                        Some(RequestRow::LocalSteering(row)) => {
+                            let query_id = row.id();
+                            me.maybe_dispatch_idle_local_steering_row(
+                                *conversation_id,
+                                query_id,
+                                ctx,
+                            );
+                        }
+                        Some(RequestRow::SteeredHead(_)) | None => {}
+                    }
                 }
                 QueuedQueryEvent::EditEntered { .. }
                 | QueuedQueryEvent::Cleared { .. }
@@ -1773,14 +1788,9 @@ impl BlocklistAIController {
     fn maybe_dispatch_idle_local_steering_row(
         &mut self,
         conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(RequestRow::LocalSteering(row)) =
-            QueuedQueryModel::as_ref(ctx).next_row_for_request(conversation_id)
-        else {
-            return;
-        };
-        let query_id = row.id();
         let owns_conversation = BlocklistAIHistoryModel::as_ref(ctx)
             .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
             .any(|conversation| conversation.id() == conversation_id);
