@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
-use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -24,7 +23,7 @@ use super::{
     ThirdPartyHarness, install_docs_url, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::server::server_api::ServerApi;
@@ -48,6 +47,10 @@ impl ThirdPartyHarness for GeminiHarness {
 
     fn cli_agent(&self) -> CLIAgent {
         CLIAgent::Gemini
+    }
+
+    fn external_conversation_format(&self) -> &'static str {
+        GEMINI_CLI_FORMAT
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
@@ -200,22 +203,22 @@ impl HarnessRunner for GeminiHarnessRunner {
 
     async fn start(
         &self,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
-        // Create the external conversation record on the server.
-        let conversation_id = setup_events
-            .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
-                self.client
-                    .create_external_conversation(GEMINI_CLI_FORMAT, Harness::Gemini)
-                    .await
-                    .map_err(|e| {
-                        report_error!(&e);
-                        AgentDriverError::ConfigBuildFailed(e)
-                    })
-            })
-            .await?;
-        log::info!("Created external conversation {conversation_id}");
+        let conversation_id = match external_conversation {
+            Some(id) => id,
+            None => {
+                super::create_external_conversation(
+                    self.client.as_ref(),
+                    GEMINI_CLI_FORMAT,
+                    Harness::Gemini,
+                    setup_events,
+                )
+                .await?
+            }
+        };
 
         let command = self.command.clone();
         let terminal_driver = self.terminal_driver.clone();

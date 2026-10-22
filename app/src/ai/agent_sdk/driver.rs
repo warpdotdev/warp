@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::future::Future;
@@ -14,7 +13,7 @@ use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
 use futures::FutureExt as _;
 use futures::channel::oneshot;
-use futures::future::{self, Either, FusedFuture};
+use futures::future::{self, Either, FusedFuture, RemoteHandle};
 use itertools::Itertools as _;
 use oneshot::{Canceled, Receiver};
 use session_sharing_protocol::sharer::SessionRetentionReason;
@@ -34,6 +33,7 @@ use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
 };
 
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
@@ -80,14 +80,13 @@ use crate::auth::credentials::Credentials;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, TaskGitCredentialsError, TaskStatusUpdate};
 use crate::server::server_api::harness_support::{
-    HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
+    HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest, ResolvedHarnessPrompt,
 };
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::team_scope::RequestTeamScope;
-use crate::terminal::ShellLaunchData;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     CliAgentPluginManager, PluginInstallError, plugin_manager_for_with_shell,
 };
@@ -96,6 +95,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::terminal::{CLIAgent, ShellLaunchData};
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
 
@@ -1054,6 +1054,15 @@ impl SDKConversationOutputStatus {
             }
         }
     }
+}
+
+/// Third-party harness inputs that are ready before the workspace is, see
+/// [`AgentDriver::spawn_early_harness_preparation`].
+struct EarlyHarnessPreparation {
+    /// The server conversation created for a fresh run; `None` when the run resumes one, which
+    /// the runner resolves itself.
+    external_conversation: Option<ServerConversationToken>,
+    prompt: ResolvedHarnessPrompt,
 }
 
 /// Task configuration for running an agent.
@@ -2078,6 +2087,7 @@ impl AgentDriver {
         let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
         let (
             setup_events,
+            early_harness_preparation,
             task_id_for_refresh,
             ai_client_for_refresh,
             use_factory_repositories,
@@ -2135,6 +2145,21 @@ impl AgentDriver {
                     Self::setup_cloud_providers(&foreground),
                 )
                 .await?;
+
+            // Third-party harness preparation that needs no workspace runs from here on, so it
+            // overlaps repository clones and setup commands on the PTY.
+            let early_harness_preparation = match &task.harness {
+                HarnessKind::ThirdParty(harness) => Some(
+                    Self::spawn_early_harness_preparation(
+                        harness.as_ref(),
+                        task.prompt.clone(),
+                        &foreground,
+                        &setup_events,
+                    )
+                    .await?,
+                ),
+                HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
+            };
 
             // For the Oz harness only: set up model overrides and profile information.
             if matches!(&task.harness, HarnessKind::Oz) {
@@ -2342,6 +2367,7 @@ impl AgentDriver {
 
             Ok::<_, AgentDriverError>((
                 setup_events,
+                early_harness_preparation,
                 task_id_for_refresh,
                 ai_client_for_refresh,
                 use_factory_repositories,
@@ -2411,17 +2437,18 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
-                let harness_setup_events = setup_events.clone();
-                let (harness_exit_rx, runner) = setup_events
+                let early_harness_preparation =
+                    early_harness_preparation.ok_or(AgentDriverError::InvalidRuntimeState)?;
+                let (harness_exit_rx, runner, external_conversation) = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
-                        let harness_exit_rx = Self::setup_harness(
-                            harness.as_ref(),
-                            &foreground,
-                            &harness_setup_events,
-                        )
-                        .await?;
+                        let harness_exit_rx =
+                            Self::subscribe_to_harness_exit(harness.as_ref(), &foreground).await?;
+                        let EarlyHarnessPreparation {
+                            external_conversation,
+                            prompt,
+                        } = early_harness_preparation.await?;
                         let runner = Self::prepare_harness(
-                            &task.prompt,
+                            prompt,
                             &task.mcp_specs,
                             harness.as_ref(),
                             &foreground,
@@ -2429,7 +2456,7 @@ impl AgentDriver {
                         .await?;
 
                         Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
-                        Ok::<_, AgentDriverError>((harness_exit_rx, runner))
+                        Ok::<_, AgentDriverError>((harness_exit_rx, runner, external_conversation))
                     })
                     .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns_for_run();
@@ -2439,6 +2466,7 @@ impl AgentDriver {
                 with_credential_refreshes(
                     Self::run_harness(
                         runner,
+                        external_conversation,
                         &runtime_error_patterns,
                         &foreground,
                         harness_exit_rx,
@@ -2821,22 +2849,19 @@ impl AgentDriver {
         }
     }
 
-    /// Sets up the third-party harness by subscribing to CLI session events and
-    /// installing the Warp plugin and platform plugin, if applicable.
+    /// Subscribes to the events that decide when the third-party harness should exit.
     ///
     /// Returns a oneshot receiver that fires when the harness should exit
     /// (either immediately on completion or after the idle-on-complete timeout).
-    async fn setup_harness(
+    async fn subscribe_to_harness_exit(
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
-        events: &SetupClientEventReporter,
     ) -> Result<oneshot::Receiver<()>, AgentDriverError> {
         let (exit_tx, exit_rx) = oneshot::channel();
         let harness_exit = IdleTimeoutSender::new(exit_tx);
 
         // Harnesses that report progress through the native conversation instead of a CLI agent
-        // session have no hook plugin to install; the conversation's own status drives their
-        // idle window instead.
+        // session are driven by the conversation's own status.
         if !harness.drives_cli_agent_session() {
             foreground
                 .spawn(move |me, ctx| {
@@ -2852,19 +2877,95 @@ impl AgentDriver {
             .spawn(move |me, ctx| me.subscribe_to_cli_agent_session_events(harness_exit, ctx))
             .await?;
 
-        // Install plugins before running the harness command.
-        Self::setup_harness_plugins(harness, foreground, events).await?;
-
         Ok(exit_rx)
     }
 
-    async fn setup_harness_plugins(
+    /// Starts the third-party harness preparation that needs only the bootstrapped terminal, so
+    /// it runs while the workspace is being prepared on the PTY: plugin installs run through
+    /// their own shell process, and conversation creation and prompt resolution are server
+    /// calls.
+    ///
+    /// Dropping the returned handle cancels the preparation.
+    async fn spawn_early_harness_preparation(
         harness: &dyn ThirdPartyHarness,
+        prompt: AgentRunPrompt,
+        foreground: &ModelSpawner<Self>,
+        setup_events: &SetupClientEventReporter,
+    ) -> Result<RemoteHandle<Result<EarlyHarnessPreparation, AgentDriverError>>, AgentDriverError>
+    {
+        let cli_agent = harness.cli_agent();
+        let requires_platform_plugin = harness.requires_verified_platform_plugin();
+        // Harnesses driven through the native conversation have no hook plugin to install.
+        let installs_plugins = harness.drives_cli_agent_session();
+        let harness_kind = harness.harness();
+        let conversation_format = harness.external_conversation_format();
+        let (background, task_id, server_api, resumes_conversation) = foreground
+            .spawn(|me, ctx| {
+                (
+                    ctx.background_executor(),
+                    me.task_id,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    me.resume_payload.is_some() || me.restored_conversation_id.is_some(),
+                )
+            })
+            .await?;
+        let foreground = foreground.clone();
+        let setup_events = setup_events.clone();
+        let (preparation, handle) = async move {
+            setup_events
+                .record_result(SetupStep::ThirdPartyHarnessEarlyPreparation, async {
+                    let plugins = async {
+                        if installs_plugins {
+                            Self::setup_harness_plugins(
+                                cli_agent,
+                                requires_platform_plugin,
+                                &foreground,
+                                &setup_events,
+                            )
+                            .await
+                        } else {
+                            Ok(())
+                        }
+                    };
+                    let prompt = Self::resolve_harness_prompt(&prompt, task_id, &server_api);
+                    // A resumed run reuses its stored conversation, which the runner resolves.
+                    let conversation = async {
+                        if resumes_conversation {
+                            return Ok(None);
+                        }
+                        harness::create_external_conversation(
+                            server_api.as_ref(),
+                            conversation_format,
+                            harness_kind,
+                            &setup_events,
+                        )
+                        .await
+                        .map(Some)
+                    };
+                    let (plugins, prompt, conversation) =
+                        futures::join!(plugins, prompt, conversation);
+                    plugins?;
+                    let prompt = prompt?;
+                    let external_conversation = conversation?;
+                    Ok(EarlyHarnessPreparation {
+                        external_conversation,
+                        prompt,
+                    })
+                })
+                .await
+        }
+        .remote_handle();
+        background.spawn(preparation).detach();
+        Ok(handle)
+    }
+
+    async fn setup_harness_plugins(
+        cli_agent: CLIAgent,
+        requires_platform_plugin: bool,
         foreground: &ModelSpawner<Self>,
         events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
-        let harness_name = harness.cli_agent().command_prefix();
-        let requires_platform_plugin = harness.requires_verified_platform_plugin();
+        let harness_name = cli_agent.command_prefix();
         let shell_launch_data = foreground
             .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).active_shell_launch_data(ctx))
             .await?;
@@ -2883,8 +2984,7 @@ impl AgentDriver {
             | Some(ShellLaunchData::DockerSandbox { .. })
             | None => (None, None),
         };
-        let Some(manager) =
-            plugin_manager_for_with_shell(harness.cli_agent(), shell_path, shell_type, None)
+        let Some(manager) = plugin_manager_for_with_shell(cli_agent, shell_path, shell_type, None)
         else {
             if requires_platform_plugin {
                 return Err(Self::required_platform_plugin_error(
@@ -3017,10 +3117,49 @@ impl AgentDriver {
         }
     }
 
+    /// Resolves the prompt a third-party harness run starts with, asking the server for
+    /// server-side prompts.
+    async fn resolve_harness_prompt(
+        prompt: &AgentRunPrompt,
+        task_id: Option<AmbientAgentTaskId>,
+        server_api: &ServerApi,
+    ) -> Result<ResolvedHarnessPrompt, AgentDriverError> {
+        match prompt {
+            AgentRunPrompt::Local(text) => Ok(ResolvedHarnessPrompt {
+                prompt: text.clone(),
+                system_prompt: None,
+                resumption_prompt: None,
+                context: None,
+                harness_usage: None,
+            }),
+            AgentRunPrompt::ServerSide {
+                skill,
+                attachments_dir,
+            } => {
+                let skill = skill
+                    .as_ref()
+                    .map(|parsed_skill| ResolvePromptAttachedSkill {
+                        name: parsed_skill.name.clone(),
+                        content: parsed_skill.content.clone(),
+                        path: Some(parsed_skill.path.display_path()),
+                    });
+                let request = ResolvePromptRequest {
+                    skill,
+                    attachments_dir: attachments_dir.clone(),
+                };
+                match task_id.as_ref() {
+                    Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
+                    None => server_api.resolve_prompt(request).await,
+                }
+                .map_err(AgentDriverError::PromptResolutionFailed)
+            }
+        }
+    }
+
     /// Configure a third-party harness for execution. This will set `self.harness` and
     /// return a handle to the harness runner.
     async fn prepare_harness(
-        prompt: &AgentRunPrompt,
+        prompt: ResolvedHarnessPrompt,
         mcp_specs: &[MCPSpec],
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
@@ -3058,40 +3197,13 @@ impl AgentDriver {
             .map_err(|_| AgentDriverError::InvalidRuntimeState)
             .flatten()?;
 
-        let (prompt_text, system_prompt, resumption_prompt, server_context, usage_context) =
-            match prompt {
-                AgentRunPrompt::Local(text) => {
-                    (Cow::Borrowed(text.as_str()), None, None, None, None)
-                }
-                AgentRunPrompt::ServerSide {
-                    skill,
-                    attachments_dir,
-                } => {
-                    let skill = skill
-                        .as_ref()
-                        .map(|parsed_skill| ResolvePromptAttachedSkill {
-                            name: parsed_skill.name.clone(),
-                            content: parsed_skill.content.clone(),
-                            path: Some(parsed_skill.path.display_path()),
-                        });
-                    let request = ResolvePromptRequest {
-                        skill,
-                        attachments_dir: attachments_dir.clone(),
-                    };
-                    let resolved = match task_id.as_ref() {
-                        Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
-                        None => server_api.resolve_prompt(request).await,
-                    }
-                    .map_err(AgentDriverError::PromptResolutionFailed)?;
-                    (
-                        Cow::Owned(resolved.prompt),
-                        resolved.system_prompt,
-                        resolved.resumption_prompt,
-                        resolved.context,
-                        resolved.harness_usage,
-                    )
-                }
-            };
+        let ResolvedHarnessPrompt {
+            prompt: prompt_text,
+            system_prompt,
+            resumption_prompt,
+            context: server_context,
+            harness_usage: usage_context,
+        } = prompt;
 
         let (secrets, third_party_harness_model_config) = foreground
             .spawn(|me, _| {
@@ -3130,7 +3242,7 @@ impl AgentDriver {
 
         let runner: Arc<dyn HarnessRunner> = harness
             .build_runner(
-                prompt_text.as_ref(),
+                &prompt_text,
                 system_prompt.as_deref(),
                 resumption_prompt.as_deref(),
                 server_context.as_deref(),
@@ -3173,6 +3285,7 @@ impl AgentDriver {
     /// same `AuthenticationRequired` error code used by the auth preflight.
     async fn run_harness(
         runner: Arc<dyn harness::HarnessRunner>,
+        external_conversation: Option<ServerConversationToken>,
         runtime_error_patterns: &[&str],
         foreground: &ModelSpawner<Self>,
         harness_exit_rx: oneshot::Receiver<()>,
@@ -3184,7 +3297,7 @@ impl AgentDriver {
         let command_handle = setup_events
             .record_result(
                 SetupStep::ThirdPartyHarnessStart,
-                runner.start(foreground, setup_events),
+                runner.start(external_conversation, foreground, setup_events),
             )
             .await?;
         setup_events

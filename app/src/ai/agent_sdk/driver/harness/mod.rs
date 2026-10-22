@@ -16,6 +16,7 @@ use warp_cli::{
     WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -27,7 +28,7 @@ use super::{
     WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::attachment_utils::DownloadedAttachment;
@@ -151,6 +152,9 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
 
     /// Returns the CLIAgent type associated with this harness.
     fn cli_agent(&self) -> CLIAgent;
+
+    /// Format slug of the server conversation a fresh run of this harness reports into.
+    fn external_conversation_format(&self) -> &'static str;
 
     /// URL to install instructions for this harness's CLI, surfaced in the
     /// default [`validate`] impl when the CLI is not on `PATH`.
@@ -651,14 +655,15 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         None
     }
 
-    /// Create the external conversation on the server and start the harness
-    /// command in the terminal.
+    /// Start the harness command in the terminal, reporting into `external_conversation` when
+    /// the driver created one ahead of launch and otherwise resuming or creating one itself.
     ///
     /// Returns a [`CommandHandle`] that resolves to the exit code. The runner
     /// stores the conversation ID and block ID internally for use in
     /// [`save_conversation`].
     async fn start(
         &self,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError>;
@@ -733,6 +738,28 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
     ) -> Result<()> {
         Ok(())
     }
+}
+
+/// Creates the server conversation a fresh third-party harness run reports into.
+pub(crate) async fn create_external_conversation(
+    client: &dyn HarnessSupportClient,
+    format: &str,
+    harness: Harness,
+    setup_events: &SetupClientEventReporter,
+) -> Result<ServerConversationToken, AgentDriverError> {
+    let conversation_id = setup_events
+        .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+            client
+                .create_external_conversation(format, harness)
+                .await
+                .map_err(|error| {
+                    report_error!(&error);
+                    AgentDriverError::ConfigBuildFailed(error)
+                })
+        })
+        .await?;
+    log::info!("Created external conversation {conversation_id}");
+    Ok(conversation_id)
 }
 
 /// Returns `true` if the terminal tracked by `terminal_driver` has a CLI agent session

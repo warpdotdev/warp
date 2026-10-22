@@ -15,7 +15,6 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_info;
-use warp_errors::report_error;
 use warp_harness_usage::{CaptureDiagnostics, JsonlReadStatus, extract_codex};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
@@ -41,7 +40,7 @@ use super::{
     write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
@@ -70,6 +69,10 @@ impl ThirdPartyHarness for CodexHarness {
 
     fn cli_agent(&self) -> CLIAgent {
         CLIAgent::Codex
+    }
+
+    fn external_conversation_format(&self) -> &'static str {
+        CODEX_CLI_FORMAT
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
@@ -377,29 +380,25 @@ impl HarnessRunner for CodexHarnessRunner {
 
     async fn start(
         &self,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Resume runs reuse the prior server conversation id; fresh runs mint a new one.
-        let conversation_id = match &self.preexisting_conversation_id {
-            Some(id) => {
+        let conversation_id = match (&self.preexisting_conversation_id, external_conversation) {
+            (Some(id), _) => {
                 log::info!("Resuming external conversation {id}");
                 id.clone()
             }
-            None => {
-                let id = setup_events
-                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
-                        self.client
-                            .create_external_conversation(CODEX_CLI_FORMAT, Harness::Codex)
-                            .await
-                            .map_err(|e| {
-                                report_error!(&e);
-                                AgentDriverError::ConfigBuildFailed(e)
-                            })
-                    })
-                    .await?;
-                log::info!("Created external conversation {id}");
-                id
+            (None, Some(id)) => id,
+            (None, None) => {
+                super::create_external_conversation(
+                    self.client.as_ref(),
+                    CODEX_CLI_FORMAT,
+                    Harness::Codex,
+                    setup_events,
+                )
+                .await?
             }
         };
 

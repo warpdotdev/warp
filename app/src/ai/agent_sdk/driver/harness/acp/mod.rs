@@ -93,7 +93,7 @@ use super::{
 use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::attachment_utils::{DownloadedAttachment, attachments_download_dir};
@@ -245,6 +245,10 @@ impl ThirdPartyHarness for AcpHarness {
             Harness::Gemini => CLIAgent::Gemini,
             Harness::Pi | Harness::Oz | Harness::OpenCode | Harness::Unknown => CLIAgent::Unknown,
         }
+    }
+
+    fn external_conversation_format(&self) -> &'static str {
+        MAA_FORMAT
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
@@ -531,10 +535,12 @@ impl AcpHarnessRunner {
 
     /// Binds the native conversation the run drives and gives it a server identity before the
     /// first turn, so every request stream carries the server-known id. A conversation restored
-    /// from the server already has one; otherwise a new server conversation is created.
+    /// from the server already has one; otherwise the server conversation created ahead of
+    /// launch is used, or a new one is created.
     async fn bind_server_conversation(
         &self,
         restored_conversation_id: Option<AIConversationId>,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<RunConversation, AgentDriverError> {
@@ -563,18 +569,18 @@ impl AcpHarnessRunner {
             });
         }
 
-        let server_id = setup_events
-            .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
-                self.client
-                    .create_external_conversation(MAA_FORMAT, self.harness)
-                    .await
-                    .map_err(|error| {
-                        report_error!(&error);
-                        AgentDriverError::ConfigBuildFailed(error)
-                    })
-            })
-            .await?;
-        log::info!("Created ACP conversation {server_id}");
+        let server_id = match external_conversation {
+            Some(server_id) => server_id,
+            None => {
+                super::create_external_conversation(
+                    self.client.as_ref(),
+                    MAA_FORMAT,
+                    self.harness,
+                    setup_events,
+                )
+                .await?
+            }
+        };
         let token = server_id.as_str().to_owned();
         foreground
             .spawn(move |_, ctx| {
@@ -615,6 +621,7 @@ impl HarnessRunner for AcpHarnessRunner {
 
     async fn start(
         &self,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
@@ -795,7 +802,12 @@ impl HarnessRunner for AcpHarnessRunner {
         self.record_cli_session(&session_id);
 
         let conversation = match self
-            .bind_server_conversation(restored_conversation_id, foreground, setup_events)
+            .bind_server_conversation(
+                restored_conversation_id,
+                external_conversation,
+                foreground,
+                setup_events,
+            )
             .await
         {
             Ok(conversation) => conversation,

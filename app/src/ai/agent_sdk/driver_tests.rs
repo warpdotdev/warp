@@ -63,6 +63,8 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::harness_support::ResolvedHarnessPrompt;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -2679,23 +2681,28 @@ fn deferred_repository_semantic_acp_consumes_server_resolved_text_once() {
         options.selected_harness = Harness::Codex;
         options.harness_transport = HarnessTransport::Acp;
         let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
-        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let (foreground, server_api) = driver.update(&mut app, |_, ctx| {
+            (ctx.spawner(), ServerApiProvider::as_ref(ctx).get())
+        });
         let HarnessKind::ThirdParty(harness) =
             harness_kind(Harness::Codex, HarnessTransport::Acp).unwrap()
         else {
             panic!("expected an ACP harness");
         };
-        let runner = AgentDriver::prepare_harness(
+        let resolved_prompt = AgentDriver::resolve_harness_prompt(
             &AgentRunPrompt::ServerSide {
                 skill: None,
                 attachments_dir: None,
             },
-            &[],
-            harness.as_ref(),
-            &foreground,
+            None,
+            &server_api,
         )
         .await
         .unwrap();
+        let runner =
+            AgentDriver::prepare_harness(resolved_prompt, &[], harness.as_ref(), &foreground)
+                .await
+                .unwrap();
         assert_eq!(runner.prompt_text_for_test(), Some(prompt));
     });
     resolved.assert();
@@ -2834,7 +2841,13 @@ fn deferred_repository_semantic_skill_publication_without_initial_inventory() {
                         panic!("expected a third-party harness");
                     };
                     let result = AgentDriver::prepare_harness(
-                        &AgentRunPrompt::Local("do the task".into()),
+                        ResolvedHarnessPrompt {
+                            prompt: "do the task".into(),
+                            system_prompt: None,
+                            resumption_prompt: None,
+                            context: None,
+                            harness_usage: None,
+                        },
                         &[],
                         harness.as_ref(),
                         &foreground,

@@ -244,12 +244,19 @@ pub(crate) enum SetupStep {
     GlobalSkillLoading,
     SkillsDirsLoading,
     ConversationResumeLoading,
+    /// Third-party harness preparation that needs only the bootstrapped terminal and so runs
+    /// concurrently with workspace preparation: plugin installs, external conversation creation,
+    /// and prompt resolution.
+    ThirdPartyHarnessEarlyPreparation,
+    /// Third-party harness preparation that needs the prepared workspace: waiting for
+    /// [`SetupStep::ThirdPartyHarnessEarlyPreparation`], writing harness config, and the auth
+    /// preflight.
     ThirdPartyHarnessPreparation,
     /// Launching the harness through command startup and ACP runner initialization, including
     /// conversation binding and first-turn setup for ACP harnesses.
     ThirdPartyHarnessStart,
     ThirdPartyHarnessExternalConversation,
-    /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] that track plugin
+    /// Sub-steps of [`SetupStep::ThirdPartyHarnessEarlyPreparation`] that track plugin
     /// install/update latency and reliability individually.
     ThirdPartyHarnessPreparationNotificationPluginInstall,
     ThirdPartyHarnessPreparationNotificationPluginUpdate,
@@ -297,6 +304,7 @@ impl SetupStep {
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
             // Pre-warming is Oz-only, so these are unreachable from a standby.
+            | Self::ThirdPartyHarnessEarlyPreparation
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart
             | Self::ThirdPartyHarnessExternalConversation
@@ -384,6 +392,9 @@ impl SetupStep {
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")
+            }
+            Self::ThirdPartyHarnessEarlyPreparation => {
+                span_and_name!("setup_third_party_harness_early_preparation")
             }
             Self::ThirdPartyHarnessPreparation => {
                 span_and_name!("setup_third_party_harness_preparation")

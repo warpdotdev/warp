@@ -15,6 +15,7 @@ use super::{
     PersistenceOutcome, SavePoint, auth_check_command_for, harness_env_vars, harness_kind,
     prepare_harness_failure_output, validate_cli_installed,
 };
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
 use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
@@ -187,6 +188,7 @@ impl HarnessRunner for RecordingRunner {
 
     async fn start(
         &self,
+        _: Option<ServerConversationToken>,
         _: &ModelSpawner<AgentDriver>,
         _: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {

@@ -39,7 +39,7 @@ use super::{
     ThirdPartyHarness, cli_agent_session_status, install_docs_url, write_temp_file,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
@@ -67,7 +67,6 @@ use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 use shell_words::quote as shell_quote;
 #[cfg(test)]
 use wake_driver::{CLAUDE_WAKE_PROMPT_FILE_NAME, ClaudeWakeRemoteContext};
-use warp_errors::report_error;
 
 #[cfg(test)]
 use super::super::OZ_MESSAGE_LISTENER_STATE_ROOT_ENV;
@@ -82,6 +81,10 @@ impl ThirdPartyHarness for ClaudeHarness {
 
     fn cli_agent(&self) -> CLIAgent {
         CLIAgent::Claude
+    }
+
+    fn external_conversation_format(&self) -> &'static str {
+        CLAUDE_CODE_FORMAT
     }
 
     fn install_docs_url(&self) -> Option<&'static str> {
@@ -463,6 +466,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
 
     async fn start(
         &self,
+        external_conversation: Option<ServerConversationToken>,
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
@@ -470,25 +474,20 @@ impl HarnessRunner for ClaudeHarnessRunner {
         // Otherwise create a fresh external conversation record for this run.
         // TODO(REMOTE-1149): `create_external_conversation` currently won't work for local CLI
         // runs. We should either support it or have a fallback.
-        let conversation_id = match &self.preexisting_conversation_id {
-            Some(id) => {
+        let conversation_id = match (&self.preexisting_conversation_id, external_conversation) {
+            (Some(id), _) => {
                 log::info!("Resuming external conversation {id}");
                 id.clone()
             }
-            None => {
-                let id = setup_events
-                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
-                        self.client
-                            .create_external_conversation(CLAUDE_CODE_FORMAT, Harness::Claude)
-                            .await
-                            .map_err(|e| {
-                                report_error!(&e);
-                                AgentDriverError::ConfigBuildFailed(e)
-                            })
-                    })
-                    .await?;
-                log::info!("Created external conversation {id}");
-                id
+            (None, Some(id)) => id,
+            (None, None) => {
+                super::create_external_conversation(
+                    self.client.as_ref(),
+                    CLAUDE_CODE_FORMAT,
+                    Harness::Claude,
+                    setup_events,
+                )
+                .await?
             }
         };
         self.start_parent_bridge(foreground)
