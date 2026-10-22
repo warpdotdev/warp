@@ -1397,6 +1397,8 @@ struct ExpansionInfo {
     buffer_text: String,
     /// The byte indices that should be replaced with the alias_value.
     byte_range: Range<usize>,
+    /// Where the cursor goes in alias_value. `None`: after it.
+    cursor_in_alias_value: Option<usize>,
 }
 
 /// For inserting last word of last command in history - by default, this is the last command but consecutive
@@ -10383,9 +10385,9 @@ impl Input {
         }
     }
 
-    /// Gets the abbreviation and abbreviation value, or alias and alias value, given
-    /// a command, if they exist. Will return None if the conditions for alias
-    /// expansion are not met.
+    /// Gets the abbreviation or alias token and its expanded value (with where the cursor goes in
+    /// it, if not at the end), given a command, if they exist. Will return None if the conditions
+    /// for alias expansion are not met.
     fn get_valid_abbreviation_or_alias_for_expansion<'a>(
         &self,
         command: Option<&'a LiteCommand>,
@@ -10393,23 +10395,30 @@ impl Input {
         executing: Executing,
         session_context: &'a SessionContext,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<(&'a Spanned<String>, &'a str)> {
-        // An alias must be the first token of a command
-        let first_token = command?.parts.first()?;
-
-        if !Self::is_potential_expansion(first_token, cursor_pos, executing) {
-            return None;
-        }
+    ) -> Option<(&'a Spanned<String>, String, Option<usize>)> {
+        let command = command?;
 
         // If there is an abbreviation, we expand it as long as we aren't executing.
         // In fish, an alias formatted like `ls=echo Hello && ls` would get expanded
         // twice if we also performed expansion on enter.
         if matches!(executing, Executing::No)
-            && let Some(abbr_value) = session_context
-                .session
-                .abbreviation_value(&first_token.item)
+            && let Some((index, token)) = command
+                .parts
+                .iter()
+                .enumerate()
+                .find(|(_, part)| Self::is_potential_expansion(part, cursor_pos, executing))
+            && let Some(abbreviation) = session_context.session.abbreviation(&token.item)
+            && abbreviation.may_expand_at((index > 0).then(|| command.parts[0].item.as_str()))
         {
-            return Some((first_token, abbr_value));
+            let (expansion, cursor) = abbreviation.expansion_and_cursor();
+            return Some((token, expansion, cursor));
+        }
+
+        // An alias must be the first token of a command
+        let first_token = command.parts.first()?;
+
+        if !Self::is_potential_expansion(first_token, cursor_pos, executing) {
+            return None;
         }
 
         // We only expand aliases if the user has turned the setting on.
@@ -10419,7 +10428,7 @@ impl Input {
                 return None;
             }
 
-            return Some((first_token, alias_value));
+            return Some((first_token, alias_value.to_owned(), None));
         }
         None
     }
@@ -10429,7 +10438,12 @@ impl Input {
     /// entered a space into the input editor.
     fn run_expansion_on_space(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(expansion_info) = self.run_expansion_internal(Executing::No, ctx) {
-            self.expand_alias(expansion_info.byte_range, &expansion_info.alias_value, ctx);
+            self.expand_alias(
+                expansion_info.byte_range,
+                &expansion_info.alias_value,
+                expansion_info.cursor_in_alias_value,
+                ctx,
+            );
         }
     }
 
@@ -10476,17 +10490,21 @@ impl Input {
             &session_context,
             ctx,
         )
-        .map(|(alias, alias_value)| ExpansionInfo {
-            alias_value: alias_value.into(),
-            buffer_text,
-            byte_range: alias.span().start()..cursor_pos.as_usize(),
-        })
+        .map(
+            |(alias, alias_value, cursor_in_alias_value)| ExpansionInfo {
+                alias_value,
+                buffer_text,
+                byte_range: alias.span().start()..cursor_pos.as_usize(),
+                cursor_in_alias_value,
+            },
+        )
     }
 
     fn expand_alias(
         &mut self,
         replacement_range: Range<usize>,
         alias_value: &str,
+        cursor_in_alias_value: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
         let alias_value_with_space = format!("{alias_value} ");
@@ -10498,6 +10516,10 @@ impl Input {
                 PlainTextEditorViewAction::ExpandAlias,
                 ctx,
             );
+            if let Some(cursor) = cursor_in_alias_value {
+                let cursor = ByteOffset::from(replacement_range.start + cursor);
+                input.select_ranges_by_byte_offset([cursor..cursor], ctx);
+            }
         });
     }
 

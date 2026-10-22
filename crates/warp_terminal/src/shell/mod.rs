@@ -463,24 +463,33 @@ impl ShellType {
         }
     }
 
-    pub fn abbreviations(self, abbr_output: &str) -> HashMap<SmolStr, String> {
+    /// Given the output of fish's `abbr --show`, returns a map of abbreviation names to
+    /// abbreviations.
+    pub fn abbreviations(self, abbr_output: &str) -> HashMap<SmolStr, Abbreviation> {
         match self {
             ShellType::Fish => {
                 abbr_output
                     .lines()
                     .filter_map(|line| {
                         // Fish outputs abbreviations in the form:
-                        // abbr -a -U -- name val # optional comment
-                        // First, strip off the comment at the end if it exists. Then,
-                        // strip off the preamble characters and separate the key and value
+                        // abbr -a -U [OPTIONS] -- name val # optional comment
+                        // First, split the line into words, which drops the comment. Then,
+                        // separate the options from the abbreviation, and its key from its value.
                         // Note: The key cannot have spaces in it (fish won't allow you to define an
                         // abbreviation with a space in the name)
-                        line.split_once(" #")
-                            .map_or(line, |split_line| split_line.0)
-                            .split_once(" -- ")
-                            .and_then(|(_, abbr)| abbr.split_once(' '))
+                        let words = fish_words(line);
+                        let (options, abbr) =
+                            words.split_at(words.iter().position(|&word| word == "--")?);
+                        let [_, key, value @ ..] = abbr else {
+                            return None;
+                        };
+                        // `--function` abbreviations have no value.
+                        if value.is_empty() {
+                            return None;
+                        }
+                        let (key, expansion) = unescape_alias_key_value(key, &value.join(" "))?;
+                        Some((key, parse_fish_abbr_options(options, expansion)))
                     })
-                    .filter_map(|(key, value)| unescape_alias_key_value(key, value))
                     .collect()
             }
             // Abbreviations are currently only supported in fish
@@ -940,6 +949,125 @@ impl From<ShellLaunchData> for SessionPlatform {
             ShellLaunchData::DockerSandbox { .. } => SessionPlatform::DockerSandbox,
         }
     }
+}
+
+/// Where a fish abbreviation may expand (`--position`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbbreviationPosition {
+    /// Only as the command (fish's default).
+    Command,
+    /// As the command or as an argument.
+    Anywhere,
+}
+
+/// A fish abbreviation, as printed by `abbr --show`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Abbreviation {
+    pub expansion: String,
+    pub position: AbbreviationPosition,
+    /// `--command`: only expands as an argument of one of these commands. An empty command means
+    /// as the command itself.
+    pub commands: Vec<String>,
+    /// `--set-cursor`: the cursor goes where this marker is in the expansion, which loses it.
+    pub set_cursor_marker: Option<String>,
+}
+
+impl Abbreviation {
+    /// A plain abbreviation, which only expands as the command.
+    pub fn new(expansion: String) -> Self {
+        Self {
+            expansion,
+            position: AbbreviationPosition::Command,
+            commands: Vec::new(),
+            set_cursor_marker: None,
+        }
+    }
+
+    /// Whether the abbreviation may expand as an argument of the command `argument_of`, or as the
+    /// command itself (`None`).
+    pub fn may_expand_at(&self, argument_of: Option<&str>) -> bool {
+        if !self.commands.is_empty() {
+            let command = argument_of.unwrap_or_default();
+            return self.commands.iter().any(|c| c == command);
+        }
+        argument_of.is_none() || self.position == AbbreviationPosition::Anywhere
+    }
+
+    /// The expansion without its `--set-cursor` marker, and where the cursor goes in it.
+    pub fn expansion_and_cursor(&self) -> (String, Option<usize>) {
+        let marker = self
+            .set_cursor_marker
+            .as_deref()
+            .and_then(|marker| self.expansion.find(marker).map(|index| (marker, index)));
+        match marker {
+            Some((marker, index)) => (self.expansion.replacen(marker, "", 1), Some(index)),
+            None => (self.expansion.clone(), None),
+        }
+    }
+}
+
+/// Reads the options `abbr --show` prints before `--`, e.g.
+/// `abbr -a --position anywhere --set-cursor=@CURSOR@ --command git`.
+fn parse_fish_abbr_options(options: &[&str], expansion: String) -> Abbreviation {
+    let mut abbreviation = Abbreviation::new(expansion);
+    let mut words = options.iter().copied();
+    while let Some(word) = words.next() {
+        match word.split_once('=') {
+            Some(("--set-cursor", marker)) => {
+                abbreviation.set_cursor_marker = unescape_quotes(marker).ok()
+            }
+            _ => match word {
+                "--set-cursor" => abbreviation.set_cursor_marker = Some("%".to_owned()),
+                "--position" if words.next() == Some("anywhere") => {
+                    abbreviation.position = AbbreviationPosition::Anywhere
+                }
+                "--command" => {
+                    if let Some(command) = words.next().and_then(|c| unescape_quotes(c).ok()) {
+                        abbreviation.commands.push(command);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    abbreviation
+}
+
+/// Splits a line of fish's `abbr --show` output into words like fish does, but keeps their quotes
+/// and escapes. A word starting with `#` starts a comment, which ends the line.
+fn fish_words(line: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut word_start = None;
+    let mut quote = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((index, c)) = chars.next() {
+        if quote.is_none() && c.is_whitespace() {
+            if let Some(start) = word_start.take() {
+                words.push(&line[start..index]);
+            }
+            continue;
+        }
+        if word_start.is_none() {
+            if c == '#' {
+                return words;
+            }
+            word_start = Some(index);
+        }
+        match (quote, c) {
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(open), _) if c == open => quote = None,
+            // In single quotes, fish only treats `\'` and `\\` as escapes.
+            (Some('\''), '\\') => {
+                chars.next_if(|&(_, next)| matches!(next, '\'' | '\\'));
+            }
+            (_, '\\') => {
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    words.extend(word_start.map(|start| &line[start..]));
+    words
 }
 
 /// Unescape the key and value for an alias, returning None if either fails

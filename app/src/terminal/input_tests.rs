@@ -8081,6 +8081,87 @@ fn test_alias_expansion_with_abbreviations() {
     });
 }
 
+/// Real `abbr --show` output (fish 4.9.3): `foobar` is the `--set-cursor` abbreviation from #4365,
+/// `glc` only expands as an argument to `git` and puts the cursor at `@CURSOR@`, `-C` expands at
+/// any position.
+const FISH_ABBR_SHOW: &str = r#"abbr -a --set-cursor='%' -- foobar 'foo % bar'
+abbr -a --position anywhere -- -C --color
+abbr -a --position anywhere --set-cursor=@CURSOR@ --command git -- glc "log --pretty=tformat:'%h%x09%an%x09%s' @CURSOR@ | column -t -s \\t"
+"#;
+
+#[test]
+fn test_fish_abbreviation_expansion_follows_abbreviation_options() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_info = SessionInfo::new_for_test().with_fish_abbreviations(FISH_ABBR_SHOW);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        let (input, editor) = terminal.read(&app, |terminal, ctx| {
+            let input = terminal.input().clone();
+            let editor = input.as_ref(ctx).editor().clone();
+            (input, editor)
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_active_block_metadata(
+                BlockMetadata::new(Some(SessionId::from(0)), Some("~".into())),
+                false,
+                ctx,
+            )
+        });
+
+        // Types `typed` with the cursor at its end, expands on space and returns the buffer and
+        // the text before the cursor.
+        let mut type_and_expand = |typed: &str| {
+            input.update(&mut app, |input, ctx| {
+                input.clear_buffer_and_reset_undo_stack(ctx);
+                input.user_insert(typed, ctx);
+            });
+            editor.update(&mut app, |editor, ctx| editor.move_to_buffer_end(ctx));
+            input.update(&mut app, |input, ctx| input.run_expansion_on_space(ctx));
+            let buffer = input.read(&app, |input, ctx| input.buffer_text(ctx));
+            let cursor = editor.read(&app, |editor, ctx| {
+                editor.end_byte_index_of_last_selection(ctx).as_usize()
+            });
+            let before_cursor = buffer[..cursor].to_owned();
+            (buffer, before_cursor)
+        };
+
+        // `--set-cursor`: the marker is removed and the cursor goes where it was, the typed space
+        // stays at the end.
+        assert_eq!(
+            type_and_expand("foobar "),
+            ("foo  bar ".to_owned(), "foo ".to_owned())
+        );
+        // `--command git`: expands as an argument to `git`, at the marker.
+        assert_eq!(
+            type_and_expand("git glc "),
+            (
+                r"git log --pretty=tformat:'%h%x09%an%x09%s'  | column -t -s \t ".to_owned(),
+                "git log --pretty=tformat:'%h%x09%an%x09%s' ".to_owned()
+            )
+        );
+        // ... but not as a command or as an argument to another command.
+        assert_eq!(
+            type_and_expand("glc "),
+            ("glc ".to_owned(), "glc ".to_owned())
+        );
+        assert_eq!(
+            type_and_expand("ls glc "),
+            ("ls glc ".to_owned(), "ls glc ".to_owned())
+        );
+        // `--position anywhere`: expands as an argument too.
+        assert_eq!(
+            type_and_expand("ls -C "),
+            ("ls --color ".to_owned(), "ls --color ".to_owned())
+        );
+    });
+}
+
 #[test]
 fn test_alias_expansion_when_alias_expansion_is_disabled() {
     App::test((), |mut app| async move {
