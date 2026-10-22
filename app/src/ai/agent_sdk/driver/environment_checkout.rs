@@ -618,7 +618,9 @@ impl Git {
 /// any output was dropped.
 async fn capture(mut reader: impl AsyncRead + Unpin) -> io::Result<(String, bool)> {
     let mut bytes = VecDeque::new();
-    let mut buffer = [0; 8192];
+    // Make sure not to store the capture buffer directly in the future's generated state
+    // machine, as it's likely to end up on the stack.
+    let mut buffer = vec![0; 8192];
     let mut truncated = false;
     let mut starts_on_line = true;
     loop {
@@ -767,11 +769,13 @@ async fn attempt_cached_checkout(
 /// Ensures `mirror` is a valid, up-to-date bare copy of `url`, rebuilding it if it is not or if it
 /// cannot be refreshed. Returns the remote's default branch, which the mirror's `HEAD` follows.
 ///
-/// The mirror holds every ref the remote advertises, including ones such as pull request refs
-/// that no branch reaches, so checkouts can resolve any commit the remote can serve from it. It is
-/// always a complete copy because checkouts borrow its objects. Its configuration is rewritten on
-/// every use so that nothing left over from earlier runs, such as a URL carrying credentials or
-/// unrelated settings, is trusted.
+/// The mirror holds the remote's branches and tags. Other refs, such as pull request refs, are left
+/// out: most commits will be included via branches, and any missing commits are fetched from the remote
+/// on checkout. On busy repositories, those refs carry a large share of the history that every checkout
+/// would otherwise copy.
+///
+/// The mirror configuration configuration is rewritten on every use so that nothing left over from
+/// earlier runs, such as a URL carrying credentials or unrelated settings, is trusted.
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
     cache_hit = tracing::field::Empty,
@@ -790,16 +794,63 @@ async fn refresh_mirror(
         let parent = mirror
             .parent()
             .ok_or_else(|| git.record("cache mirror has no parent directory"))?;
+        // The default branch lookup queries the remote directly, so it does not need to wait for the mirror refresh.
+        let mut head_git = Git::default();
+        let (synced, head) = tokio::join!(
+            sync_mirror(mirror, parent, url, label, git),
+            remote_default_branch(parent, url, &mut head_git),
+        );
+        if !head_git.diagnostics.is_empty() {
+            git.record(&head_git.diagnostics);
+        }
+        cache_hit = synced.cache_hit;
+        rebuilt = synced.rebuilt;
+        synced.result?;
+        let head = head?;
+        // Fetching never moves the mirror's `HEAD`, so follow the remote's default branch explicitly.
+        git.run(
+            "cache mirror HEAD update",
+            mirror,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{head}")],
+        )
+        .await?;
+        Ok(head)
+    }
+    .await;
+    tracing::Span::current().record("cache_hit", cache_hit);
+    tracing::Span::current().record("rebuilt", rebuilt);
+    tracing::Span::current().record("result_ok", result.is_ok());
+    result
+}
+
+struct MirrorSyncOutcome {
+    result: Result<(), ()>,
+    cache_hit: bool,
+    rebuilt: bool,
+}
+
+/// Brings `mirror` up to date with `url`, validating and refreshing an existing mirror or
+/// rebuilding it when it is invalid or cannot be refreshed.
+///
+/// Note that this is not a true Git mirror (i.e. `--mirror` is not used), so that we can
+/// control which refs are included.
+async fn sync_mirror(
+    mirror: &Path,
+    parent: &Path,
+    url: &str,
+    label: &str,
+    git: &mut Git,
+) -> MirrorSyncOutcome {
+    let mut cache_hit = false;
+    let mut rebuilt = false;
+    let result = async {
         let existing = fs::symlink_metadata(mirror).await;
         let config_path = mirror.join("config");
         let config_path_str = config_path
             .to_str()
             .ok_or_else(|| git.record("cache mirror config path is not valid UTF-8"))?;
-        let canonical_config = format!(
-            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
-             [remote \"origin\"]\n\turl = {url}\n\tfetch = +refs/*:refs/*\n\tmirror = true\n"
-        );
-        // A mirror configured as partial would lack objects that checkouts expect to borrow from it.
+        // Removing partial-clone config does not make a normal fetch backfill missing objects.
+        // Hydrating it needs a full --refetch, so rebuild instead of borrowing incomplete objects.
         let mut valid = existing.as_ref().is_ok_and(|metadata| metadata.is_dir())
             && git
                 .run(
@@ -827,7 +878,7 @@ async fn refresh_mirror(
                     })
                 });
         if valid {
-            fs::write(&config_path, &canonical_config)
+            fs::write(&config_path, canonical_mirror_config(url))
                 .await
                 .map_err(|error| git.record_error("could not write cache mirror config", error))?;
             valid = git
@@ -887,32 +938,33 @@ async fn refresh_mirror(
                 rebuilt = true;
             }
         }
-        // Fetching never moves the mirror's `HEAD`, so follow the remote's default branch explicitly.
-        let head = remote_default_branch(mirror, git).await?;
-        git.run(
-            "cache mirror HEAD update",
-            mirror,
-            &["symbolic-ref", "HEAD", &format!("refs/heads/{head}")],
-        )
-        .await?;
-        Ok(head)
+        Ok(())
     }
     .await;
-    tracing::Span::current().record("cache_hit", cache_hit);
-    tracing::Span::current().record("rebuilt", rebuilt);
-    tracing::Span::current().record("result_ok", result.is_ok());
-    result
+    MirrorSyncOutcome {
+        result,
+        cache_hit,
+        rebuilt,
+    }
 }
 
-/// Puts a fresh `git clone --mirror` of `url` at `mirror`, replacing whatever is there. The clone
-/// is made beside the mirror and moved into place only once it is complete, so a failure or an
-/// interrupted run never leaves a partial mirror at `mirror`, and an existing mirror stays in
-/// place until the replacement is ready.
+/// Returns the mirror configuration:
+/// * A bare repository with `url` as the single `origin` remote
+/// * On fetch, all branches and tags are updated or pruned
+fn canonical_mirror_config(url: &str) -> String {
+    format!(
+        "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+         [remote \"origin\"]\n\turl = {url}\n\
+         \tfetch = +refs/heads/*:refs/heads/*\n\tfetch = +refs/tags/*:refs/tags/*\n"
+    )
+}
+
+/// Puts a fresh bare clone of `url` at `mirror`, replacing whatever is there. The clone is made
+/// beside the mirror and moved into place only once it is complete, so a failure or an interrupted
+/// run never leaves a partial mirror at `mirror`, and an existing mirror stays in place until the
+/// replacement is ready.
 ///
-/// `--mirror` makes a bare repository whose `+refs/*:refs/*` refspec lets later fetches update
-/// and prune every ref, not only branches. A clone also records every ref in `packed-refs` in
-/// one step, so unlike a fetch it succeeds for branches that differ only in case on a
-/// case-insensitive filesystem.
+/// The clone is *like* a Git mirror, but does not use `--mirror` so we can control the included refs.
 #[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
 async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), ()> {
     let result = async {
@@ -934,10 +986,16 @@ async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), (
             .run(
                 "cache mirror clone",
                 parent,
-                &["clone", "--mirror", "--quiet", "--", url, staging_path],
+                &["clone", "--bare", "--quiet", "--", url, staging_path],
             )
             .await;
-        if cloned.is_err() {
+        let configured = match cloned {
+            Ok(_) => fs::write(staging.join("config"), canonical_mirror_config(url))
+                .await
+                .map_err(|error| git.record_error("could not write cache mirror config", error)),
+            Err(()) => Err(()),
+        };
+        if configured.is_err() {
             let _ = fs::remove_dir_all(&staging).await;
             return Err(());
         }
@@ -957,15 +1015,16 @@ async fn install_mirror(mirror: &Path, url: &str, git: &mut Git) -> Result<(), (
     result
 }
 
-/// Returns the validated name of the branch that the `origin` remote's `HEAD` points to.
+/// Returns the validated name of the branch that `remote`'s `HEAD` points to. `remote` is a
+/// remote name or URL, resolved from `cwd`.
 #[tracing::instrument(skip_all, fields(tags.cloud_agent = true, result_ok = tracing::field::Empty))]
-async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, ()> {
+async fn remote_default_branch(cwd: &Path, remote: &str, git: &mut Git) -> Result<String, ()> {
     let result = async {
         let output = git
             .run(
                 "default branch lookup",
-                target,
-                &["ls-remote", "--symref", "origin", "HEAD"],
+                cwd,
+                &["ls-remote", "--symref", remote, "HEAD"],
             )
             .await?;
         let branch = output
@@ -977,7 +1036,7 @@ async fn remote_default_branch(target: &Path, git: &mut Git) -> Result<String, (
             .ok_or_else(|| git.record("git ls-remote did not report a symbolic default branch"))?;
         git.run(
             "default branch validation",
-            target,
+            cwd,
             &["check-ref-format", "--branch", branch],
         )
         .await?;
@@ -1118,7 +1177,7 @@ async fn clone_from_mirror(
             git.record("checkout target path is not valid UTF-8");
             clone_error
         })?;
-        let mut args = vec!["clone", "--quiet"];
+        let mut args = vec!["-c", "checkout.workers=0", "clone", "--quiet"];
         if head.is_some() {
             args.push("--no-checkout");
         }
@@ -1139,6 +1198,8 @@ async fn clone_from_mirror(
                     "requested head checkout",
                     target,
                     &[
+                        "-c",
+                        "checkout.workers=0",
                         "checkout",
                         "--detach",
                         &format!("refs/remotes/origin/{branch}"),
@@ -1158,7 +1219,7 @@ async fn clone_from_mirror(
                 git.run(
                     "requested head checkout",
                     target,
-                    &["checkout", "--detach", sha],
+                    &["-c", "checkout.workers=0", "checkout", "--detach", sha],
                 )
                 .await
             }
@@ -1345,7 +1406,7 @@ async fn checkout_requested_head(
             return Ok(());
         };
         if request.fetch_branch_only {
-            let default = remote_default_branch(target, git)
+            let default = remote_default_branch(target, "origin", git)
                 .await
                 .map_err(|_| checkout_error)?;
             let refspec = format!("+refs/heads/{}:refs/remotes/origin/{default}", head.value());

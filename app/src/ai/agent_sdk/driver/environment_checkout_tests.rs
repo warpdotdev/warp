@@ -616,24 +616,20 @@ fn cold_and_warm_mirrors_refresh_default_and_remain_independent() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs() {
+fn mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs() {
     fixture_test(
-        "mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs",
+        "mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs",
         |fixture| {
             fixture.prepare(fixture.request("cold", None), true);
             let mirror = fixture.mirror();
             assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.fetch"]),
-                "+refs/*:refs/*"
+                git(
+                    &mirror,
+                    &["config", "--local", "--get-all", "remote.origin.fetch"]
+                ),
+                "+refs/heads/*:refs/heads/*\n+refs/tags/*:refs/tags/*"
             );
-            assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.mirror"]),
-                "true"
-            );
-            assert_eq!(
-                git(&mirror, &["rev-parse", "refs/pinned/base"]),
-                fixture.pinned()
-            );
+            assert!(git(&mirror, &["for-each-ref", "refs/pinned"]).is_empty());
             git(
                 &mirror,
                 &["commit-graph", "write", "--reachable", "--split"],
@@ -812,6 +808,43 @@ fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn partial_mirrors_with_missing_blobs_are_rebuilt() {
+    fixture_test(
+        "partial_mirrors_with_missing_blobs_are_rebuilt",
+        |fixture| {
+            let root = optional_mirror_root().unwrap();
+            git(
+                &root,
+                &[
+                    "clone",
+                    "--bare",
+                    "--filter=blob:none",
+                    CANONICAL_URL,
+                    fixture.mirror().to_str().unwrap(),
+                ],
+            );
+            assert!(
+                git(
+                    &fixture.mirror(),
+                    &["rev-list", "--objects", "--all", "--missing=print"]
+                )
+                .lines()
+                .any(|line| line.starts_with('?'))
+            );
+            fs::write(fixture.mirror().join("KEEP"), "partial mirror").unwrap();
+
+            fixture.prepare(fixture.request("rebuilt", None), true);
+
+            assert!(!fixture.mirror().join("KEEP").exists());
+            let target = fixture.work().join("rebuilt");
+            assert!(!is_partial_clone(&target));
+            fixture.full_objects(&target);
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history() {
     fixture_test(
         "failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history",
@@ -854,6 +887,31 @@ fn failed_rebuild_keeps_the_existing_mirror() {
         let entries = fs::read_dir(mirror.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1, "no staging directory should be left behind");
     });
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail() {
+    fixture_test(
+        "mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail",
+        |fixture| {
+            fixture.prepare(fixture.request("initial", None), true);
+            fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+            let mirror = fixture.mirror();
+
+            let outcome = block_on(Compat::new(super::sync_mirror(
+                &mirror,
+                mirror.parent().unwrap(),
+                CANONICAL_URL,
+                "fixture",
+                &mut Git::default(),
+            )));
+
+            assert!(outcome.result.is_err());
+            assert!(outcome.cache_hit);
+            assert!(!outcome.rebuilt);
+        },
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
