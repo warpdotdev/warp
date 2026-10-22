@@ -228,6 +228,42 @@ fn should_watch_prunes_gitignored_directory() {
     ));
 }
 
+#[test]
+fn should_watch_prunes_nested_gitignored_directory() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join("client/node_modules/pkg")).unwrap();
+    fs::create_dir(root.join("client/src")).unwrap();
+    // Only the nested `.gitignore` ignores `client/node_modules`; the root one is unrelated.
+    let gitignores = vec![gitignore_rooted(&root, "/dist/\n")];
+    fs::write(root.join("client/.gitignore"), "/node_modules\n").unwrap();
+
+    assert!(super::should_watch_repo_directory(
+        &root.join("client"),
+        &root,
+        &gitignores,
+        &[]
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join("client/src"),
+        &root,
+        &gitignores,
+        &[]
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join("client/node_modules"),
+        &root,
+        &gitignores,
+        &[]
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join("client/node_modules/pkg"),
+        &root,
+        &gitignores,
+        &[]
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn should_watch_prunes_directory_symlinks_and_their_descendants() {
@@ -593,6 +629,64 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
         },
     );
 }
+/// Rule files under a gitignored directory (root-level or nested `.gitignore`) are not project
+/// rules, but a rule file that is itself gitignored inside a tracked directory still is.
+#[test]
+fn standing_queries_skip_rules_below_ignored_directories() {
+    virtual_fs::VirtualFS::test("standing_queries_skip_ignored_rules", |dirs, mut vfs| {
+        vfs.mkdir("repo/vendor")
+            .mkdir("repo/client/node_modules/pkg")
+            .with_files(vec![
+                virtual_fs::Stub::FileWithContent("repo/.gitignore", "/vendor/\n/WARP.md\n"),
+                virtual_fs::Stub::FileWithContent("repo/WARP.md", "personal rules"),
+                virtual_fs::Stub::FileWithContent("repo/vendor/AGENTS.md", "vendored"),
+                virtual_fs::Stub::FileWithContent("repo/client/.gitignore", "/node_modules\n"),
+                virtual_fs::Stub::FileWithContent("repo/client/AGENTS.md", "client rules"),
+                virtual_fs::Stub::FileWithContent(
+                    "repo/client/node_modules/pkg/AGENTS.md",
+                    "dependency",
+                ),
+            ]);
+        let repo = dirs.tests().join("repo");
+
+        let mut files = Vec::new();
+        let mut gitignores = Vec::new();
+        let mut results = StandingQueryResults::default();
+        // `Include` descends into ignored directories, so this exercises the recording
+        // decision itself rather than relying on ignored directories staying lazy.
+        run(Entry::build_tree_with_standing_queries(
+            &repo,
+            &mut files,
+            &mut gitignores,
+            None,
+            super::BuildTreeOptions {
+                max_depth: 200,
+                current_depth: 0,
+                ignored_path_strategy: &IgnoredPathStrategy::Include,
+                force_included_paths: &[],
+                budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
+            },
+            false,
+            &mut results,
+            &StandingQueryDefinitions::default(),
+        ))
+        .unwrap();
+
+        let rule_paths = results
+            .project_rules()
+            .map(|content| content.path.clone())
+            .collect::<Vec<_>>();
+        let standardized = |relative: &str| {
+            warp_util::standardized_path::StandardizedPath::try_from_local(&repo.join(relative))
+                .unwrap()
+        };
+        assert!(rule_paths.contains(&standardized("WARP.md")));
+        assert!(rule_paths.contains(&standardized("client/AGENTS.md")));
+        assert!(!rule_paths.contains(&standardized("vendor/AGENTS.md")));
+        assert!(!rule_paths.contains(&standardized("client/node_modules/pkg/AGENTS.md")));
+    });
+}
+
 #[test]
 fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
     virtual_fs::VirtualFS::test("standing_queries_report_shallow_rules", |dirs, mut vfs| {
