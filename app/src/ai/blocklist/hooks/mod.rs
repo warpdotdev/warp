@@ -4,6 +4,8 @@
 //! so the inactive path adds no work beyond that check.
 
 pub(crate) mod denied_result;
+#[cfg(all(test, feature = "local_fs"))]
+mod e2e_tests;
 pub(crate) mod envelope;
 pub(crate) mod pre_tool;
 pub(crate) mod prompt;
@@ -419,6 +421,12 @@ impl HookRuntime {
                 })
             })
             .clone()
+    }
+
+    /// The project hook file watcher, once a detected root started it.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn config_watcher_for_test(&self) -> Option<ModelHandle<HookConfigWatcher>> {
+        self.config_watcher.clone()
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
@@ -1031,6 +1039,8 @@ pub(crate) mod testing {
         pub hooks: TestHooks,
         pub active_session: ModelHandle<ActiveSession>,
         pub dispatcher: ModelHandle<ModelEventDispatcher>,
+        /// The sessions behind `active_session`, empty until a test registers one.
+        pub sessions: ModelHandle<Sessions>,
         pub conversation_id: AIConversationId,
         pub terminal_view_id: warpui::EntityId,
     }
@@ -1038,7 +1048,7 @@ pub(crate) mod testing {
     pub(crate) fn hook_test_app(app: &mut App) -> HookTestApp {
         initialize_app_for_terminal_view(app);
         let hooks = app.update(install_test_hooks);
-        let (active_session, dispatcher) = mock_session(app);
+        let (active_session, dispatcher, sessions) = mock_session(app);
         let terminal_view_id = warpui::EntityId::new();
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
@@ -1051,6 +1061,7 @@ pub(crate) mod testing {
             hooks,
             active_session,
             dispatcher,
+            sessions,
             conversation_id,
             terminal_view_id,
         }
@@ -1063,13 +1074,14 @@ pub(crate) mod testing {
     ) -> (
         ModelHandle<ActiveSession>,
         ModelHandle<ModelEventDispatcher>,
+        ModelHandle<Sessions>,
     ) {
         let sessions = app.add_model(|_| Sessions::new_for_test());
         let (_tx, rx) = unbounded();
         let dispatcher = app.add_model(|ctx| ModelEventDispatcher::new(rx, sessions.clone(), ctx));
         let active_session =
-            app.add_model(|ctx| ActiveSession::new(sessions, dispatcher.clone(), ctx));
-        (active_session, dispatcher)
+            app.add_model(|ctx| ActiveSession::new(sessions.clone(), dispatcher.clone(), ctx));
+        (active_session, dispatcher, sessions)
     }
 
     pub(crate) fn mock_active_session(app: &mut App) -> ModelHandle<ActiveSession> {
