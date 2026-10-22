@@ -321,8 +321,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::PreviewUrlsMcp,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
-        #[cfg(feature = "web_fetch_ui")]
-        FeatureFlag::WebFetchUI,
         #[cfg(feature = "fork_from_command")]
         FeatureFlag::ForkFromCommand,
         #[cfg(feature = "context_window_usage_v2")]
