@@ -129,6 +129,29 @@ impl From<app_state::PaneFlex> for PaneFlex {
     }
 }
 
+/// The sizes of the two panes on either side of a divider at the moment a drag on it started,
+/// along the divider's split axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::pane_group) struct DividerDragAnchor {
+    /// Size of the pane before the divider.
+    leading_size: f32,
+    /// Combined size of the panes before and after the divider.
+    total_size: f32,
+}
+
+impl DividerDragAnchor {
+    /// Returns the leading pane's share of `total_flex` once the divider has been dragged
+    /// `offset` pixels from where the drag started. Both panes are kept at least
+    /// `minimum_pane_size` large, unless a pane was already smaller when the drag started, in
+    /// which case it is never shrunk further (rather than snapping it to the minimum).
+    fn leading_flex(&self, offset: f32, minimum_pane_size: f32, total_flex: f32) -> f32 {
+        let smallest = minimum_pane_size.min(self.leading_size);
+        let largest = (self.total_size - minimum_pane_size).max(self.leading_size);
+        let leading_size = (self.leading_size + offset).clamp(smallest, largest);
+        leading_size / self.total_size * total_flex
+    }
+}
+
 pub struct PaneBranch {
     axis: SplitDirection,
     pub nodes: Vec<(PaneFlex, PaneNode)>,
@@ -520,17 +543,31 @@ impl PaneData {
         }
     }
 
-    pub fn adjust_pane_size(
-        &mut self,
-        border_id: EntityId,
-        delta: f32,
-        ctx: &mut ViewContext<PaneGroup>,
-    ) {
-        self.root.adjust_pane_size(border_id, delta, ctx);
-    }
-
     pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
         self.root.reset_pane_sizes(border_id)
+    }
+
+    /// Measures the panes on either side of `border_id` to anchor a drag of that divider.
+    /// Returns `None` if the divider isn't found or its panes haven't been laid out yet.
+    pub(in crate::pane_group) fn divider_drag_anchor(
+        &self,
+        border_id: EntityId,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) -> Option<DividerDragAnchor> {
+        self.root.divider_drag_anchor(border_id, ctx)
+    }
+
+    /// Moves divider `border_id` to `offset` pixels from where the drag described by `anchor`
+    /// started.
+    pub(in crate::pane_group) fn drag_divider(
+        &mut self,
+        border_id: EntityId,
+        anchor: DividerDragAnchor,
+        offset: f32,
+        minimum_pane_size: f32,
+    ) {
+        self.root
+            .drag_divider(border_id, anchor, offset, minimum_pane_size);
     }
 
     pub fn adjust_pane_size_by_id(
@@ -765,6 +802,32 @@ impl PaneNode {
         match self {
             PaneNode::Leaf(_) => false,
             PaneNode::Branch(branch) => branch.reset_pane_sizes(border_id),
+        }
+    }
+
+    fn divider_drag_anchor(
+        &self,
+        border_id: EntityId,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) -> Option<DividerDragAnchor> {
+        match self {
+            PaneNode::Leaf(_) => None,
+            PaneNode::Branch(branch) => branch.divider_drag_anchor(border_id, ctx),
+        }
+    }
+
+    fn drag_divider(
+        &mut self,
+        border_id: EntityId,
+        anchor: DividerDragAnchor,
+        offset: f32,
+        minimum_pane_size: f32,
+    ) -> bool {
+        match self {
+            PaneNode::Leaf(_) => false,
+            PaneNode::Branch(branch) => {
+                branch.drag_divider(border_id, anchor, offset, minimum_pane_size)
+            }
         }
     }
 
@@ -1188,6 +1251,62 @@ impl PaneBranch {
         false
     }
 
+    fn divider_index(&self, border_id: EntityId) -> Option<usize> {
+        self.dividers
+            .iter()
+            .position(|divider| divider.id == border_id)
+    }
+
+    fn divider_drag_anchor(
+        &self,
+        border_id: EntityId,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) -> Option<DividerDragAnchor> {
+        let Some(idx) = self.divider_index(border_id) else {
+            return self
+                .nodes
+                .iter()
+                .find_map(|(_, node)| node.divider_drag_anchor(border_id, ctx));
+        };
+
+        let leading_size = self.nodes[idx].1.pane_size(ctx);
+        let trailing_size = self.nodes[idx + 1].1.pane_size(ctx);
+        let (leading_size, trailing_size) = match self.axis {
+            SplitDirection::Horizontal => (leading_size.x(), trailing_size.x()),
+            SplitDirection::Vertical => (leading_size.y(), trailing_size.y()),
+        };
+
+        // Panes that haven't been laid out yet report a zero size; don't anchor the drag to
+        // that, so the next drag event can measure again. Both sides must be measured: with
+        // only one, the drag would treat that pane as the whole span and squeeze the other
+        // to nothing.
+        (leading_size > 0. && trailing_size > 0.).then_some(DividerDragAnchor {
+            leading_size,
+            total_size: leading_size + trailing_size,
+        })
+    }
+
+    fn drag_divider(
+        &mut self,
+        border_id: EntityId,
+        anchor: DividerDragAnchor,
+        offset: f32,
+        minimum_pane_size: f32,
+    ) -> bool {
+        let Some(idx) = self.divider_index(border_id) else {
+            return self
+                .nodes
+                .iter_mut()
+                .any(|(_, node)| node.drag_divider(border_id, anchor, offset, minimum_pane_size));
+        };
+
+        let total_flex = self.nodes[idx].0.0 + self.nodes[idx + 1].0.0;
+        let leading_flex = anchor.leading_flex(offset, minimum_pane_size, total_flex);
+        self.nodes[idx].0 = PaneFlex(leading_flex);
+        self.nodes[idx + 1].0 = PaneFlex(total_flex - leading_flex);
+        true
+    }
+
     pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
         if self.dividers.iter().any(|divider| divider.id == border_id) {
             for (flex, _) in &mut self.nodes {
@@ -1248,6 +1367,11 @@ impl PaneBranch {
 
     pub fn axis(&self) -> SplitDirection {
         self.axis
+    }
+
+    #[cfg(test)]
+    pub(in crate::pane_group) fn divider_ids(&self) -> Vec<EntityId> {
+        self.dividers.iter().map(|divider| divider.id).collect()
     }
 
     // Find the sibling of the given pane in the given direction.
@@ -1413,7 +1537,8 @@ fn divider_mouse_down_action(
         PaneGroupAction::StartResizing(DraggedBorder {
             border_id,
             direction,
-            previous_mouse_location: position,
+            start_mouse_location: position,
+            anchor: None,
         })
     }
 }
