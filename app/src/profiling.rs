@@ -197,7 +197,168 @@ async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
     if !prof_ctl.activated() {
         anyhow::bail!("heap profiling not activated");
     }
-    prof_ctl.dump_pprof()
+    let profile = prof_ctl.dump_pprof()?;
+    warn_if_pprof_missing_build_ids(&profile);
+    Ok(profile)
+}
+
+/// Logs a warning if a gzipped pprof dump's mapping table has entries with no
+/// GNU build-id. `jemalloc_pprof` always zeroes out each `Mapping`'s address
+/// range in the pprof output (it pre-resolves sample addresses to
+/// file-relative offsets instead, so the range is redundant) -- the build-id
+/// is therefore the only remaining way to join a mapping to a debug-info file
+/// offline, and a missing one means frames in that mapping can never be
+/// symbolized. Logging here surfaces that immediately, rather than leaving it
+/// discoverable only by decoding an individual profile attachment by hand.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "linux"))]
+fn warn_if_pprof_missing_build_ids(gzipped_profile: &[u8]) {
+    match ungzip_and_count_pprof_mappings_missing_build_id(gzipped_profile) {
+        Ok((total, missing_build_id)) if missing_build_id > 0 => {
+            log::warn!(
+                "jemalloc heap profile has {missing_build_id} of {total} pprof mapping(s) with \
+                 no GNU build-id; frames in those mappings cannot be symbolized offline"
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            log::warn!("Failed to inspect jemalloc heap profile mappings: {err:#}");
+        }
+    }
+}
+
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+fn ungzip_and_count_pprof_mappings_missing_build_id(
+    gzipped_profile: &[u8],
+) -> anyhow::Result<(usize, usize)> {
+    use std::io::Read as _;
+
+    let mut profile = Vec::new();
+    flate2::read::GzDecoder::new(gzipped_profile).read_to_end(&mut profile)?;
+    count_pprof_mappings_missing_build_id(&profile)
+}
+
+/// One decoded protobuf field's value: a varint, or a length-delimited
+/// (submessage/string/bytes) payload.
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+enum ProtobufFieldValue<'a> {
+    Varint(u64),
+    Bytes(&'a [u8]),
+}
+
+/// Reads the tag and value of one protobuf field from `buf[*pos..]`,
+/// advancing `*pos` past it. Returns `None` once `*pos` reaches the end of
+/// `buf`.
+///
+/// This supports only the wire types the pprof `Profile` schema (see
+/// `perftools.profiles.Profile` in the `jemalloc_pprof` crate's
+/// `proto/google/pprof/profile.proto`) actually uses. It exists so that
+/// [`count_pprof_mappings_missing_build_id`] can walk to a `Mapping`'s
+/// `build_id` field without pulling in a full protobuf decoder for a single
+/// yes/no signal.
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+fn read_protobuf_field<'a>(
+    buf: &'a [u8],
+    pos: &mut usize,
+) -> anyhow::Result<Option<(u64, ProtobufFieldValue<'a>)>> {
+    use anyhow::Context as _;
+
+    if *pos >= buf.len() {
+        return Ok(None);
+    }
+
+    let tag = read_protobuf_varint(buf, pos)?;
+    let field_number = tag >> 3;
+    let wire_type = tag & 0x7;
+    let value = match wire_type {
+        // Varint.
+        0 => ProtobufFieldValue::Varint(read_protobuf_varint(buf, pos)?),
+        // Length-delimited (submessage, string, or bytes).
+        2 => {
+            let len = usize::try_from(read_protobuf_varint(buf, pos)?)
+                .context("Protobuf length prefix does not fit in usize")?;
+            let end = pos
+                .checked_add(len)
+                .filter(|end| *end <= buf.len())
+                .context("Protobuf length-delimited field overruns buffer")?;
+            let value = &buf[*pos..end];
+            *pos = end;
+            ProtobufFieldValue::Bytes(value)
+        }
+        // Fixed64/fixed32. Not used by any field this parser inspects, so the
+        // bytes are exposed unparsed rather than as a numeric value.
+        1 | 5 => {
+            let width = if wire_type == 1 { 8 } else { 4 };
+            let end = pos
+                .checked_add(width)
+                .filter(|end| *end <= buf.len())
+                .context("Protobuf fixed-width field overruns buffer")?;
+            let value = &buf[*pos..end];
+            *pos = end;
+            ProtobufFieldValue::Bytes(value)
+        }
+        other => anyhow::bail!("Unsupported protobuf wire type {other}"),
+    };
+    Ok(Some((field_number, value)))
+}
+
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+fn read_protobuf_varint(buf: &[u8], pos: &mut usize) -> anyhow::Result<u64> {
+    use anyhow::Context as _;
+
+    let mut value = 0u64;
+    let mut shift = 0;
+    loop {
+        let byte = *buf.get(*pos).context("Truncated protobuf varint")?;
+        *pos += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+        shift += 7;
+        anyhow::ensure!(shift < 64, "Protobuf varint longer than 64 bits");
+    }
+}
+
+/// Counts the `Mapping` entries in a pprof `Profile` protobuf message and how
+/// many of them have no build-id. Per the pprof format, `string_table[0]`
+/// is always the empty string, so an absent or zero `Mapping.build_id` field
+/// always means an empty build-id; this lets the check skip decoding the
+/// string table entirely.
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+fn count_pprof_mappings_missing_build_id(profile: &[u8]) -> anyhow::Result<(usize, usize)> {
+    const PROFILE_MAPPING_FIELD_NUMBER: u64 = 3;
+
+    let mut total = 0;
+    let mut missing_build_id = 0;
+    let mut pos = 0;
+    while let Some((field_number, value)) = read_protobuf_field(profile, &mut pos)? {
+        let ProtobufFieldValue::Bytes(mapping) = value else {
+            continue;
+        };
+        if field_number != PROFILE_MAPPING_FIELD_NUMBER {
+            continue;
+        }
+        total += 1;
+        if !mapping_has_build_id(mapping)? {
+            missing_build_id += 1;
+        }
+    }
+    Ok((total, missing_build_id))
+}
+
+#[cfg(any(test, all(feature = "jemalloc_pprof", target_os = "linux")))]
+fn mapping_has_build_id(mapping: &[u8]) -> anyhow::Result<bool> {
+    const MAPPING_BUILD_ID_FIELD_NUMBER: u64 = 6;
+
+    let mut pos = 0;
+    while let Some((field_number, value)) = read_protobuf_field(mapping, &mut pos)? {
+        if field_number == MAPPING_BUILD_ID_FIELD_NUMBER
+            && let ProtobufFieldValue::Varint(string_table_index) = value
+        {
+            return Ok(string_table_index != 0);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(all(feature = "heap_usage_tracking", not(target_os = "linux")))]
@@ -309,3 +470,7 @@ pub async fn handle_get_heap()
     })?;
     Ok(pprof)
 }
+
+#[cfg(test)]
+#[path = "profiling_tests.rs"]
+mod tests;
