@@ -45,9 +45,22 @@ use super::testing::{
     ControllerHarness, HookTestApp, action_model, controller_harness, conversation_status,
     create_task_with_messages, done_event, exchange_count, finish_turn_with_text, hook_test_app,
     init_project_action, let_background_work_settle, record_statuses, root_task_id,
-    set_working_directory, shell_action, shell_tool_call_message, stream_init_event, text_message,
+    shell_action, shell_tool_call_message, stream_init_event, text_message,
 };
 use super::{HookRuntime, RunIdentity, RunSurface};
+use ai::agent::action::FileEdit;
+use chrono::Local;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentActionId, AIAgentActionType};
+use crate::ai::blocklist::{RequestInput, ResponseStreamId};
+use crate::ai::llms::LLMId;
+use crate::terminal::ShellLaunchData;
+use crate::terminal::event::BlockMetadataReceivedEvent;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::{SessionId, SessionInfo};
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::model_events::ModelEvent;
+use crate::terminal::shell::ShellType;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentAction, AIAgentActionResultType, CancellationReason};
 use crate::ai::agent_sdk::driver::hooks::{HookRunOptions, write_diagnostic, write_notice};
@@ -72,6 +85,8 @@ const HOOK_PATH: &str = "/usr/bin:/bin";
 const PROCESS_WAIT: Duration = Duration::from_secs(30);
 
 const SAMPLE_RM_REASON: &str = "This project's hook does not allow rm -rf. Remove files one at a time, or ask the user to do it.";
+const SAMPLE_PUSH_REASON: &str = "This project's hook does not allow force pushes. Push without \
+                                  --force, or ask the user to do it.";
 
 /// A temporary directory holding fixture copies, hook directories, and the `HOME` hooks run with.
 struct Sandbox {
@@ -270,10 +285,12 @@ fn pin(app: &mut App, terminal_view_id: EntityId) {
     assert!(app.read(|ctx| HookRegistry::as_ref(ctx).pinned().is_some()));
 }
 
-/// A command-line run in a test app: the hook doubles replaced by the real runner, a window to
-/// read the posture through, and the profile's execute-commands setting at `setting`.
+/// A command-line run in a test app: the hook doubles replaced by the real runner, a Bash session
+/// Warp can classify commands for, a window to read the posture through, and the profile's
+/// execute-commands setting at `setting`.
 fn command_line_run(app: &mut App, setting: ActionPermission) -> (Sandbox, HookTestApp) {
     let harness = hook_test_app(app);
+    give_session_a_shell(app, &harness);
     let sandbox = Sandbox::new();
     install_real_runner(app, &sandbox.home);
     record_command_line_run(app);
@@ -336,6 +353,8 @@ async fn finished_result(
     })
 }
 
+/// Waits until `action` is the next in its conversation's queue and not running: it either waits
+/// for a confirmation or is not ready to run. The conversation's status tells the two apart.
 async fn wait_until_blocked(
     app: &mut App,
     model: &ModelHandle<BlocklistAIActionModel>,
@@ -370,14 +389,102 @@ fn line_count(path: &Path) -> usize {
 fn sample_project(app: &mut App, sandbox: &Sandbox, harness: &HookTestApp) -> PathBuf {
     let root = sandbox.copy_fixture("sample_project", "sample");
     detect_root(app, &root);
-    set_working_directory(app, harness, &root);
+    move_session(app, harness, &root);
     root
 }
 
-/// §11 "permission matrix under run-to-completion": on a command-line run, a hook's deny holds
-/// when the conversation auto-approves and when the user approves; a headless `ask` denies with
-/// the approval-unavailable reason; and a denylisted command stays behind Warp's confirmation even
-/// though the hook allowed it.
+fn session_id() -> SessionId {
+    SessionId::from(7)
+}
+
+/// Registers a Bash session as the harness's active session. Without a shell type Warp cannot
+/// classify a command, so it never auto-executes one and its own permission answer is hidden.
+fn give_session_a_shell(app: &mut App, harness: &HookTestApp) {
+    harness.sessions.update(app, |sessions, _| {
+        let mut session = SessionInfo::new_for_test().with_id(session_id());
+        session.launch_data = Some(ShellLaunchData::Executable {
+            executable_path: PathBuf::from("/bin/bash"),
+            shell_type: ShellType::Bash,
+        });
+        sessions.register_session_for_test(session);
+    });
+    harness.dispatcher.update(app, |dispatcher, _| {
+        dispatcher.set_active_session_id(session_id());
+    });
+}
+
+/// Moves the harness's shell session to `cwd`, the way its prompt would report it.
+fn move_session(app: &mut App, harness: &HookTestApp, cwd: &Path) {
+    let cwd = cwd.display().to_string();
+    harness.dispatcher.update(app, |_, ctx| {
+        ctx.emit(ModelEvent::BlockMetadataReceived(
+            BlockMetadataReceivedEvent {
+                block_metadata: BlockMetadata::new(Some(session_id()), Some(cwd)),
+                block_index: BlockIndex::zero(),
+                is_after_in_band_command: false,
+                is_done_bootstrapping: true,
+            },
+        ));
+    });
+}
+
+async fn wait_until_running(
+    app: &mut App,
+    model: &ModelHandle<BlocklistAIActionModel>,
+    action: &AIAgentAction,
+) {
+    let id = action.id.clone();
+    wait_for(app, &format!("{id} to start running"), |app| {
+        model.read(app, |model, _| {
+            model
+                .get_action_status(&id)
+                .is_some_and(|status| status.is_running())
+        })
+    })
+    .await;
+}
+
+/// Ends a command the mock terminal started and will never report finished.
+async fn end_running_command(
+    app: &mut App,
+    model: &ModelHandle<BlocklistAIActionModel>,
+    conversation_id: AIConversationId,
+    action: &AIAgentAction,
+) {
+    model.update(app, |model, ctx| {
+        model.cancel_action_with_id(
+            conversation_id,
+            &action.id,
+            CancellationReason::ManuallyCancelled,
+            ctx,
+        )
+    });
+    finished_result(app, model, action).await;
+}
+
+fn add_to_denylist(app: &mut App, harness: &HookTestApp, pattern: &str) {
+    let predicate = AgentModeCommandExecutionPredicate::new_regex(pattern).unwrap();
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = profiles
+            .active_profile(Some(harness.terminal_view_id), ctx)
+            .id()
+            .clone();
+        profiles.add_to_command_denylist(&profile_id, &predicate, ctx);
+    });
+}
+
+fn is_denylisted(result: &AIAgentActionResultType) -> bool {
+    matches!(
+        result,
+        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Denylisted { .. })
+    )
+}
+
+/// §11 "permission matrix under run-to-completion": on a command-line run whose shell Warp can
+/// classify, a command both hooks allow runs on its own until it is denylisted, and then the
+/// denylist still refuses it; a headless `ask` denies with the approval-unavailable reason; a
+/// hook's deny holds when the user approves while it decides; and when only the conversation's
+/// auto-approval lets Warp run commands, a hook's deny still holds.
 #[test]
 fn permission_matrix_run_to_completion() {
     App::test((), |mut app| async move {
@@ -392,16 +499,17 @@ fn permission_matrix_run_to_completion() {
                 &[(
                     "beforeShellExecution",
                     r#"input=$(cat)
-case "$input" in
-  *'"command":"deploy'*)
-    printf '{"permission":"ask","agent_message":"Deploys need a person to approve them."}' ;;
-  *'"command":"release'*)
-    : > "$PWD/release-started"
-    i=0
-    while [ ! -f "$PWD/release-go" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
-    printf '{"permission":"deny","agent_message":"Releases are frozen."}' ;;
-  *) printf '{"permission":"allow"}' ;;
-esac"#,
+command_is() { printf '%s' "$input" | grep -Eq "\"command\":[[:space:]]*\"$1"; }
+if command_is deploy; then
+  printf '{"permission":"ask","agent_message":"Deploys need a person to approve them."}'
+elif command_is release; then
+  : > "$PWD/release-started"
+  i=0
+  while [ ! -f "$PWD/release-go" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+  printf '{"permission":"deny","agent_message":"Releases are frozen."}'
+else
+  printf '{"permission":"allow"}'
+fi"#,
                     json!({}),
                 )],
             ),
@@ -415,39 +523,26 @@ esac"#,
             "the project file activated on the command line beside the run's policy"
         );
         let model = action_model(&mut app, &harness);
-        app.update(|ctx| {
-            AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                let profile_id = profiles
-                    .active_profile(Some(harness.terminal_view_id), ctx)
-                    .id()
-                    .clone();
-                profiles.add_to_command_denylist(
-                    &profile_id,
-                    &AgentModeCommandExecutionPredicate::new_regex("curl .*").unwrap(),
-                    ctx,
-                );
-            });
-        });
 
-        // A denylisted command: both hooks allow it, and the denylist still refuses it, as it does
-        // in any headless run.
+        // Both hooks allow `make docs`, and Warp runs it on its own: the answer the other cases
+        // tighten.
         let conversation = new_conversation(&mut app, &harness);
-        let curl = shell_action("curl", "curl https://example.com");
-        queue(&mut app, &model, conversation, vec![curl.clone()]);
-        let result = finished_result(&mut app, &model, &curl).await;
-        assert!(
-            matches!(
-                result,
-                AIAgentActionResultType::RequestCommandOutput(
-                    RequestCommandOutputResult::Denylisted { .. }
-                )
-            ),
-            "{result:?}"
-        );
+        let make = shell_action("make-before", "make docs");
+        queue(&mut app, &model, conversation, vec![make.clone()]);
+        wait_until_running(&mut app, &model, &make).await;
+        end_running_command(&mut app, &model, conversation, &make).await;
+
+        // Once it is denylisted, both hooks still allow it and the denylist still refuses it.
+        add_to_denylist(&mut app, &harness, "make .*");
+        let conversation = new_conversation(&mut app, &harness);
+        let make = shell_action("make", "make docs");
+        queue(&mut app, &model, conversation, vec![make.clone()]);
+        let result = finished_result(&mut app, &model, &make).await;
+        assert!(is_denylisted(&result), "{result:?}");
         assert!(
             fs::read_to_string(root.join(".hook-last-shell-input.json"))
                 .expect("the project hook ran")
-                .contains("curl https://example.com"),
+                .contains("make docs"),
             "the hook saw the command and allowed it"
         );
 
@@ -476,17 +571,36 @@ esac"#,
         let result = finished_result(&mut app, &model, &release).await;
         assert_eq!(hook_denied_reason(&result), Some("Releases are frozen."));
 
-        // The conversation auto-approves everything: the project's deny still holds.
-        let conversation = new_conversation(&mut app, &harness);
+        // From here the profile asks before running commands (the posture was read when the run
+        // pinned, so the project hooks stay active). A headless run refuses what Warp would ask
+        // about, so only the conversation's auto-approval lets Warp run a command now.
+        set_execute_commands(&mut app, harness.terminal_view_id, ActionPermission::AlwaysAsk);
+        let asking = new_conversation(&mut app, &harness);
+        let build = shell_action("build-asking", "npm run build");
+        queue(&mut app, &model, asking, vec![build.clone()]);
+        let result = finished_result(&mut app, &model, &build).await;
+        assert!(is_denylisted(&result), "{result:?}");
+
+        let auto_approving = new_conversation(&mut app, &harness);
         app.update(|ctx| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.toggle_autoexecute_override(&conversation, harness.terminal_view_id, ctx);
+                history.toggle_autoexecute_override(
+                    &auto_approving,
+                    harness.terminal_view_id,
+                    ctx,
+                );
             });
         });
-        let rm = shell_action("rm", "rm -rf build");
-        queue(&mut app, &model, conversation, vec![rm.clone()]);
-        let result = finished_result(&mut app, &model, &rm).await;
-        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
+        let build = shell_action("build", "npm run build");
+        queue(&mut app, &model, auto_approving, vec![build.clone()]);
+        wait_until_running(&mut app, &model, &build).await;
+        end_running_command(&mut app, &model, auto_approving, &build).await;
+
+        // Warp would run this one on its own too, and the project's hook denies it.
+        let push = shell_action("push", "git push --force origin main");
+        queue(&mut app, &model, auto_approving, vec![push.clone()]);
+        let result = finished_result(&mut app, &model, &push).await;
+        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_PUSH_REASON));
     });
 }
 
@@ -511,13 +625,6 @@ printf '{"permission":"deny","agent_message":"The nested project allows no shell
         detect_root(&mut app, &nested);
         pin(&mut app, harness.terminal_view_id);
         let model = action_model(&mut app, &harness);
-        // The mock terminal has no shell type, so Warp cannot classify a command it would run on
-        // its own, and a headless run refuses such a command outright. With the hooks pinned, the
-        // process goes back to the interactive mode, where Warp asks instead, so the test can
-        // approve the `cd` and have it start. The pinned project hooks stay active.
-        AppExecutionMode::handle(&app).update(&mut app, |mode, ctx| {
-            *mode = AppExecutionMode::new(ExecutionMode::App, false, ctx);
-        });
 
         let delete = shell_action("delete", "rm -rf build");
         let enter = shell_action("enter", "cd nested");
@@ -531,31 +638,12 @@ printf '{"permission":"deny","agent_message":"The nested project allows no shell
         let result = finished_result(&mut app, &model, &delete).await;
         assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
 
-        // The outer project allows `cd`, and once approved it runs. The mock terminal never reports
-        // it finished, so the test moves the session the way the shell's prompt would and then
-        // ends the command.
-        wait_until_blocked(&mut app, &model, &enter).await;
-        model.update(&mut app, |model, ctx| {
-            model.execute_action(&enter.id, harness.conversation_id, ctx)
-        });
-        let enter_id = enter.id.clone();
-        wait_for(&mut app, "the cd to start running", |app| {
-            model.read(app, |model, _| {
-                model
-                    .get_action_status(&enter_id)
-                    .is_some_and(|status| status.is_running())
-            })
-        })
-        .await;
-        set_working_directory(&mut app, &harness, &nested);
-        model.update(&mut app, |model, ctx| {
-            model.cancel_action_with_id(
-                harness.conversation_id,
-                &enter.id,
-                CancellationReason::ManuallyCancelled,
-                ctx,
-            )
-        });
+        // The outer project allows `cd`, and Warp runs it on its own. The mock terminal never
+        // reports it finished, so the test moves the session the way the shell's prompt would and
+        // then ends the command.
+        wait_until_running(&mut app, &model, &enter).await;
+        move_session(&mut app, &harness, &nested);
+        end_running_command(&mut app, &model, harness.conversation_id, &enter).await;
 
         let result = finished_result(&mut app, &model, &list).await;
         assert_eq!(
@@ -794,7 +882,7 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
-        set_working_directory(&mut app, &harness, &work);
+        move_session(&mut app, &harness, &work);
         let policy = sandbox.dir("run-policy");
         let hooks_file = write_hook_dir(&policy, &[("beforeShellExecution", SLOW_DENY, json!({}))]);
         load_hook_dir(&mut app, &hooks_file);
@@ -839,7 +927,7 @@ printf '{"permission":"deny","agent_message":"denied on run %s"}' "$runs""#;
         let root = sandbox.dir("project");
         write_project_hooks(&root, &[("beforeShellExecution", SLOW_DENY)]);
         detect_root(&mut app, &root);
-        set_working_directory(&mut app, &harness, &root);
+        move_session(&mut app, &harness, &root);
         pin(&mut app, harness.terminal_view_id);
         let model = action_model(&mut app, &harness);
 
@@ -1059,150 +1147,136 @@ fn an_inert_project_file_says_it_waits_for_a_profile_that_runs_commands() {
     assert!(inert.contains("approv"), "{inert}");
 }
 
-/// §11 "protected hook paths": a file edit that targets the project's hook file or one of its
-/// scripts, or a run-delivered hook file, is refused with `ProtectedPath`, also in a sandboxed run.
+/// A conversation on the harness's surface with one exchange: the file-edit executor only
+/// auto-approves an edit the model asked for in a request of its own.
+fn conversation_with_an_exchange(app: &mut App, harness: &HookTestApp) -> AIConversationId {
+    let conversation_id = new_conversation(app, harness);
+    let terminal_view_id = harness.terminal_view_id;
+    BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let task_id = history
+            .conversation(&conversation_id)
+            .expect("the conversation")
+            .get_root_task_id()
+            .clone();
+        history
+            .update_conversation_for_new_request_input_for_test(
+                RequestInput {
+                    conversation_id,
+                    input_messages: vec![(task_id, Vec::new())],
+                    working_directory: None,
+                    model_id: LLMId::from("test-model"),
+                    coding_model_id: LLMId::from("test-coding-model"),
+                    cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                    computer_use_model_id: LLMId::from("test-computer-use-model"),
+                    shared_session_response_initiator: None,
+                    request_start_ts: Local::now(),
+                    supported_tools_override: None,
+                },
+                ResponseStreamId::new_for_test(),
+                terminal_view_id,
+                ctx,
+            )
+            .expect("the exchange is recorded");
+    });
+    conversation_id
+}
+
+/// The model asking to replace `file`, spelled the way the model wrote it.
+fn edit_action(id: &str, file: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task".to_owned()),
+        requires_result: true,
+        action: AIAgentActionType::RequestFileEdits {
+            file_edits: vec![FileEdit::Create {
+                file: Some(file.to_owned()),
+                content: Some(String::new()),
+                allow_overwrite: true,
+            }],
+            title: None,
+        },
+    }
+}
+
+/// §11 "protected hook paths", through the action model on a command-line run that auto-approves
+/// diffs, in and out of a sandbox: a `RequestFileEdits` for the project's hook file (written
+/// relative to the session's working directory, as models write paths, and once absolute), for
+/// one of its scripts, or for the run-delivered hook file never starts. In a headless run nobody
+/// can confirm it, so the action waits and the conversation is left `Blocked`, which ends an Oz
+/// run as blocked. An edit of a file beside them is not held.
 #[test]
 fn protected_hook_paths() {
-    use crate::ai::blocklist::BlocklistAIPermissions;
-    use crate::ai::blocklist::permissions::{FileWritePermission, FileWritePermissionDeniedReason};
-    use crate::workspaces::user_workspaces::UserWorkspaces;
-
     for sandboxed in [false, true] {
         App::test((), move |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-            let (conversation_id, terminal_view_id) = permissions_app(&mut app, sandboxed);
-            let sandbox = Sandbox::new();
-            let root = sandbox.copy_fixture("sample_project", "sample");
-            app.add_singleton_model(|_| HookRegistry::new());
-            HookRegistry::handle(&app).update(&mut app, |registry, _| {
-                let hooks_file = root.join(PROJECT_CURSOR_HOOKS_PATH);
-                let bytes = fs::read(&hooks_file).expect("read");
-                registry.upsert_source(ai::hooks::SourceUpdate {
-                    source: ai::hooks::HookSourceId {
-                        kind: HookSourceKind::ProjectCursorFile,
-                        location: ai::hooks::HookSourceLocation::CanonicalPath(hooks_file),
-                    },
-                    format: HookFormat::Cursor,
-                    bytes: &bytes,
-                    project_root: Some(root.clone()),
-                    trust: ai::hooks::TrustDecision::Activate,
-                });
-                load_explicit_sources(
-                    &[ExplicitHookSource {
-                        path: root.join("run_hooks/hooks.json"),
-                        format: HookFormat::Cursor,
-                        scope: ExplicitSourceScope::Run,
-                    }],
-                    registry,
-                );
+            let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
+            if sandboxed {
+                AppExecutionMode::handle(&app)
+                    .update(&mut app, |mode, _| mode.set_sandboxed_for_test(true));
+            }
+            let root = sample_project(&mut app, &sandbox, &harness);
+            load_hook_dir(&mut app, &root.join("run_hooks/hooks.json"));
+            pin(&mut app, harness.terminal_view_id);
+            AIExecutionProfilesModel::handle(&app).update(&mut app, |profiles, ctx| {
+                let profile_id = profiles
+                    .active_profile(Some(harness.terminal_view_id), ctx)
+                    .id()
+                    .clone();
+                profiles.set_apply_code_diffs(&profile_id, &ActionPermission::AlwaysAllow, ctx);
             });
+            let model = action_model(&mut app, &harness);
 
-            let write = |app: &App, path: PathBuf| {
-                BlocklistAIPermissions::handle(app).read(app, |permissions, ctx| {
-                    permissions.can_write_files(
-                        &conversation_id,
-                        &[path],
-                        Some(terminal_view_id),
-                        &UserWorkspaces::teamless_context_for_operation_for_test(),
-                        ctx,
-                    )
-                })
-            };
-            for protected in [
-                ".cursor/hooks.json",
-                ".cursor/scripts/deny_dangerous.sh",
-                ".cursor/scripts/audit.sh",
-                "run_hooks/hooks.json",
+            let absolute = root.join(PROJECT_CURSOR_HOOKS_PATH).display().to_string();
+            for (id, file) in [
+                ("hook-file", ".cursor/hooks.json"),
+                ("hook-file-absolute", absolute.as_str()),
+                ("script", ".cursor/scripts/deny_dangerous.sh"),
+                ("run-hooks", "run_hooks/hooks.json"),
             ] {
-                let permission = write(&app, root.join(protected));
+                let conversation_id = conversation_with_an_exchange(&mut app, &harness);
+                let edit = edit_action(id, file);
+                queue(&mut app, &model, conversation_id, vec![edit.clone()]);
+                wait_until_blocked(&mut app, &model, &edit).await;
                 assert!(
                     matches!(
-                        permission,
-                        FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                        conversation_status(&app, conversation_id),
+                        Some(ConversationStatus::Blocked { .. })
                     ),
-                    "{protected} (sandboxed: {sandboxed}): {permission:?}"
+                    "{file} (sandboxed: {sandboxed}): {:?}",
+                    conversation_status(&app, conversation_id)
+                );
+                assert!(
+                    model.read(&app, |model, _| model.get_action_result(&edit.id).is_none()),
+                    "{file} was not edited (sandboxed: {sandboxed})"
                 );
             }
-            let other = write(&app, root.join("README.md"));
+
+            // The edit beside them passes the permission check and goes on to execution, which
+            // waits for diffs this harness never prepares; it is never held for confirmation.
+            let conversation_id = conversation_with_an_exchange(&mut app, &harness);
+            let readme = edit_action("readme", "README.md");
+            queue(&mut app, &model, conversation_id, vec![readme.clone()]);
+            wait_until_blocked(&mut app, &model, &readme).await;
+            for _ in 0..10 {
+                let_background_work_settle(&mut app).await;
+            }
             assert!(
                 !matches!(
-                    other,
-                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                    conversation_status(&app, conversation_id),
+                    Some(ConversationStatus::Blocked { .. })
                 ),
-                "an ordinary file is not protected (sandboxed: {sandboxed}): {other:?}"
+                "a file beside the hook files is not held (sandboxed: {sandboxed}): {:?}",
+                conversation_status(&app, conversation_id)
             );
         });
     }
 }
 
-/// The singletons the permission checks read, in the desktop app or a sandboxed SDK run, with
-/// one conversation. Returns the conversation and its terminal view.
-fn permissions_app(app: &mut App, sandboxed: bool) -> (AIConversationId, EntityId) {
-    use warp_core::execution_mode::ExecutionMode;
-
-    use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-    use crate::ai::blocklist::BlocklistAIPermissions;
-    use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
-    use crate::auth::AuthStateProvider;
-    use crate::cloud_object::model::persistence::CloudModel;
-    use crate::network::NetworkStatus;
-    use crate::server::cloud_objects::update_manager::UpdateManager;
-    use crate::server::sync_queue::SyncQueue;
-    use crate::settings::PrivacySettings;
-    use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-    use crate::test_util::settings::initialize_settings_for_tests_with_mode;
-    use crate::workspaces::team_tester::TeamTesterStatus;
-    use crate::workspaces::user_workspaces::UserWorkspaces;
-    use crate::{
-        AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
-    };
-
-    let mode = if sandboxed {
-        ExecutionMode::Sdk
-    } else {
-        ExecutionMode::App
-    };
-    initialize_settings_for_tests_with_mode(app, mode, sandboxed);
-    let global_resource_handles = GlobalResourceHandles::mock(app);
-    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
-    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-    app.add_singleton_model(|_| CLIAgentSessionsModel::new());
-    app.add_singleton_model(|_| ActiveAgentViewsModel::new());
-    app.add_singleton_model(AgentNotificationsModel::new);
-    app.add_singleton_model(BlocklistAIPermissions::new);
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-    app.add_singleton_model(SyncQueue::mock);
-    app.add_singleton_model(|_| NetworkStatus::new());
-    app.add_singleton_model(TeamTesterStatus::mock);
-    app.add_singleton_model(UpdateManager::mock);
-    app.add_singleton_model(CloudModel::mock);
-    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
-    let profiles = app.add_singleton_model(|ctx| {
-        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
-    });
-    app.add_singleton_model(PrivacySettings::mock);
-    app.add_singleton_model(UserWorkspaces::default_mock);
-    let terminal_view_id = EntityId::new();
-    profiles.update(app, |profiles, ctx| {
-        let profile_id = profiles
-            .active_profile(Some(terminal_view_id), ctx)
-            .id()
-            .clone();
-        if sandboxed {
-            profiles.apply_cli_profile_defaults_for_test(&profile_id, true, ctx);
-        }
-        profiles.set_apply_code_diffs(&profile_id, &ActionPermission::AlwaysAllow, ctx);
-    });
-    let conversation_id = history.update(app, |history, ctx| {
-        history.start_new_conversation(terminal_view_id, false, false, false, ctx)
-    });
-    (conversation_id, terminal_view_id)
-}
-
 /// §11 "deny reason reaches the wire": the project's shell denial carries the script's own text
-/// into `permission_denied.hook_denied.reason`; a tool with no text slot denied by a `preToolUse`
-/// hook finishes with its cancelled result and the reason reaches only a `Denied` notice (the
-/// recorded gap in §9.3).
+/// into `permission_denied.hook_denied.reason`. A tool with no text slot denied by a `preToolUse`
+/// hook finishes with its cancelled result and the reason reaches only a `Denied` notice: the
+/// empty-result half of the clause is not met in Phase 1, as PR 6 decided (questions.md, "PR 6: a
+/// denied action with no text slot ends the turn as cancelled, or reports completion").
 #[test]
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {
