@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
+use warp_multi_agent_api::AgentType;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -159,6 +160,15 @@ impl QueuedQuery {
         self.origin == QueuedQueryOrigin::LocalSteering
     }
 
+    /// Whether this is a shared-session injection addressed to the conversation's primary
+    /// task, as opposed to an agent wake or a prompt intended for the CLI subagent.
+    pub(crate) fn is_primary_injected_followup(&self) -> bool {
+        self.shared_session_prompt().is_some()
+            && !self.base_user_query().is_some_and(|base| {
+                base.is_agent_message_wake() || base.intended_agent() == Some(AgentType::Cli)
+            })
+    }
+
     /// Whether all asynchronous preparation for this row has settled.
     pub fn is_ready(&self) -> bool {
         match &self.kind {
@@ -233,6 +243,28 @@ pub enum AutofireAction {
         query_id: QueuedQueryId,
         command: String,
     },
+}
+
+/// A queued row that may be sent with the conversation's next request instead of waiting for
+/// the turn to finish, tagged with the reason it qualifies.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RequestRow<'a> {
+    /// A shared-session injection at the head of the queue. The caller may need to interrupt
+    /// a running agent command before it can be sent.
+    InjectedFollowup(&'a QueuedQuery),
+    /// The head of a queue delivered in [`QueuedPromptDeliveryMode::Steering`].
+    SteeredHead(&'a QueuedQuery),
+    /// A prompt filed in `Steer` mode. It passes plain prompts, which wait for the turn to
+    /// finish, but never a command, locked, or LRC auto-queue row.
+    LocalSteering(&'a QueuedQuery),
+}
+
+impl<'a> RequestRow<'a> {
+    pub(crate) fn row(self) -> &'a QueuedQuery {
+        match self {
+            Self::InjectedFollowup(row) | Self::SteeredHead(row) | Self::LocalSteering(row) => row,
+        }
+    }
 }
 
 /// How queued prompts for a conversation are delivered to the agent. Selected per-conversation;
@@ -460,13 +492,21 @@ impl QueuedQueryModel {
         self.ready_query(conversation_id, first.id)
     }
 
-    /// Returns the first local steering row when nothing ahead of it must fire first. Plain
-    /// prompts wait for the turn to finish, so a steering row may pass them; commands, locked
-    /// rows, and LRC auto-queue rows are ordering barriers.
-    pub(crate) fn ready_local_steering_row(
+    /// Returns the one row, if any, that may ride along with `conversation_id`'s next request
+    /// rather than waiting for the turn to finish. Queued commands never ride along.
+    pub(crate) fn next_row_for_request(
         &self,
         conversation_id: AIConversationId,
-    ) -> Option<&QueuedQuery> {
+    ) -> Option<RequestRow<'_>> {
+        let head = self
+            .ready_head(conversation_id)
+            .filter(|row| !row.is_command());
+        if let Some(head) = head.filter(|row| row.is_primary_injected_followup()) {
+            return Some(RequestRow::InjectedFollowup(head));
+        }
+        if self.is_steering(conversation_id) {
+            return head.map(RequestRow::SteeredHead);
+        }
         if self.has_command_in_flight(conversation_id) {
             return None;
         }
@@ -480,6 +520,7 @@ impl QueuedQueryModel {
             return None;
         }
         self.ready_query(conversation_id, row.id)
+            .map(RequestRow::LocalSteering)
     }
 
     /// Settles attachment preparation once; stale completions never recreate removed rows.
