@@ -797,7 +797,7 @@ impl InputSuggestionsMode {
         ) || (FeatureFlag::InlineProfileSelector.is_enabled()
             && matches!(self, Self::ProfileSelector))
             || (FeatureFlag::ListSkills.is_enabled() && matches!(self, Self::SkillMenu))
-            || (FeatureFlag::InlineRepoMenu.is_enabled() && matches!(self, Self::IndexedReposMenu))
+            || matches!(self, Self::IndexedReposMenu)
     }
 
     /// Whether this mode should snapshot the input buffer on open and restore it on dismiss.
