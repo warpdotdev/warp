@@ -16,6 +16,7 @@ use super::launch::AcpLaunchSpec;
 
 const SIDECAR_ENV: &str = "WARP_HARNESS_SIDECAR";
 const MANIFEST_FILE: &str = "warp-harness.json";
+const SIDECAR_ROOT_PREFIX: &str = "${SIDECAR_ROOT}/";
 
 /// Unknown top-level sections are ignored so a sidecar can add ones for other transports
 /// without breaking clients that only know about ACP; the sections consumed here are strict.
@@ -26,6 +27,26 @@ struct Manifest {
     acp: AcpLaunchSpec,
     #[serde(default)]
     auth: Auth,
+}
+/// Resolves an explicit `${SIDECAR_ROOT}/` file path without escaping the sidecar.
+fn resolve_sidecar_path(dir: &Path, value: &str) -> Result<PathBuf> {
+    let relative = value
+        .strip_prefix(SIDECAR_ROOT_PREFIX)
+        .context("Sidecar path must start with ${SIDECAR_ROOT}/")?;
+    if relative.contains(['\\', ':'])
+        || relative
+            .split('/')
+            .any(|part| matches!(part, "" | "." | ".."))
+    {
+        bail!("Invalid sidecar-relative path {value:?}");
+    }
+    let root = fs::canonicalize(dir)?;
+    let path = fs::canonicalize(root.join(relative))
+        .with_context(|| format!("Cannot resolve sidecar path {value:?}"))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        bail!("Sidecar path must name a file inside {}", root.display());
+    }
+    Ok(path)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -38,8 +59,7 @@ struct Auth {
 
 /// How to launch and check a harness over ACP: either what its sidecar's `warp-harness.json`
 /// declares, with the program resolved under the sidecar, or the built-in defaults used when
-/// there is no sidecar and the adapter is expected on `PATH`. Anything that depends on the
-/// sidecar's own layout is the launched program's business, not the client's.
+/// there is no sidecar and the adapter is expected on `PATH`.
 pub(super) struct HarnessManifest {
     pub(super) launch: AcpLaunchSpec,
     pub(super) auth_check_command: Option<String>,
@@ -49,21 +69,28 @@ pub(super) struct HarnessManifest {
 
 pub(super) fn resolve(harness: Harness) -> Result<HarnessManifest, AgentDriverError> {
     let override_dir = std::env::var_os(SIDECAR_ENV).map(PathBuf::from);
-    discover(harness, override_dir.as_deref(), Path::new("/mnt")).map_err(|error| {
-        AgentDriverError::HarnessSetupFailed {
-            harness: harness.to_string(),
-            reason: format!("{error:#}"),
-        }
+    let path_dirs = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    discover(
+        harness,
+        override_dir.as_deref(),
+        Path::new("/mnt"),
+        &path_dirs,
+    )
+    .map_err(|error| AgentDriverError::HarnessSetupFailed {
+        harness: harness.to_string(),
+        reason: format!("{error:#}"),
     })
 }
 
-/// Selects the sidecar manifest named by `override_dir`, else the one on the harness's mount,
-/// else the built-in defaults. An override that is set but unusable is an error rather than a
-/// fall-through.
-fn discover(
+/// Selects an override, mounted manifest, or PATH sidecar, then falls back to built-in defaults.
+/// An override that is set but unusable is an error rather than a fall-through.
+pub(super) fn discover(
     harness: Harness,
     override_dir: Option<&Path>,
     mounts_dir: &Path,
+    path_dirs: &[PathBuf],
 ) -> Result<HarnessManifest> {
     let mount_path = mounts_dir
         .join(format!("{harness}-cli-sidecar"))
@@ -76,14 +103,38 @@ fn discover(
     {
         mount_path
     } else {
-        log::info!("Using built-in ACP defaults for {harness}");
-        return default_manifest(harness)
-            .with_context(|| format!("The {harness} harness cannot be driven over ACP."));
+        let mut selected = None;
+        for dir in path_dirs.iter().filter(|dir| dir.is_absolute()) {
+            let candidate = dir.join(format!("warp-harness.{harness}.json"));
+            if candidate
+                .try_exists()
+                .with_context(|| format!("Cannot inspect {}", candidate.display()))?
+            {
+                selected = Some(candidate);
+                break;
+            }
+        }
+        match selected {
+            Some(path) => path,
+            None => {
+                log::info!("Using built-in ACP defaults for {harness}");
+                return default_manifest(harness)
+                    .with_context(|| format!("The {harness} harness cannot be driven over ACP."));
+            }
+        }
     };
     let dir = absolute(path.parent().context("Manifest has no parent directory")?)?;
     let mut manifest = read_manifest(&path, harness)?;
     manifest.acp.program = resolve_sidecar_program(&dir, &manifest.acp.program)
         .with_context(|| format!("Invalid ACP program in {}", path.display()))?;
+    for arg in &mut manifest.acp.args {
+        if arg.starts_with(SIDECAR_ROOT_PREFIX) {
+            *arg = resolve_sidecar_path(&dir, arg)?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| anyhow!("Sidecar ACP argument path is not valid UTF-8"))?;
+        }
+    }
     log::info!("Selected ACP manifest for {harness}: {}", path.display());
     Ok(HarnessManifest {
         launch: manifest.acp,
@@ -139,14 +190,18 @@ fn read_manifest(path: &Path, harness: Harness) -> Result<Manifest> {
 }
 
 fn resolve_sidecar_program(dir: &Path, program: &str) -> Result<String> {
-    let mut components = WindowsPath::new(program).components();
-    if program.contains(['/', '\\'])
-        || !matches!(components.next(), Some(WindowsComponent::Normal(_)))
-        || components.next().is_some()
-    {
-        bail!("Sidecar ACP program must be a bare filename, got {program:?}");
-    }
-    let path = dir.join("usr/local/bin").join(program);
+    let path = if program.starts_with(SIDECAR_ROOT_PREFIX) {
+        resolve_sidecar_path(dir, program)?
+    } else {
+        let mut components = WindowsPath::new(program).components();
+        if program.contains(['/', '\\'])
+            || !matches!(components.next(), Some(WindowsComponent::Normal(_)))
+            || components.next().is_some()
+        {
+            bail!("Sidecar ACP program must be a bare filename, got {program:?}");
+        }
+        dir.join("usr/local/bin").join(program)
+    };
     let metadata = fs::metadata(&path).with_context(|| {
         format!(
             "Sidecar ACP executable {} is missing or unreadable",
