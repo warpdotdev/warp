@@ -8,7 +8,9 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
 use cloud_object_models::{ServerSentEvents, StaticHeader, TransportType};
-use rmcp::model::{DiscoverResult, ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
+use rmcp::model::{
+    CallToolRequestParams, DiscoverResult, ErrorCode, ErrorData, Resource, ServerCapabilities, Tool,
+};
 use serde_json::{Value, json};
 
 use super::{
@@ -30,6 +32,19 @@ fn caps(tools: bool, resources: bool) -> ServerCapabilities {
         (false, true) => ServerCapabilities::builder().enable_resources().build(),
         (false, false) => ServerCapabilities::builder().build(),
     }
+}
+fn legacy_version_error(version: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": "server-error",
+        "error": {
+            "code": ErrorCode::INVALID_REQUEST,
+            "message": format!(
+                "Bad Request: Unsupported protocol version: {version}. Supported versions: \
+                 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25"
+            ),
+        },
+    })
 }
 
 fn test_tool(name: &str) -> Tool {
@@ -416,6 +431,7 @@ enum FixtureProtocol {
     Discover,
     InitializeCounteroffer,
     InitializeVersionError,
+    LegacyVersionError,
 }
 
 fn rpc_error(request: &Value, code: ErrorCode, data: Option<Value>) -> Value {
@@ -466,8 +482,21 @@ async fn assert_http_startup(
     let app = Router::new().route("/mcp", post(move |headers: HeaderMap, Json(request): Json<Value>| {
         captured.lock().expect("request capture").push(request.clone());
         async move {
-            if static_credential && headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some("test-key") {
+            if static_credential
+                && (headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some("test-key")
+                    || headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer test-token")) {
                 return StatusCode::UNAUTHORIZED.into_response();
+            }
+            let requested_version = headers.get("mcp-protocol-version")
+                .and_then(|v| v.to_str().ok())
+                .or_else(|| request["params"]["protocolVersion"].as_str());
+            if matches!(protocol, FixtureProtocol::LegacyVersionError)
+                && requested_version.is_some_and(|requested| requested != version)
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(legacy_version_error(requested_version.expect("rejected version"))),
+                ).into_response();
             }
             let method = request["method"].as_str().expect("request method");
             let result = match method {
@@ -519,6 +548,13 @@ async fn assert_http_startup(
                     }
                     json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "tools": [test_tool("query_metrics")] } })
                 }
+                "tools/call" => {
+                    assert_eq!(headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()), Some(version));
+                    assert_eq!(request["params"]["name"], "query_metrics");
+                    json!({ "jsonrpc": "2.0", "id": request["id"], "result": {
+                        "content": [{ "type": "text", "text": "metrics available" }], "isError": false,
+                    } })
+                }
                 _ => return StatusCode::BAD_REQUEST.into_response(),
             };
             if sse_responses {
@@ -533,15 +569,20 @@ async fn assert_http_startup(
     }));
     let (url, server) = serve_http_router(app).await;
     let headers = if static_credential {
-        vec![StaticHeader {
-            name: "X-Api-Key".to_string(),
-            value: "test-key".to_string(),
-        }]
+        vec![
+            StaticHeader {
+                name: "X-Api-Key".to_string(),
+                value: "test-key".to_string(),
+            },
+            StaticHeader {
+                name: "Authorization".to_string(),
+                value: "Bearer test-token".to_string(),
+            },
+        ]
     } else {
         Vec::new()
     };
     let info = start_http_server(url, headers).await;
-    server.abort();
     let info = info.expect("Warp startup should succeed");
     assert_eq!(info.tools, vec![test_tool("query_metrics")]);
     assert_eq!(
@@ -552,8 +593,165 @@ async fn assert_http_startup(
             .as_str(),
         version
     );
+    if matches!(protocol, FixtureProtocol::LegacyVersionError) {
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            info.service
+                .call_tool(CallToolRequestParams::new("query_metrics")),
+        )
+        .await
+        .expect("tool call should complete")
+        .expect("tool call should succeed");
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            serde_json::to_value(result.content).expect("tool content"),
+            json!([{ "type": "text", "text": "metrics available" }])
+        );
+    }
     info.service.cancel().await.expect("cancel service");
+    server.abort();
     requests.lock().expect("captured requests").clone()
+}
+
+#[tokio::test]
+async fn http_startup_recovers_from_legacy_transport_version_rejection_and_calls_tool() {
+    for sse_responses in [false, true] {
+        let requests = assert_http_startup(
+            FixtureProtocol::LegacyVersionError,
+            "2025-11-25",
+            sse_responses,
+            true,
+        )
+        .await;
+        assert_eq!(
+            requests
+                .iter()
+                .map(|r| r["method"].as_str().expect("method"))
+                .collect::<Vec<_>>(),
+            vec![
+                "server/discover",
+                "initialize",
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "tools/call"
+            ],
+        );
+        assert_eq!(requests[1]["params"]["protocolVersion"], "2025-11-25");
+        assert_eq!(requests[2]["params"]["protocolVersion"], "2025-11-25");
+    }
+}
+
+#[tokio::test]
+async fn preflight_does_not_relax_correlation_for_other_transport_errors() {
+    for (status, id, code, message) in [
+        (
+            StatusCode::BAD_REQUEST,
+            json!(99),
+            ErrorCode::INVALID_REQUEST,
+            "Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: 2025-11-25",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("server-error"),
+            ErrorCode::INVALID_REQUEST,
+            "Bad Request: Missing session ID",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("server-error"),
+            ErrorCode::INVALID_REQUEST,
+            "Bad Request: Unsupported protocol version: 2099-01-01. Supported versions: 2025-11-25",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("server-error"),
+            ErrorCode::INTERNAL_ERROR,
+            "Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: 2025-11-25",
+        ),
+        (
+            StatusCode::OK,
+            json!("server-error"),
+            ErrorCode::INVALID_REQUEST,
+            "Bad Request: Unsupported protocol version: 2026-07-28. Supported versions: 2025-11-25",
+        ),
+    ] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let captured = requests.clone();
+        let app = Router::new().route(
+            "/mcp",
+            post(move || {
+                captured.fetch_add(1, Ordering::SeqCst);
+                let id = id.clone();
+                async move {
+                    (
+                        status,
+                        Json(json!({
+                            "jsonrpc": "2.0", "id": id,
+                            "error": { "code": code, "message": message },
+                        })),
+                    )
+                }
+            }),
+        );
+        let (url, server) = serve_http_router(app).await;
+        let result = determine_transport("test".to_string(), &url, &HashMap::new(), None).await;
+        server.abort();
+        assert!(matches!(
+            result,
+            Err(rmcp::RmcpError::ClientInitialize(
+                rmcp::service::ClientInitializeError::UncorrelatedErrorResponse { .. }
+            ))
+        ));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn preflight_does_not_repeat_legacy_transport_version_fallback() {
+    for status in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::FORBIDDEN,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let captured = requests.clone();
+        let app = Router::new().route(
+            "/mcp",
+            post(move |headers: HeaderMap| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    (
+                        status,
+                        Json(legacy_version_error(
+                            headers
+                                .get("mcp-protocol-version")
+                                .and_then(|v| v.to_str().ok())
+                                .expect("protocol header"),
+                        )),
+                    )
+                }
+            }),
+        );
+        let (url, server) = serve_http_router(app).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            determine_transport("test".to_string(), &url, &HashMap::new(), None),
+        )
+        .await
+        .expect("negotiation should terminate");
+        server.abort();
+        assert!(result.is_err());
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            if status == StatusCode::BAD_REQUEST {
+                2
+            } else {
+                1
+            }
+        );
+    }
 }
 
 #[tokio::test]

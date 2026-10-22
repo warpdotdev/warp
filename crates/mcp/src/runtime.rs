@@ -657,8 +657,18 @@ async fn negotiate_protocol(
                 return Ok(preflight);
             }
             Some(ServerJsonRpcMessage::Error(error)) => {
+                // Python MCP servers reject newer HTTP revisions before reading the request ID.
+                let legacy_version_rejection = protocol.discover
+                    && preflight.status == reqwest::StatusCode::BAD_REQUEST
+                    && matches!(error.id.as_ref(), Some(RequestId::String(id)) if id.as_ref() == "server-error")
+                    && error.error.code == ErrorCode::INVALID_REQUEST
+                    && error.error.message.starts_with(&format!(
+                        "Bad Request: Unsupported protocol version: {}. Supported versions: ",
+                        protocol.version.as_str()
+                    ));
                 if let Some(id) = error.id
                     && id != RequestId::Number(0)
+                    && !legacy_version_rejection
                 {
                     return Err(ClientInitializeError::UncorrelatedErrorResponse {
                         expected: RequestId::Number(0),
