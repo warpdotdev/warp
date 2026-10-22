@@ -1623,7 +1623,7 @@ pub fn default_cursor_colors(ctx: &AppContext) -> CursorColors {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceTranscriptionOptions {
     /// Voice transcription is enabled, possibly showing a microphone button.
     Enabled { show_button: bool },
@@ -3056,12 +3056,17 @@ impl EditorView {
 
         #[cfg(feature = "voice_input")]
         {
-            use crate::workspaces::user_workspaces::UserWorkspaces;
+            use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _handle, _event, ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _handle, event, ctx| {
+                if !matches!(
+                    event,
+                    UserWorkspacesEvent::TeamsChanged
+                        | UserWorkspacesEvent::CurrentWorkspaceChanged
+                ) {
+                    return;
+                }
                 me.update_voice_transcription_options(Self::voice_options(ctx), ctx);
-                // Re-render if teams-related data changed that may affect whether features such as voice input are enabled.
-                ctx.notify();
             });
 
             ctx.subscribe_to_model(
