@@ -330,7 +330,7 @@ fn mixed_watch_modes_filter_git_flags_per_subscriber() {
                 };
 
                 let subscriber_updates =
-                    repo_handle.read(&app, |repo, _| repo.subscriber_updates(&update));
+                    repo_handle.read(&app, move |repo, _| repo.subscriber_updates(update));
                 let filesystem_update = subscriber_updates
                     .iter()
                     .find_map(|(id, update)| (*id == filesystem_id).then_some(update))
@@ -351,6 +351,46 @@ fn mixed_watch_modes_filter_git_flags_per_subscriber() {
             });
         },
     );
+}
+
+#[test]
+fn single_subscriber_receives_full_update() {
+    VirtualFS::test("single_subscriber_receives_full_update", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+        let repo_path = dirs.tests().join("repo");
+
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            let repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory(
+                        StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            let (update_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+            let git_id = repo_handle.update(&mut app, |repo, _| {
+                add_recording_subscriber(repo, RepositoryWatchMode::GitRepository, update_tx)
+            });
+            let changed_file = TargetFile::new(repo_path.join("file.txt"), false);
+            let update = RepositoryUpdate {
+                modified: [changed_file.clone()].into(),
+                commit_updated: true,
+                ..Default::default()
+            };
+
+            let mut subscriber_updates =
+                repo_handle.read(&app, move |repo, _| repo.subscriber_updates(update));
+
+            assert_eq!(subscriber_updates.len(), 1);
+            let (subscriber_id, update) = subscriber_updates.remove(0);
+            assert_eq!(subscriber_id, git_id);
+            assert_eq!(update.modified, [changed_file].into());
+            assert!(update.commit_updated);
+        });
+    });
 }
 
 #[test]
@@ -382,7 +422,7 @@ fn filesystem_only_subscription_drops_git_only_updates() {
                 };
 
                 let subscriber_updates =
-                    repo_handle.read(&app, |repo, _| repo.subscriber_updates(&update));
+                    repo_handle.read(&app, move |repo, _| repo.subscriber_updates(update));
 
                 assert!(subscriber_updates.is_empty());
             });
