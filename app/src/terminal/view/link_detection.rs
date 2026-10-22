@@ -21,6 +21,7 @@ cfg_if::cfg_if! {
         use std::path::PathBuf;
         use unicode_general_category::{get_general_category, GeneralCategory};
         use unicode_width::UnicodeWidthChar;
+        use url::Url;
         use warp_util::path::CleanPathResult;
         use warp_util::path::LineAndColumnArg;
     }
@@ -110,6 +111,40 @@ fn path_without_trailing_sentence_punctuation(
         path: trimmed,
         removed_width,
     })
+}
+
+/// Returns the file and position a `file://` URL with a line/column suffix points to,
+/// e.g. `file:///src/Main.kt:35:24` as printed by Gradle and other compilers.
+///
+/// Returns `None`, leaving the URL to be opened by the OS as before, when the URL has no
+/// suffix, isn't a local `file://` URL, or doesn't point to an existing file once the
+/// suffix is removed. A URL that already names an existing file (e.g. a file literally
+/// named `notes:12`) is also left alone.
+#[cfg(feature = "local_fs")]
+fn file_url_link_target(uri: &str) -> Option<(PathBuf, LineAndColumnArg)> {
+    let CleanPathResult {
+        path: uri_without_suffix,
+        line_and_column_num,
+    } = CleanPathResult::with_line_and_column_number(uri);
+    let line_and_column_num = line_and_column_num?;
+
+    let path = local_file_url_path(&uri_without_suffix)?;
+    if !path.is_file() || local_file_url_path(uri).is_some_and(|full| full.is_file()) {
+        return None;
+    }
+    Some((path, line_and_column_num))
+}
+
+/// Converts a local `file://` URL to a path, decoding percent-encoded characters. URLs with
+/// a host other than `localhost` return `None`, so they're never resolved as UNC paths on
+/// Windows.
+#[cfg(feature = "local_fs")]
+fn local_file_url_path(uri: &str) -> Option<PathBuf> {
+    let url = Url::parse(uri).ok()?;
+    if url.scheme() != "file" || !matches!(url.host_str(), None | Some("localhost")) {
+        return None;
+    }
+    url.to_file_path().ok()
 }
 
 /// Highlighted link within a terminal model grid.
@@ -515,12 +550,24 @@ impl super::TerminalView {
                     .model
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
-                ctx.open_url(&uri);
+                self.open_url_link(&uri, ctx);
             }
             GridHighlightedLink::Hyperlink { uri, .. } => {
                 self.open_hyperlink_uri(uri, ctx);
             }
         };
+    }
+
+    /// Opens a URL from the terminal grid. A `file://` URL with a `:line[:col]` suffix is
+    /// opened like a detected file path, so the suffix is used as the position instead of
+    /// being passed to the OS as part of the file name.
+    pub(super) fn open_url_link(&mut self, uri: &str, ctx: &mut ViewContext<Self>) {
+        #[cfg(feature = "local_fs")]
+        if let Some((path, line_and_column_num)) = file_url_link_target(uri) {
+            self.open_file_path(path, Some(line_and_column_num), ctx);
+            return;
+        }
+        ctx.open_url(uri);
     }
 
     pub(super) fn open_rich_content_link(
