@@ -12,8 +12,8 @@ use warpui::{App, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use super::{AIBlockEvent, open_code_action_event};
 use super::{
-    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
-    default_collapsible_state_for_orchestration_action,
+    CodeSectionUpdate, CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
+    code_section_update, default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
     recording_artifact_view_url, user_avatar_info_for_conversation_creator,
 };
@@ -28,6 +28,10 @@ use crate::code::editor_management::CodeSource;
 use crate::settings::{AISettings, OrchestrationMessageDisplayMode};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+#[test]
+fn streamed_code_resets_when_previous_length_splits_utf8_character() {
+    assert_eq!(code_section_update("éé", 3), CodeSectionUpdate::Reset("éé"));
+}
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
