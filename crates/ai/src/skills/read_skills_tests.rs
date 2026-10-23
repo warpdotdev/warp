@@ -146,6 +146,42 @@ No front matter here.
 }
 
 #[test]
+fn test_read_skills_stops_at_batch_byte_budget() {
+    let temp_dir = tempdir().unwrap();
+    let skills_dir = temp_dir.path().join(".agents/skills");
+    fs::create_dir_all(&skills_dir).unwrap();
+
+    // Six identically-sized skills (each name is a single digit, so every file's content is the
+    // same length): five fit within the 5 MB batch budget, a sixth does not. Names sort exactly
+    // as written, so the selection is deterministic and pinned below.
+    let body = "x".repeat(900_000);
+    for i in 0..6 {
+        let skill_dir = skills_dir.join(format!("skill{i}"));
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: skill-{i}\n---\n\n{body}"),
+        )
+        .unwrap();
+    }
+
+    let skills = read_skills(&skills_dir);
+
+    let mut names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["skill-0", "skill-1", "skill-2", "skill-3", "skill-4"],
+        "expected exactly the five lexically-first skills to survive the batch budget"
+    );
+    let total_bytes: usize = skills.iter().map(|s| s.content.len()).sum();
+    assert!(
+        total_bytes as u64 <= MAX_SKILLS_BATCH_BYTES,
+        "retained content ({total_bytes} bytes) exceeded the batch budget"
+    );
+}
+
+#[test]
 fn test_read_skills_empty_directory() {
     let temp_dir = tempdir().unwrap();
     let skills_dir = temp_dir.path();

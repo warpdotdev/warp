@@ -248,3 +248,29 @@ fn test_truncation_cuts_at_sentence_boundary() {
 
     assert_eq!(result.description, "This is a sentence.");
 }
+
+#[test]
+fn test_parse_rejects_oversized_skill_file() {
+    let content = format!(
+        "---\nname: some-skill\n---\n\n{}",
+        "x".repeat(MAX_SKILL_FILE_BYTES as usize + 1)
+    );
+
+    let (_temp_dir, skill_file) = create_temp_skill_file(&content);
+    let result = parse_skill(&skill_file);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_parse_accepts_skill_file_at_the_size_cap() {
+    let header = "---\nname: some-skill\n---\n\n";
+    let body = "x".repeat(MAX_SKILL_FILE_BYTES as usize - header.len());
+    let content = format!("{header}{body}");
+    assert_eq!(content.len(), MAX_SKILL_FILE_BYTES as usize);
+
+    let (_temp_dir, skill_file) = create_temp_skill_file(&content);
+    let result = parse_skill(&skill_file).unwrap();
+
+    assert_eq!(result.name, "some-skill");
+}
