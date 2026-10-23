@@ -1,6 +1,6 @@
 use ai::api_keys::{
     ApiKeyManager, CustomEndpointDefinition, CustomEndpointDefinitions, CustomEndpointId,
-    CustomEndpointModel, CustomEndpointParams,
+    CustomEndpointParams,
 };
 use settings::Setting;
 use uuid::Uuid;
@@ -151,7 +151,8 @@ pub(crate) fn save(
         .id_at(index)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("custom endpoint index is out of bounds"))?;
-    definitions.insert(id.clone(), definition_from_params(params.clone()))?;
+    let definition = definition_from_params(params.clone());
+    definitions.insert(id.clone(), definition)?;
     let old_key = ApiKeyManager::as_ref(ctx)
         .custom_endpoint_key(&id)
         .map(ToOwned::to_owned);
@@ -191,12 +192,11 @@ fn definition_from_params(params: CustomEndpointParams) -> CustomEndpointDefinit
         models: params
             .models
             .into_iter()
-            .map(|(name, alias, config_key)| CustomEndpointModel {
-                name,
-                alias,
-                config_key: config_key
-                    .filter(|key| !key.trim().is_empty())
-                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            .map(|mut model| {
+                if model.config_key.trim().is_empty() {
+                    model.config_key = Uuid::new_v4().to_string();
+                }
+                model
             })
             .collect(),
     }
