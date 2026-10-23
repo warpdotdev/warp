@@ -25,6 +25,9 @@ pub struct AmbientAgentProgressUIState {
 
     /// Mouse state handle for the authenticate button in the GitHub auth screen.
     pub auth_button_mouse_state: MouseStateHandle,
+
+    /// Mouse state handle for the retry button in the cloud mode error screen.
+    pub retry_button_mouse_state: MouseStateHandle,
 }
 
 impl AmbientAgentProgressUIState {
@@ -41,6 +44,7 @@ impl AmbientAgentProgressUIState {
             error_selection_handle: SelectionHandle::default(),
             error_selected_text: std::rc::Rc::new(parking_lot::RwLock::new(None)),
             auth_button_mouse_state: MouseStateHandle::default(),
+            retry_button_mouse_state: MouseStateHandle::default(),
         }
     }
 }
