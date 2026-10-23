@@ -665,6 +665,7 @@ fn test_warp_tui_does_not_match_other_commands() {
 #[test]
 fn test_warp_tui_variant_properties() {
     assert!(CLIAgent::Claude.supports_cli_agent_footer());
+    assert!(!CLIAgent::Kiro.supports_cli_agent_footer());
     assert_eq!(CLIAgent::WarpTui.command_prefix(), "warp");
     assert_eq!(
         CLIAgent::WarpTui.command_prefixes(),
