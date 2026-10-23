@@ -136,7 +136,7 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
     } else {
         None
     };
-    if !failed && !args.remove_origins_only {
+    if !args.remove_origins_only {
         resolve_heads(&batch, &mut outcomes).await;
     }
     let bytes = serde_json::to_vec(&CheckoutReport {
@@ -170,6 +170,7 @@ async fn resolve_heads(batch: &CheckoutBatch, outcomes: &mut [CheckoutOutcome]) 
     let mut capture = stream::iter(
         outcomes
             .iter_mut()
+            .filter(|outcome| outcome.failure.is_none())
             .filter(|outcome| outcome.resolved_head.is_none())
             .filter_map(|outcome| {
                 batch
@@ -713,7 +714,18 @@ async fn checkout(
             git.record_error("could not create checkout target", error);
             CheckoutFailureKind::Clone
         })?;
-        checkout_direct(request, &url, &target, git).await
+        let result = checkout_direct(request, &url, &target, git).await;
+        if result == Err(CheckoutFailureKind::Clone) {
+            // Git can leave the empty directory we created behind after a failed clone.
+            // A later pass must not mistake it for a successful existing checkout.
+            if let Err(error) = fs::remove_dir(&target).await
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                git.record_error("could not remove failed clone target", error);
+                return Err(CheckoutFailureKind::RemoveTarget);
+            }
+        }
+        result
     }
     .await;
     tracing::Span::current().record("existing", existing_field);
@@ -757,7 +769,7 @@ async fn attempt_cached_checkout(
         }
         fs::remove_dir_all(target).await.map_err(|error| {
             git.record_error("could not remove failed cached checkout target", error);
-            CheckoutFailureKind::Clone
+            CheckoutFailureKind::RemoveTarget
         })?;
         Ok(CachedCheckout::Failed)
     }

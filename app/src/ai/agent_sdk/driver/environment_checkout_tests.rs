@@ -1149,10 +1149,12 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
             let report: CheckoutReport =
                 serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
             assert_eq!(report.outcomes.len(), 3);
-            // A failed batch reports no heads, since nothing downstream should trust them.
+            assert_eq!(
+                report.outcomes[0].resolved_head.as_deref(),
+                Some(fixture.base().as_str())
+            );
             assert!(
-                report
-                    .outcomes
+                report.outcomes[1..]
                     .iter()
                     .all(|outcome| outcome.resolved_head.is_none())
             );
@@ -1829,6 +1831,55 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
 
 struct Fixture {
     root: PathBuf,
+}
+#[test]
+fn failed_direct_clone_leaves_a_retryable_target() {
+    fixture_test("failed_direct_clone_leaves_a_retryable_target", |fixture| {
+        fixture.prepare(fixture.request("ready", None), false);
+        let preserved = fixture.work().join("ready");
+        fs::write(preserved.join("README"), "uncommitted work\n").unwrap();
+        let original_config = fs::read(preserved.join(".git/config")).unwrap();
+        let unavailable = fixture.root.join("unavailable.git");
+        fs::rename(fixture.origin(), &unavailable).unwrap();
+        let batch = fixture.batch(vec![
+            fixture.request("ready", None),
+            fixture.request("retry", None),
+        ]);
+        let args = EnvironmentCheckoutArgs {
+            requests_file: fixture.root.join("requests.json"),
+            report_file: fixture.root.join("report.json"),
+            remove_origins_only: false,
+            fail_if_target_exists: false,
+        };
+        fs::write(fixture.root.join("cache/git-mirrors"), "").unwrap();
+        fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+        assert!(run(&args).is_err());
+        let report: CheckoutReport =
+            serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+        assert_eq!(
+            report.outcomes[0].resolved_head.as_deref(),
+            Some(git(&unavailable, &["rev-parse", "main"]).as_str())
+        );
+        assert_eq!(report.outcomes[1].failure, Some(CheckoutFailureKind::Clone));
+        assert!(!fixture.work().join("retry").exists());
+
+        fs::rename(&unavailable, fixture.origin()).unwrap();
+        let retry = fixture.batch(vec![batch.repositories[1].clone()]);
+        fs::write(&args.requests_file, serde_json::to_vec(&retry).unwrap()).unwrap();
+        run(&args).unwrap();
+        assert_eq!(
+            git(&fixture.work().join("retry"), &["rev-parse", "HEAD"]),
+            fixture.base()
+        );
+        assert_eq!(
+            fs::read_to_string(preserved.join("README")).unwrap(),
+            "uncommitted work\n"
+        );
+        assert_eq!(
+            fs::read(preserved.join(".git/config")).unwrap(),
+            original_config
+        );
+    });
 }
 
 impl Fixture {
