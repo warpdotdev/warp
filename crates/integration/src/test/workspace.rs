@@ -16,10 +16,10 @@ use warp::integration_testing::terminal::util::{
     ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
-    assert_active_session_local_path, assert_command_executed_for_single_terminal_in_tab,
-    assert_focused_editor_in_tab, assert_input_editor_contents,
-    assert_long_running_block_executing_for_single_terminal_in_tab, execute_command,
-    execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_pane,
+    assert_active_session_local_path, assert_command_executed,
+    assert_command_executed_for_single_terminal_in_tab, assert_focused_editor_in_tab,
+    assert_input_editor_contents, assert_long_running_block_executing_for_single_terminal_in_tab,
+    execute_command, execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_pane,
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
@@ -861,6 +861,139 @@ pub fn test_reorder_tabs_with_drag() -> Builder {
                     "echo source-zero".to_string(),
                 )),
         )
+}
+
+/// Drives `WorkspaceAction::MergeTabIntoTab` directly instead of the tab context menu: the
+/// menu's sidecar is positioned from the previous frame's layout, which the integration
+/// framework cannot hover reliably.
+pub fn test_merge_tab_into_tab_keeps_sessions_alive() -> Builder {
+    FeatureFlag::MergeTabIntoTab.set_enabled(true);
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo destination".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Open a new tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            1,
+            "echo source".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            TestStep::new("Merge the second tab into the first")
+                .with_action(|app, window_id, _| {
+                    let workspace = workspace_view(app, window_id);
+                    workspace.update(app, |workspace, ctx| {
+                        workspace.handle_action(
+                            &WorkspaceAction::MergeTabIntoTab {
+                                source_tab_index: 1,
+                                destination_tab_index: 0,
+                            },
+                            ctx,
+                        );
+                    });
+                })
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_focused_tab_index(0))
+                .add_assertion(|app, window_id| {
+                    let workspace = workspace_view(app, window_id);
+                    let visible_pane_count = workspace.read(app, |workspace, ctx| {
+                        workspace
+                            .get_pane_group_view(0)
+                            .expect("destination tab should exist")
+                            .as_ref(ctx)
+                            .visible_pane_ids()
+                            .len()
+                    });
+                    async_assert_eq!(visible_pane_count, 2)
+                })
+                .add_assertion(assert_command_executed(
+                    0,
+                    0,
+                    "echo destination".to_string(),
+                ))
+                .add_assertion(assert_command_executed(0, 1, "echo source".to_string())),
+        )
+        .with_step(
+            // The moved session must still accept input.
+            execute_command(
+                0,
+                1,
+                "echo still-alive".to_string(),
+                ExpectedExitStatus::Success,
+                "still-alive",
+            ),
+        )
+}
+
+/// Opens a tab's context menu with `open_context_menu` and clicks its "Merge into tab" entry for
+/// the second tab, all through real pointer events.
+fn merge_tab_into_tab_through_context_menu(
+    builder: Builder,
+    open_context_menu: fn(&'static str) -> TestStep,
+) -> Builder {
+    FeatureFlag::MergeTabIntoTab.set_enabled(true);
+    builder
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo source".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Open a new tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            1,
+            "echo destination".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(open_context_menu("Open the source tab's context menu"))
+        .with_step(
+            new_step_with_default_assertions("Choose the second tab as the destination")
+                .with_click_on_saved_position_fn(|app, window_id| {
+                    let workspace = workspace_view(app, window_id);
+                    workspace.read(app, |workspace, ctx| {
+                        let title = workspace
+                            .get_pane_group_view(1)
+                            .expect("destination tab should exist")
+                            .as_ref(ctx)
+                            .display_title(ctx);
+                        format!("Merge into tab 2: {title}")
+                    })
+                })
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_focused_tab_index(0))
+                .add_assertion(assert_command_executed(
+                    0,
+                    0,
+                    "echo destination".to_string(),
+                ))
+                .add_assertion(assert_command_executed(0, 1, "echo source".to_string())),
+        )
+}
+
+pub fn test_merge_tab_into_tab_from_vertical_tab_context_menu() -> Builder {
+    merge_tab_into_tab_through_context_menu(
+        new_builder().with_step(enable_vertical_tabs(VerticalTabsDisplayGranularity::Tabs)),
+        open_vertical_tab_context_menu,
+    )
+}
+
+pub fn test_merge_tab_into_tab_from_horizontal_tab_context_menu() -> Builder {
+    merge_tab_into_tab_through_context_menu(new_builder(), open_horizontal_tab_context_menu)
 }
 
 pub fn test_detach_tab_to_new_window_with_drag() -> Builder {

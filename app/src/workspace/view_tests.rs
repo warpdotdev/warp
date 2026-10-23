@@ -3206,8 +3206,16 @@ fn test_tab_context_menu_share_session_items() {
         // When there's a single shared session in a tab (focused), the options
         // for sharing are "Stop sharing" and "Stop sharing all".
         workspace.read(&app, |workspace, ctx| {
-            let items =
-                workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
+            let items = workspace.tabs[1].menu_items(
+                1,
+                3,
+                &workspace.tab_groups,
+                false,
+                true,
+                true,
+                &[],
+                ctx,
+            );
             assert!(
                 items[0].is_approximately_same_item_as(
                     &MenuItemFields::new("Stop sharing").into_item()
@@ -3231,8 +3239,16 @@ fn test_tab_context_menu_share_session_items() {
         // When there's a single shared session in a tab (unfocused), the options
         // for sharing are "Share session" and "Stop sharing all".
         workspace.read(&app, |workspace, ctx| {
-            let items =
-                workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
+            let items = workspace.tabs[1].menu_items(
+                1,
+                3,
+                &workspace.tab_groups,
+                false,
+                true,
+                true,
+                &[],
+                ctx,
+            );
             assert!(
                 items[0].is_approximately_same_item_as(
                     &MenuItemFields::new("Share session").into_item()
@@ -3251,8 +3267,16 @@ fn test_tab_context_menu_share_session_items() {
 
         // When there's no shared sessions in a tab, the only option is "Share session".
         workspace.read(&app, |workspace, ctx| {
-            let items =
-                workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
+            let items = workspace.tabs[1].menu_items(
+                1,
+                3,
+                &workspace.tab_groups,
+                false,
+                true,
+                true,
+                &[],
+                ctx,
+            );
             assert!(
                 items[0].is_approximately_same_item_as(
                     &MenuItemFields::new("Share session").into_item()
@@ -5822,5 +5846,379 @@ fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
                 "a rename interrupted by the terminal stealing focus must not be committed"
             );
         });
+    });
+}
+
+fn visible_terminal_view_ids(
+    workspace: &Workspace,
+    tab_index: usize,
+    ctx: &AppContext,
+) -> Vec<EntityId> {
+    workspace.tabs[tab_index]
+        .pane_group
+        .as_ref(ctx)
+        .visible_terminal_views(ctx)
+        .iter()
+        .map(|view| view.id())
+        .collect()
+}
+
+fn add_terminal_split(workspace: &Workspace, tab_index: usize, ctx: &mut ViewContext<Workspace>) {
+    workspace.tabs[tab_index]
+        .pane_group
+        .update(ctx, |pane_group, ctx| {
+            pane_group.add_terminal_pane(Direction::Right, None, ctx);
+        });
+}
+
+fn is_merge_entry(item: &MenuItem<WorkspaceAction>) -> bool {
+    matches!(
+        item.item_on_select_action(),
+        Some(WorkspaceAction::MergeTabIntoTab { .. })
+    )
+}
+
+fn merge_tab_menu_item_is_offered(
+    workspace: &Workspace,
+    tab_index: usize,
+    ctx: &AppContext,
+) -> bool {
+    workspace.tabs[tab_index]
+        .menu_items(
+            tab_index,
+            workspace.tab_count(),
+            &workspace.tab_groups,
+            false,
+            true,
+            true,
+            &workspace.merge_into_tab_destinations(tab_index, ctx),
+            ctx,
+        )
+        .iter()
+        .any(is_merge_entry)
+}
+
+#[test]
+fn merge_tab_into_tab_moves_all_panes_into_destination_and_closes_source() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let (expected_terminal_view_ids, destination_pane_group_id, untouched_pane_group_id) =
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_terminal_tab(false, ctx);
+                workspace.add_terminal_tab(false, ctx);
+                add_terminal_split(workspace, 1, ctx);
+                assert_eq!(workspace.tab_count(), 3);
+
+                let mut expected = visible_terminal_view_ids(workspace, 0, ctx);
+                expected.extend(visible_terminal_view_ids(workspace, 1, ctx));
+                assert_eq!(expected.len(), 3);
+
+                let destination_pane_group_id = workspace.tabs[0].pane_group.id();
+                let untouched_pane_group_id = workspace.tabs[2].pane_group.id();
+                workspace.handle_action(
+                    &WorkspaceAction::MergeTabIntoTab {
+                        source_tab_index: 1,
+                        destination_tab_index: 0,
+                    },
+                    ctx,
+                );
+                (expected, destination_pane_group_id, untouched_pane_group_id)
+            });
+
+        // Delivering the source group's exit event must not close another tab.
+        workspace.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(
+                workspace
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.pane_group.id())
+                    .collect::<Vec<_>>(),
+                vec![destination_pane_group_id, untouched_pane_group_id]
+            );
+            assert_eq!(workspace.active_tab_index(), 0);
+            assert_eq!(
+                visible_terminal_view_ids(workspace, 0, ctx),
+                expected_terminal_view_ids
+            );
+            assert_eq!(
+                workspace.tabs[1]
+                    .pane_group
+                    .as_ref(ctx)
+                    .visible_pane_count(),
+                1
+            );
+        });
+    });
+}
+
+#[test]
+fn merge_tab_into_tab_activates_destination_when_source_was_active() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+            let destination_pane_group_id = workspace.tabs[2].pane_group.id();
+
+            workspace.handle_action(
+                &WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: 0,
+                    destination_tab_index: 2,
+                },
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(
+                workspace.active_tab_pane_group().id(),
+                destination_pane_group_id
+            );
+        });
+    });
+}
+
+#[test]
+fn merge_tab_into_tab_rejects_source_with_non_terminal_pane_without_moving_anything() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.tabs[1].pane_group.update(ctx, |pane_group, ctx| {
+                let notebook = ctx.add_typed_action_view(NotebookView::new);
+                pane_group.add_pane_with_direction(
+                    Direction::Right,
+                    NotebookPane::new(notebook, ctx),
+                    false,
+                    ctx,
+                );
+            });
+            let source_pane_count = workspace.tabs[1].pane_group.as_ref(ctx).pane_count();
+            let destination_pane_count = workspace.tabs[0].pane_group.as_ref(ctx).pane_count();
+            assert!(!merge_tab_menu_item_is_offered(workspace, 1, ctx));
+
+            workspace.handle_action(
+                &WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: 1,
+                    destination_tab_index: 0,
+                },
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(
+                workspace.tabs[1].pane_group.as_ref(ctx).pane_count(),
+                source_pane_count
+            );
+            assert_eq!(
+                workspace.tabs[0].pane_group.as_ref(ctx).pane_count(),
+                destination_pane_count
+            );
+        });
+    });
+}
+
+#[test]
+fn merge_tab_into_tab_into_itself_is_a_no_op() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            add_terminal_split(workspace, 1, ctx);
+            let terminal_view_ids = visible_terminal_view_ids(workspace, 1, ctx);
+
+            workspace.handle_action(
+                &WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: 1,
+                    destination_tab_index: 1,
+                },
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(
+                visible_terminal_view_ids(workspace, 1, ctx),
+                terminal_view_ids
+            );
+        });
+    });
+}
+
+#[test]
+fn merge_tab_into_tab_is_disabled_without_the_feature_flag() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            assert!(!merge_tab_menu_item_is_offered(workspace, 1, ctx));
+
+            workspace.handle_action(
+                &WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: 1,
+                    destination_tab_index: 0,
+                },
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 2);
+        });
+    });
+}
+
+#[test]
+fn merge_into_tab_menu_entries_require_another_tab_and_a_mergeable_source() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(!merge_tab_menu_item_is_offered(workspace, 0, ctx));
+
+            workspace.add_terminal_tab(false, ctx);
+            assert!(merge_tab_menu_item_is_offered(workspace, 0, ctx));
+            assert!(merge_tab_menu_item_is_offered(workspace, 1, ctx));
+        });
+    });
+}
+
+#[test]
+fn merge_tab_into_tab_prunes_the_source_tabs_group_and_leaves_no_undo_entry() {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+            assert_eq!(workspace.tab_groups.len(), 1);
+            let source_pane_group_id = workspace.tabs[1].pane_group.id();
+
+            workspace.handle_action(
+                &WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: 1,
+                    destination_tab_index: 0,
+                },
+                ctx,
+            );
+
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(workspace.tab_groups.is_empty());
+            assert!(workspace.tabs[0].group_id.is_none());
+            assert!(!UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(source_pane_group_id));
+            assert!(UndoCloseStack::as_ref(ctx).is_empty());
+        });
+    });
+}
+
+fn merge_entries_in_open_tab_context_menu(
+    workspace: &Workspace,
+    ctx: &AppContext,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    workspace
+        .tab_right_click_menu
+        .read(ctx, |menu, _| menu.items().to_vec())
+        .into_iter()
+        .filter(is_merge_entry)
+        .collect()
+}
+
+/// Opens the tab context menu on the second of two tabs through `open_menu`, then selects the
+/// "Merge into tab" entry it lists, as a click on that row would.
+fn merging_through_the_open_tab_context_menu_moves_the_tab(
+    use_vertical_tabs: bool,
+    open_menu: fn(&mut Workspace, &mut ViewContext<Workspace>),
+) {
+    let _merge_guard = FeatureFlag::MergeTabIntoTab.override_enabled(true);
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(use_vertical_tabs, ctx));
+            });
+        });
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            open_menu(workspace, ctx);
+        });
+
+        let merge_entry = workspace.read(&app, |workspace, ctx| {
+            let mut entries = merge_entries_in_open_tab_context_menu(workspace, ctx);
+            assert_eq!(entries.len(), 1, "one destination tab should be listed");
+            entries.remove(0)
+        });
+        let action = merge_entry
+            .item_on_select_action()
+            .cloned()
+            .expect("merge entry should dispatch an action");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&action, ctx);
+            assert_eq!(workspace.tab_count(), 1);
+        });
+    });
+}
+
+#[test]
+fn merge_into_tab_entries_in_the_tab_context_menu_merge_in_horizontal_tabs() {
+    merging_through_the_open_tab_context_menu_moves_the_tab(false, |workspace, ctx| {
+        workspace.toggle_tab_right_click_menu(
+            1,
+            TabContextMenuAnchor::Pointer(Vector2F::zero()),
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn merge_into_tab_entries_in_the_tab_context_menu_merge_in_vertical_tabs() {
+    merging_through_the_open_tab_context_menu_moves_the_tab(true, |workspace, ctx| {
+        workspace.toggle_tab_right_click_menu(1, TabContextMenuAnchor::VerticalTabsKebab, ctx);
+    });
+}
+
+#[test]
+fn merge_into_tab_entries_in_the_vertical_pane_context_menu_merge() {
+    merging_through_the_open_tab_context_menu_moves_the_tab(true, |workspace, ctx| {
+        let pane_group = workspace.tabs[1].pane_group.clone();
+        let locator = PaneViewLocator {
+            pane_group_id: pane_group.id(),
+            pane_id: pane_group.as_ref(ctx).focused_pane_id(ctx),
+        };
+        workspace.toggle_vertical_tabs_pane_context_menu(
+            1,
+            VerticalTabsPaneContextMenuTarget::ClickedPane(locator),
+            Vector2F::zero(),
+            ctx,
+        );
     });
 }
