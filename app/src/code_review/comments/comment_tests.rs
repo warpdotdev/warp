@@ -35,6 +35,23 @@ fn original_text_strips_only_one_leading_minus() {
     let content = LineDiffContent::from_content("--text");
     assert_eq!(content.original_text(), "-text");
 }
+#[test]
+fn original_text_preserves_leading_dash_for_unmodified_line() {
+    let content = LineDiffContent {
+        content: "- context list item".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(content.original_text(), "- context list item");
+}
+
+#[test]
+fn original_text_preserves_leading_plus_for_unmodified_line() {
+    let content = LineDiffContent {
+        content: "+ context value".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(content.original_text(), "+ context value");
+}
 
 #[test]
 fn original_text_preserves_space_prefixed_content() {
