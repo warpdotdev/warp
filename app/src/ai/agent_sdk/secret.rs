@@ -1024,7 +1024,7 @@ fn find_secret_type(
 
 fn format_secret_type(type_: &ManagedSecretType) -> String {
     match type_ {
-        ManagedSecretType::RawValue => "Raw Value".to_string(),
+        ManagedSecretType::RawValue => "Secret key".to_string(),
         ManagedSecretType::Dotenvx => "dotenvx".to_string(),
         ManagedSecretType::AnthropicApiKey => "Anthropic API Key".to_string(),
         ManagedSecretType::AnthropicBedrockAccessKey => "Anthropic Bedrock Access Key".to_string(),
