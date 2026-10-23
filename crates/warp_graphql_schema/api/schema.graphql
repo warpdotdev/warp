@@ -1065,6 +1065,11 @@ type CreateGenericStringObjectOutput implements Response {
 union CreateGenericStringObjectResult = CreateGenericStringObjectOutput | UserFacingError
 
 input CreateManagedSecretInput {
+  """
+  Optional override of the provider's default API URL. Only valid for
+  LLM_PROVIDER_API_KEY secrets.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String!
   name: String!
@@ -2375,6 +2380,12 @@ type LlmSpec {
   speed: Float!
 }
 
+"""How an LLM provider API key's endpoint is reached."""
+enum LlmEndpointKind {
+  """The provider's own API, at its default URL or a baseUrl override of it."""
+  NATIVE
+}
+
 type LlmUsageMetadata {
   creditMultiplier: Float
   requestMultiplier: Int! @deprecated(reason: "Use creditMultiplier instead")
@@ -2411,6 +2422,11 @@ type PiProviderInfo {
 }
 
 type ManagedSecret {
+  """
+  For LLM_PROVIDER_API_KEY secrets, an optional override of the provider's default API
+  URL (for example, a proxy or regional endpoint). Not secret.
+  """
+  baseUrl: String
   createdAt: Time!
 
   """
@@ -2418,11 +2434,18 @@ type ManagedSecret {
   """
   description: String
 
+  """For LLM_PROVIDER_API_KEY secrets, how the key's endpoint is reached."""
+  endpointKind: LlmEndpointKind
+
   """The name of this secret. Secret names are unique for a given owner."""
   name: String!
 
   """The user or team who owns this secret."""
   owner: Space!
+
+  """
+  For LLM_PROVIDER_API_KEY secrets, the model provider the key authenticates against.
+  """
   providerId: String
 
   """The kind of secret value."""
@@ -2499,6 +2522,11 @@ type ManagedSecretOpenAiApiKeyValue {
   baseUrl: String
 }
 
+"""
+A managed secret value representing an API key for a model provider. The encrypted
+value carries only providerId and apiKey; baseUrl is read from the secret's metadata
+when the value is delivered to a run.
+"""
 type ManagedSecretLlmProviderApiKeyValue {
   providerId: String!
   apiKey: String!
@@ -4543,6 +4571,11 @@ type UpdateGenericStringObjectOutput implements Response {
 union UpdateGenericStringObjectResult = UpdateGenericStringObjectOutput | UserFacingError
 
 input UpdateManagedSecretInput {
+  """
+  New base URL for an LLM_PROVIDER_API_KEY secret. If omitted, the base URL is not
+  changed. If set to null, the provider's default API URL is used.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String
   name: String!
