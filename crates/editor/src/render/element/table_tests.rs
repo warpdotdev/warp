@@ -82,14 +82,14 @@ fn test_laid_out_table() -> LaidOutTable {
     let cell_text_frames = vec![vec![Arc::new(TextFrame::mock("")); 2]; 3];
 
     LaidOutTable {
-        table,
+        table: Arc::new(table),
         config,
         row_heights,
         column_widths,
         total_height,
-        offset_map,
+        offset_map: Arc::new(offset_map),
         content_length,
-        cell_offset_maps,
+        cell_offset_maps: Arc::new(cell_offset_maps),
         row_y_offsets,
         col_x_offsets,
         cell_text_frames,
