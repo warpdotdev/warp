@@ -601,8 +601,7 @@ pub fn init(app: &mut AppContext) {
     )
     .with_key_binding(cmd_or_ctrl_shift("f"))
     .with_custom_action(CustomAction::Find)
-    .with_context_predicate(text_entry.clone() & id!("FindBarAvailable"))
-    .with_enabled(|| FeatureFlag::CodeFindReplace.is_enabled())]);
+    .with_context_predicate(text_entry.clone() & id!("FindBarAvailable"))]);
 
     // Editable Go to Line keybinding
     app.register_editable_bindings([EditableBinding::new(
