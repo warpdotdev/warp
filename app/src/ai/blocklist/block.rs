@@ -6619,9 +6619,9 @@ impl TypedActionView for AIBlock {
                 // Clear all other selections within the `AIBlock`'s view sub-hierarchy to ensure
                 // only one component has a selection at a time.
                 self.clear_other_selections(None, ctx.window_id(), ctx);
-                // If we have a selection, we should use the default cursor, even if it's over a link.
-                ctx.reset_cursor();
                 if has_selection {
+                    // An empty selection can come from clicking another input; preserve its cursor.
+                    ctx.reset_cursor();
                     self.dismiss_ai_tooltips(ctx);
                 }
                 // Notify the terminal view so it can keep the model's record of which rich

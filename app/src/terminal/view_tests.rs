@@ -10255,12 +10255,36 @@ fn copy_selected_text_from_ai_block() {
                 .expect("an AI block should have been inserted")
         });
 
+        terminal.update(&mut app, |view, ctx| {
+            view.input.update(ctx, |_, ctx| {
+                ctx.set_cursor_shape(Cursor::IBeam);
+            });
+        });
+        ai_block.update(&mut app, |block, ctx| {
+            block.set_block_level_selected_text_for_test(None);
+            block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.get_cursor_shape(),
+                Cursor::IBeam,
+                "an empty AI block selection must not override the input's hover cursor"
+            );
+        });
+
         // Simulate a block-level text selection within the AI block and notify the
         // terminal view (mirrors the `SelectableArea` selection callback plus the
         // `AIBlockAction::SelectText` dispatch that happens on a real drag).
         ai_block.update(&mut app, |block, ctx| {
             block.set_block_level_selected_text_for_test(Some("quick brown".to_owned()));
             block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.get_cursor_shape(),
+                Cursor::Arrow,
+                "a non-empty AI block selection must still reset the cursor"
+            );
         });
 
         // The model must now record that the AI block has an active text
@@ -10284,9 +10308,21 @@ fn copy_selected_text_from_ai_block() {
 
         // Clearing the AI block's selection must clear the tracked model selection
         // so stale text isn't returned by later copy/insert operations.
+        terminal.update(&mut app, |view, ctx| {
+            view.input.update(ctx, |_, ctx| {
+                ctx.set_cursor_shape(Cursor::IBeam);
+            });
+        });
         ai_block.update(&mut app, |block, ctx| {
             block.set_block_level_selected_text_for_test(None);
             block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.get_cursor_shape(),
+                Cursor::IBeam,
+                "clearing an AI block selection must preserve the input's hover cursor"
+            );
         });
         terminal.read(&app, |view, ctx| {
             let semantic_selection = SemanticSelection::as_ref(ctx);

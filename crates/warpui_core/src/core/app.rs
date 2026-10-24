@@ -2354,7 +2354,7 @@ impl AppContext {
         self.platform_delegate.set_cursor_shape(cursor)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn get_cursor_shape(&self) -> Cursor {
         self.platform_delegate.get_cursor_shape()
     }
