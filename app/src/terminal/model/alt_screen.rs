@@ -39,6 +39,12 @@ use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::selection::{Selection, SelectionRange};
 use crate::terminal::{SizeInfo, SizeUpdate};
 
+/// Largest share of the alt screen that can show the terminal's default background while still
+/// counting as painted by the app. Apps that paint their own background (e.g. OpenCode, Vim
+/// colorschemes) cover every cell, whereas on the default background highlighted content such as
+/// full-width diff lines can outnumber the default cells.
+const MAX_DEFAULT_BACKGROUND_SHARE: f32 = 0.05;
+
 pub struct AltScreen {
     grid_handler: GridHandler,
     // Number of fractional lines that have yet to scroll the alt grid.
@@ -374,8 +380,11 @@ impl AltScreen {
     }
 
     pub fn inferred_bg_color(&self) -> Option<ColorU> {
-        self.bg_color_sampler
-            .lock()
+        let sampler = self.bg_color_sampler.lock();
+        if sampler.default_background_share() > MAX_DEFAULT_BACKGROUND_SHARE {
+            return None;
+        }
+        sampler
             .most_common()
             .filter(|color| !color.is_fully_transparent())
     }

@@ -99,3 +99,37 @@ fn test_accumulate_lines_to_scroll() {
     assert_eq!(screen.accumulate_lines_to_scroll(5.0.into_lines()), 4);
     assert_lines_approx_eq!(screen.pending_lines_to_scroll(), 0.9);
 }
+
+/// A multiple of the sampler's stride, so every sampled row adds the same count.
+const SAMPLED_COLUMNS: usize = 80;
+
+fn sample_rows(screen: &AltScreen, color: ColorU, rows: usize) {
+    let mut sampler = screen.bg_color_sampler.lock();
+    for _ in 0..rows * SAMPLED_COLUMNS {
+        sampler.sample(color);
+    }
+}
+
+#[test]
+fn test_inferred_bg_color_ignores_highlighted_rows_on_default_background() {
+    // Claude Code's fullscreen diff view: full-width removed and added lines can outnumber the
+    // cells left on the terminal's default background.
+    let screen = new_alt_screen(default_size());
+    sample_rows(&screen, ColorU::new(92, 26, 26, 255), 25);
+    sample_rows(&screen, ColorU::new(26, 72, 36, 255), 10);
+    sample_rows(&screen, ColorU::transparent_black(), 15);
+
+    assert_eq!(screen.inferred_bg_color(), None);
+}
+
+#[test]
+fn test_inferred_bg_color_matches_app_painted_background() {
+    let screen = new_alt_screen(default_size());
+    let app_background = ColorU::new(10, 10, 10, 255);
+    sample_rows(&screen, app_background, 38);
+    sample_rows(&screen, ColorU::new(30, 30, 30, 255), 1);
+    // A few cells, such as IME marked text, still render on the default background.
+    sample_rows(&screen, ColorU::transparent_black(), 1);
+
+    assert_eq!(screen.inferred_bg_color(), Some(app_background));
+}

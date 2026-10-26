@@ -96,6 +96,17 @@ impl ColorSampler {
             .map(|(&color, _)| color)
     }
 
+    /// Fraction of samples that fell on the terminal's default background.
+    pub fn default_background_share(&self) -> f32 {
+        let total: usize = self.counts.values().sum();
+        let default_count = self
+            .counts
+            .get(&ColorU::transparent_black())
+            .copied()
+            .unwrap_or_default();
+        default_count as f32 / total.max(1) as f32
+    }
+
     pub fn reset(&mut self) {
         self.counts.clear();
         self.total_samples = 0;
