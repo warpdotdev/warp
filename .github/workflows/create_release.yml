@@ -57,6 +57,9 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: write # script/create_release_tag_and_branch pushes the release branch and tag; softprops/action-gh-release creates the GitHub release; each build job runs `gh release upload` to attach its artifacts
+
 env:
   CARGO_TERM_COLOR: always
   CONFIG_FILE: ".github/workflows/release_configurations.json"

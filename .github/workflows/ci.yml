@@ -51,6 +51,9 @@ jobs:
       github.event.pull_request.draft == false &&
       (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict')) &&
       github.repository_owner == 'warpdotdev'
+    permissions:
+      contents: read # actions/checkout clones the repo
+      pull-requests: read # dorny/paths-filter asks the GitHub API for the PR's changed-files list to decide which CI jobs run; reading PR metadata needs this scope
     outputs:
       affects-database-schema: ${{ github.ref == 'master' || steps.filter.outputs.affects-database-schema }}
       affects-rust-sources: ${{ github.ref == 'master' || steps.filter.outputs.affects-rust-sources }}

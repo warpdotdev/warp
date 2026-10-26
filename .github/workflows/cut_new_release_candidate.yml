@@ -34,6 +34,8 @@ jobs:
   create_release_candidate:
     name: Create Release Candidate
     uses: ./.github/workflows/create_release.yml
+    permissions:
+      contents: write # create_release.yml pushes the release branch/tag and creates and uploads the GitHub release; a reusable-workflow caller must grant everything its callee declares
     needs: compute_channel
     with:
       channel: ${{ needs.compute_channel.outputs.channel }}
