@@ -87,16 +87,15 @@ jobs:
     needs:
       - create_release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # octo-sts/action exchanges the job's OIDC token for a scoped GitHub token
     steps:
       - name: Mint channel-versions token
         id: app_token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
         with:
-          client-id: ${{ vars.WARP_WORKFLOWS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.WARP_WORKFLOWS_APP_PRIVATE_KEY }}
-          owner: warpdotdev
-          repositories: channel-versions
-          permission-contents: write
+          scope: warpdotdev/channel-versions
+          identity: warp-internal-dispatch
       - name: Invoke update workflow in channel-versions repository
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:

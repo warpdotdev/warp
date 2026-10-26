@@ -2,8 +2,7 @@ name: Notify docs of Settings UI changes
 
 # Fires when any Settings view source file is merged to master, signalling
 # that valid_paths.json in warpdotdev/docs may need to be refreshed.
-# The dispatch runs only in warp-internal, which can read the app private key;
-# the synced copy in public warp skips it.
+# The dispatch runs only in warp-internal; the synced copy in public warp skips it.
 #
 # If this job fails:
 #   1. GitHub will email the commit author automatically.
@@ -27,16 +26,15 @@ jobs:
     name: Dispatch settings-ui-changed to docs
     if: github.repository == 'warpdotdev/warp-internal'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # octo-sts/action exchanges the job's OIDC token for a scoped GitHub token
     steps:
       - name: Mint docs token
         id: app_token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
         with:
-          client-id: ${{ vars.WARP_WORKFLOWS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.WARP_WORKFLOWS_APP_PRIVATE_KEY }}
-          owner: warpdotdev
-          repositories: docs
-          permission-contents: write
+          scope: warpdotdev/docs
+          identity: warp-internal-dispatch
 
       - name: Send repository_dispatch to warpdotdev/docs
         id: dispatch
