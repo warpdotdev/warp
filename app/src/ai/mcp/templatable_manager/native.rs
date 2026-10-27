@@ -851,7 +851,7 @@ impl TemplatableMCPServerManager {
         // token refresh) and usually carry the same credential. Respawning
         // for each would open a redundant server-side MCP session per event,
         // so only respawn when the effective bearer actually changed.
-        if is_active && self.builtin_server_token.as_deref() == Some(token.as_str()) {
+        if self.builtin_spawn_settled_for_token(installation_uuid, &token) {
             return;
         }
 
@@ -865,6 +865,22 @@ impl TemplatableMCPServerManager {
         // clients, which have no active ambient task. CLI/cloud agent runs attach their
         // own run-scoped installation instead (see AgentDriver::builtin_factory_mcp_for_run).
         self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token, &[]), ctx);
+    }
+
+    /// Whether the built-in server's last spawn used `token` and is still live, pending, or failed.
+    /// A failed spawn counts because retrying with the same credential (e.g. after a 403) would
+    /// fail again on every auth event; a rotated token gets a fresh attempt.
+    pub(super) fn builtin_spawn_settled_for_token(
+        &self,
+        installation_uuid: Uuid,
+        token: &str,
+    ) -> bool {
+        self.builtin_server_token.as_deref() == Some(token)
+            && (self.is_server_active_or_pending(installation_uuid)
+                || matches!(
+                    self.server_states.get(&installation_uuid),
+                    Some(MCPServerState::FailedToStart)
+                ))
     }
 
     /// Spawns a new MCP server from a given installation UUID.
