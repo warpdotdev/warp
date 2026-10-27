@@ -1,0 +1,4 @@
+issuer: https://token.actions.githubusercontent.com
+subject_pattern: repo:warpdotdev/channel-versions:.*
+permissions:
+  contents: read
