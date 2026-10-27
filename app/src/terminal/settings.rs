@@ -6,6 +6,7 @@ use warpui::units::Pixels;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::settings::{AISettings, InputSettings, TerminalSpacing};
+pub use crate::util::git_branch_display::GitBranchNameTruncation;
 
 #[derive(
     Clone,
@@ -205,6 +206,26 @@ define_settings_group!(TerminalSettings, settings: [
         private: false,
         toml_path: "experimental.async_find_enabled",
         description: "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs.",
+    },
+    git_branch_name_truncation: GitBranchNameTruncationSetting {
+        type: GitBranchNameTruncation,
+        default: GitBranchNameTruncation::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "terminal.prompt.git_branch_name_truncation",
+        description: "Which end of a long git branch name stays visible in the prompt chip. `end` keeps the end of the name. `start` keeps the beginning, such as a ticket id.",
+    },
+    git_branch_name_pattern: GitBranchNamePatternSetting {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "terminal.prompt.git_branch_name_pattern",
+        description: "Optional regular expression applied to the git branch name before the prompt chip shows it. When the pattern matches, the first capture group is displayed, or the whole match when there is no capture group. Leave empty to show the full branch name. Example: ^([A-Z]+-[0-9]+) shows ABC-123 from ABC-123-some-long-feature.",
     },
 ]);
 

@@ -51,10 +51,12 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_display_string;
+use crate::util::git_branch_display::format_git_branch_name;
 use crate::util::truncation::truncate_from_beginning;
 use crate::view_components::action_button::{ActionButtonTheme, NakedTheme};
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
@@ -1129,6 +1131,21 @@ impl DisplayChip {
             }
         });
 
+        if matches!(
+            chip_result.kind,
+            ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus
+        ) {
+            ctx.subscribe_to_model(&TerminalSettings::handle(ctx), |_, _, event, ctx| {
+                if matches!(
+                    event,
+                    TerminalSettingsChangedEvent::GitBranchNameTruncationSetting { .. }
+                        | TerminalSettingsChangedEvent::GitBranchNamePatternSetting { .. }
+                ) {
+                    ctx.notify();
+                }
+            });
+        }
+
         // Subscribe to ambient agent model changes to re-render when the state changes
         if let Some(ref ambient_agent_model) = config.ambient_agent_view_model {
             ctx.subscribe_to_model(ambient_agent_model, |_, _, _, ctx| {
@@ -1388,11 +1405,18 @@ impl DisplayChip {
         let is_interactive =
             !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
         let is_in_agent_view = self.is_in_agent_view;
-        let chip_text = self.text.clone();
+        let full_branch = self.text.clone();
+        let displayed_branch = git_branch_chip_label(&full_branch, app);
+        let tooltip = if full_branch == displayed_branch {
+            "Change git branch".to_string()
+        } else {
+            format!("Change git branch ({full_branch})")
+        };
         let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
             let hovered = state.is_hovered() && is_interactive;
             let mut config =
-                UdiChipConfig::new_with_icon(Icon::GitBranch, font_color, chip_text.clone())
+                UdiChipConfig::new_with_icon(Icon::GitBranch, font_color, displayed_branch.clone())
+                    .with_truncate_text(false)
                     .with_hovered(hovered);
             if is_in_agent_view {
                 config = config.for_agent_view();
@@ -1403,7 +1427,7 @@ impl DisplayChip {
             if state.is_hovered() && is_interactive && !menu_open {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("Change git branch".to_string())
+                    .tool_tip(tooltip.clone())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1513,20 +1537,22 @@ impl DisplayChip {
         let font_size = udi_font_size(appearance);
         let is_interactive =
             !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
-        let fallback_branch = self.text.clone();
         let tracking_status = tracking_status
             .clone()
             .or_else(|| GitBranchTrackingStatus::from_display_text(&self.text));
-        let tooltip_text = tracking_status
+        let raw_branch = tracking_status
             .as_ref()
-            .map(GitBranchTrackingStatus::tooltip_text);
+            .map(|status| status.branch.clone())
+            .unwrap_or_else(|| self.text.clone());
+        let displayed_branch = git_branch_chip_label(&raw_branch, app);
+        let tooltip_text = match tracking_status.as_ref() {
+            Some(status) if displayed_branch == raw_branch => Some(status.tooltip_text()),
+            Some(status) => Some(format!("{} ({raw_branch})", status.tooltip_text())),
+            None if displayed_branch != raw_branch => Some(raw_branch.clone()),
+            None => None,
+        };
 
         let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
-            let branch = tracking_status
-                .as_ref()
-                .map(|status| status.branch.clone())
-                .unwrap_or_else(|| fallback_branch.clone());
-
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
             add_git_branch_status_child(
                 &mut content,
@@ -1537,7 +1563,13 @@ impl DisplayChip {
             );
             add_git_branch_status_child(
                 &mut content,
-                git_branch_status_text(branch, font_color, font_family, font_size, appearance),
+                git_branch_status_text(
+                    displayed_branch.clone(),
+                    font_color,
+                    font_family,
+                    font_size,
+                    appearance,
+                ),
                 GIT_BRANCH_STATUS_MAIN_GAP,
             );
 
@@ -2350,6 +2382,16 @@ pub(crate) fn chip_container(
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CHIP_CORNER_RADIUS)))
         .with_vertical_padding(spacing::UDI_CHIP_VERTICAL_PADDING)
         .with_horizontal_padding(spacing::UDI_CHIP_HORIZONTAL_PADDING)
+}
+
+fn git_branch_chip_label(branch: &str, app: &AppContext) -> String {
+    let settings = TerminalSettings::as_ref(app);
+    format_git_branch_name(
+        branch,
+        *settings.git_branch_name_truncation,
+        settings.git_branch_name_pattern.as_str(),
+        UDI_CHIP_MAX_NUM_CHARACTERS,
+    )
 }
 
 pub(crate) fn render_udi_chip(config: UdiChipConfig, appearance: &Appearance) -> Box<dyn Element> {
