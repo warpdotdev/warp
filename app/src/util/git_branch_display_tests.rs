@@ -1,107 +1,105 @@
 use settings_value::SettingsValue;
 
-use super::{GitBranchNameTruncation, format_git_branch_name, git_branch_name_pattern_is_valid};
-use crate::util::truncation::truncate_from_beginning;
+use super::{
+    DEFAULT_GIT_BRANCH_NAME_PREFIX_CHARS, DEFAULT_GIT_BRANCH_NAME_SUFFIX_CHARS,
+    GitBranchNameTruncation, format_git_branch_name,
+};
+use crate::util::truncation::{truncate_from_beginning, truncate_from_end};
 
 const LONG_BRANCH: &str = "ABC-123-some-long-feature-that-needs-to-be-implemented";
 
-#[test]
-fn end_truncation_matches_existing_beginning_truncation() {
-    let displayed = format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::End, "", 40);
-    assert_eq!(displayed, truncate_from_beginning(LONG_BRANCH, 40));
-    assert!(!displayed.contains("ABC-123"));
-    assert!(displayed.starts_with('…'));
+fn format(
+    branch: &str,
+    truncation: GitBranchNameTruncation,
+    prefix_chars: usize,
+    suffix_chars: usize,
+    max_chars: usize,
+) -> String {
+    format_git_branch_name(branch, truncation, prefix_chars, suffix_chars, max_chars)
 }
 
 #[test]
-fn start_truncation_keeps_the_ticket_prefix() {
-    let displayed = format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::Start, "", 40);
+fn omit_start_matches_existing_beginning_truncation() {
+    let displayed = format(LONG_BRANCH, GitBranchNameTruncation::OmitStart, 12, 12, 40);
+    assert_eq!(displayed, truncate_from_beginning(LONG_BRANCH, 40));
+    assert!(displayed.starts_with('…'));
+    assert!(!displayed.contains("ABC-123"));
+}
+
+#[test]
+fn omit_end_keeps_the_ticket_prefix_and_the_ellipsis() {
+    let displayed = format(LONG_BRANCH, GitBranchNameTruncation::OmitEnd, 3, 3, 40);
+    assert_eq!(displayed, truncate_from_end(LONG_BRANCH, 40));
     assert!(displayed.starts_with("ABC-123"));
     assert!(displayed.ends_with('…'));
     assert_eq!(displayed.chars().count(), 40);
 }
 
 #[test]
-fn short_names_are_not_truncated() {
+fn edge_counts_do_not_change_start_or_end_omission() {
+    let with_defaults = format(LONG_BRANCH, GitBranchNameTruncation::OmitStart, 12, 12, 40);
+    let with_other_counts = format(LONG_BRANCH, GitBranchNameTruncation::OmitStart, 1, 30, 40);
+    assert_eq!(with_defaults, with_other_counts);
+}
+
+#[test]
+fn short_names_keep_every_character() {
     let branch = "main";
+    for truncation in [
+        GitBranchNameTruncation::OmitStart,
+        GitBranchNameTruncation::OmitEnd,
+        GitBranchNameTruncation::OmitMiddle,
+    ] {
+        assert_eq!(format(branch, truncation, 12, 12, 40), branch);
+    }
+}
+
+#[test]
+fn omit_middle_keeps_both_edges_and_the_ellipsis() {
+    let displayed = format(
+        LONG_BRANCH,
+        GitBranchNameTruncation::OmitMiddle,
+        DEFAULT_GIT_BRANCH_NAME_PREFIX_CHARS,
+        DEFAULT_GIT_BRANCH_NAME_SUFFIX_CHARS,
+        40,
+    );
+    assert_eq!(displayed, "ABC-123-some…-implemented");
+    assert!(displayed.contains('…'));
+    assert_ne!(displayed, LONG_BRANCH);
+}
+
+#[test]
+fn omit_middle_shows_the_name_when_the_edges_cover_it() {
+    let branch = "ABC-123-short";
     assert_eq!(
-        format_git_branch_name(branch, GitBranchNameTruncation::End, "", 40),
+        format(branch, GitBranchNameTruncation::OmitMiddle, 8, 8, 40),
         branch
     );
+}
+
+#[test]
+fn omit_middle_shrinks_the_suffix_before_the_prefix() {
+    let displayed = format(LONG_BRANCH, GitBranchNameTruncation::OmitMiddle, 30, 30, 40);
+    assert_eq!(displayed.chars().count(), 40);
+    let without_ellipsis: String = displayed.chars().filter(|c| *c != '…').collect();
+    assert_eq!(without_ellipsis.chars().count(), 39);
+    assert!(displayed.starts_with(&LONG_BRANCH.chars().take(30).collect::<String>()));
+    assert!(LONG_BRANCH.ends_with(&displayed.chars().skip(31).collect::<String>()));
+    assert_eq!(displayed.chars().nth(30), Some('…'));
+}
+
+#[test]
+fn omit_middle_with_no_edge_characters_is_an_ellipsis() {
     assert_eq!(
-        format_git_branch_name(branch, GitBranchNameTruncation::Start, "", 40),
-        branch
+        format(LONG_BRANCH, GitBranchNameTruncation::OmitMiddle, 0, 0, 40),
+        "…"
     );
 }
 
 #[test]
-fn capture_group_shows_only_the_ticket_id() {
-    let displayed = format_git_branch_name(
-        LONG_BRANCH,
-        GitBranchNameTruncation::End,
-        r"^([A-Z]+-\d+)",
-        40,
-    );
-    assert_eq!(displayed, "ABC-123");
-}
-
-#[test]
-fn pattern_without_groups_shows_the_whole_match() {
-    let displayed =
-        format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::Start, r"ABC-\d+", 40);
-    assert_eq!(displayed, "ABC-123");
-}
-
-#[test]
-fn unmatched_pattern_falls_back_to_the_full_name() {
-    let displayed = format_git_branch_name(
-        LONG_BRANCH,
-        GitBranchNameTruncation::Start,
-        r"^TICKET-(\d+)",
-        40,
-    );
-    assert_eq!(
-        displayed,
-        format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::Start, "", 40)
-    );
-}
-
-#[test]
-fn invalid_pattern_falls_back_to_the_full_name() {
-    let displayed =
-        format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::End, r"(unclosed", 40);
-    assert_eq!(
-        displayed,
-        format_git_branch_name(LONG_BRANCH, GitBranchNameTruncation::End, "", 40)
-    );
-}
-
-#[test]
-fn whitespace_around_a_pattern_is_ignored() {
-    let displayed = format_git_branch_name(
-        LONG_BRANCH,
-        GitBranchNameTruncation::End,
-        "  ^([A-Z]+-\\d+)  ",
-        40,
-    );
-    assert_eq!(displayed, "ABC-123");
-}
-
-#[test]
-fn unmatched_capture_group_keeps_the_full_name() {
-    let displayed = format_git_branch_name(
-        "feature-without-ticket",
-        GitBranchNameTruncation::End,
-        r"^([A-Z]+-\d+)?",
-        40,
-    );
-    assert_eq!(displayed, "feature-without-ticket");
-}
-
-#[test]
-fn unicode_start_truncation_keeps_char_boundaries() {
+fn unicode_omit_end_keeps_char_boundaries() {
     let branch = "票-1-很长的分支名字需要被截断才能放进提示";
-    let displayed = format_git_branch_name(branch, GitBranchNameTruncation::Start, "", 8);
+    let displayed = format(branch, GitBranchNameTruncation::OmitEnd, 0, 0, 8);
     assert!(displayed.starts_with("票-1"));
     assert!(displayed.ends_with('…'));
     assert_eq!(displayed.chars().count(), 8);
@@ -109,43 +107,49 @@ fn unicode_start_truncation_keeps_char_boundaries() {
 }
 
 #[test]
-fn pattern_validity_accepts_empty_and_rejects_broken_regex() {
-    assert!(git_branch_name_pattern_is_valid(""));
-    assert!(git_branch_name_pattern_is_valid("   "));
-    assert!(git_branch_name_pattern_is_valid(r"^([A-Z]+-\d+)"));
-    assert!(!git_branch_name_pattern_is_valid(r"(unclosed"));
-    assert!(!git_branch_name_pattern_is_valid(&"a".repeat(257)));
+fn unicode_omit_middle_keeps_char_boundaries() {
+    let branch = "票-1-很长的分支名字需要被截断才能放进提示";
+    let displayed = format(branch, GitBranchNameTruncation::OmitMiddle, 3, 2, 40);
+    assert_eq!(displayed, "票-1…提示");
 }
 
 #[test]
 fn truncation_serializes_as_snake_case() {
     assert_eq!(
         GitBranchNameTruncation::default(),
-        GitBranchNameTruncation::End
+        GitBranchNameTruncation::OmitStart
     );
     assert_eq!(
-        GitBranchNameTruncation::End.to_file_value(),
-        serde_json::json!("end")
+        GitBranchNameTruncation::OmitStart.to_file_value(),
+        serde_json::json!("omit_start")
     );
     assert_eq!(
-        GitBranchNameTruncation::Start.to_file_value(),
-        serde_json::json!("start")
+        GitBranchNameTruncation::OmitEnd.to_file_value(),
+        serde_json::json!("omit_end")
     );
     assert_eq!(
-        GitBranchNameTruncation::from_file_value(&serde_json::json!("start")).unwrap(),
-        GitBranchNameTruncation::Start
+        GitBranchNameTruncation::OmitMiddle.to_file_value(),
+        serde_json::json!("omit_middle")
     );
-    assert!(GitBranchNameTruncation::from_file_value(&serde_json::json!("middle")).is_none());
+    assert_eq!(
+        GitBranchNameTruncation::from_file_value(&serde_json::json!("omit_middle")).unwrap(),
+        GitBranchNameTruncation::OmitMiddle
+    );
+    assert!(GitBranchNameTruncation::from_file_value(&serde_json::json!("end")).is_none());
 }
 
 #[test]
-fn toggled_switches_between_ends() {
+fn toggled_switches_between_hiding_the_start_and_the_end() {
     assert_eq!(
-        GitBranchNameTruncation::End.toggled(),
-        GitBranchNameTruncation::Start
+        GitBranchNameTruncation::OmitStart.toggled(),
+        GitBranchNameTruncation::OmitEnd
     );
     assert_eq!(
-        GitBranchNameTruncation::Start.toggled(),
-        GitBranchNameTruncation::End
+        GitBranchNameTruncation::OmitEnd.toggled(),
+        GitBranchNameTruncation::OmitStart
+    );
+    assert_eq!(
+        GitBranchNameTruncation::OmitMiddle.toggled(),
+        GitBranchNameTruncation::OmitEnd
     );
 }

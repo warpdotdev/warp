@@ -6,7 +6,10 @@ use warpui::units::Pixels;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::settings::{AISettings, InputSettings, TerminalSpacing};
-pub use crate::util::git_branch_display::GitBranchNameTruncation;
+pub use crate::util::git_branch_display::{
+    DEFAULT_GIT_BRANCH_NAME_PREFIX_CHARS, DEFAULT_GIT_BRANCH_NAME_SUFFIX_CHARS,
+    GitBranchNameTruncation,
+};
 
 #[derive(
     Clone,
@@ -215,17 +218,27 @@ define_settings_group!(TerminalSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.prompt.git_branch_name_truncation",
-        description: "Which end of a long git branch name stays visible in the prompt chip. `end` keeps the end of the name. `start` keeps the beginning, such as a ticket id.",
+        description: "Which part of a long git branch name the prompt chip replaces with an ellipsis. `omit_start` hides the beginning and is the original behavior. `omit_end` hides the end so a ticket prefix stays visible. `omit_middle` hides the middle and keeps the configured number of characters from each end.",
     },
-    git_branch_name_pattern: GitBranchNamePatternSetting {
-        type: String,
-        default: String::new(),
+    git_branch_name_prefix_chars: GitBranchNamePrefixChars {
+        type: usize,
+        default: DEFAULT_GIT_BRANCH_NAME_PREFIX_CHARS,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
         private: false,
-        toml_path: "terminal.prompt.git_branch_name_pattern",
-        description: "Optional regular expression applied to the git branch name before the prompt chip shows it. When the pattern matches, the first capture group is displayed, or the whole match when there is no capture group. Leave empty to show the full branch name. Example: ^([A-Z]+-[0-9]+) shows ABC-123 from ABC-123-some-long-feature.",
+        toml_path: "terminal.prompt.git_branch_name_prefix_chars",
+        description: "When long git branch names omit the middle, how many characters to keep from the start. Ignored for the other truncation modes.",
+    },
+    git_branch_name_suffix_chars: GitBranchNameSuffixChars {
+        type: usize,
+        default: DEFAULT_GIT_BRANCH_NAME_SUFFIX_CHARS,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "terminal.prompt.git_branch_name_suffix_chars",
+        description: "When long git branch names omit the middle, how many characters to keep from the end. Ignored for the other truncation modes.",
     },
 ]);
 

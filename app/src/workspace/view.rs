@@ -23603,7 +23603,7 @@ impl Workspace {
         }
         if matches!(
             *terminal_settings.git_branch_name_truncation,
-            GitBranchNameTruncation::Start
+            GitBranchNameTruncation::OmitEnd
         ) {
             context.set.insert(flags::GIT_BRANCH_NAME_SHOW_START);
         }

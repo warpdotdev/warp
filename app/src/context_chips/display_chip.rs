@@ -1139,7 +1139,8 @@ impl DisplayChip {
                 if matches!(
                     event,
                     TerminalSettingsChangedEvent::GitBranchNameTruncationSetting { .. }
-                        | TerminalSettingsChangedEvent::GitBranchNamePatternSetting { .. }
+                        | TerminalSettingsChangedEvent::GitBranchNamePrefixChars { .. }
+                        | TerminalSettingsChangedEvent::GitBranchNameSuffixChars { .. }
                 ) {
                     ctx.notify();
                 }
@@ -2389,7 +2390,8 @@ fn git_branch_chip_label(branch: &str, app: &AppContext) -> String {
     format_git_branch_name(
         branch,
         *settings.git_branch_name_truncation,
-        settings.git_branch_name_pattern.as_str(),
+        *settings.git_branch_name_prefix_chars,
+        *settings.git_branch_name_suffix_chars,
         UDI_CHIP_MAX_NUM_CHARACTERS,
     )
 }
