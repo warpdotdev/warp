@@ -326,6 +326,130 @@ fn test_flex_main_axis_alignment() {
     })
 }
 
+/// Regression coverage for CSAT-10272: `Flex` gives non-flexible children an
+/// unbounded max-width constraint along the main axis (see the "unbounded
+/// size" comment above in `Flex::layout`), so a child whose own width can
+/// exceed the available space -- such as an autocomplete row's label -- must
+/// be wrapped in `Shrinkable` to receive a real, bounded constraint. This
+/// mirrors the exact `Flex::row` topology used for a suggestion row (a
+/// fixed-width leading child, then the variable-width label): `ConstrainedBox`
+/// stands in for `Text`, since both clamp their own width to `min(natural
+/// width, given max)`.
+#[test]
+fn test_shrinkable_bounds_child_to_available_row_space() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            TestDynamicView::new(|_| {
+                Stack::new()
+                    .with_child(
+                        Flex::row()
+                            .with_children([
+                                SavePosition::new(
+                                    ConstrainedBox::new(Rect::new().finish())
+                                        .with_width(20.)
+                                        .finish(),
+                                    "icon",
+                                )
+                                .finish(),
+                                Shrinkable::new(
+                                    1.,
+                                    SavePosition::new(
+                                        ConstrainedBox::new(Rect::new().finish())
+                                            .with_width(1000.)
+                                            .finish(),
+                                        "label",
+                                    )
+                                    .finish(),
+                                )
+                                .finish(),
+                            ])
+                            .finish(),
+                    )
+                    .finish()
+            })
+        });
+
+        let mut presenter = Presenter::new(window_id);
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).expect("root view should exist"));
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(200., 50.), 1., None, ctx);
+
+            let label = presenter
+                .position_cache()
+                .get_position("label")
+                .expect("position should exist");
+
+            // Bounded to the row's remaining space (200 - 20 icon width), not
+            // the child's own 1000px width.
+            assert_eq!(label.width(), 180.);
+        });
+    })
+}
+
+/// Companion to [`test_shrinkable_bounds_child_to_available_row_space`]: the
+/// same topology, but with the label child not wrapped in `Shrinkable`. It
+/// keeps its full, unconstrained width, exceeding the available row space.
+#[test]
+fn test_non_flexible_child_keeps_natural_width_when_it_exceeds_available_row_space() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            TestDynamicView::new(|_| {
+                Stack::new()
+                    .with_child(
+                        Flex::row()
+                            .with_children([
+                                SavePosition::new(
+                                    ConstrainedBox::new(Rect::new().finish())
+                                        .with_width(20.)
+                                        .finish(),
+                                    "icon",
+                                )
+                                .finish(),
+                                SavePosition::new(
+                                    ConstrainedBox::new(Rect::new().finish())
+                                        .with_width(1000.)
+                                        .finish(),
+                                    "label",
+                                )
+                                .finish(),
+                            ])
+                            .finish(),
+                    )
+                    .finish()
+            })
+        });
+
+        let mut presenter = Presenter::new(window_id);
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).expect("root view should exist"));
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(200., 50.), 1., None, ctx);
+
+            let label = presenter
+                .position_cache()
+                .get_position("label")
+                .expect("position should exist");
+
+            assert_eq!(label.width(), 1000.);
+        });
+    })
+}
+
 #[test]
 fn test_flex_row_spacing() {
     App::test((), |mut app| async move {
