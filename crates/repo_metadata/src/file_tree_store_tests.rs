@@ -197,3 +197,42 @@ fn test_rename_directory_parent_child_link_consistency() {
         "Child path in parent_to_child_map should match the renamed child path"
     );
 }
+
+/// Regression test for APP-4835: `ensure_parent_directories_exist` must not
+/// deep-clone the whole store (via `Arc::make_mut`) when every ancestor already
+/// exists, even while the store is shared with another holder. It must still
+/// copy-on-write (leaving the shared snapshot untouched) when it genuinely
+/// inserts a missing ancestor.
+#[test]
+fn test_ensure_parent_directories_no_cow_when_ancestors_exist() {
+    let mut tree = FileTreeEntry::new_for_directory(Arc::new(std_path("/repo")));
+    tree.insert_entry_at_path(Arc::new(std_path("/repo/a")), create_dir_entry("/repo/a"));
+    tree.insert_entry_at_path(
+        Arc::new(std_path("/repo/a/b")),
+        create_dir_entry("/repo/a/b"),
+    );
+
+    // Share the underlying store with a reader snapshot so `Arc::make_mut`
+    // would clone if it were called.
+    let shared = tree.clone();
+    tree.ensure_parent_directories_exist(&std_path("/repo/a/b"));
+    assert!(
+        Arc::ptr_eq(&tree.state_map, &shared.state_map),
+        "no copy-on-write should occur when all ancestors already exist"
+    );
+
+    // Now insert missing ancestors: this must copy-on-write, forking from the
+    // shared snapshot without mutating it.
+    let shared_before_insert = tree.clone();
+    tree.ensure_parent_directories_exist(&std_path("/repo/x/y"));
+    assert!(
+        !Arc::ptr_eq(&tree.state_map, &shared_before_insert.state_map),
+        "copy-on-write should occur when inserting missing ancestors"
+    );
+    assert!(tree.get(&std_path("/repo/x")).is_some());
+    assert!(tree.get(&std_path("/repo/x/y")).is_some());
+    assert!(
+        shared_before_insert.get(&std_path("/repo/x")).is_none(),
+        "the shared snapshot must not observe the new directories"
+    );
+}
