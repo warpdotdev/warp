@@ -150,6 +150,43 @@ pub fn is_runnable_shell_script(_path: &Path) -> bool {
     false
 }
 
+/// What Warp should do with a file handed to it by the OS through a `file://`
+/// URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenFileAction {
+    /// Open in the notebook viewer pane (Markdown, or Jupyter when enabled).
+    Notebook,
+    /// Open in Warp's code/text editor pane.
+    Editor,
+    /// Open a session at the parent directory and queue the file as the pending command,
+    /// or just open a session at the directory path if `path` is a directory.
+    ExecuteInSession,
+}
+
+/// Pure routing decision for `uri::open_file`. Extracted so it can be unit-tested without
+/// standing up a full `AppContext`.
+///
+/// The Markdown Viewer preference is passed in because macOS can hand Markdown
+/// file URLs to Warp via the file type registration in `Info.plist`. Since Warp
+/// cannot easily update that registration when the user toggles the viewer
+/// preference, the URI handler must check the preference before routing a
+/// Markdown file to the in-Warp notebook viewer. Other notebook viewer formats,
+/// such as Jupyter notebooks, are controlled by their own routing checks.
+pub fn classify_open_file_action(path: &Path, prefer_markdown_viewer: bool) -> OpenFileAction {
+    if renders_in_warp_notebook_viewer(path) && (!is_markdown_file(path) || prefer_markdown_viewer)
+    {
+        OpenFileAction::Notebook
+    } else if is_runnable_shell_script(path) {
+        OpenFileAction::ExecuteInSession
+    } else if path.is_file()
+        && (is_file_openable_in_warp(path).is_some() || starts_with_shebang(path))
+    {
+        OpenFileAction::Editor
+    } else {
+        OpenFileAction::ExecuteInSession
+    }
+}
+
 /// Determines if a file can be opened in Warp and returns its type.
 /// Returns `None` if the file is binary and should not be opened.
 pub fn is_file_openable_in_warp(path: &Path) -> Option<OpenableFileType> {
@@ -220,6 +257,28 @@ pub fn resolve_file_target_with_editor_choice(
     default_layout: EditorLayout,
     layout: Option<EditorLayout>,
 ) -> FileTarget {
+    resolve_file_target_with_system_default_handler(
+        path,
+        editor_choice,
+        prefer_markdown_viewer,
+        default_layout,
+        layout,
+        crate::util::file::external_editor::system_default_handler_is_warp,
+    )
+}
+
+/// [`resolve_file_target_with_editor_choice`], with the "is Warp the OS default
+/// handler for this file?" probe injected so tests do not depend on the host's
+/// file associations.
+#[cfg(feature = "local_fs")]
+fn resolve_file_target_with_system_default_handler(
+    path: &Path,
+    editor_choice: EditorChoice,
+    prefer_markdown_viewer: bool,
+    default_layout: EditorLayout,
+    layout: Option<EditorLayout>,
+    system_default_handler_is_warp: impl Fn(&Path) -> bool,
+) -> FileTarget {
     let is_openable_in_warp = is_file_openable_in_warp(path);
     let is_markdown = matches!(is_openable_in_warp, Some(OpenableFileType::Markdown));
     let layout = layout.unwrap_or(default_layout);
@@ -258,6 +317,31 @@ pub fn resolve_file_target_with_editor_choice(
     // 5. External Editor or System Default (for text files)
     match editor_choice {
         EditorChoice::ExternalEditor(editor) => FileTarget::ExternalEditor(editor),
+        // When Warp is the OS handler, handing the file to the system bounces it
+        // back in as a bare `file://` URL, which cannot carry a line number.
+        // Open it in-process instead so the caller's requested line survives.
+        //
+        // Only where the round trip would itself have opened an editor, so that
+        // short-circuiting changes whether the line survives and nothing else:
+        // a runnable script still runs in a session, and a directory still goes
+        // to the OS. Asking the classifier the far side uses, rather than
+        // restating its conditions, is what keeps the two from drifting apart.
+        // It is also the cheap check, so a file it rejects never pays for the
+        // handler lookup.
+        //
+        // Rule 4 above is stricter than the classifier for extensionless files:
+        // it treats one with no recognized name as binary, where the classifier
+        // admits any file starting with a shebang. Such a file is diverted
+        // before reaching here, so it opens via the OS at line 1 even though the
+        // far side would put it in an editor. Pre-existing, and pinned by
+        // `test_extensionless_shebang_file_is_diverted_before_the_short_circuit`.
+        EditorChoice::SystemDefault
+            if classify_open_file_action(path, prefer_markdown_viewer)
+                == OpenFileAction::Editor
+                && system_default_handler_is_warp(path) =>
+        {
+            FileTarget::CodeEditor(layout)
+        }
         EditorChoice::SystemDefault => FileTarget::SystemDefault,
         EditorChoice::Warp | EditorChoice::EnvEditor => unreachable!("Already matched above"),
     }
