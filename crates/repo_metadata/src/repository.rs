@@ -527,23 +527,60 @@ impl Repository {
     }
 
     /// Returns updates filtered for each subscriber's watch mode.
+    ///
+    /// `update` can be large (it owns per-file `HashSet`/`HashMap` collections), so this avoids
+    /// cloning it once per subscriber. Subscribers whose filtered result would be empty are
+    /// identified without cloning, and only the subscribers earlier than the last relevant one
+    /// receive a clone -- the last relevant subscriber receives the update by move.
     #[cfg(feature = "local_fs")]
     pub(crate) fn subscriber_updates(
         &self,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
     ) -> Vec<(SubscriberId, RepositoryUpdate)> {
-        self.subscribers
+        let has_filesystem_changes = !update.added.is_empty()
+            || !update.modified.is_empty()
+            || !update.deleted.is_empty()
+            || !update.moved.is_empty();
+
+        // A `FilesystemOnly` subscriber only ever sees the file-change fields (the git-state
+        // flags are always cleared for it), so its filtered result is empty exactly when there
+        // are no filesystem changes. Checking this doesn't require cloning `update`.
+        let relevant: Vec<(SubscriberId, RepositoryWatchMode)> = self
+            .subscribers
             .iter()
             .filter_map(|(&subscriber_id, subscription)| {
-                let mut update = update.clone();
-                if subscription.mode == RepositoryWatchMode::FilesystemOnly {
-                    update.commit_updated = false;
-                    update.index_lock_detected = false;
-                    update.remote_ref_updated = false;
-                }
-                (!update.is_empty()).then_some((subscriber_id, update))
+                let is_relevant = match subscription.mode {
+                    RepositoryWatchMode::FilesystemOnly => has_filesystem_changes,
+                    RepositoryWatchMode::GitRepository => !update.is_empty(),
+                };
+                is_relevant.then_some((subscriber_id, subscription.mode))
             })
-            .collect()
+            .collect();
+
+        let Some((&(last_id, last_mode), earlier)) = relevant.split_last() else {
+            return Vec::new();
+        };
+
+        let mut results = Vec::with_capacity(relevant.len());
+        for &(subscriber_id, mode) in earlier {
+            let mut update = update.clone();
+            if mode == RepositoryWatchMode::FilesystemOnly {
+                update.commit_updated = false;
+                update.index_lock_detected = false;
+                update.remote_ref_updated = false;
+            }
+            results.push((subscriber_id, update));
+        }
+
+        let mut last_update = update;
+        if last_mode == RepositoryWatchMode::FilesystemOnly {
+            last_update.commit_updated = false;
+            last_update.index_lock_detected = false;
+            last_update.remote_ref_updated = false;
+        }
+        results.push((last_id, last_update));
+
+        results
     }
 
     #[cfg(feature = "local_fs")]
