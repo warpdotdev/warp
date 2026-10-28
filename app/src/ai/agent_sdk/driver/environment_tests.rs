@@ -18,8 +18,9 @@ use super::super::environment_checkout_protocol::{
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    WorkspaceConfiguration, await_checkout_helper, await_setup_phase, build_checkout_helper_command, environment_snapshot,
-    merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    WorkspaceConfiguration, await_checkout_helper, await_setup_phase,
+    build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
+    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
@@ -151,7 +152,7 @@ fn checkout_helper_timeout_covers_command_start_and_exit() {
 #[test]
 fn checkout_helper_completion_preserves_command_result() {
     assert_eq!(
-        block_on(await_checkout_helper(ready(Ok(17)), pending::<()>() )).unwrap(),
+        block_on(await_checkout_helper(ready(Ok(17)), pending::<()>())).unwrap(),
         17
     );
     assert!(matches!(
