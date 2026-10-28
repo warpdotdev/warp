@@ -212,7 +212,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     }
 
     pub fn emit(&mut self, payload: T::Event) {
-        self.app.pending_effects.push_back(Effect::Event {
+        self.app.enqueue_effect(Effect::Event {
             entity_id: self.model_id,
             payload: Box::new(payload),
         });
@@ -227,7 +227,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     #[track_caller]
     pub fn dispatch_global_action<A: Any>(&mut self, name: &'static str, arg: A) {
         let location = std::panic::Location::caller();
-        self.app.pending_effects.push_back(Effect::GlobalAction {
+        self.app.enqueue_effect(Effect::GlobalAction {
             name,
             location,
             arg: Box::new(arg),
@@ -263,11 +263,9 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             return;
         }
 
-        self.app
-            .pending_effects
-            .push_back(Effect::ModelNotification {
-                model_id: self.model_id,
-            });
+        self.app.enqueue_effect(Effect::ModelNotification {
+            model_id: self.model_id,
+        });
     }
 
     /// Emit AccessibilityContent
