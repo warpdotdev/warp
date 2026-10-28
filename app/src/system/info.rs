@@ -9,6 +9,7 @@ use ordered_float::OrderedFloat;
 use serde::Serialize;
 use sysinfo::ProcessesToUpdate;
 use warp_core::channel::ChannelState;
+use warp_editor::render::model::diagnostics::{RenderStateStats, live_render_state_stats};
 use warpui::{App, AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::server::telemetry;
@@ -218,7 +219,8 @@ impl SystemInfo {
         }
 
         // Collect a detailed memory breakdown for diagnostics.
-        let memory_breakdown = memory_footprint::memory_breakdown();
+        let mut memory_breakdown = memory_footprint::memory_breakdown();
+        Self::add_render_state_stats(&mut memory_breakdown, ctx);
 
         // If we're tracking heap usage and detect excessive memory usage,
         // dump and upload the current heap profiling data.
@@ -244,6 +246,42 @@ impl SystemInfo {
 
         ctx.emit(SystemInfoEvent::MemoryUsageHigh);
         self.has_emitted_memory_warning_event = true;
+    }
+
+    /// Adds the editor's live-content-tree stats to a memory breakdown.
+    ///
+    /// The heap profiles behind APP-5439 put most of the process's memory in the editor's content
+    /// trees but can't tell a few huge trees from very many small ones, so this reports the live
+    /// model count and the distribution of their sizes (APP-5445). It rides along on the existing
+    /// breakdown, which means it reaches both the Sentry event carrying the heap profile and the
+    /// `MemoryUsageHigh` telemetry event without a new surface.
+    ///
+    /// Costs one weak-handle upgrade and one tree-summary read per live model; nothing walks a
+    /// tree.
+    fn add_render_state_stats(memory_breakdown: &mut serde_json::Value, ctx: &AppContext) {
+        let serde_json::Value::Object(breakdown) = memory_breakdown else {
+            return;
+        };
+
+        let stats = live_render_state_stats(ctx);
+        breakdown.insert(
+            "render_states".to_string(),
+            serde_json::json!({
+                "live_pixel_models": stats.live_pixel_models,
+                "live_char_cell_models": stats.live_char_cell_models,
+                "unresolved_entries": stats.unresolved_entries,
+                "total_items": stats.total_items,
+                "total_lines": stats.total_lines,
+                "total_chars": stats.total_chars,
+                "largest_model_items": stats.largest_model_items,
+                "largest_model_lines": stats.largest_model_lines,
+                "models_by_item_count": {
+                    "bucket_upper_bounds": RenderStateStats::bucket_upper_bounds(),
+                    "models": stats.models_by_item_count,
+                    "above_largest_bucket": stats.models_above_largest_bucket,
+                },
+            }),
+        );
     }
 
     /// Returns the pid of the current process.
