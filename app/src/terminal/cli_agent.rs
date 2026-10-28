@@ -13,7 +13,7 @@ use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_cli::agent::Harness;
-use warp_completer::parsers::simple::top_level_command;
+use warp_completer::parsers::simple::{all_parsed_commands, top_level_command};
 use warp_editor::content::buffer::Buffer;
 use warp_editor::content::markdown::MarkdownStyle;
 use warp_util::path::EscapeChar;
@@ -463,7 +463,27 @@ impl CLIAgent {
             return false;
         };
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        self.command_prefixes().contains(&basename)
+        if !self.command_prefixes().contains(&basename) {
+            return false;
+        }
+        if matches!(self, CLIAgent::WarpTui) {
+            // The ACP bridge uses this executable but receives prompts over a socket, not its PTY.
+            let is_acp_bridge = match escape_char {
+                Some(esc) => all_parsed_commands(command, esc)
+                    .next()
+                    .is_some_and(|command| {
+                        command
+                            .parts
+                            .get(1)
+                            .is_some_and(|part| part.item == "acp-bridge")
+                    }),
+                None => command.split_whitespace().nth(1) == Some("acp-bridge"),
+            };
+            if is_acp_bridge {
+                return false;
+            }
+        }
+        true
     }
 
     /// Detects the CLI agent from a command string.
