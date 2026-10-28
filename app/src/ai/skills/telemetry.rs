@@ -4,8 +4,6 @@ use serde_json::json;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
-use crate::features::FeatureFlag;
-
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillOpenOrigin {
@@ -114,7 +112,7 @@ impl TelemetryEventDesc for SkillTelemetryEventDiscriminants {
     }
 
     fn enablement_state(&self) -> EnablementState {
-        EnablementState::Flag(FeatureFlag::ListSkills)
+        EnablementState::Always
     }
 }
 
