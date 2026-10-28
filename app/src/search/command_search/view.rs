@@ -215,10 +215,12 @@ impl CommandSearchView {
     }
 
     /// Resets the mixer with the relevant data sources for Command Search registered.
+    #[allow(clippy::too_many_arguments)]
     fn reset_command_search_mixer(
         &mut self,
         session_id: SessionId,
         session_context: Option<SessionContext>,
+        cwd: Option<String>,
         ai_execution_context: Option<WarpAiExecutionContext>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -287,7 +289,7 @@ impl CommandSearchView {
             }
 
             if History::as_ref(ctx).is_queryable(&session_id) {
-                let source = history_data_source_for_session(session_id);
+                let source = history_data_source_for_session(session_id, cwd.clone());
                 mixer.add_async_source(
                     source,
                     HashSet::from([QueryFilter::History]),
@@ -299,12 +301,14 @@ impl CommandSearchView {
                     ctx,
                 );
             } else {
+                let cwd = cwd.clone();
                 ctx.subscribe_to_model(
                     &History::handle(ctx),
                     move |mixer, _, history_event, ctx| match history_event {
                         HistoryEvent::Initialized(id) => {
                             if id == &session_id {
-                                let source = history_data_source_for_session(session_id);
+                                let source =
+                                    history_data_source_for_session(session_id, cwd.clone());
                                 mixer.add_async_source(
                                     source,
                                     HashSet::from([QueryFilter::History]),
@@ -333,13 +337,20 @@ impl CommandSearchView {
         &mut self,
         session_id: SessionId,
         session_context: Option<SessionContext>,
+        cwd: Option<String>,
         initial_query: String,
         query_filter: Option<QueryFilter>,
         menu_positioning: MenuPositioning,
         ai_execution_context: Option<WarpAiExecutionContext>,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.reset_command_search_mixer(session_id, session_context, ai_execution_context, ctx);
+        self.reset_command_search_mixer(
+            session_id,
+            session_context,
+            cwd,
+            ai_execution_context,
+            ctx,
+        );
         let ordering = match menu_positioning {
             MenuPositioning::AboveInputBox => SearchResultOrdering::BottomUp,
             MenuPositioning::BelowInputBox => SearchResultOrdering::TopDown,
