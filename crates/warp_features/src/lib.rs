@@ -518,9 +518,6 @@ pub enum FeatureFlag {
     /// Enables rendering markdown images inline in AI block list responses.
     BlocklistMarkdownImages,
 
-    /// Enables the /fork-from slash command.
-    ForkFromCommand,
-
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
