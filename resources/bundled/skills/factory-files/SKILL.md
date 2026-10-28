@@ -164,13 +164,11 @@ read them.
 - When creating automations, recommend non-empty inclusive scope filters:
   GitHub `labels` for events that support labels, Linear `teams` (or
   `team_ids`), Jira `project_keys`, and Microsoft Teams `team_ids`.
-  Exclusions alone do not satisfy these recommendations; neither do Microsoft
-  Teams channel filters alone. Use the trigger's `(provider, event)` schema.
-- Suggest the Factory's GitHub label when available; for Linear/Jira, suggest
-  the teams/projects from its enabled agent-session routing automation.
-  If scope is unclear, ask rather than inventing values. Explain and confirm
-  intentional broad matching; these are recommendations, not save-blocking
-  validation requirements.
+  Prefer the Factory's GitHub label and its enabled Linear/Jira agent-session
+  routing scope when available. Exclusions alone and Microsoft Teams channel
+  filters alone do not satisfy these recommendations. Follow the event's
+  schema, ask if scope is unclear, and confirm intentional broad matching;
+  these recommendations do not block saving.
 - A webhook never carries secret material. `secretName` is required in every
   `authMode` and names an existing managed secret; the server does not generate
   a secret for a file-declared source, because nothing could then read it back
