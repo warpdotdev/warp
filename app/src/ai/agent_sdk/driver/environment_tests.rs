@@ -18,7 +18,7 @@ use super::super::environment_checkout_protocol::{
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command, environment_snapshot,
+    WorkspaceConfiguration, await_checkout_helper, await_setup_phase, build_checkout_helper_command, environment_snapshot,
     merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
@@ -116,6 +116,51 @@ fn duplicate_resolved_repositories_fail_before_clone() {
         })
         .collect::<Vec<_>>();
     assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new(), Vec::new()).is_err());
+}
+
+#[test]
+fn checkout_helper_timeout_covers_command_start_and_exit() {
+    for command_started in [false, true] {
+        block_on(async {
+            let (start_tx, start_rx) = oneshot::channel::<()>();
+            let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
+            let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+            let operation = async {
+                start_rx.await.unwrap();
+                Ok(exit_rx.await.unwrap())
+            };
+            let mut wait = Box::pin(await_checkout_helper(operation, deadline_rx));
+            assert!(poll!(wait.as_mut()).is_pending());
+            if command_started {
+                start_tx.send(()).unwrap();
+                assert!(poll!(wait.as_mut()).is_pending());
+            }
+            deadline_tx.send(()).unwrap();
+
+            assert!(matches!(
+                wait.await,
+                Err(PrepareEnvironmentError::CheckoutHelperTimedOut {
+                    timeout_seconds: 1800
+                })
+            ));
+            assert!(exit_tx.is_canceled());
+        });
+    }
+}
+
+#[test]
+fn checkout_helper_completion_preserves_command_result() {
+    assert_eq!(
+        block_on(await_checkout_helper(ready(Ok(17)), pending::<()>() )).unwrap(),
+        17
+    );
+    assert!(matches!(
+        block_on(await_checkout_helper(
+            ready(Err::<(), _>(PrepareEnvironmentError::InvalidRuntimeState)),
+            pending::<()>()
+        )),
+        Err(PrepareEnvironmentError::InvalidRuntimeState)
+    ));
 }
 
 #[test]

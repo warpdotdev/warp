@@ -48,6 +48,7 @@ const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncat
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
 const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_mins(30);
 const SETUP_COMMAND_CWD_RESET_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECKOUT_HELPER_TIMEOUT: Duration = Duration::from_mins(30);
 
 #[derive(Clone, Copy, Debug)]
 pub enum SetupCommandPhase {
@@ -129,6 +130,8 @@ pub enum PrepareEnvironmentError {
     UnsupportedRepositoryForge { repo_name: String },
     #[error("Environment checkout helper failed: {reason}")]
     CheckoutHelper { reason: &'static str },
+    #[error("Environment checkout helper timed out after {timeout_seconds}s")]
+    CheckoutHelperTimedOut { timeout_seconds: u64 },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -1024,7 +1027,10 @@ async fn remove_repository_origins_from_repos(
     let batch = checkout_requests_batch(&selected, working_dir)?;
     let result = execute_checkout_helper(&batch, true, spawner)
         .await
-        .map_err(|_| PrepareEnvironmentError::RemoveRepositoryOrigins)?;
+        .map_err(|error| match error {
+            error @ PrepareEnvironmentError::CheckoutHelperTimedOut { .. } => error,
+            _ => PrepareEnvironmentError::RemoveRepositoryOrigins,
+        })?;
     if result.command_result.exit_code == 0.into() {
         Ok(())
     } else {
@@ -1204,6 +1210,18 @@ struct CheckoutHelperResult {
     report: Option<CheckoutReport>,
 }
 
+async fn await_checkout_helper<T>(
+    operation: impl Future<Output = Result<T, PrepareEnvironmentError>>,
+    deadline: impl Future,
+) -> Result<T, PrepareEnvironmentError> {
+    match select(Box::pin(operation), Box::pin(deadline)).await {
+        Either::Left((result, _)) => result,
+        Either::Right((_, _)) => Err(PrepareEnvironmentError::CheckoutHelperTimedOut {
+            timeout_seconds: CHECKOUT_HELPER_TIMEOUT.as_secs(),
+        }),
+    }
+}
+
 #[tracing::instrument(skip_all, err, fields(
     tags.cloud_agent = true,
     remove_origins_only = remove_origins_only,
@@ -1246,7 +1264,11 @@ async fn execute_checkout_helper(
         remove_origins_only,
         active_shell_type(spawner).await,
     );
-    let result = execute_command(command, spawner).await;
+    let result = await_checkout_helper(
+        execute_command(command, spawner),
+        Timer::after(CHECKOUT_HELPER_TIMEOUT),
+    )
+    .await;
     let _ = std::fs::remove_file(&requests_file);
     let command_result = result?;
     let report = read_checkout_report(&report_file, batch.repositories.len());
