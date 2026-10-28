@@ -80,3 +80,75 @@ fn embedded_resource_round_trips_in_wire_shape() {
     .unwrap();
     assert_eq!(blob.as_text(), "file:///tmp/a.bin");
 }
+
+#[test]
+fn parses_session_capabilities_from_claude_agent_acp() {
+    let response: InitializeResponse = serde_json::from_value(json!({
+        "protocolVersion": 1,
+        "agentInfo": { "name": "@agentclientprotocol/claude-agent-acp", "version": "0.93.0" },
+        "agentCapabilities": {
+            "loadSession": true,
+            "promptCapabilities": { "image": true, "embeddedContext": true },
+            "sessionCapabilities": { "resume": {}, "list": {}, "close": {} },
+        },
+    }))
+    .unwrap();
+
+    let capabilities = response.agent_capabilities;
+    assert!(capabilities.session_capabilities.supports_resume());
+    assert!(!capabilities.extra.contains_key("sessionCapabilities"));
+}
+
+#[test]
+fn agents_that_announce_no_resume_cannot_resume() {
+    for agent_capabilities in [
+        json!({}),
+        json!({ "sessionCapabilities": {} }),
+        json!({ "sessionCapabilities": { "resume": null, "list": {} } }),
+    ] {
+        let response: InitializeResponse = serde_json::from_value(json!({
+            "protocolVersion": 1,
+            "agentCapabilities": agent_capabilities,
+        }))
+        .unwrap();
+        assert!(
+            !response
+                .agent_capabilities
+                .session_capabilities
+                .supports_resume()
+        );
+    }
+}
+
+#[test]
+fn resume_response_becomes_the_session_it_reopened() {
+    let response: ResumeSessionResponse = serde_json::from_value(json!({
+        "configOptions": [{ "id": "model", "category": "model", "type": "select", "options": [] }],
+        "_meta": { "adapter": "data" },
+    }))
+    .unwrap();
+
+    let session = response.into_session("prior-session".to_owned());
+
+    assert_eq!(session.session_id, "prior-session");
+    assert_eq!(session.config_options.len(), 1);
+    assert_eq!(session.meta["adapter"], "data");
+
+    let empty: ResumeSessionResponse = serde_json::from_value(json!({})).unwrap();
+    assert!(empty.into_session("s".to_owned()).config_options.is_empty());
+}
+
+#[test]
+fn resume_request_names_the_session_cwd_and_servers() {
+    let params = serde_json::to_value(ResumeSessionParams {
+        session_id: "prior-session".to_owned(),
+        cwd: "/workspace".to_owned(),
+        mcp_servers: Vec::new(),
+    })
+    .unwrap();
+
+    assert_eq!(
+        params,
+        json!({ "sessionId": "prior-session", "cwd": "/workspace", "mcpServers": [] })
+    );
+}

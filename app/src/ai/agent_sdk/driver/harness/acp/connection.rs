@@ -451,4 +451,4 @@ async fn read_loop<R: AsyncRead + Unpin>(
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]
-mod tests;
+pub(super) mod tests;
