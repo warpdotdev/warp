@@ -3878,7 +3878,9 @@ impl FeaturesPageView {
                 ctx.notify();
             }
             EditorEvent::Enter | EditorEvent::Blurred => {
-                ctx.dispatch_typed_action(&FeaturesPageAction::SetGitBranchNamePattern);
+                // The features page is mid-update while this editor event is
+                // delivered, so a synchronous dispatch never reaches its handler.
+                ctx.dispatch_typed_action_deferred(FeaturesPageAction::SetGitBranchNamePattern);
             }
             EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
             _ => {}
