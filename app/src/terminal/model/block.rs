@@ -423,6 +423,11 @@ pub struct Block {
 
     /// Only set on restored blocks. Indicates whether the block was local or from a remote session.
     restored_block_was_local: Option<bool>,
+    /// Whether the block originated from serialized state rather than the live shell.
+    was_restored: bool,
+
+    /// Deferred event data shared by every completion event emitted for this block.
+    user_block_completion_fields: Option<UserBlockCompletionFields>,
 
     /// Tracks which views (terminal and/or agent conversations) this block should be visible in.
     ///
@@ -553,6 +558,42 @@ macro_rules! lazy_block_field {
         })
     }};
 }
+#[derive(Clone)]
+struct UserBlockCompletionFields {
+    serialized_block: Lazy<Arc<SerializedBlock>, BlockList>,
+    command: Lazy<String, BlockList>,
+    command_with_obfuscated_secrets: Lazy<String, BlockList>,
+    output_truncated: Lazy<String, BlockList>,
+    output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
+}
+
+impl UserBlockCompletionFields {
+    fn new(id: &BlockId) -> Self {
+        let id = id.clone();
+        Self {
+            serialized_block: lazy_block_field!(id, |block| Arc::new(SerializedBlock::from(block))),
+            command: lazy_block_field!(id, Block::command_to_string),
+            command_with_obfuscated_secrets: lazy_block_field!(
+                id,
+                Block::compute_command_with_obfuscated_secrets
+            ),
+            output_truncated: lazy_block_field!(id, Block::compute_output_truncated),
+            output_truncated_with_obfuscated_secrets: lazy_block_field!(
+                id,
+                Block::compute_output_truncated_with_obfuscated_secrets
+            ),
+        }
+    }
+
+    fn resolve(&self, block_list: &BlockList) {
+        self.serialized_block.get(block_list);
+        self.command.get(block_list);
+        self.command_with_obfuscated_secrets.get(block_list);
+        self.output_truncated.get(block_list);
+        self.output_truncated_with_obfuscated_secrets
+            .get(block_list);
+    }
+}
 
 impl From<&Block> for BlockType {
     fn from(block: &Block) -> Self {
@@ -561,6 +602,9 @@ impl From<&Block> for BlockType {
         }
         if block.is_static() {
             return BlockType::Static;
+        }
+        if block.is_restored() {
+            return BlockType::Restored;
         }
 
         match block.bootstrap_stage() {
@@ -578,22 +622,17 @@ impl From<&Block> for BlockType {
                 if block.is_background() {
                     BlockType::Background(Arc::new(block.into()))
                 } else {
-                    // Captured (by stable `BlockId`, not `BlockIndex` — see `resolve_and_compute`)
-                    // by the `Lazy::deferred` closures below so they can look up this block again
-                    // (via a `&BlockList` given later, at read time) without holding onto `block`
-                    // itself.
-                    let index = block.block_index;
-                    let id = block.id().clone();
+                    let fields = block
+                        .user_block_completion_fields
+                        .as_ref()
+                        .expect("completed user blocks must have deferred completion fields");
                     BlockType::User(UserBlockCompleted::new(
-                        index,
-                        lazy_block_field!(id, |block| Arc::new(SerializedBlock::from(block))),
-                        lazy_block_field!(id, Block::command_to_string),
-                        lazy_block_field!(id, Block::compute_command_with_obfuscated_secrets),
-                        lazy_block_field!(id, Block::compute_output_truncated),
-                        lazy_block_field!(
-                            id,
-                            Block::compute_output_truncated_with_obfuscated_secrets
-                        ),
+                        block.id.clone(),
+                        fields.serialized_block.clone(),
+                        fields.command.clone(),
+                        fields.command_with_obfuscated_secrets.clone(),
+                        fields.output_truncated.clone(),
+                        fields.output_truncated_with_obfuscated_secrets.clone(),
                         block.agent_interaction_metadata().is_some(),
                         block.command_start_time(),
                         block.output_grid().len() as u64,
@@ -939,6 +978,7 @@ impl Block {
         is_ai_ugc_telemetry_enabled: bool,
         conversation_id: Option<AIConversationId>,
     ) -> Self {
+        let was_restored = bootstrap_stage == BootstrapStage::RestoreBlocks;
         let perform_reset_grid_checks = if cfg!(windows) && bootstrap_stage.is_done() {
             PerformResetGridChecks::Yes
         } else {
@@ -1017,6 +1057,8 @@ impl Block {
             leading_linefeeds_ignored: 0,
             is_ai_ugc_telemetry_enabled,
             restored_block_was_local: None,
+            was_restored,
+            user_block_completion_fields: None,
             agent_view_visibility: match conversation_id {
                 Some(id) => AgentViewVisibility::new_from_conversation(id),
                 None => AgentViewVisibility::new_from_terminal(),
@@ -1116,7 +1158,7 @@ impl Block {
 
     pub fn set_restored_block_was_local(&mut self, was_local: bool) {
         debug_assert!(
-            self.bootstrap_stage == BootstrapStage::RestoreBlocks,
+            self.is_restored(),
             "set_restored_block_was_local should only be called for restored blocks"
         );
         self.restored_block_was_local = Some(was_local);
@@ -1124,6 +1166,16 @@ impl Block {
 
     pub fn restored_block_was_local(&self) -> Option<bool> {
         self.restored_block_was_local
+    }
+
+    pub(super) fn mark_restored(&mut self) {
+        self.was_restored = true;
+    }
+
+    pub(super) fn resolve_user_block_completion_fields(&self, block_list: &BlockList) {
+        if let Some(fields) = &self.user_block_completion_fields {
+            fields.resolve(block_list);
+        }
     }
 
     pub(super) fn receiving_chars_for_prompt(&self) -> Option<ansi::PromptKind> {
@@ -1369,7 +1421,7 @@ impl Block {
     }
 
     pub fn is_restored(&self) -> bool {
-        matches!(self.bootstrap_stage, BootstrapStage::RestoreBlocks)
+        self.was_restored
     }
 
     /// Whether this is a background output block. Background output blocks are
@@ -1584,13 +1636,20 @@ impl Block {
         log::info!("Block finished with new state {:?}", self.state);
 
         self.block_banner = None;
+        if self.bootstrap_stage == BootstrapStage::PostBootstrapPrecmd
+            && !self.is_for_in_band_command
+            && !self.is_background()
+            && !self.is_static()
+            && !self.is_restored()
+        {
+            self.user_block_completion_fields = Some(UserBlockCompletionFields::new(&self.id));
+        }
 
         let block_type: BlockType = self.into();
         self.event_proxy
             .send_app_event(Event::BlockCompleted(BlockCompletedEvent {
                 block_type,
                 num_secrets_obfuscated: self.num_secrets_obfuscated(),
-                block_index: self.block_index,
                 block_id: self.id.clone(),
                 session_id: self.session_id,
                 restored_block_was_local: self.restored_block_was_local,
