@@ -101,6 +101,12 @@ pub struct ScrollableAppearance {
     // The scrollbar is the runway for the draggable scrollbar. By default the scollbox renders to
     // the side of the child element. This setting makes the scrollbar render over the child instead.
     overlaid_scrollbar: bool,
+    // By default, the scrollbar thumb is only painted while the pointer is somewhere over the
+    // scrollable's content (see `ScrollableState::draw_scrollbars`). That hides the affordance
+    // entirely from keyboard-only interactions (e.g. arrowing through a long list), which can make
+    // an overflowing list look unscrollable. Setting this keeps the (nonactive) thumb visible
+    // whenever there's overflow, regardless of hover state.
+    always_show_thumb: bool,
 }
 
 impl ScrollableAppearance {
@@ -108,7 +114,14 @@ impl ScrollableAppearance {
         Self {
             scrollbar_size,
             overlaid_scrollbar,
+            always_show_thumb: false,
         }
+    }
+
+    /// Keep the scrollbar thumb visible whenever there's overflow, instead of only while hovered.
+    pub fn with_always_show_thumb(mut self, always_show_thumb: bool) -> Self {
+        self.always_show_thumb = always_show_thumb;
+        self
     }
 
     fn scrollbar_size(&self, include_overlaid_scrollbar: bool) -> f32 {
@@ -117,6 +130,27 @@ impl ScrollableAppearance {
         } else {
             self.scrollbar_size.as_f32()
         }
+    }
+}
+
+/// Selects the fill for a scrollbar thumb given its current interaction/visibility state.
+/// Drawn in `active_background` while the thumb itself is hovered/dragged; in
+/// `nonactive_background` while the pointer is over the scrollable's content, or whenever
+/// `always_show_thumb` opts out of that hover-gating so the affordance stays visible without a
+/// hover (e.g. for keyboard-only navigation); otherwise not drawn (`Fill::None`).
+fn scrollbar_thumb_fill(
+    is_scrollbar_hovered: bool,
+    is_child_hovered: bool,
+    always_show_thumb: bool,
+    nonactive_background: Fill,
+    active_background: Fill,
+) -> Fill {
+    if is_scrollbar_hovered {
+        active_background
+    } else if is_child_hovered || always_show_thumb {
+        nonactive_background
+    } else {
+        Fill::None
     }
 }
 
@@ -307,13 +341,13 @@ impl ScrollableState {
                     scrollable_size,
                     scrollbar_size_with_padding,
                     origin,
-                    if config.hovered(Axis::Vertical) {
-                        active_scrollbar_thumb_background
-                    } else if !config.child_hovered() {
-                        Fill::None
-                    } else {
-                        nonactive_scrollbar_thumb_background
-                    },
+                    scrollbar_thumb_fill(
+                        config.hovered(Axis::Vertical),
+                        config.child_hovered(),
+                        vertical_appearance.always_show_thumb,
+                        nonactive_scrollbar_thumb_background,
+                        active_scrollbar_thumb_background,
+                    ),
                     scrollbar_track_background,
                     *vertical_appearance,
                     ctx,
@@ -324,13 +358,13 @@ impl ScrollableState {
                     scrollable_size,
                     scrollbar_size_with_padding,
                     origin,
-                    if config.hovered(Axis::Horizontal) {
-                        active_scrollbar_thumb_background
-                    } else if !config.child_hovered() {
-                        Fill::None
-                    } else {
-                        nonactive_scrollbar_thumb_background
-                    },
+                    scrollbar_thumb_fill(
+                        config.hovered(Axis::Horizontal),
+                        config.child_hovered(),
+                        horizontal_appearance.always_show_thumb,
+                        nonactive_scrollbar_thumb_background,
+                        active_scrollbar_thumb_background,
+                    ),
                     scrollbar_track_background,
                     *horizontal_appearance,
                     ctx,
@@ -376,13 +410,13 @@ impl ScrollableState {
                 scrollable_size,
                 scrollbar_size_with_padding,
                 origin,
-                if config.hovered() {
-                    active_scrollbar_thumb_background
-                } else if !config.child_hovered() {
-                    Fill::None
-                } else {
-                    nonactive_scrollbar_thumb_background
-                },
+                scrollbar_thumb_fill(
+                    config.hovered(),
+                    config.child_hovered(),
+                    appearance.always_show_thumb,
+                    nonactive_scrollbar_thumb_background,
+                    active_scrollbar_thumb_background,
+                ),
                 scrollbar_track_background,
                 *appearance,
                 ctx,
