@@ -4178,8 +4178,7 @@ impl CodeReviewView {
         is_in_split_pane: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let has_menu_flags = FeatureFlag::DiscardPerFileAndAllChanges.is_enabled()
-            || FeatureFlag::DiffSetAsContext.is_enabled()
+        let has_menu_flags = FeatureFlag::DiffSetAsContext.is_enabled()
             || FeatureFlag::FileAndDiffSetComments.is_enabled();
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
         let has_header_menu_items =
@@ -5011,18 +5010,16 @@ impl CodeReviewView {
             );
         }
 
-        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
-            right_row.add_child(
-                EventHandler::new(
-                    Container::new(ChildView::new(&file.discard_button).finish())
-                        .with_margin_left(4.)
-                        .finish(),
-                )
-                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
-                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
-                .finish(),
-            );
-        }
+        right_row.add_child(
+            EventHandler::new(
+                Container::new(ChildView::new(&file.discard_button).finish())
+                    .with_margin_left(4.)
+                    .finish(),
+            )
+            .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+            .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+            .finish(),
+        );
 
         right_row.add_child(
             EventHandler::new(
@@ -6864,7 +6861,7 @@ impl CodeReviewView {
             );
         }
 
-        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() && has_changes {
+        if has_changes {
             items.push(
                 MenuItemFields::new("Discard all")
                     .with_icon(Icon::ReverseLeft)
