@@ -154,7 +154,7 @@ impl AsyncRead for PipeReader {
 }
 
 /// The agent's end of the wire: reads what the client wrote and writes raw lines back.
-struct FakeAgent {
+pub(in super::super) struct FakeAgent {
     from_client: BufReader<PipeReader>,
     to_client: PipeWriter,
     /// Runs the connection's read loop; dropping it would cancel the loop.
@@ -171,20 +171,20 @@ impl FakeAgent {
         assert_eq!(answer["id"], "read-barrier", "{answer}");
         assert_eq!(answer["error"]["code"], -32601);
     }
-    async fn next_message(&mut self) -> Value {
+    pub(in super::super) async fn next_message(&mut self) -> Value {
         let mut line = String::new();
         self.from_client.read_line(&mut line).await.unwrap();
         serde_json::from_str(&line).expect("client must write one JSON object per line")
     }
 
-    async fn send(&mut self, message: Value) {
+    pub(in super::super) async fn send(&mut self, message: Value) {
         let mut encoded = serde_json::to_string(&message).unwrap();
         encoded.push('\n');
         self.to_client.write_all(encoded.as_bytes()).await.unwrap();
     }
 }
 
-fn connect(
+pub(in super::super) fn connect(
     handler: AgentRequestHandler,
 ) -> (
     AcpConnection,
@@ -207,7 +207,7 @@ fn connect(
     )
 }
 
-fn rejecting_handler() -> AgentRequestHandler {
+pub(in super::super) fn rejecting_handler() -> AgentRequestHandler {
     Arc::new(|method, _| future::ready(Err(RpcError::method_not_found(method))).boxed())
 }
 
