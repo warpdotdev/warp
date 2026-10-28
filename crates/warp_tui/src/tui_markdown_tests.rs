@@ -1,4 +1,6 @@
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use futures::channel::oneshot;
 use markdown_parser::{
@@ -10,9 +12,10 @@ use warp::tui_export::Appearance;
 use warpui::AddWindowOptions;
 use warpui::platform::WindowStyle;
 use warpui_core::elements::tui::{
-    Modifier, TuiBufferExt, TuiChildView, TuiElement, TuiRect, TuiText,
+    Modifier, TuiBuffer, TuiBufferExt, TuiChildView, TuiElement, TuiRect, TuiText,
 };
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::runtime::TuiFrameRenderer;
 use warpui_core::{App, AppContext, ViewHandle, WindowInvalidation};
 
 use super::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_text};
@@ -78,6 +81,86 @@ fn renders_blocks_inline_styles_and_accessible_links_without_markers() {
             assert!(buffer[(8, 2)].modifier.contains(Modifier::ITALIC));
             assert!(buffer[(16, 2)].modifier.contains(Modifier::CROSSED_OUT));
             assert!(buffer[(32, 2)].modifier.contains(Modifier::UNDERLINED));
+        });
+    });
+}
+
+#[test]
+fn wrapped_link_text_carries_the_full_url_on_every_wrapped_row() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let url = "https://warp.dev/very/long/path/that/should/wrap/across/rows";
+            let formatted =
+                parse_markdown(&format!("[click here]({url})")).expect("Markdown should parse");
+            let (lines, buffer, hyperlinks) = render_with_hyperlinks(&formatted, 20, ctx);
+            assert!(
+                lines.len() > 1,
+                "expected the link's display text plus URL suffix to wrap: {lines:?}"
+            );
+
+            let url_rc: Rc<str> = url.into();
+            // Every visible (non-space) cell of every wrapped row must carry
+            // the complete URL -- checking only one cell per row would also
+            // pass an implementation that tagged just the first character of
+            // each wrapped fragment, which is close to the original bug.
+            for (y, line) in lines.iter().enumerate() {
+                let y = u16::try_from(y).unwrap();
+                for (x, ch) in line.chars().enumerate() {
+                    if ch == ' ' {
+                        continue;
+                    }
+                    let x = u16::try_from(x).unwrap();
+                    assert_eq!(
+                        hyperlinks.get(&(x, y)),
+                        Some(&url_rc),
+                        "cell ({x}, {y}) = {ch:?} on row {line:?} should carry the link's full URL"
+                    );
+                }
+            }
+
+            // Cross the `TuiFrame` -> `TuiFrameRenderer` boundary: prove the
+            // OSC 8 bytes are actually emitted and every open is balanced by
+            // a close that comes before the next open. A first-frame repaint
+            // diffs the whole (uninterrupted, same-URL) link as one
+            // contiguous run spanning all wrapped rows -- rather than one run
+            // per row -- which is the renderer's normal, more efficient
+            // batching (see `TuiFrameRenderer::write_cell_run`) and is still
+            // correct: every row's cells fall inside that one run.
+            let mut renderer = TuiFrameRenderer::new();
+            let mut output = Vec::new();
+            renderer
+                .draw(&mut output, &buffer, None, &hyperlinks)
+                .expect("draw should succeed");
+            let output = String::from_utf8(output).expect("renderer output should be valid utf8");
+            let open = format!("\u{1b}]8;;{url}\u{1b}\\");
+            let close = "\u{1b}]8;;\u{1b}\\";
+            let open_count = output.matches(&open).count();
+            let close_count = output.matches(close).count();
+            assert!(
+                open_count >= 1,
+                "expected at least one hyperlink run: {output:?}"
+            );
+            assert_eq!(
+                open_count, close_count,
+                "every opened hyperlink run must be closed exactly once: {output:?}"
+            );
+            let mut search_from = 0;
+            for _ in 0..open_count {
+                let open_at = output[search_from..].find(&open).unwrap() + search_from;
+                let close_at = output[open_at..]
+                    .find(close)
+                    .map(|offset| open_at + offset)
+                    .expect("every open escape should have a matching close after it");
+                if let Some(next_open_offset) = output[open_at + open.len()..].find(&open) {
+                    let next_open_at = open_at + open.len() + next_open_offset;
+                    assert!(
+                        close_at < next_open_at,
+                        "a hyperlink run must close before the next one opens: {output:?}"
+                    );
+                }
+                search_from = close_at + close.len();
+            }
         });
     });
 }
@@ -497,6 +580,34 @@ fn render(
     ctx: &AppContext,
 ) -> (Vec<String>, warpui_core::elements::tui::TuiBuffer) {
     render_with_hooks(formatted, width, &TuiMarkdownBlockHooks::default(), ctx)
+}
+
+/// Renders like [`render`], but also returns the frame's hyperlink side table
+/// (buffer cell -> URL), for asserting on OSC 8 hyperlink placement rather
+/// than just visible text.
+#[allow(clippy::type_complexity)]
+fn render_with_hyperlinks(
+    formatted: &FormattedText,
+    width: u16,
+    ctx: &AppContext,
+) -> (Vec<String>, TuiBuffer, HashMap<(u16, u16), Rc<str>>) {
+    let palette = TuiMarkdownPalette::from_builder(&TuiUiBuilder::from_app(ctx));
+    let mut presenter = TuiPresenter::new();
+    let frame = presenter.present_element(
+        render_formatted_text(formatted, palette, &TuiMarkdownBlockHooks::default()),
+        TuiRect::new(0, 0, width, 40),
+        ctx,
+    );
+    let mut lines = frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    (lines, frame.buffer, frame.hyperlinks)
 }
 
 fn render_with_hooks(

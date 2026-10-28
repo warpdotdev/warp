@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::io::{self, Write};
+use std::rc::Rc;
+
 use ratatui::buffer::CellWidth;
 use ratatui::style::{Color, Modifier};
 
@@ -13,9 +17,55 @@ fn line_buffer(line: &str) -> TuiBuffer {
 }
 
 fn draw_to_string(renderer: &mut TuiFrameRenderer, buffer: &TuiBuffer) -> String {
+    draw_with_hyperlinks(renderer, buffer, &HashMap::new())
+}
+
+fn draw_with_hyperlinks(
+    renderer: &mut TuiFrameRenderer,
+    buffer: &TuiBuffer,
+    hyperlinks: &HashMap<(u16, u16), Rc<str>>,
+) -> String {
     let mut output = Vec::new();
-    renderer.draw(&mut output, buffer, None).unwrap();
+    renderer
+        .draw(&mut output, buffer, None, hyperlinks)
+        .unwrap();
     String::from_utf8(output).unwrap()
+}
+
+/// A writer that fails every write once it has seen an OSC 8 open escape,
+/// until it fails exactly one call — simulating a transient error partway
+/// through the bracketed draw, after the open succeeded. Every other write
+/// (setup, the open/close escapes themselves, and anything after the single
+/// failure) succeeds, so the close attempt that follows the failure can be
+/// observed directly in `written`.
+#[derive(Default)]
+struct DrawFailingWriter {
+    written: Vec<u8>,
+    saw_open: bool,
+    failed_once: bool,
+}
+
+impl Write for DrawFailingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let is_hyperlink_escape = buf.starts_with(b"\x1b]8;;");
+        if is_hyperlink_escape {
+            // An open escape carries a URL between the two `;;`/`\x1b\\`
+            // markers, so it's longer than the bare close escape.
+            self.saw_open = buf.len() > b"\x1b]8;;\x1b\\".len();
+            self.written.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
+        if self.saw_open && !self.failed_once {
+            self.failed_once = true;
+            return Err(io::Error::other("simulated write failure"));
+        }
+        self.written.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The CSI sequence crossterm emits to move the cursor to `(x, y)` (1-based).
@@ -260,18 +310,141 @@ fn wide_grapheme_styles_continuation_before_glyph() {
 }
 
 #[test]
+fn osc8_hyperlink_wraps_only_the_tagged_cell() {
+    let mut renderer = TuiFrameRenderer::new();
+    let buffer = line_buffer("abc");
+    let url: Rc<str> = "https://warp.dev".into();
+    let mut hyperlinks = HashMap::new();
+    hyperlinks.insert((1, 0), url.clone());
+    let output = draw_with_hyperlinks(&mut renderer, &buffer, &hyperlinks);
+
+    let open = format!("\u{1b}]8;;{url}\u{1b}\\");
+    let close = "\u{1b}]8;;\u{1b}\\";
+    let open_at = output
+        .find(&open)
+        .expect("expected an OSC 8 open escape for the tagged cell");
+    let close_at = output[open_at..]
+        .find(close)
+        .map(|offset| open_at + offset)
+        .expect("expected a matching OSC 8 close escape");
+    let bracketed = &output[open_at + open.len()..close_at];
+    assert!(
+        bracketed.contains('b'),
+        "the tagged cell's glyph should be inside the OSC 8 pair: {bracketed:?}"
+    );
+    assert!(
+        !bracketed.contains('a') && !bracketed.contains('c'),
+        "untagged cells should stay outside the OSC 8 pair: {bracketed:?}"
+    );
+    assert_eq!(output.matches(&open).count(), 1, "exactly one open escape");
+    assert_eq!(output.matches(close).count(), 1, "exactly one close escape");
+}
+
+#[test]
+fn hyperlink_only_change_repaints_the_cell_even_when_glyph_and_style_are_unchanged() {
+    let mut renderer = TuiFrameRenderer::new();
+    let buffer = line_buffer("abc");
+    let _ = draw_with_hyperlinks(&mut renderer, &buffer, &HashMap::new());
+
+    // Ratatui's own diff sees no change here (same glyph, same style); only the
+    // hyperlink table differs from the previous frame.
+    let url: Rc<str> = "https://warp.dev".into();
+    let mut hyperlinks = HashMap::new();
+    hyperlinks.insert((0, 0), url.clone());
+    let output = draw_with_hyperlinks(&mut renderer, &buffer, &hyperlinks);
+
+    let open = format!("\u{1b}]8;;{url}\u{1b}\\");
+    assert!(
+        output.contains(&open),
+        "a hyperlink-only change must still repaint the cell: {output:?}"
+    );
+    assert!(
+        output.contains('a'),
+        "the unchanged glyph should still be re-emitted alongside the new hyperlink"
+    );
+}
+
+#[test]
+fn removed_hyperlink_is_not_reemitted_and_does_not_leak_open() {
+    let mut renderer = TuiFrameRenderer::new();
+    let url: Rc<str> = "https://warp.dev".into();
+    let mut hyperlinks = HashMap::new();
+    hyperlinks.insert((0, 0), url.clone());
+    let _ = draw_with_hyperlinks(&mut renderer, &line_buffer("abc"), &hyperlinks);
+
+    // Same glyphs and style, but the hyperlink is gone.
+    let output = draw_with_hyperlinks(&mut renderer, &line_buffer("abc"), &HashMap::new());
+
+    assert!(
+        !output.contains("]8;;"),
+        "a removed hyperlink must not be re-opened once cleared: {output:?}"
+    );
+}
+
+#[test]
+fn resize_repaint_reemits_every_current_hyperlink() {
+    let mut renderer = TuiFrameRenderer::new();
+    let url: Rc<str> = "https://warp.dev".into();
+    let mut hyperlinks = HashMap::new();
+    hyperlinks.insert((0, 0), url.clone());
+    let _ = draw_with_hyperlinks(&mut renderer, &line_buffer("abc"), &hyperlinks);
+
+    // A differently-sized frame forces a full repaint (clear + redraw), which
+    // must re-emit every current hyperlink even though this one didn't change.
+    let output = draw_with_hyperlinks(&mut renderer, &line_buffer("abcd"), &hyperlinks);
+
+    let open = format!("\u{1b}]8;;{url}\u{1b}\\");
+    assert!(
+        output.contains(&open),
+        "a resize's full repaint should re-emit every current hyperlink: {output:?}"
+    );
+}
+
+#[test]
+fn write_failure_during_the_draw_still_closes_the_hyperlink_and_propagates_the_original_error() {
+    let mut renderer = TuiFrameRenderer::new();
+    let buffer = line_buffer("abc");
+    let url: Rc<str> = "https://warp.dev".into();
+    let mut hyperlinks = HashMap::new();
+    hyperlinks.insert((1, 0), url.clone());
+
+    let mut writer = DrawFailingWriter::default();
+    let result = renderer.draw(&mut writer, &buffer, None, &hyperlinks);
+
+    assert!(
+        result.is_err(),
+        "the simulated write failure should propagate as the draw's error"
+    );
+    let output = String::from_utf8(writer.written).unwrap();
+    let open = format!("\u{1b}]8;;{url}\u{1b}\\");
+    let close = "\u{1b}]8;;\u{1b}\\";
+    assert!(
+        output.contains(&open),
+        "the open escape should have been written before the simulated failure: {output:?}"
+    );
+    assert!(
+        output.contains(close),
+        "the close escape must still be attempted (and here, succeed) even though the draw failed, so the hyperlink can't leak open: {output:?}"
+    );
+}
+
+#[test]
 fn cursor_is_shown_when_present_and_hidden_otherwise() {
     let mut renderer = TuiFrameRenderer::new();
     let buffer = line_buffer("abc");
 
     let mut shown = Vec::new();
-    renderer.draw(&mut shown, &buffer, Some((1, 0))).unwrap();
+    renderer
+        .draw(&mut shown, &buffer, Some((1, 0)), &HashMap::new())
+        .unwrap();
     let shown = String::from_utf8(shown).unwrap();
     assert!(shown.contains("\u{1b}[?25h"), "cursor should be shown");
     assert!(shown.contains(&move_to(1, 0)));
 
     let mut hidden = Vec::new();
-    renderer.draw(&mut hidden, &buffer, None).unwrap();
+    renderer
+        .draw(&mut hidden, &buffer, None, &HashMap::new())
+        .unwrap();
     let hidden = String::from_utf8(hidden).unwrap();
     assert!(hidden.contains("\u{1b}[?25l"), "cursor should be hidden");
 }
