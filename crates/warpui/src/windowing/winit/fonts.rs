@@ -1302,6 +1302,41 @@ impl platform::FontDB for FontDB {
     }
 }
 
+/// The largest width we ever pass into cosmic-text's line-layout `width` parameter.
+///
+/// Callers can legitimately pass a non-finite `max_width` (e.g. `f32::INFINITY`): a
+/// `Text` element placed as a non-flexible child of a `Flex` row is laid out with an
+/// unbounded main-axis constraint (see `SizeConstraint::child_constraint_along_axis`),
+/// and that constraint flows straight through into `max_width` here.
+///
+/// cosmic-text's line layout aligns right-to-left text by computing
+/// `x_start = line_width - (line_width - content_width)`, where `line_width` is this
+/// `max_width`. For infinite `max_width` that subtraction is `INFINITY - INFINITY`,
+/// which is `NaN` in IEEE 754 — every glyph in the line ends up at a NaN position and
+/// silently fails to paint, while left-to-right text is unaffected (its equivalent
+/// term is always `0`, independent of `line_width`). `f32::MAX` doesn't fare any
+/// better: subtracting a few hundred pixels of real content width from it is beneath
+/// `f32`'s precision at that magnitude, so the subtraction rounds away the content
+/// width entirely and produces the same wrong (though finite, not NaN) offset.
+///
+/// Clamping to a value comfortably larger than any real UI surface, but far from
+/// `f32`'s precision cliff, keeps that subtraction numerically exact for right-to-left
+/// text while still behaving as "effectively unbounded" for every other purpose (both
+/// `Wrap::None`, used by `layout_line`, and `layout_text`'s wrapping only care that
+/// this exceeds the width of any word/line we ask them to lay out).
+const MAX_FINITE_LINE_LAYOUT_WIDTH: f32 = 1_000_000.0;
+
+/// Clamps `max_width` to a large finite value when it is infinite or NaN. See
+/// [`MAX_FINITE_LINE_LAYOUT_WIDTH`] for why cosmic-text's line layout requires a
+/// finite width.
+fn finite_line_layout_width(max_width: f32) -> f32 {
+    if max_width.is_finite() {
+        max_width
+    } else {
+        MAX_FINITE_LINE_LAYOUT_WIDTH
+    }
+}
+
 impl platform::TextLayoutSystem for TextLayoutSystem {
     fn layout_line(
         &self,
@@ -1340,7 +1375,7 @@ impl platform::TextLayoutSystem for TextLayoutSystem {
         // single line.
         let layout = shape_line.layout(
             line_style.font_size,
-            Some(max_width),
+            Some(finite_line_layout_width(max_width)),
             Wrap::None,
             Some(Align::Left),
             None,
@@ -1428,7 +1463,7 @@ impl platform::TextLayoutSystem for TextLayoutSystem {
 
             let layout_lines = shape_line.layout(
                 line_style.font_size,
-                Some(max_width),
+                Some(finite_line_layout_width(max_width)),
                 Wrap::WordOrGlyph,
                 Some(Align::Left),
                 first_line_head_indent,
