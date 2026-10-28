@@ -53,8 +53,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CreatingSharedSessions,
         #[cfg(feature = "agent_mode")]
         FeatureFlag::AgentMode,
-        #[cfg(feature = "shared_session_long_running_commands")]
-        FeatureFlag::SharedSessionWriteToLongRunningCommands,
         #[cfg(feature = "resize_fix")]
         FeatureFlag::ResizeFix,
         #[cfg(feature = "richtext_multiselect")]
