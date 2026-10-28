@@ -933,8 +933,15 @@ impl CodeEditorView {
         true
     }
 
-    pub(crate) fn with_can_show_diff_ui(mut self, can_show_diff_ui: bool) -> Self {
+    pub(crate) fn with_can_show_diff_ui(
+        mut self,
+        can_show_diff_ui: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         self.display_options.can_show_diff_ui = can_show_diff_ui;
+        self.model.update(ctx, |model, _ctx| {
+            model.set_diff_tracking_enabled(can_show_diff_ui);
+        });
         self
     }
 
