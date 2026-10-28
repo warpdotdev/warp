@@ -1,4 +1,5 @@
 use core::fmt;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::error;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -796,13 +797,40 @@ struct RenderedImageCacheKey {
     fit_type: FitType,
     animated_image_behavior: AnimatedImageBehavior,
 }
-type RenderedImageCache = HashMap<u64, HashMap<RenderedImageCacheKey, Rc<Image>>>;
+
+/// The maximum number of distinct rendered size variants retained per asset in
+/// `ImageCache`. Bounds memory growth from continuously rendering the same
+/// asset at new sizes (e.g. dragging to resize a window with an image in the
+/// Markdown viewer), while leaving headroom for assets that are legitimately
+/// displayed at several fixed sizes at once (e.g. an icon reused across the
+/// UI, or theme picker previews rendered at different form factors). Once an
+/// asset has this many cached variants, requesting a new size evicts the
+/// least-recently-used one first (see the lazy eviction pass in `image()`).
+const MAX_CACHED_SIZES_PER_ASSET: usize = 8;
+
+/// A single cached rendered image, plus bookkeeping for LRU eviction of stale
+/// size variants (see `MAX_CACHED_SIZES_PER_ASSET`).
+struct RenderedCacheEntry {
+    image: Rc<Image>,
+    /// Monotonically increasing sequence number, bumped on every cache hit or
+    /// insert. Among an asset's cached variants, the lowest value identifies
+    /// the least-recently-used one.
+    last_accessed: Cell<u64>,
+}
+
+type RenderedImageCache = HashMap<u64, HashMap<RenderedImageCacheKey, RenderedCacheEntry>>;
 
 #[derive(Clone, Default)]
 pub struct ImageCache {
     /// Map of rendered images of any ImageType already materialized for a certain size and fit.
     /// Uses the hashed AssetSource and rendered-image properties as a key.
     images: Rc<RwLock<RenderedImageCache>>,
+    /// Monotonic counter used to timestamp cache accesses for LRU eviction.
+    /// Lives outside `images`'s `RwLock` since it does not need to be
+    /// sequenced with the cache contents, and is shared across `ImageCache`
+    /// clones via `Rc` so LRU order stays consistent regardless of which
+    /// handle is used to access the cache.
+    access_sequence: Rc<Cell<u64>>,
 }
 
 impl ImageCache {
@@ -820,6 +848,13 @@ impl ImageCache {
         cache.remove(&cache_key);
     }
 
+    /// Returns a fresh LRU sequence number, bumped on every cache hit or insert.
+    fn next_access_sequence(&self) -> u64 {
+        let next = self.access_sequence.get() + 1;
+        self.access_sequence.set(next);
+        next
+    }
+
     /// Removes a single cached rendered entry for an asset.
     ///
     /// When the removed `Rc<Image>` is the last strong holder of the inner
@@ -830,9 +865,6 @@ impl ImageCache {
     /// `bounds` and `fit_type` must match the resolved values used as the
     /// cache key inside `image()` (i.e., after any `max_dimension`
     /// adjustment), not only the originally requested bounds.
-    // Called by the debounce eviction pass added in the main changeset.
-    /// TODO(APP-3877): remove `#[allow(dead_code)]` once the debounce eviction pass wires this up.
-    #[allow(dead_code)]
     fn evict_size(
         &self,
         asset_source: &AssetSource,
@@ -932,15 +964,48 @@ impl ImageCache {
 
                 // If it is already in the image cache at the target size and fit, return it.
                 let cache = if should_cache_rendered_image {
-                    let cache = self.images.upgradable_read();
-                    if let Some(inner_map) = cache.get(&cache_key)
-                        && let Some(image) = inner_map.get(&rendered_image_cache_key)
+                    let guard = self.images.upgradable_read();
+                    if let Some(inner_map) = guard.get(&cache_key)
+                        && let Some(entry) = inner_map.get(&rendered_image_cache_key)
                     {
+                        entry.last_accessed.set(self.next_access_sequence());
                         return AssetState::Loaded {
-                            data: image.clone(),
+                            data: entry.image.clone(),
                         };
                     }
-                    Some(cache)
+
+                    // Cache miss. If this asset already has as many cached size
+                    // variants as allowed, evict the least-recently-used one
+                    // before adding a new one, so continuously requesting new
+                    // sizes (e.g. dragging to resize a window) can't grow the
+                    // cache without bound. This only ever scans the handful of
+                    // entries belonging to this one asset, not the whole cache.
+                    let lru_victim = guard
+                        .get(&cache_key)
+                        .filter(|inner_map| inner_map.len() >= MAX_CACHED_SIZES_PER_ASSET)
+                        .and_then(|inner_map| {
+                            inner_map
+                                .iter()
+                                .min_by_key(|(_, entry)| entry.last_accessed.get())
+                                .map(|(key, _)| *key)
+                        });
+
+                    match lru_victim {
+                        Some(victim) => {
+                            // evict_size acquires its own write lock, so this
+                            // upgradable guard must be released first --
+                            // parking_lot's RwLock is not reentrant.
+                            drop(guard);
+                            self.evict_size(
+                                &asset_source,
+                                victim.bounds,
+                                victim.fit_type,
+                                victim.animated_image_behavior,
+                            );
+                            None
+                        }
+                        None => Some(guard),
+                    }
                 } else {
                     None
                 };
@@ -952,12 +1017,32 @@ impl ImageCache {
                         Ok(image) => Rc::new(image),
                         Err(err) => return AssetState::FailedToLoad(Rc::new(err)),
                     };
-                if let Some(cache) = cache {
-                    let mut images_cache = RwLockUpgradableReadGuard::upgrade(cache);
-                    images_cache
-                        .entry(cache_key)
-                        .or_default()
-                        .insert(rendered_image_cache_key, image.clone());
+                if should_cache_rendered_image {
+                    let entry = RenderedCacheEntry {
+                        image: image.clone(),
+                        last_accessed: Cell::new(self.next_access_sequence()),
+                    };
+                    match cache {
+                        // Fast path: reuse the upgradable read acquired above --
+                        // no size variant needed to be evicted, so no extra lock
+                        // acquisition is needed here beyond the existing upgrade.
+                        Some(guard) => {
+                            let mut images_cache = RwLockUpgradableReadGuard::upgrade(guard);
+                            images_cache
+                                .entry(cache_key)
+                                .or_default()
+                                .insert(rendered_image_cache_key, entry);
+                        }
+                        // The upgradable guard above was released to evict a
+                        // stale size variant; take a fresh write lock now.
+                        None => {
+                            let mut images_cache = self.images.write();
+                            images_cache
+                                .entry(cache_key)
+                                .or_default()
+                                .insert(rendered_image_cache_key, entry);
+                        }
+                    }
                 }
 
                 AssetState::Loaded { data: image }
