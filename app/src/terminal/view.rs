@@ -27905,6 +27905,7 @@ impl TypedActionView for TerminalView {
             | StartNewAgentConversation { .. }
             | ToggleConversationDetailsPanel
             | CancelAmbientAgentTask
+            | RetryCloudEnvironmentSetup
             | OpenInlineHistoryMenu
             | OpenModelSelector
             | ResolvePromptSuggestion(..)
@@ -29006,6 +29007,14 @@ impl TypedActionView for TerminalView {
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() {
                     ambient_agent_view_model.update(ctx, |model, ctx| {
                         model.cancel_task(ctx);
+                    });
+                }
+                ctx.notify();
+            }
+            RetryCloudEnvironmentSetup => {
+                if let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() {
+                    ambient_agent_view_model.update(ctx, |model, ctx| {
+                        model.retry_setup(ctx);
                     });
                 }
                 ctx.notify();
