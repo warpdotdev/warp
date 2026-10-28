@@ -37,6 +37,8 @@ pub mod entry;
 pub mod file_tree_store;
 pub mod file_tree_update;
 mod gitignore_cache;
+#[cfg(not(target_family = "wasm"))]
+mod gitignore_match_pool;
 pub mod local_model;
 pub mod remote_model;
 pub mod repositories;
