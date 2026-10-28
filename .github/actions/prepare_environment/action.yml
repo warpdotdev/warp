@@ -15,8 +15,8 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
-  ssh_key:
-    description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
+  install_channel_config:
+    description: If true, mint a read token for the private warp-channel-config repository so the channel config generator can be installed. Only honored when running in warpdotdev/warp-internal.
 
 runs:
   using: composite
@@ -97,14 +97,27 @@ runs:
         cd "${{ steps.repo-root.outputs.path }}"
         ./script/install_cargo_binstall
 
-    # Load the SSH key needed to clone the private warp-channel-config repo. Only
-    # run in warpdotdev/warp-internal; elsewhere (mirrors, fork PRs) this is a no-op
-    # and install_channel_config falls back gracefully.
-    - name: Setup SSH keys for warp-channel-config
-      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.ssh_key != '' }}
-      uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+    # The channel config generator lives in a private repo that install_channel_config fetches
+    # over an SSH URL. Only warpdotdev/warp-internal can mint a token for it; elsewhere (mirrors,
+    # fork PRs) these steps are skipped and install_channel_config falls back gracefully.
+    - name: Mint warp-channel-config token
+      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.install_channel_config == 'true' }}
+      id: channel_config_token
+      uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
       with:
-        ssh-private-key: ${{ inputs.ssh_key }}
+        scope: warpdotdev/warp-channel-config
+        identity: warp-internal-release
+
+    # Rewrite the SSH URL to HTTPS with the minted token. cargo only honors git URL rewrites when
+    # it shells out to the git CLI, so turn that on for the rest of the job.
+    - name: Route warp-channel-config fetches through the minted token
+      if: ${{ steps.channel_config_token.outputs.token != '' }}
+      shell: bash
+      env:
+        CHANNEL_CONFIG_TOKEN: ${{ steps.channel_config_token.outputs.token }}
+      run: |
+        git config --global "url.https://x-access-token:${CHANNEL_CONFIG_TOKEN}@github.com/warpdotdev/warp-channel-config.insteadOf" "ssh://git@github.com/warpdotdev/warp-channel-config"
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
