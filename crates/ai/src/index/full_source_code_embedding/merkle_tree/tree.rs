@@ -81,12 +81,10 @@ impl MerkleTree {
         serialized_tree: SerializedMerkleTree,
     ) -> anyhow::Result<(Self, LeafToFragmentMetadata)> {
         let serialized_root = serialized_tree.into_root();
-        let Some(root_path) = serialized_root.absolute_path() else {
+        if serialized_root.absolute_path().is_none() {
             return Err(anyhow::anyhow!("root node should never be a fragment"));
-        };
-        let root_path = root_path.to_path_buf();
-        let (root, mapping_update) =
-            MerkleNode::from_serialized(serialized_root, root_path.as_path())?;
+        }
+        let (root, mapping_update) = MerkleNode::from_serialized(serialized_root, None)?;
         let leaf_node_to_fragment_metadata = LeafToFragmentMetadata::new(mapping_update);
         Ok((Self { root }, leaf_node_to_fragment_metadata))
     }

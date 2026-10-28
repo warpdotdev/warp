@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
@@ -18,7 +19,7 @@ use super::serialized_tree::{SerializedFilesystemInfo, SerializedMerkleNode};
 use super::tree::UpdateFileResult;
 use super::{ContentHash, DirEntryOrFragment, NodeHash};
 use crate::index::full_source_code_embedding::Error;
-use crate::index::full_source_code_embedding::chunker::chunk_code;
+use crate::index::full_source_code_embedding::chunker::{Fragment, chunk_code};
 use crate::index::full_source_code_embedding::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadataUpdates,
 };
@@ -30,7 +31,7 @@ use crate::index::{DirectoryEntry, Entry, FileMetadata, THREADPOOL};
 pub(crate) enum NodeId {
     /// A file node that contains fragment children
     File {
-        absolute_path: PathBuf,
+        absolute_path: Arc<Path>,
         file_size: usize,
         fs_modified_time: DateTime<Utc>,
         file_contents_hash: String,
@@ -39,13 +40,13 @@ pub(crate) enum NodeId {
     Directory { absolute_path: PathBuf },
     /// A leaf node representing a code fragment
     Fragment {
-        absolute_path: PathBuf,
+        absolute_path: Arc<Path>,
         content_range: Range<ByteOffset>,
     },
 }
 
 impl NodeId {
-    fn absolute_path(&self) -> &PathBuf {
+    fn absolute_path(&self) -> &Path {
         match self {
             Self::Directory { absolute_path } => absolute_path,
             Self::File { absolute_path, .. } => absolute_path,
@@ -54,6 +55,11 @@ impl NodeId {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ParentPath<'a> {
+    Borrowed(&'a Path),
+    Shared(&'a Arc<Path>),
+}
 /// A given node in the [`MerkleTree`].
 #[derive(Debug)]
 pub(super) struct MerkleNode {
@@ -102,12 +108,13 @@ impl MerkleNode {
                 let file_contents_hash = format!("{:x}", hasher.finalize());
 
                 let fragments = chunk_code(&file_contents, &local_path);
+                let absolute_path = Arc::from(local_path.as_path());
 
                 let (children, mapping_updates): (Vec<_>, LeafToFragmentMetadataUpdates) =
                     fragments
                         .into_iter()
                         .filter_map(|fragment| {
-                            Self::new(DirEntryOrFragment::Fragment(fragment)).ok()
+                            Self::new_fragment(fragment, Arc::clone(&absolute_path)).ok()
                         })
                         .unzip();
                 if children.is_empty() {
@@ -131,7 +138,7 @@ impl MerkleNode {
                         hash,
                         children,
                         node_id: NodeId::File {
-                            absolute_path: file.path.to_local_path_lossy(),
+                            absolute_path,
                             file_size,
                             fs_modified_time,
                             file_contents_hash,
@@ -177,39 +184,47 @@ impl MerkleNode {
                 ))
             }
             DirEntryOrFragment::Fragment(fragment) => {
-                if fragment.content.is_empty() {
-                    return Err(Error::EmptyNodeContent);
-                }
-                let hash = MerkleHash::from_fragment(&fragment);
-                let fragment_metadata = FragmentMetadata::from(&fragment);
-
-                let mut leaf_node_to_fragment_updates = LeafToFragmentMetadataUpdates::empty();
-                leaf_node_to_fragment_updates
-                    .to_insert
-                    .insert(hash.clone(), vec![fragment_metadata]);
-
-                Ok((
-                    MerkleNode {
-                        hash,
-                        children: vec![],
-                        node_id: NodeId::Fragment {
-                            absolute_path: fragment.file_path.to_path_buf(),
-                            content_range: fragment.start_byte_index..fragment.end_byte_index,
-                        },
-                    },
-                    leaf_node_to_fragment_updates,
-                ))
+                let absolute_path = Arc::from(fragment.file_path);
+                Self::new_fragment(fragment, absolute_path)
             }
         }
     }
 
+    fn new_fragment(
+        fragment: Fragment<'_>,
+        absolute_path: Arc<Path>,
+    ) -> Result<(MerkleNode, LeafToFragmentMetadataUpdates), Error> {
+        if fragment.content.is_empty() {
+            return Err(Error::EmptyNodeContent);
+        }
+        let hash = MerkleHash::from_fragment(&fragment);
+        let fragment_metadata =
+            FragmentMetadata::from_fragment(&fragment, Arc::clone(&absolute_path));
+
+        let mut leaf_node_to_fragment_updates = LeafToFragmentMetadataUpdates::empty();
+        leaf_node_to_fragment_updates
+            .to_insert
+            .insert(hash.clone(), vec![fragment_metadata]);
+
+        Ok((
+            MerkleNode {
+                hash,
+                children: vec![],
+                node_id: NodeId::Fragment {
+                    absolute_path,
+                    content_range: fragment.start_byte_index..fragment.end_byte_index,
+                },
+            },
+            leaf_node_to_fragment_updates,
+        ))
+    }
+
     pub(super) fn from_serialized(
         serialized_node: SerializedMerkleNode,
-        parent_path: &Path,
+        parent_path: Option<ParentPath<'_>>,
     ) -> anyhow::Result<(MerkleNode, LeafToFragmentMetadataUpdates)> {
         let hash = serialized_node.hash();
-
-        let mut children = vec![];
+        let mut children = Vec::with_capacity(serialized_node.children.len());
         let mut leaf_node_to_fragment_updates = LeafToFragmentMetadataUpdates::empty();
 
         let node_id = match serialized_node.fs_info {
@@ -222,33 +237,43 @@ impl MerkleNode {
                 fs_modified_time,
                 file_contents_hash,
             } => NodeId::File {
-                absolute_path,
+                absolute_path: Arc::from(absolute_path),
                 file_size,
                 fs_modified_time,
                 file_contents_hash,
             },
             SerializedFilesystemInfo::Fragment { location } => {
-                let file_path = parent_path.to_path_buf();
+                let file_path = match parent_path
+                    .ok_or_else(|| anyhow!("fragment node must have a parent path"))?
+                {
+                    ParentPath::Borrowed(path) => Arc::from(path),
+                    ParentPath::Shared(path) => Arc::clone(path),
+                };
                 leaf_node_to_fragment_updates
                     .to_insert
                     .entry(hash.as_ref().clone())
                     .or_default()
                     .push(FragmentMetadata {
-                        absolute_path: file_path.clone(),
+                        absolute_path: Arc::clone(&file_path),
                         location: (&location).into(),
                     });
 
                 NodeId::Fragment {
-                    absolute_path: file_path.clone(),
+                    absolute_path: file_path,
                     content_range: location.byte_range,
                 }
             }
         };
 
-        let absolute_path = node_id.absolute_path();
+        let parent_path = match &node_id {
+            NodeId::Directory { absolute_path } => ParentPath::Borrowed(absolute_path),
+            NodeId::File { absolute_path, .. } | NodeId::Fragment { absolute_path, .. } => {
+                ParentPath::Shared(absolute_path)
+            }
+        };
 
         for child in serialized_node.children {
-            let (child_node, new_fragments) = Self::from_serialized(child, absolute_path)?;
+            let (child_node, new_fragments) = Self::from_serialized(child, Some(parent_path))?;
             leaf_node_to_fragment_updates.merge(new_fragments);
             children.push(child_node);
         }
@@ -351,7 +376,7 @@ impl MerkleNode {
                 UpdateFileResult::Updated
             }
             // Only visit a file if it matches the target path.
-            NodeId::File { absolute_path, .. } if paths.remove(absolute_path) => {
+            NodeId::File { absolute_path, .. } if paths.remove(absolute_path.as_ref()) => {
                 node_to_fragment_updates.to_remove.insert(
                     absolute_path.to_path_buf(),
                     self.child_hashes().cloned().collect_vec(),
@@ -492,7 +517,7 @@ impl MerkleNode {
                         && let Some(child_dir) = created_dirs.remove(&dir_path)
                     {
                         // Skip if parent is the root directory
-                        if parent_path != absolute_path {
+                        if parent_path != absolute_path.as_path() {
                             if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
                                 // Now we have the completed child directory with all its children
                                 parent_dir.children.push(Entry::Directory(child_dir));
@@ -544,9 +569,9 @@ impl MerkleNode {
                 UpdateFileResult::Updated
             }
             // For files, only a single path can match at a single time.
-            NodeId::File { absolute_path, .. } if paths.remove(absolute_path) => {
+            NodeId::File { absolute_path, .. } if paths.remove(absolute_path.as_ref()) => {
                 leaf_node_to_fragment_updates.to_remove.insert(
-                    absolute_path.clone(),
+                    absolute_path.to_path_buf(),
                     self.child_hashes().cloned().collect_vec(),
                 );
 
@@ -555,7 +580,7 @@ impl MerkleNode {
                 }
 
                 let (new_node, mapping_update) = match MerkleNode::new(DirEntryOrFragment::Entry(
-                    Entry::File(FileMetadata::new(absolute_path.clone(), false)),
+                    Entry::File(FileMetadata::new(absolute_path.to_path_buf(), false)),
                 )) {
                     Ok(res) => res,
                     // If we run into a file permission error / empty node / exceeded max file limit, delete the node since we can't
