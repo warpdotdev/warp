@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use warp_completer::completer::{EngineDirEntry, EngineFileType};
 use warp_util::file_type::is_binary_file;
@@ -15,8 +16,10 @@ pub struct DirectoryFetcher {
     current_directory: String,
     /// Cached directory contents as menu items
     cached_files: Vec<DirectoryItem>,
-    /// Session context for async operations (required for directory fetching)
-    session_context: Option<SessionContext>,
+    /// Session context for async operations (required for directory fetching).
+    /// Wrapped in Arc to avoid expensive deep clones of the underlying DashMap
+    /// cache on every directory refetch.
+    session_context: Option<Arc<SessionContext>>,
     /// Handle to the fetch operation
     fetch_handle: Option<SpawnedFutureHandle>,
 }
@@ -41,7 +44,7 @@ impl DirectoryFetcher {
         let mut fetcher = Self {
             current_directory: directory_path.clone(),
             cached_files: vec![],
-            session_context,
+            session_context: session_context.map(Arc::new),
             fetch_handle: None,
         };
 
@@ -119,7 +122,7 @@ impl DirectoryFetcher {
             handle.abort();
         }
 
-        self.session_context = session_context;
+        self.session_context = session_context.map(Arc::new);
         self.refetch_directory(ctx);
     }
 
