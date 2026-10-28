@@ -100,6 +100,10 @@ pub struct CursorInfo {
     pub position: RectF,
     /// The font size tells us how far below the active cursor position we place the IME.
     pub font_size: f32,
+    /// The view that owns this cursor. Lets callers detect focus moving directly between two
+    /// surfaces that both report an active caret, which otherwise looks like a single
+    /// continuously-active caret.
+    pub view_id: EntityId,
 }
 
 #[derive(Debug)]

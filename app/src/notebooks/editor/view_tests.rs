@@ -229,6 +229,29 @@ fn test_loaded_mermaid_diagram_with_placeholder_height_needs_relayout() {
 }
 
 #[test]
+fn test_active_cursor_position_requires_editable_and_visible_caret() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view, _test_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Selectable, ctx);
+            assert!(
+                editor.active_cursor_position(ctx).is_none(),
+                "a selectable-only rich-text editor must not report an active text caret"
+            );
+
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            editor.link_editor_open = true;
+            assert!(
+                editor.active_cursor_position(ctx).is_none(),
+                "the caret is hidden while the link editor is open, so the bridge must not \
+                 activate for the underlying surface"
+            );
+        });
+    });
+}
+
+#[test]
 fn layout_affecting_asset_loads_rebuild_selectable_and_editable_layouts() {
     assert!(
         RichTextEditorView::should_rebuild_layout_after_layout_affecting_asset_load(
