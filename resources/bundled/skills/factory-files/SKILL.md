@@ -161,13 +161,16 @@ read them.
   its canonical key, and declaring both is an error. The Linear and Slack ones
   name objects the server looks up at apply time, so they take a plain list of
   names rather than an `in`/`not_in` matcher.
-- When creating automations, recommend scope filters to avoid unrelated runs:
-  GitHub/GitLab `repos`, Linear `teams` and/or `projects`, Jira `project_keys`,
-  and Slack `channels`. Choose values from the user's intended scope and only
-  use filters supported by the trigger's `(provider, event)` schema.
-- If scope is unclear, ask before creating the automation. Explain the reach
-  of an unscoped trigger and confirm that broad matching is intentional;
-  missing scope filters are not necessarily schema errors.
+- When creating automations, recommend non-empty inclusive scope filters:
+  GitHub `labels` for events that support labels, Linear `teams` (or
+  `team_ids`), Jira `project_keys`, and Microsoft Teams `team_ids`.
+  Exclusions alone do not satisfy these recommendations; neither do Microsoft
+  Teams channel filters alone. Use the trigger's `(provider, event)` schema.
+- Suggest the Factory's GitHub label when available; for Linear/Jira, suggest
+  the teams/projects from its enabled agent-session routing automation.
+  If scope is unclear, ask rather than inventing values. Explain and confirm
+  intentional broad matching; these are recommendations, not save-blocking
+  validation requirements.
 - A webhook never carries secret material. `secretName` is required in every
   `authMode` and names an existing managed secret; the server does not generate
   a secret for a file-declared source, because nothing could then read it back
