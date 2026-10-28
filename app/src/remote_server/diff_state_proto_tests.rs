@@ -110,6 +110,20 @@ fn pr_info_round_trips_through_proto() {
 }
 
 #[test]
+fn diff_mode_pull_request_layer_round_trips_through_proto() {
+    let mode = DiffMode::PullRequestLayer {
+        pr_number: 42,
+        base_oid: "a".repeat(40),
+        head_oid: "b".repeat(40),
+    };
+
+    let proto_mode = proto::DiffMode::from(&mode);
+    let decoded = DiffMode::from(&proto_mode);
+
+    assert_eq!(decoded, mode);
+}
+
+#[test]
 fn file_diff_to_proto_preserves_repo_relative_path() {
     let file_diff = FileDiff {
         file_path: "src/main.rs".to_string(),
@@ -141,6 +155,7 @@ fn build_diff_state_snapshot_preserves_repo_relative_file_paths() {
             size: DiffSize::Normal,
         },
         content_at_head: None,
+        content_at_new_commit: None,
     };
     let diffs = GitDiffWithBaseContent {
         files: vec![diff],

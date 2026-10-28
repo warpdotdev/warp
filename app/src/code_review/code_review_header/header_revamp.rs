@@ -66,9 +66,17 @@ impl CodeReviewHeader {
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(Self::render_diff_mode_dropdown(
-                        &code_review_header_fields.diff_selector,
-                    ))
+                    .with_child(
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_child(Self::render_diff_mode_dropdown(
+                                &code_review_header_fields.diff_selector,
+                            ))
+                            .with_child(
+                                ChildView::new(&code_review_header_fields.stack_control).finish(),
+                            )
+                            .finish(),
+                    )
                     .with_child(right_section.finish())
                     .finish(),
             )
