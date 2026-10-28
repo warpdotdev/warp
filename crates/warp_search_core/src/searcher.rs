@@ -717,6 +717,18 @@ impl<C: SearchSchemaConfig> SimpleFullTextSearcher<C> {
         self.writer.lock().clear()
     }
 
+    /// Waits for all background merge threads to complete and drops the writer.
+    ///
+    /// Call this when the searcher is used for a "build-once, search-once" pattern
+    /// (i.e., the index will be discarded after searching) to prevent background
+    /// merge threads from holding large in-RAM index data beyond the search call.
+    ///
+    /// **This function blocks until all merge threads complete**, so avoid calling
+    /// it from an async context without wrapping it in a blocking task.
+    pub fn wait_for_merge_completion(&mut self) -> anyhow::Result<()> {
+        self.writer.lock().wait_on_and_drop_indexing_threads()
+    }
+
     pub fn build_index(
         &self,
         documents: impl IntoIterator<Item = C::SearchDocEntry>,
