@@ -551,6 +551,8 @@ enum ChildSlot {
     Pending(async_channel::Receiver<StartAgentOutcome>),
 }
 
+/// Approved child choices replace requested choices before model validation. Reusing per-child approval
+/// requires a matching complete roster; legacy empty rosters approve only batch-model use.
 fn approved_orchestration_config_can_autoexecute(
     request: &RunAgentsRequest,
     parent_conversation_id: AIConversationId,
@@ -760,12 +762,9 @@ fn normalize_agent_name(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
 }
 
-/// Unconditionally overrides run-wide fields on a `RunAgentsRequest`
-/// from the approved orchestration config, delegating to
-/// `OrchestrationConfigState::override_from_approved_config`.
+/// Replaces run-wide fields and, when child routing is enabled, matching child model choices with the
+/// approved config's values. Name-based substitution alone does not authorize approval reuse.
 fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
-    // The approved plan config is the source of truth for these run-wide fields,
-    // so callers pass a mutable request and continue with the normalized value.
     let mut config_state = OrchestrationConfigState::from_run_agents_fields(
         Some(&request.model_id),
         Some(&request.harness_type),
@@ -863,6 +862,11 @@ pub fn run_agents_to_start_agent_mode(
                 );
             }
             let trimmed = run_harness_type.trim();
+            if let Some(harness) = Harness::parse_local_child_harness(trimmed)
+                && let Some(message) = local_harness_product_disabled_message(harness)
+            {
+                return Err(message.to_string());
+            }
             let effective_model_id = effective_child_model_id(run_model_id, cfg);
             if Harness::parse_local_child_harness(trimmed) == Some(Harness::Codex)
                 && !effective_model_id.is_empty()
@@ -876,11 +880,6 @@ pub fn run_agents_to_start_agent_mode(
                     model_id,
                 })
             } else {
-                if let Some(harness) = Harness::parse_local_child_harness(trimmed)
-                    && let Some(message) = local_harness_product_disabled_message(harness)
-                {
-                    return Err(message.to_string());
-                }
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: Some(trimmed.to_string()),
                     model_id,

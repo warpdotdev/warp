@@ -140,6 +140,8 @@ pub fn empty_env_recommendation_message(
     })
 }
 
+/// Validates effective child models against the current harness/location catalog, including disabled
+/// entries, and requires a batch fallback for explicit overrides. Does not resolve IDs or grant approval.
 pub fn child_model_validation_error<'a>(
     state: &OrchestrationConfigState,
     agents: impl IntoIterator<Item = (&'a str, &'a str)>,
