@@ -271,6 +271,7 @@ fn test_detect_known_agents() {
                 ("omp", CLIAgent::OhMyPi),
                 ("grok", CLIAgent::Grok),
                 ("muse", CLIAgent::Muse),
+                ("uta", CLIAgent::Uta),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
                 ("./script/run-tui", CLIAgent::WarpTui),
@@ -302,6 +303,10 @@ fn test_detect_with_arguments() {
                 Some(CLIAgent::Muse),
             );
             assert_eq!(CLIAgent::detect("npx muse", None, None, ctx), None);
+            assert_eq!(
+                CLIAgent::detect(r#"uta run "plan and fan out""#, None, None, ctx),
+                Some(CLIAgent::Uta),
+            );
         });
     });
 }
@@ -329,6 +334,19 @@ fn test_muse_public_configuration() {
             SkillProvider::Claude,
             SkillProvider::Codex,
         ]
+    );
+}
+
+#[test]
+fn test_uta_public_configuration() {
+    assert_eq!(CLIAgent::Uta.command_prefix(), "uta");
+    assert_eq!(CLIAgent::Uta.display_name(), "uta");
+    assert!(CLIAgent::Uta.supports_bash_mode());
+    assert_eq!(CLIAgent::Uta.skill_command_prefix(), "/");
+    assert_eq!(CLIAgent::Uta.icon(), Some(Icon::UtaLogo));
+    assert_eq!(
+        CLIAgent::Uta.supported_skill_providers(),
+        &[SkillProvider::Agents, SkillProvider::Claude]
     );
 }
 
