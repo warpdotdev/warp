@@ -72,7 +72,8 @@ pub trait WorkspaceClient: 'static + Send + Sync {
     async fn purchase_addon_credits(
         &self,
         team_uid: Option<ServerId>,
-        credits: i32,
+        credits: Option<i32>,
+        usage_cents: Option<i32>,
     ) -> Result<PurchaseAddonCreditsOutcome>;
 
     async fn update_addon_credits_settings(
@@ -81,6 +82,7 @@ pub trait WorkspaceClient: 'static + Send + Sync {
         auto_reload_enabled: Option<bool>,
         max_monthly_spend_cents: Option<i32>,
         selected_auto_reload_credit_denomination: Option<i32>,
+        selected_auto_reload_usage_cents: Option<i32>,
     ) -> Result<WorkspacesMetadataResponse>;
 }
 
@@ -215,12 +217,14 @@ impl WorkspaceClient for ServerApi {
     async fn purchase_addon_credits(
         &self,
         team_uid: Option<ServerId>,
-        credits: i32,
+        credits: Option<i32>,
+        usage_cents: Option<i32>,
     ) -> Result<PurchaseAddonCreditsOutcome> {
         let variables = PurchaseAddonCreditsVariables {
             input: PurchaseAddonCreditsInput {
                 team_uid: team_uid.map(Into::into),
                 credits,
+                usage_cents,
             },
             request_context: get_request_context(),
         };
@@ -260,6 +264,7 @@ impl WorkspaceClient for ServerApi {
         auto_reload_enabled: Option<bool>,
         max_monthly_spend_cents: Option<i32>,
         selected_auto_reload_credit_denomination: Option<i32>,
+        selected_auto_reload_usage_cents: Option<i32>,
     ) -> Result<WorkspacesMetadataResponse> {
         let variables = UpdateWorkspaceSettingsVariables {
             input: UpdateWorkspaceSettingsInput {
@@ -269,6 +274,7 @@ impl WorkspaceClient for ServerApi {
                     auto_reload_enabled,
                     max_monthly_spend_cents,
                     selected_auto_reload_credit_denomination,
+                    selected_auto_reload_usage_cents,
                 }),
             },
             request_context: get_request_context(),

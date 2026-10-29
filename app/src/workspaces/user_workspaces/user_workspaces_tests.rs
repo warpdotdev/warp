@@ -3779,9 +3779,11 @@ fn test_purchase_addon_credits_forwards_teamless_team_uid() {
         let mut workspace_client = MockWorkspaceClient::new();
         workspace_client
             .expect_purchase_addon_credits()
-            .withf(|team_uid, credits| team_uid.is_none() && *credits == 1_000)
+            .withf(|team_uid, credits, usage_cents| {
+                team_uid.is_none() && *credits == Some(1_000) && usage_cents.is_none()
+            })
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
                     checkout_url: "https://example.com/checkout".to_string(),
                 })
@@ -3812,9 +3814,11 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
         let mut workspace_client = MockWorkspaceClient::new();
         workspace_client
             .expect_purchase_addon_credits()
-            .withf(|team_uid, credits| *team_uid == Some(123.into()) && *credits == 2_000)
+            .withf(|team_uid, credits, usage_cents| {
+                *team_uid == Some(123.into()) && *credits == Some(2_000) && usage_cents.is_none()
+            })
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
                     checkout_url: "https://example.com/checkout".to_string(),
                 })

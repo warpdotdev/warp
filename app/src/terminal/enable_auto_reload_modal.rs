@@ -18,7 +18,10 @@ use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
-use crate::pricing::addon_pack::pack_menu_label;
+use crate::pricing::addon_pack::{format_price, pack_menu_label};
+use crate::pricing::usage_amount_input::{
+    AddonPurchaseAmount, UsageAmountInput, custom_usage_enabled,
+};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
@@ -40,6 +43,7 @@ struct MouseStates {
 pub struct EnableAutoReloadModalBody {
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
+    usage_amount_input: ViewHandle<UsageAmountInput>,
     addon_credits_options: Vec<AddonCreditsOption>,
     selected_denomination_index: usize,
     update_workspace_settings_loading: bool,
@@ -92,10 +96,10 @@ impl EnableAutoReloadModalBody {
                             me.update_workspace_settings_loading = false;
 
                             // Emit telemetry for successful auto-reload enablement
-                            let selected_credits = me
+                            let selected_credits = (!custom_usage_enabled(ctx)).then(|| me
                                 .addon_credits_options
                                 .get(me.selected_denomination_index)
-                                .map(|option| option.credits);
+                                .map(|option| option.credits)).flatten();
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::AutoReloadModalClosed {
                                     action: AutoReloadModalAction::EnabledAutoReload,
@@ -144,9 +148,13 @@ impl EnableAutoReloadModalBody {
             dropdown
         });
 
+        let usage_amount_input = ctx.add_typed_action_view(UsageAmountInput::new);
+        ctx.subscribe_to_view(&usage_amount_input, |_, _, _, ctx| ctx.notify());
+
         let mut me = Self {
             mouse_states: Default::default(),
             denomination_dropdown,
+            usage_amount_input,
             addon_credits_options: Default::default(),
             selected_denomination_index: 0,
             update_workspace_settings_loading: false,
@@ -225,7 +233,7 @@ impl EnableAutoReloadModalBody {
         });
     }
 
-    fn render_content(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_content(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let explanation_fragments = vec![
             FormattedTextFragment::plain_text("When enabled, "),
@@ -257,10 +265,38 @@ impl EnableAutoReloadModalBody {
         })
         .finish();
 
-        let denomination_dropdown =
-            Container::new(ChildView::new(&self.denomination_dropdown).finish())
-                .with_vertical_padding(16.)
-                .finish();
+        let amount_control = if custom_usage_enabled(ctx) {
+            let premium_bps = UserWorkspaces::as_ref(ctx)
+                .purchase_policy()
+                .map_or(0, |policy| policy.effective_premium_bps());
+            let amount = self.usage_amount_input.as_ref(ctx).amount(ctx);
+            let price = amount
+                .map(|cents| {
+                    format!(
+                        "{} of usage for {}",
+                        format_price(cents),
+                        format_price(
+                            AddonPurchaseAmount::UsageCents(cents)
+                                .price_usd_cents_with_premium(premium_bps)
+                        )
+                    )
+                })
+                .unwrap_or_default();
+            Flex::column()
+                .with_spacing(8.)
+                .with_child(ChildView::new(&self.usage_amount_input).finish())
+                .with_child(
+                    Text::new(price, appearance.ui_font_family(), 14.)
+                        .with_color(theme.foreground().into())
+                        .finish(),
+                )
+                .finish()
+        } else {
+            ChildView::new(&self.denomination_dropdown).finish()
+        };
+        let denomination_dropdown = Container::new(amount_control)
+            .with_vertical_padding(16.)
+            .finish();
 
         Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
@@ -269,7 +305,7 @@ impl EnableAutoReloadModalBody {
             .finish()
     }
 
-    fn render_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_buttons(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let cancel_button = appearance
             .ui_builder()
             .button(
@@ -321,7 +357,10 @@ impl EnableAutoReloadModalBody {
                 ctx.dispatch_typed_action(Action::Enable);
             });
 
-        if self.update_workspace_settings_loading {
+        if self.update_workspace_settings_loading
+            || (custom_usage_enabled(ctx)
+                && self.usage_amount_input.as_ref(ctx).amount(ctx).is_none())
+        {
             enable_button = enable_button.disable();
         }
 
@@ -356,7 +395,7 @@ impl View for EnableAutoReloadModalBody {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        let content = Container::new(self.render_content(appearance))
+        let content = Container::new(self.render_content(appearance, app))
             .with_horizontal_padding(MODAL_PADDING)
             .with_margin_top(0.) // let the header padding handle the top margin
             .finish();
@@ -365,7 +404,7 @@ impl View for EnableAutoReloadModalBody {
             .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
             .finish();
 
-        let buttons = Container::new(self.render_buttons(appearance))
+        let buttons = Container::new(self.render_buttons(appearance, app))
             .with_horizontal_padding(MODAL_PADDING)
             .with_vertical_padding(12.)
             .finish();
@@ -409,6 +448,18 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
                     });
                     return;
                 };
+
+                if custom_usage_enabled(ctx) {
+                    let Some(cents) = self.usage_amount_input.as_ref(ctx).amount(ctx) else {
+                        return;
+                    };
+                    self.update_workspace_settings_loading = true;
+                    UserWorkspaces::handle(ctx).update(ctx, |ws, ctx| {
+                        ws.update_addon_usage_settings(team_uid, Some(true), Some(cents), ctx)
+                    });
+                    ctx.notify();
+                    return;
+                }
 
                 // Set loading state before making the API call
                 self.update_workspace_settings_loading = true;
@@ -481,6 +532,11 @@ impl EnableAutoReloadModal {
                     .enumerate()
                     .find(|(_, option)| option.credits == credits)
                 {
+                    let usage_cents = body.addon_credits_options[index].usage_cents;
+                    if let Some(cents) = usage_cents {
+                        body.usage_amount_input
+                            .update(ctx, |input, ctx| input.sync_amount(cents, ctx));
+                    }
                     body.selected_denomination_index = index;
                     // Update the dropdown to reflect the new selection
                     body.denomination_dropdown.update(ctx, |dropdown, ctx| {

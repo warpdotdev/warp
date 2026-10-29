@@ -338,7 +338,15 @@ pub struct PricingInfo {
     pub plans: Vec<PlanPricing>,
     pub overages: OveragesPricing,
     pub addon_credits_options: Vec<AddonCreditsOption>,
+    pub addon_usage_purchase_range: AddonUsagePurchaseRange,
     pub promotion_message: Option<String>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AddonUsagePurchaseRange {
+    pub min_usage_cents: i32,
+    pub max_usage_cents: i32,
+    pub step_usage_cents: i32,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

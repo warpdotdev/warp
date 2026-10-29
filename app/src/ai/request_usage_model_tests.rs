@@ -119,6 +119,11 @@ fn set_addon_credits_pricing_info(app: &mut App) {
                 overages: OveragesPricing {
                     price_per_request_usd_cents: 1,
                 },
+                addon_usage_purchase_range: warp_graphql::billing::AddonUsagePurchaseRange {
+                    min_usage_cents: 1000,
+                    max_usage_cents: 100000,
+                    step_usage_cents: 100,
+                },
                 addon_credits_options: vec![AddonCreditsOption {
                     credits: 1000,
                     price_usd_cents: 1000,
