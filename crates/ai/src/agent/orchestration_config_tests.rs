@@ -3,7 +3,7 @@ use crate::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunA
 
 fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig {
     OrchestrationConfig {
-        agent_models: Vec::new(),
+        agent_configs: Vec::new(),
         model_id: model.to_string(),
         harness_type: harness.to_string(),
         execution_mode: if remote {
@@ -21,12 +21,12 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
 #[test]
 fn approved_child_allocation_matches_names_and_resolves_models() {
     let mut config = make_config("batch", "oz", false);
-    config.agent_models = vec![
-        OrchestrationAgentModel {
+    config.agent_configs = vec![
+        OrchestrationAgentConfig {
             name: "a".into(),
             model_id: "approved".into(),
         },
-        OrchestrationAgentModel {
+        OrchestrationAgentConfig {
             name: "b".into(),
             model_id: String::new(),
         },
@@ -38,7 +38,7 @@ fn approved_child_allocation_matches_names_and_resolves_models() {
     second.model_id = "requested".into();
     children.insert(0, second);
     assert!(config.has_matching_agent_roster(&children));
-    config.resolve_agent_models(&mut children);
+    config.resolve_agent_configs(&mut children);
     assert!(children[0].model_id.is_empty());
     assert_eq!(children[1].model_id, "approved");
     for name in ["new", "b", ""] {

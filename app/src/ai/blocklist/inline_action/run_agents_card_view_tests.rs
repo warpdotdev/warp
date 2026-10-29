@@ -44,7 +44,7 @@ fn harness_change_clears_only_unavailable_child_models_from_launch_request() {
         footer: None,
     };
 
-    state.card.clear_unavailable_child_models(&models);
+    state.card.reset_invalid_child_model_overrides(&models);
 
     let confirmed = state.to_request();
     assert_eq!(confirmed.model_id, "new-batch-model");
@@ -112,7 +112,7 @@ fn launch_details_keep_each_child_model_and_outcome() {
         format_launch_details(&result),
         [
             "review · child-model · Started (run-1)",
-            "test · Agent default (not reported) · Failed: not installed",
+            "test · Unreported · Failed: not installed",
         ]
     );
 }
@@ -569,7 +569,7 @@ mod override_from_approved_config_tests {
 
     fn local_config(model: &str, harness: &str) -> OrchestrationConfig {
         OrchestrationConfig {
-            agent_models: Vec::new(),
+            agent_configs: Vec::new(),
             model_id: model.to_string(),
             harness_type: harness.to_string(),
             execution_mode: OrchestrationExecutionMode::Local,
@@ -578,7 +578,7 @@ mod override_from_approved_config_tests {
 
     fn remote_config(model: &str, harness: &str, env: &str) -> OrchestrationConfig {
         OrchestrationConfig {
-            agent_models: Vec::new(),
+            agent_configs: Vec::new(),
             model_id: model.to_string(),
             harness_type: harness.to_string(),
             execution_mode: OrchestrationExecutionMode::Remote {

@@ -77,7 +77,7 @@ fn toggle_to_local_preserves_claude() {
 #[test]
 fn runner_id_round_trips_through_config() {
     let config = OrchestrationConfig {
-        agent_models: Vec::new(),
+        agent_configs: Vec::new(),
         model_id: "auto".to_string(),
         harness_type: "oz".to_string(),
         execution_mode: OrchestrationExecutionMode::Remote {

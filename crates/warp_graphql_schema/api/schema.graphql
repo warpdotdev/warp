@@ -4449,13 +4449,7 @@ type UntrashObjectOutput implements Response {
 
 union UntrashObjectResult = UntrashObjectOutput | UserFacingError
 
-input LocalAgentConfiguredModelInput {
-  harnessType: String!
-  modelId: String!
-}
-
 input UpdateAgentTaskInput {
-  configuredModel: LocalAgentConfiguredModelInput
   """
   If set, the task is associated with this AI conversation UUID for follow-up messages.
   """

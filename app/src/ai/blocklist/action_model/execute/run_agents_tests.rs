@@ -60,7 +60,7 @@ fn approved_child_roster_requires_confirmation_for_renamed_agents() {
             panic!("expected run_agents action");
         };
         let mut config = OrchestrationConfig {
-            agent_models: vec![ai::agent::orchestration_config::OrchestrationAgentModel {
+            agent_configs: vec![ai::agent::orchestration_config::OrchestrationAgentConfig {
                 name: request.agent_run_configs[0].name.clone(),
                 model_id: String::new(),
             }],
@@ -87,7 +87,7 @@ fn approved_child_roster_requires_confirmation_for_renamed_agents() {
                 ctx,
             ));
         });
-        config.agent_models[0].name = "renamed".into();
+        config.agent_configs[0].name = "renamed".into();
         BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
             history
                 .conversation_mut(&state.conversation_id)
@@ -164,7 +164,7 @@ fn persist_plan_config_with_harness(
             .set_orchestration_config_for_plan(
                 plan_id.to_string(),
                 OrchestrationConfig {
-                    agent_models: Vec::new(),
+                    agent_configs: Vec::new(),
                     model_id: "auto".to_string(),
                     harness_type: harness_type.to_string(),
                     execution_mode: OrchestrationExecutionMode::Remote {
@@ -405,6 +405,97 @@ fn subscribe_to_start_agent_requests(
 }
 
 #[test]
+fn launch_completion_waits_for_adapter_receipt_and_preserves_unknowns() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let ai_client = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        for (index, reported_model) in [None, Some(None), Some(Some("accepted-model"))]
+            .into_iter()
+            .enumerate()
+        {
+            let receiver = state
+                .start_agent_executor
+                .update(&mut app, |executor, ctx| {
+                    executor.dispatch(
+                        format!("child-{index}"),
+                        "work".to_string(),
+                        StartAgentExecutionMode::Local {
+                            harness_type: None,
+                            model_id: Some("requested-model".to_string()),
+                        },
+                        Default::default(),
+                        None,
+                        state.conversation_id,
+                        None,
+                        RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                        ctx,
+                    )
+                });
+            let request_id = captured.read(&app, |requests, _| requests.0[index].id);
+            let surface_id = EntityId::new();
+            let run_id = format!("00000000-0000-0000-0000-{:012}", index + 2);
+            let child_id =
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    let child_id = history.start_new_child_conversation(
+                        surface_id,
+                        format!("child-{index}"),
+                        state.conversation_id,
+                        None,
+                        false,
+                        ctx,
+                    );
+                    history.record_new_conversation_request_complete(request_id, child_id, ctx);
+                    history.assign_run_id_for_conversation(
+                        child_id,
+                        run_id.clone(),
+                        None,
+                        surface_id,
+                        ctx,
+                    );
+                    child_id
+                });
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(async_channel::TryRecvError::Empty)
+            ));
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.record_child_agent_launch_complete(
+                    request_id,
+                    child_id,
+                    run_id.clone(),
+                    reported_model.map(|model_id| {
+                        crate::server::server_api::ai::AgentLaunchConfig {
+                            harness_type: "oz".to_string(),
+                            model_id: model_id.map(str::to_string),
+                        }
+                    }),
+                    ctx,
+                );
+            });
+            let StartAgentOutcome::Started {
+                agent_id,
+                launch_config,
+            } = receiver.try_recv().expect("adapter completion")
+            else {
+                panic!("expected successful launch");
+            };
+            assert_eq!(agent_id, run_id);
+            assert_eq!(
+                launch_config
+                    .as_ref()
+                    .map(|config| config.model_id.as_deref()),
+                reported_model,
+            );
+        }
+    });
+}
+
+#[test]
 fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
@@ -559,7 +650,7 @@ fn child_models_survive_approved_batch_defaults_and_local_remote_translation() {
         resolve_request_from_config(
             &mut request,
             &OrchestrationConfig {
-                agent_models: Vec::new(),
+                agent_configs: Vec::new(),
                 model_id: "approved-batch".to_string(),
                 harness_type: "oz".to_string(),
                 execution_mode: OrchestrationExecutionMode::Local,
@@ -713,7 +804,7 @@ fn dispatch_preserves_models_in_successful_launches_and_partial_failures() {
         resolve_request_from_config(
             &mut request,
             &OrchestrationConfig {
-                agent_models: Vec::new(),
+                agent_configs: Vec::new(),
                 model_id: "approved-batch".to_string(),
                 harness_type: "oz".to_string(),
                 execution_mode: OrchestrationExecutionMode::Local,
@@ -760,10 +851,6 @@ fn dispatch_preserves_models_in_successful_launches_and_partial_failures() {
                     false,
                     ctx,
                 );
-                history
-                    .conversation_mut(&child_id)
-                    .unwrap()
-                    .set_configured_launch_model_id(Some(format!("configured-{expected_model}")));
                 history.assign_run_id_for_conversation(
                     child_id,
                     run_id.to_string(),
@@ -771,7 +858,16 @@ fn dispatch_preserves_models_in_successful_launches_and_partial_failures() {
                     EntityId::new(),
                     ctx,
                 );
-                history.record_new_conversation_request_complete(request.id, child_id, ctx);
+                history.record_child_agent_launch_complete(
+                    request.id,
+                    child_id,
+                    run_id.to_string(),
+                    Some(crate::server::server_api::ai::AgentLaunchConfig {
+                        harness_type: "oz".to_string(),
+                        model_id: Some(format!("configured-{expected_model}")),
+                    }),
+                    ctx,
+                );
             });
         }
         let RunAgentsResult::Launched { agents, .. } = receiver.recv().await.unwrap() else {

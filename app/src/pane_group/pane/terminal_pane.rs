@@ -39,7 +39,7 @@ use crate::ai::blocklist::{
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::{
     apply_child_agent_model_override, finish_local_oz_child_conversation,
-    prepare_local_oz_child_launch, record_local_oz_child_model,
+    local_oz_child_launch_config, prepare_local_oz_child_launch,
 };
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
@@ -56,6 +56,8 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::ai::AgentLaunchConfig;
 use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::CloudAgentShellRecoveryFailureClass;
 use crate::session_management::SessionNavigationData;
@@ -1747,18 +1749,14 @@ fn launch_local_no_harness_child(
                         model_id.as_deref(),
                         ctx,
                     );
-                    record_local_oz_child_model(
-                        conversation_id,
-                        terminal_view_id,
-                        child_task_id,
-                        &team_context,
-                        ctx,
-                    );
+                    let launch_config =
+                        local_oz_child_launch_config(terminal_view_id, &team_context, ctx);
                     finish_local_oz_child_conversation(
                         conversation_id,
                         terminal_view_id,
                         child_task_id,
                         request_id,
+                        Some(launch_config),
                         ctx,
                     );
 
@@ -1909,21 +1907,10 @@ fn launch_local_harness_child(
                             ctx,
                         );
 
-                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                            if let Some(conversation) = model.conversation_mut(&conversation_id) {
-                                conversation.set_configured_launch_model_id(configured_model_id);
-                            }
-                            model.record_new_conversation_request_complete(
-                                request_id,
-                                conversation_id,
-                                ctx,
-                            );
-                        });
-
                         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                             history_model.assign_run_id_for_conversation(
                                 conversation_id,
-                                run_id,
+                                run_id.clone(),
                                 Some(task_id),
                                 terminal_view_id,
                                 ctx,
@@ -1936,6 +1923,18 @@ fn launch_local_harness_child(
                                 None,
                                 Some(conversation_id),
                                 AgentViewEntryOrigin::ChildAgent,
+                                ctx,
+                            );
+                        });
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                            history.record_child_agent_launch_complete(
+                                request_id,
+                                conversation_id,
+                                run_id,
+                                Some(AgentLaunchConfig {
+                                    harness_type: orchestration_harness.config_name().to_string(),
+                                    model_id: configured_model_id,
+                                }),
                                 ctx,
                             );
                         });
@@ -1982,13 +1981,6 @@ fn launch_local_harness_child(
 /// `SpawnAgentRequest`, enters the agent view, and kicks off the spawn via
 /// the ambient agent view model. Returns the freshly-created
 /// `AIConversationId` on success.
-///
-/// The executor handle is used to echo the child conversation id back to
-/// the executor's pending table via
-/// [`StartAgentExecutor::record_child_conversation`] so the
-/// `ConversationServerTokenAssigned` event that fires when
-/// `model.spawn_agent_with_request` resolves can be matched back to this
-/// request.
 fn launch_remote_child(
     group: &mut PaneGroup,
     parent_pane_id: PaneId,
@@ -2065,7 +2057,12 @@ fn launch_remote_child(
         if let Some(ambient_agent_view_model) = terminal_view.ambient_agent_view_model() {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(conversation_id));
-                model.spawn_agent_with_request(prepared.spawn_request, team_scope, ctx);
+                model.spawn_agent_with_request(
+                    prepared.spawn_request,
+                    team_scope,
+                    Some(request_id),
+                    ctx,
+                );
             });
         } else {
             report_error!("Remote StartAgent child pane missing ambient agent view model");

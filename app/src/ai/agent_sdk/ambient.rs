@@ -608,7 +608,6 @@ impl AmbientAgentRunner {
                 while let Some(event_result) = stream.next().await {
                     match event_result {
                         Ok(event) => match event {
-                            AmbientAgentEvent::ConfiguredModel { .. } => {}
                             AmbientAgentEvent::TaskSpawned { task_id, .. } => {
                                 println!("Spawned ambient agent with run ID: {task_id}");
                                 println!("View run: {oz_root_url}/runs/{task_id}");

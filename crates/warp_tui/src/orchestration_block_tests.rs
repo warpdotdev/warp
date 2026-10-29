@@ -289,7 +289,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
 fn edit_state_is_overridden_by_an_approved_config() {
     let incoming = request("oz", RunAgentsExecutionMode::Local);
     let config = OrchestrationConfig {
-        agent_models: Vec::new(),
+        agent_configs: Vec::new(),
         model_id: "sonnet".to_string(),
         harness_type: "claude".to_string(),
         execution_mode: OrchestrationExecutionMode::Remote {

@@ -341,7 +341,7 @@ fn assert_error_containing(outcome: StartAgentOutcome, needle: &str) {
         StartAgentOutcome::Error(message) => {
             assert!(message.contains(needle), "unexpected error: {message}");
         }
-        StartAgentOutcome::Started { agent_id } => {
+        StartAgentOutcome::Started { agent_id, .. } => {
             panic!("expected an error outcome, got Started({agent_id})");
         }
     }
@@ -537,6 +537,67 @@ fn local_harness_children_fail_cleanly() {
 }
 
 #[test]
+fn remote_launch_reports_optional_receipt_after_run_registration() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_id = read_active_conversation_id(&app, parent_session_id);
+        for reported_model in [None, Some(None), Some(Some("server-model"))] {
+            let request = remote_request(parent_id);
+            let (conversation_id, surface_id, cloud_run_state) = add_remote_child_session(
+                &mut app,
+                &fixture,
+                parent_session_id,
+                &request,
+                "child".to_string(),
+                Harness::Oz,
+            );
+            let task_id: AmbientAgentTaskId = uuid::Uuid::new_v4().to_string().parse().unwrap();
+            let (sender, receiver) = async_channel::bounded(1);
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |_, event, ctx| {
+                    if let warp::tui_export::BlocklistAIHistoryEvent::NewConversationRequestComplete {
+                        request_id, conversation_id: child_id, launch: Some(launch),
+                    } = event
+                        && *child_id == conversation_id
+                    {
+                        assert_eq!(*request_id, request.id);
+                        assert_eq!(
+                            BlocklistAIHistoryModel::as_ref(ctx)
+                                .conversation_id_for_agent_id(&launch.agent_id),
+                            Some(conversation_id),
+                        );
+                        sender.try_send(launch.clone()).unwrap();
+                    }
+                });
+                TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.finish_remote_child_launch(
+                        request.id, conversation_id, surface_id, cloud_run_state,
+                        Ok(warp::tui_export::SpawnAgentResponse {
+                            task_id, run_id: task_id.to_string(), at_capacity: false,
+                            launch_config: reported_model.map(|model_id| warp::tui_export::AgentLaunchConfig {
+                                harness_type: "claude".to_string(),
+                                model_id: model_id.map(str::to_string),
+                            }),
+                        }),
+                        ctx,
+                    );
+                });
+            });
+            let launch = receiver.try_recv().expect("TUI launch completion");
+            assert_eq!(launch.agent_id, task_id.to_string());
+            assert_eq!(
+                launch
+                    .launch_config
+                    .as_ref()
+                    .map(|config| config.model_id.as_deref()),
+                reported_model,
+            );
+        }
+    });
+}
+
+#[test]
 fn github_auth_blocker_keeps_the_remote_session_and_actionable_url() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);
@@ -559,6 +620,7 @@ fn github_auth_blocker_keeps_the_remote_session_and_actionable_url() {
         app.update(|ctx| {
             TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
                 model.finish_remote_child_launch(
+                    request.id,
                     conversation_id,
                     surface_id,
                     cloud_run_state.clone(),
@@ -618,6 +680,7 @@ fn failed_remote_launch_records_cloud_startup_error_for_tui_rendering() {
         app.update(|ctx| {
             TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
                 model.finish_remote_child_launch(
+                    request.id,
                     conversation_id,
                     surface_id,
                     cloud_run_state,

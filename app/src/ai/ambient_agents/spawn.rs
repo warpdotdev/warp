@@ -12,7 +12,7 @@ use session_sharing_protocol::common::SessionId;
 use super::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
 use crate::server::retry_strategies::with_bounded_retry;
 use crate::server::server_api::ai::{
-    AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
+    AIClient, AgentLaunchConfig, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
 };
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
@@ -69,9 +69,7 @@ pub enum AmbientAgentEvent {
     TaskSpawned {
         task_id: AmbientAgentTaskId,
         run_id: String,
-    },
-    ConfiguredModel {
-        receipt: crate::server::server_api::ai::ConfiguredAgentModel,
+        launch_config: Option<AgentLaunchConfig>,
     },
     /// The task state changed.
     StateChanged {
@@ -113,24 +111,26 @@ pub fn spawn_task(
     // See https://github.com/tokio-rs/async-stream/issues/63.
     async_stream::stream! {
         // First, spawn the ambient agent task.
-        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request, team_scope).await {
-            Ok(response) => {
-                if let Some(receipt) = response.configured_model {
-                    yield Ok(AmbientAgentEvent::ConfiguredModel { receipt });
-                }
-                (response.task_id, response.run_id, response.at_capacity)
-            },
+        let response = match ai_client.spawn_agent(request, team_scope).await {
+            Ok(response) => response,
             Err(err) => {
                 yield Err(err);
                 return;
             },
         };
 
-        let mut stream = Box::pin(monitor_spawned_task(
-            task_id,
-            run_id,
-            at_capacity,
+        yield Ok(AmbientAgentEvent::TaskSpawned {
+            task_id: response.task_id,
+            run_id: response.run_id,
+            launch_config: response.launch_config,
+        });
+        if response.at_capacity {
+            yield Ok(AmbientAgentEvent::AtCapacity);
+        }
+        let mut stream = Box::pin(poll_run_until_joinable_session(
+            response.task_id,
             ai_client,
+            RunPollMode::InitialRun,
             timeout,
         ));
         while let Some(event) = stream.next().await {
@@ -151,7 +151,7 @@ pub fn monitor_spawned_task(
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
     async_stream::stream! {
-        yield Ok(AmbientAgentEvent::TaskSpawned { task_id, run_id });
+        yield Ok(AmbientAgentEvent::TaskSpawned { task_id, run_id, launch_config: None });
 
         // Emit AtCapacity event if the server indicates capacity limit reached.
         if at_capacity {

@@ -355,11 +355,13 @@ impl RunAgentsExecutor {
                                 futures::future::Either::Left((
                                     Ok(StartAgentOutcome::Started {
                                         agent_id,
-                                        configured_model_id: receipt,
+                                        launch_config,
                                     }),
                                     _,
                                 )) => {
-                                    configured_model_id = receipt;
+                                    configured_model_id = launch_config
+                                        .and_then(|config| config.model_id)
+                                        .unwrap_or_default();
                                     RunAgentsAgentOutcomeKind::Launched { agent_id }
                                 }
                                 futures::future::Either::Left((
@@ -563,7 +565,7 @@ fn approved_orchestration_config_can_autoexecute(
         .conversation(&parent_conversation_id)
         .and_then(|conversation| conversation.orchestration_config_for_plan(&request.plan_id));
     let allocation_approved = config.is_some_and(|(config, _)| {
-        if config.agent_models.is_empty() {
+        if config.agent_configs.is_empty() {
             resolved_request.agent_run_configs.iter().all(|cfg| {
                 effective_child_model_id(&resolved_request.model_id, cfg)
                     == resolved_request.model_id.trim()
@@ -774,7 +776,7 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
     request.harness_type = config_state.harness_type;
     request.execution_mode = config_state.execution_mode;
     if FeatureFlag::ChildModelRouting.is_enabled() {
-        config.resolve_agent_models(&mut request.agent_run_configs);
+        config.resolve_agent_configs(&mut request.agent_run_configs);
     }
 }
 

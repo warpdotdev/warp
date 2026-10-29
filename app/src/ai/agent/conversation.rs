@@ -355,7 +355,6 @@ pub struct AIConversation {
     /// The string form (for APIs that accept a run_id) is obtained via
     /// `run_id()` which calls `.to_string()` on this field.
     task_id: Option<AmbientAgentTaskId>,
-    configured_launch_model_id: Option<String>,
 
     /// The server conversation ID of the source conversation if this conversation was forked.
     forked_from_server_conversation_token: Option<ServerConversationToken>,
@@ -486,7 +485,6 @@ impl AIConversation {
             conversation_usage_metadata: ConversationUsageMetadata::default(),
             server_conversation_token: None,
             task_id: None,
-            configured_launch_model_id: None,
             forked_from_server_conversation_token: None,
             server_metadata: None,
             transaction: None,
@@ -745,7 +743,6 @@ impl AIConversation {
             conversation_usage_metadata,
             server_conversation_token,
             task_id: run_id.as_deref().and_then(|id| id.parse().ok()),
-            configured_launch_model_id: None,
             forked_from_server_conversation_token,
             server_metadata: None,
             transaction: None,
@@ -1226,14 +1223,6 @@ impl AIConversation {
     /// Sets the task ID directly (used for child agents spawned via `SpawnAgentResponse`).
     pub fn set_task_id(&mut self, id: AmbientAgentTaskId) {
         self.task_id = Some(id);
-    }
-
-    pub fn configured_launch_model_id(&self) -> Option<&str> {
-        self.configured_launch_model_id.as_deref()
-    }
-
-    pub fn set_configured_launch_model_id(&mut self, model_id: Option<String>) {
-        self.configured_launch_model_id = model_id;
     }
 
     /// Returns the server-side agent identifier for orchestration.

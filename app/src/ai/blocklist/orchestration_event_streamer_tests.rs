@@ -266,6 +266,7 @@ fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
                 terminal_view_id,
                 child_task_id,
                 StartAgentRequestId::from_raw_for_test(0),
+                None,
                 ctx,
             );
         });
@@ -380,6 +381,7 @@ fn sse_placeholder_then_local_launch_converges_on_one_conversation() {
                 terminal_view_id,
                 child_task_id,
                 StartAgentRequestId::from_raw_for_test(1),
+                None,
                 ctx,
             );
         });

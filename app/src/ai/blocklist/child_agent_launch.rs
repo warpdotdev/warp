@@ -20,7 +20,7 @@ use crate::AIExecutionProfilesModel;
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
 #[cfg(not(target_family = "wasm"))]
-use crate::features::FeatureFlag;
+use crate::server::server_api::ai::AgentLaunchConfig;
 use crate::workspaces::user_workspaces::TeamScope;
 
 /// Server-side state prepared before a frontend creates the child's surface.
@@ -81,6 +81,7 @@ pub fn finish_local_oz_child_conversation(
     terminal_surface_id: EntityId,
     task_id: AmbientAgentTaskId,
     request_id: StartAgentRequestId,
+    launch_config: Option<AgentLaunchConfig>,
     ctx: &mut AppContext,
 ) {
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
@@ -91,7 +92,13 @@ pub fn finish_local_oz_child_conversation(
             terminal_surface_id,
             ctx,
         );
-        model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
+        model.record_child_agent_launch_complete(
+            request_id,
+            conversation_id,
+            task_id.to_string(),
+            launch_config,
+            ctx,
+        );
     });
 }
 
@@ -144,37 +151,18 @@ pub fn apply_child_agent_model_override(
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub fn record_local_oz_child_model(
-    conversation_id: AIConversationId,
+pub fn local_oz_child_launch_config(
     terminal_surface_id: EntityId,
-    task_id: AmbientAgentTaskId,
     scope: &impl TeamScope,
-    ctx: &mut AppContext,
-) {
-    let model_id = LLMPreferences::as_ref(ctx)
-        .get_active_base_model(scope, ctx, Some(terminal_surface_id))
-        .id
-        .to_string();
-    let team_scope = RequestTeamScope::from_scope(scope);
-    let client = ServerApiProvider::as_ref(ctx).get_ai_client();
-    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-        if let Some(conversation) = history.conversation_mut(&conversation_id) {
-            conversation.set_configured_launch_model_id(Some(model_id.clone()));
-        }
-        if !FeatureFlag::ChildModelRouting.is_enabled() {
-            return;
-        }
-        ctx.spawn(
-            async move {
-                client
-                    .report_local_agent_model(task_id, "oz".to_string(), model_id, team_scope)
-                    .await
-            },
-            |_, result, _| {
-                if let Err(error) = result {
-                    log::warn!("Failed to persist local child model: {error}");
-                }
-            },
-        );
-    });
+    ctx: &AppContext,
+) -> AgentLaunchConfig {
+    AgentLaunchConfig {
+        harness_type: "oz".to_string(),
+        model_id: Some(
+            LLMPreferences::as_ref(ctx)
+                .get_active_base_model(scope, ctx, Some(terminal_surface_id))
+                .id
+                .to_string(),
+        ),
+    }
 }

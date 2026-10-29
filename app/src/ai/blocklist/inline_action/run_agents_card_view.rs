@@ -124,7 +124,7 @@ pub struct RunAgentsCardFields {
 }
 
 impl RunAgentsCardFields {
-    fn clear_unavailable_child_models(&mut self, models: &OptionSnapshot) {
+    fn reset_invalid_child_model_overrides(&mut self, models: &OptionSnapshot) {
         for child in &mut self.agent_run_configs {
             let model_id = child.model_id.trim();
             if !model_id.is_empty()
@@ -387,7 +387,7 @@ impl RunAgentsCardView {
         {
             orchestration_config_state.override_from_approved_config(config);
             if FeatureFlag::ChildModelRouting.is_enabled() {
-                config.resolve_agent_models(&mut card.agent_run_configs);
+                config.resolve_agent_configs(&mut card.agent_run_configs);
             }
         }
         // Snapshot the raw incoming request so we can diff against the
@@ -715,7 +715,7 @@ impl RunAgentsCardView {
                 .orchestration_config_state
                 .override_from_approved_config(config);
             if FeatureFlag::ChildModelRouting.is_enabled() {
-                config.resolve_agent_models(&mut new_state.card.agent_run_configs);
+                config.resolve_agent_configs(&mut new_state.card.agent_run_configs);
             }
         }
         if !self
@@ -972,11 +972,11 @@ impl RunAgentsCardView {
                     .orchestration_edit_state
                     .orchestration_config_state
                     .to_orchestration_config();
-                edited.agent_models = config.agent_models.clone();
+                edited.agent_configs = config.agent_configs.clone();
                 edited != *config
                     || (FeatureFlag::ChildModelRouting.is_enabled()
                         && self.card.agent_run_configs.iter().any(|agent| {
-                            config.agent_models.iter().any(|approved| {
+                            config.agent_configs.iter().any(|approved| {
                                 approved.name.trim().eq_ignore_ascii_case(agent.name.trim())
                                     && approved.model_id != agent.model_id
                             })
@@ -1571,6 +1571,13 @@ impl TypedActionView for RunAgentsCardView {
                     fallback,
                     ctx,
                 );
+                if FeatureFlag::ChildModelRouting.is_enabled() {
+                    self.card
+                        .reset_invalid_child_model_overrides(&model_snapshot(
+                            &self.orchestration_edit_state.orchestration_config_state,
+                            ctx,
+                        ));
+                }
                 // Switching to Cloud reveals the Runner control (when the
                 // flag is on); build + fetch it lazily so Local cards never
                 // hit `getRunners`.
@@ -1611,10 +1618,11 @@ impl TypedActionView for RunAgentsCardView {
                     ctx,
                 );
                 if FeatureFlag::ChildModelRouting.is_enabled() {
-                    self.card.clear_unavailable_child_models(&model_snapshot(
-                        &self.orchestration_edit_state.orchestration_config_state,
-                        ctx,
-                    ));
+                    self.card
+                        .reset_invalid_child_model_overrides(&model_snapshot(
+                            &self.orchestration_edit_state.orchestration_config_state,
+                            ctx,
+                        ));
                 }
                 // Harness change resets per-harness selection state, so
                 // give the new harness a fresh auto-open prompt.
@@ -2006,7 +2014,7 @@ fn format_launch_details(result: &RunAgentsResult) -> Vec<String> {
         .iter()
         .map(|agent| {
             let model = if agent.resolved_model_id.is_empty() {
-                "Agent default (not reported)"
+                "Unreported"
             } else {
                 &agent.resolved_model_id
             };

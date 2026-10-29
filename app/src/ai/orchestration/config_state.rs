@@ -256,7 +256,7 @@ impl OrchestrationConfigState {
             model_id: self.model_id.clone(),
             harness_type: self.harness_type.clone(),
             execution_mode,
-            agent_models: Vec::new(),
+            agent_configs: Vec::new(),
         }
     }
 }

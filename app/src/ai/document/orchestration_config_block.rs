@@ -3,7 +3,7 @@
 //! toggle, Cloud/Local picker, and run-wide config dropdowns.
 
 use ai::agent::action::RunAgentsExecutionMode;
-use ai::agent::orchestration_config::{OrchestrationAgentModel, OrchestrationConfigStatus};
+use ai::agent::orchestration_config::{OrchestrationAgentConfig, OrchestrationConfigStatus};
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
@@ -151,7 +151,7 @@ pub struct OrchestrationConfigBlockView {
     /// Run-wide config being edited plus per-harness model memory.
     orchestration_edit_state: OrchestrationEditState,
     pickers: OrchestrationPickerHandles<OrchestrationConfigBlockAction>,
-    agent_models: Vec<OrchestrationAgentModel>,
+    agent_configs: Vec<OrchestrationAgentConfig>,
     child_model_pickers: Vec<ViewHandle<FilterableDropdown<OrchestrationConfigBlockAction>>>,
     is_editing_models: bool,
     edit_models_button: ViewHandle<ActionButton>,
@@ -193,10 +193,10 @@ impl OrchestrationConfigBlockView {
             .conversation(&conversation_id)
             .and_then(|conv| conv.orchestration_config_for_plan(&plan_id))
             .is_some();
-        let agent_models = history
+        let agent_configs = history
             .conversation(&conversation_id)
             .and_then(|conv| conv.orchestration_config_for_plan(&plan_id))
-            .map(|(config, _)| config.agent_models.clone())
+            .map(|(config, _)| config.agent_configs.clone())
             .unwrap_or_default();
         let (config_state, is_approved) = history
             .conversation(&conversation_id)
@@ -383,7 +383,7 @@ impl OrchestrationConfigBlockView {
                 })
         });
         let mut view = Self {
-            agent_models,
+            agent_configs,
             child_model_pickers: Vec::new(),
             is_editing_models: false,
             edit_models_button,
@@ -494,7 +494,7 @@ impl OrchestrationConfigBlockView {
         {
             self.orchestration_edit_state.orchestration_config_state =
                 OrchestrationConfigState::from_orchestration_config(config);
-            self.agent_models = config.agent_models.clone();
+            self.agent_configs = config.agent_configs.clone();
             self.is_approved = status.is_approved();
             if self.pickers_initialized {
                 oc::repopulate_all_pickers(
@@ -706,10 +706,10 @@ impl OrchestrationConfigBlockView {
         );
     }
 
-    fn clear_unavailable_child_models(&mut self, ctx: &AppContext) {
+    fn reset_invalid_child_model_overrides(&mut self, ctx: &AppContext) {
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let snapshot = crate::ai::orchestration::model_snapshot(state, ctx);
-        for child in &mut self.agent_models {
+        for child in &mut self.agent_configs {
             if !child.model_id.trim().is_empty()
                 && !snapshot
                     .rows
@@ -734,8 +734,8 @@ impl OrchestrationConfigBlockView {
             padding.left = 8.;
             padding.right = 8.;
         }
-        self.child_model_pickers.truncate(self.agent_models.len());
-        while self.child_model_pickers.len() < self.agent_models.len() {
+        self.child_model_pickers.truncate(self.agent_configs.len());
+        while self.child_model_pickers.len() < self.agent_configs.len() {
             let picker = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
             picker.update(ctx, |dropdown, ctx| {
                 dropdown.set_use_overlay_layer(true, ctx);
@@ -746,7 +746,7 @@ impl OrchestrationConfigBlockView {
         }
         let state = &self.orchestration_edit_state.orchestration_config_state;
         for (index, (agent, picker)) in self
-            .agent_models
+            .agent_configs
             .iter()
             .zip(&self.child_model_pickers)
             .enumerate()
@@ -762,7 +762,7 @@ impl OrchestrationConfigBlockView {
         }
     }
 
-    fn render_agent_models(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render_agent_configs(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let snapshot = crate::ai::orchestration::model_snapshot(state, app);
@@ -771,7 +771,7 @@ impl OrchestrationConfigBlockView {
             .with_spacing(8.)
             .with_child(
                 Text::new(
-                    format!("Agents ({})", self.agent_models.len()),
+                    format!("Agents ({})", self.agent_configs.len()),
                     appearance.ui_font_family(),
                     appearance.monospace_font_size() - 1.,
                 )
@@ -794,29 +794,36 @@ impl OrchestrationConfigBlockView {
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_spacing(6.)
-                .with_children(self.agent_models.iter().zip(&self.child_model_pickers).map(
-                    |(agent, picker)| {
-                        ConstrainedBox::new(
-                            Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                                .with_spacing(8.)
-                                .with_child(oc::render_agent_chip(&agent.name, None, appearance))
-                                .with_child(
-                                    Expanded::new(1., ChildView::new(picker).finish()).finish(),
-                                )
-                                .finish(),
-                        )
-                        .with_max_width(360.)
-                        .finish()
-                    },
-                ))
+                .with_children(
+                    self.agent_configs
+                        .iter()
+                        .zip(&self.child_model_pickers)
+                        .map(|(agent, picker)| {
+                            ConstrainedBox::new(
+                                Flex::row()
+                                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                    .with_spacing(8.)
+                                    .with_child(oc::render_agent_chip(
+                                        &agent.name,
+                                        None,
+                                        appearance,
+                                    ))
+                                    .with_child(
+                                        Expanded::new(1., ChildView::new(picker).finish()).finish(),
+                                    )
+                                    .finish(),
+                            )
+                            .with_max_width(360.)
+                            .finish()
+                        }),
+                )
                 .finish()
         } else {
             Wrap::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.)
                 .with_run_spacing(6.)
-                .with_children(self.agent_models.iter().map(|agent| {
+                .with_children(self.agent_configs.iter().map(|agent| {
                     let label = (!agent.model_id.is_empty()).then(|| {
                         snapshot
                             .rows
@@ -868,7 +875,7 @@ impl OrchestrationConfigBlockView {
             .orchestration_edit_state
             .orchestration_config_state
             .to_orchestration_config();
-        config.agent_models = self.agent_models.clone();
+        config.agent_configs = self.agent_configs.clone();
         let status = if self.is_approved {
             OrchestrationConfigStatus::Approved
         } else {
@@ -1135,8 +1142,8 @@ impl View for OrchestrationConfigBlockView {
                 .finish();
                 column.add_child(Container::new(helper).with_margin_top(4.).finish());
 
-                if FeatureFlag::ChildModelRouting.is_enabled() && !self.agent_models.is_empty() {
-                    column.add_child(self.render_agent_models(app));
+                if FeatureFlag::ChildModelRouting.is_enabled() && !self.agent_configs.is_empty() {
+                    column.add_child(self.render_agent_configs(app));
                 }
 
                 // Validation
@@ -1147,7 +1154,7 @@ impl View for OrchestrationConfigBlockView {
                 .or_else(|| {
                     crate::ai::orchestration::child_model_validation_error(
                         &self.orchestration_edit_state.orchestration_config_state,
-                        self.agent_models
+                        self.agent_configs
                             .iter()
                             .map(|agent| (agent.name.as_str(), agent.model_id.as_str())),
                         app,
@@ -1235,7 +1242,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::ChildModelChanged { index, model_id } => {
-                if let Some(agent) = self.agent_models.get_mut(*index) {
+                if let Some(agent) = self.agent_configs.get_mut(*index) {
                     agent.model_id = model_id.clone();
                     self.apply_field_change(ctx);
                     ctx.spawn(async {}, |me, _, ctx| me.refresh_child_model_pickers(ctx));
@@ -1265,7 +1272,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 // flag is on); build + fetch it lazily so Local configs
                 // never hit `getRunners`.
                 self.ensure_runner_picker(ctx);
-                self.clear_unavailable_child_models(ctx);
+                self.reset_invalid_child_model_overrides(ctx);
                 self.refresh_child_model_pickers(ctx);
                 self.apply_field_change(ctx);
                 // Local → Cloud can newly reveal the auth picker.
@@ -1294,7 +1301,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     fallback,
                     ctx,
                 );
-                self.clear_unavailable_child_models(ctx);
+                self.reset_invalid_child_model_overrides(ctx);
                 self.refresh_child_model_pickers(ctx);
                 self.apply_field_change(ctx);
                 // Per-harness state reset — re-arm for the new harness.

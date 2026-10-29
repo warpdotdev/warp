@@ -16,8 +16,6 @@ pub struct UpdateAgentTaskVariables {
 #[derive(cynic::InputObject, Debug)]
 pub struct UpdateAgentTaskInput {
     pub task_id: cynic::Id,
-    #[cynic(skip_serializing_if = "Option::is_none")]
-    pub configured_model: Option<LocalAgentConfiguredModelInput>,
 
     // Important: for our server-side changeset logic to work, any fields which we aren't trying to
     // update must be omitted, NOT set to null.
@@ -71,10 +69,4 @@ pub enum UpdateAgentTaskResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct UpdateAgentTaskOutput {
     pub response_context: ResponseContext,
-}
-
-#[derive(cynic::InputObject, Debug)]
-pub struct LocalAgentConfiguredModelInput {
-    pub harness_type: String,
-    pub model_id: String,
 }
