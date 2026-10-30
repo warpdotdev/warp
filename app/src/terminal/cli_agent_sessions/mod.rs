@@ -1,3 +1,5 @@
+#[cfg(feature = "local_tty")]
+pub(crate) mod control_endpoint;
 pub mod event;
 pub mod listener;
 #[cfg(not(target_family = "wasm"))]
