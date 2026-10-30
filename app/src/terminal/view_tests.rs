@@ -2414,7 +2414,6 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_agent_rich_input = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
                 .auto_dismiss_rich_input_after_submit
@@ -2486,7 +2485,6 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_agent_rich_input = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -8417,7 +8415,6 @@ fn ctrl_g_closes_cli_agent_rich_input_when_editor_is_focused() {
             crate::editor::init(ctx);
         });
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let (window_id, terminal) =
             open_cli_agent_rich_input_for_agent_with_window_id(&mut app, CLIAgent::OpenCode);
@@ -8464,7 +8461,6 @@ fn ctrl_g_closes_cli_agent_rich_input_from_terminal_context() {
             crate::editor::init(ctx);
         });
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let (window_id, terminal) =
             open_cli_agent_rich_input_for_agent_with_window_id(&mut app, CLIAgent::OpenCode);
@@ -8507,7 +8503,6 @@ fn ctrl_g_toggles_cli_agent_rich_input_from_terminal_context() {
             crate::editor::init(ctx);
         });
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         // Start with rich input open, then close via Ctrl-G, then re-open via
         // direct call (Ctrl-G open path requires LongRunningCommand which is
@@ -8555,7 +8550,6 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         for (agent, expected_hint_text) in [
             (CLIAgent::Claude, "Enter prompt for Claude Code..."),
@@ -8582,7 +8576,6 @@ fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
         terminal.update(&mut app, |view, ctx| {
@@ -8618,7 +8611,6 @@ fn submit_cli_agent_rich_input_codex_uses_bracketed_paste() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let (_terminal, pty_writes) =
             submit_rich_input_and_collect_pty_writes(&mut app, CLIAgent::Codex, "hello");
@@ -8650,7 +8642,6 @@ fn submit_cli_agent_rich_input_hermes_multiline_uses_bracketed_paste() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let (_terminal, pty_writes) =
             submit_rich_input_and_collect_pty_writes(&mut app, CLIAgent::Hermes, "line1\nline2");
@@ -8688,7 +8679,6 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let (_terminal, pty_writes) =
             submit_rich_input_and_collect_pty_writes(&mut app, CLIAgent::OpenCode, "hello");
@@ -8740,7 +8730,6 @@ fn attach_path_as_context_routes_to_open_cli_agent_rich_input() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
@@ -8951,7 +8940,6 @@ fn submit_without_auto_dismiss_keeps_rich_input_open() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_dismiss defaults to false — leave it off.
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -8999,7 +8987,6 @@ fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_toggle_rich_input defaults to true.
         // Turn on auto_dismiss too — it should be overridden by auto_toggle.
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -9056,7 +9043,6 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings.auto_toggle_rich_input.set_value(false, ctx);
             let _ = settings
@@ -9116,7 +9102,6 @@ fn status_blocked_auto_closes_rich_input() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_toggle_rich_input defaults to true.
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -9194,7 +9179,6 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -9292,7 +9276,6 @@ fn codex_status_change_does_not_auto_open_rich_input() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_toggle_rich_input defaults to true.
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -9629,7 +9612,6 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
 
@@ -9728,7 +9710,6 @@ fn close_cli_agent_rich_input_saves_draft_and_reopen_restores_it() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
 
@@ -9784,7 +9765,6 @@ fn submit_cli_agent_rich_input_clears_draft() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             // Keep the input open after submit so we can inspect the buffer.
             let _ = settings
@@ -9821,7 +9801,6 @@ fn close_cli_agent_rich_input_with_empty_buffer_stores_no_draft() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
         let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
 

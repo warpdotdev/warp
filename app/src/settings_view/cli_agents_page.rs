@@ -373,8 +373,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
                 flags::AUTO_TOGGLE_RICH_INPUT_FLAG,
             )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+            .with_group(bindings::BindingGroup::WarpAi),
             ToggleSettingActionPair::new(
                 "auto open Rich Input when a coding agent session starts",
                 builder(SettingsAction::CLIAgents(
@@ -383,8 +382,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
                 flags::AUTO_OPEN_RICH_INPUT_ON_CLI_AGENT_START_FLAG,
             )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+            .with_group(bindings::BindingGroup::WarpAi),
             ToggleSettingActionPair::new(
                 "auto dismiss Rich Input after prompt submission",
                 builder(SettingsAction::CLIAgents(
@@ -393,8 +391,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
                 flags::AUTO_DISMISS_RICH_INPUT_AFTER_SUBMIT_FLAG,
             )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+            .with_group(bindings::BindingGroup::WarpAi),
         ],
         app,
     );
@@ -476,10 +473,6 @@ fn should_render_cli_agent_detail(app: &AppContext) -> bool {
     *AISettings::as_ref(app).should_render_cli_agent_footer
 }
 
-fn should_render_cli_agent_rich_input(app: &AppContext) -> bool {
-    should_render_cli_agent_detail(app) && FeatureFlag::CLIAgentRichInput.is_enabled()
-}
-
 #[derive(Default)]
 struct CLIAgentAutoToggleRichInputWidget {
     toggle: SwitchStateHandle,
@@ -494,7 +487,7 @@ impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
+        should_render_cli_agent_detail(app)
     }
 
     fn render(
@@ -556,7 +549,7 @@ impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
+        should_render_cli_agent_detail(app)
     }
 
     fn render(
@@ -594,7 +587,7 @@ impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
+        should_render_cli_agent_detail(app)
     }
 
     fn render(
@@ -632,7 +625,7 @@ impl SettingsWidget for CLIAgentSubmitRichInputWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
+        should_render_cli_agent_detail(app)
     }
 
     fn render(
