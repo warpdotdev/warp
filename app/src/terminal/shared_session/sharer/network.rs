@@ -1180,6 +1180,9 @@ impl Network {
         if matches!(self.stage, Stage::Finished | Stage::Reconnecting { .. }) {
             return;
         }
+        if !self.has_unconfirmed_terminal_events() {
+            self.no_progress_reconnects = 0;
+        }
         if self.no_progress_reconnects >= MAX_NO_PROGRESS_RECONNECTS {
             sharer_warn!(
                 self,
@@ -1587,7 +1590,8 @@ impl Network {
                     return;
                 }
                 let confirmed_event_no = last_received_event_no.max(additional_confirmed_event_no);
-                if self.record_confirmed_event_progress(confirmed_event_no) {
+                let made_progress = self.record_confirmed_event_progress(confirmed_event_no);
+                if made_progress || !self.has_unconfirmed_terminal_events() {
                     self.no_progress_reconnects = 0;
                 } else {
                     self.no_progress_reconnects += 1;
@@ -1771,6 +1775,10 @@ impl Network {
             }
             DownstreamMessage::Pong { .. } => {}
         }
+    }
+
+    fn has_unconfirmed_terminal_events(&self) -> bool {
+        self.last_confirmed_event_no < usize::from(self.event_no).checked_sub(1)
     }
 
     fn record_confirmed_event_progress(&mut self, event_no: Option<usize>) -> bool {
