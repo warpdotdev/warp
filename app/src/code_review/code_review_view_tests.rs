@@ -3,12 +3,24 @@ use std::sync::Arc;
 
 use ai::agent::action::InsertReviewComment;
 use chrono::Local;
+#[cfg(all(unix, feature = "local_fs"))]
+use futures::channel::oneshot;
 use lsp::LspManagerModel;
+#[cfg(all(unix, feature = "local_fs"))]
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
+#[cfg(all(unix, feature = "local_fs"))]
+use repo_metadata::watcher::DirectoryWatcher;
+#[cfg(all(unix, feature = "local_fs"))]
+use string_offset::CharOffset;
+#[cfg(all(unix, feature = "local_fs"))]
+use vec1::vec1;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::LineCount;
+#[cfg(all(unix, feature = "local_fs"))]
+use warp_files::FileModel;
 use warpui::elements::{Empty, MouseStateHandle};
 use warpui::platform::WindowStyle;
 use warpui::{App, ViewHandle};
@@ -20,6 +32,8 @@ use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
+#[cfg(all(unix, feature = "local_fs"))]
+use crate::code::editor::model::CodeEditorModelEvent;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::GlobalCodeReviewModel;
@@ -29,6 +43,8 @@ use crate::code_review::comments::{
     PendingImportedReviewCommentTarget, attach_pending_imported_comments,
 };
 use crate::code_review::diff_size_limits::DiffSize;
+#[cfg(unix)]
+use crate::code_review::diff_state::LocalDiffStateModel;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::git_repo_model::GitRepoModels;
@@ -140,6 +156,7 @@ fn create_editor_with_diff(
                 CodeEditorRenderOptions::new(VerticalExpansionBehavior::GrowToMaxHeight),
                 ctx,
             )
+            .with_revert_diff_hunk_button()
         });
 
         code_editor_view.update(ctx, |editor, ctx| {
@@ -399,6 +416,418 @@ fn test_relocate_comments_empty_input() {
                 "Empty input should return empty output"
             );
             assert_eq!(fallbacks, 0, "Empty input should have no fallbacks");
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_editor_displays_file_target_without_a_backing_file() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        let referent_content = "code\n".repeat(3000);
+        std::fs::write(dir.path().join("target"), &referent_content).unwrap();
+        std::os::unix::fs::symlink("target", dir.path().join("link")).unwrap();
+
+        let editor = update_review_file(&test, "target", &mut app);
+
+        assert_unbacked_review_content(&editor, "target\n", &app);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("target")).unwrap(),
+            referent_content
+        );
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_editor_displays_directory_target_without_a_backing_file() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        std::fs::create_dir(dir.path().join("directory")).unwrap();
+        std::os::unix::fs::symlink("directory", dir.path().join("link")).unwrap();
+
+        let editor = update_review_file(&test, "directory", &mut app);
+
+        assert_unbacked_review_content(&editor, "directory\n", &app);
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_editor_displays_missing_target_without_a_backing_file() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
+
+        let editor = update_review_file(&test, "missing", &mut app);
+
+        assert_unbacked_review_content(&editor, "missing\n", &app);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn tracked_file_replaced_by_symlink_displays_link_target() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "link", "ordinary\n");
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.active_repo.as_mut().unwrap().repo_path =
+                LocalOrRemotePath::Local(dir.path().to_path_buf());
+            let mut file_diff = test.state.file_states["link"].file_diff.clone();
+            file_diff.hunks = Arc::new(
+                LocalDiffStateModel::parse_diff_hunks(
+                    "@@ -1 +0,0 @@\n-ordinary\ndiff --git a/link b/link\n@@ -0,0 +1 @@\n+missing\n",
+                )
+                .unwrap(),
+            );
+            let file = FileDiffAndContent {
+                file_diff,
+                content_at_head: Some("ordinary\n".to_string()),
+            };
+            let editor = view
+                .create_code_review_model_with_global_buffer(&file, ctx)
+                .unwrap();
+            let local_editor = editor.editor().as_ref(ctx);
+            assert!(local_editor.file_id().is_none());
+            assert!(!local_editor.has_unsaved_changes(ctx));
+            assert_eq!(
+                local_editor.editor().as_ref(ctx).text(ctx).as_str(),
+                "missing\n"
+            );
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn symlink_review_test_context(app: &mut App, repo_path: PathBuf) -> TestContext {
+    let test = TestContext::new(app, "link", "");
+    app.add_singleton_model(DirectoryWatcher::new);
+    app.add_singleton_model(RepoMetadataModel::new);
+    app.add_singleton_model(FileModel::new);
+    app.add_singleton_model(GlobalBufferModel::new);
+    app.add_singleton_model(|_| crate::workspace::ToastStack);
+    test.code_review_view.update(app, |view, _| {
+        let repo = view.active_repo.as_mut().unwrap();
+        repo.repo_path = LocalOrRemotePath::Local(repo_path);
+        repo.state = CodeReviewViewState::Loaded(LoadedState {
+            file_states: IndexMap::new(),
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 0,
+        });
+    });
+    test
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn added_review_file(test: &TestContext, content: &str) -> Arc<FileDiffAndContent> {
+    let mut file_diff = test.state.file_states["link"].file_diff.clone();
+    file_diff.status = GitFileStatus::Untracked;
+    file_diff.hunks = Arc::new(
+        LocalDiffStateModel::parse_diff_hunks(&format!("@@ -0,0 +1 @@\n+{content}\n")).unwrap(),
+    );
+    Arc::new(FileDiffAndContent {
+        file_diff,
+        content_at_head: Some(String::new()),
+    })
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_retarget_updates_existing_review_editor() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        let link = dir.path().join("link");
+        let referent_content = "code\n".repeat(3000);
+        std::fs::write(dir.path().join("first"), &referent_content).unwrap();
+        std::fs::create_dir(dir.path().join("second")).unwrap();
+        std::os::unix::fs::symlink("first", &link).unwrap();
+
+        let first_editor = update_review_file(&test, "first", &mut app);
+        assert_unbacked_review_content(&first_editor, "first\n", &app);
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("second", &link).unwrap();
+        let directory_editor = update_review_file(&test, "second", &mut app);
+
+        assert_eq!(directory_editor.id(), first_editor.id());
+        assert_unbacked_review_content(&directory_editor, "second\n", &app);
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+        let dangling_editor = update_review_file(&test, "missing", &mut app);
+
+        assert_eq!(dangling_editor.id(), first_editor.id());
+        assert_unbacked_review_content(&dangling_editor, "missing\n", &app);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("first")).unwrap(),
+            referent_content
+        );
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_and_regular_file_transitions_rebuild_review_editor() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+
+        let first_editor = update_review_file(&test, "missing", &mut app);
+        assert_unbacked_review_content(&first_editor, "missing\n", &app);
+
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, "ordinary\n").unwrap();
+        let regular_editor = update_review_file(&test, "ordinary", &mut app);
+
+        assert_ne!(regular_editor.id(), first_editor.id());
+        regular_editor.read(&app, |editor, _| assert!(editor.file_id().is_some()));
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+        let symlink_editor = update_review_file(&test, "missing", &mut app);
+
+        assert_ne!(symlink_editor.id(), regular_editor.id());
+        assert_unbacked_review_content(&symlink_editor, "missing\n", &app);
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_review_comment_is_saved_with_repository_path() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
+        let editor = update_review_file(&test, "missing", &mut app);
+        let location = LocalOrRemotePath::Local(dir.path().join("link"));
+        let comment = create_line_comment(dir.path().join("link"), 0, "missing", "Keep this link");
+        let comment_id = comment.id;
+        let event = LocalCodeEditorEvent::CommentSaved {
+            comment: EditorReviewComment::try_from(comment).unwrap(),
+        };
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.handle_local_code_editor_events(editor, &event, &location, ctx);
+
+            let saved = view
+                .get_comment_by_id(comment_id, ctx)
+                .expect("comment should be saved");
+            assert_eq!(saved.content, "Keep this link");
+            assert_eq!(saved.target.absolute_file_path(), Some(&location));
+            assert_eq!(saved.target.line_number(), Some(LineCount::from(0)));
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_review_editor_ignores_hunk_revert() {
+    type EditorAction = <CodeEditorView as TypedActionView>::Action;
+
+    App::test((), |mut app| async move {
+        let _revert = FeatureFlag::RevertDiffHunk.override_enabled(true);
+        let _save = FeatureFlag::CodeReviewSaveChanges.override_enabled(true);
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+        let editor = update_review_file(&test, "missing", &mut app);
+        let code_editor = editor.read(&app, |editor, _| editor.editor().clone());
+        compute_review_diff(&code_editor, &mut app).await;
+
+        code_editor.update(&mut app, |editor, ctx| {
+            assert_eq!(
+                editor
+                    .model
+                    .as_ref(ctx)
+                    .diff()
+                    .as_ref(ctx)
+                    .diff_hunk_count(),
+                1
+            );
+            editor.handle_action(
+                &EditorAction::RevertDiffHunk {
+                    line_range: LineCount::from(0)..LineCount::from(1),
+                },
+                ctx,
+            );
+        });
+
+        assert_unbacked_review_content(&editor, "missing\n", &app);
+        assert_eq!(std::fs::read_link(&link).unwrap(), PathBuf::from("missing"));
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("retargeted", &link).unwrap();
+        let refreshed_editor = update_review_file(&test, "retargeted", &mut app);
+
+        assert_eq!(refreshed_editor.id(), editor.id());
+        assert_unbacked_review_content(&refreshed_editor, "retargeted\n", &app);
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn review_editor_with_revert_control_can_revert_hunk() {
+    type EditorAction = <CodeEditorView as TypedActionView>::Action;
+
+    App::test((), |mut app| async move {
+        let _revert = FeatureFlag::RevertDiffHunk.override_enabled(true);
+        initialize_test_app(&mut app);
+        let editor = create_editor_with_diff(&mut app, "", "ordinary\n");
+        let code_editor = editor.read(&app, |editor, _| editor.editor().clone());
+        compute_review_diff(&code_editor, &mut app).await;
+
+        code_editor.update(&mut app, |editor, ctx| {
+            assert_eq!(
+                editor
+                    .model
+                    .as_ref(ctx)
+                    .diff()
+                    .as_ref(ctx)
+                    .diff_hunk_count(),
+                1
+            );
+            editor.handle_action(
+                &EditorAction::RevertDiffHunk {
+                    line_range: LineCount::from(0)..LineCount::from(1),
+                },
+                ctx,
+            );
+        });
+
+        code_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.text(ctx).as_str(), "");
+        });
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+async fn compute_review_diff(editor: &ViewHandle<CodeEditorView>, app: &mut App) {
+    let model = editor.read(app, |editor, _| editor.model.clone());
+    let (diff_tx, diff_rx) = oneshot::channel();
+    app.update(|ctx| {
+        let mut diff_tx = Some(diff_tx);
+        ctx.subscribe_to_model(&model, move |model, event, ctx| {
+            if let CodeEditorModelEvent::DiffUpdated = event
+                && model.as_ref(ctx).diff().as_ref(ctx).diff_hunk_count() > 0
+                && let Some(tx) = diff_tx.take()
+            {
+                let _ = tx.send(());
+            }
+        });
+        model.update(ctx, |model, ctx| model.set_base("", true, ctx));
+    });
+    diff_rx.await.expect("diff should be computed");
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn update_review_file(
+    test: &TestContext,
+    content: &str,
+    app: &mut App,
+) -> ViewHandle<LocalCodeEditorView> {
+    let file = added_review_file(test, content);
+    test.code_review_view.update(app, |view, ctx| {
+        view.update_from_single_file_diff_result("link".to_string(), Some(file), ctx);
+        let CodeReviewViewState::Loaded(state) = view.state() else {
+            panic!("expected loaded review state");
+        };
+        state.file_states["link"]
+            .editor_state
+            .as_ref()
+            .unwrap()
+            .editor()
+            .clone()
+    })
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn assert_unbacked_review_content(
+    editor: &ViewHandle<LocalCodeEditorView>,
+    expected: &str,
+    app: &App,
+) {
+    editor.read(app, |editor, ctx| {
+        assert!(editor.file_id().is_none());
+        assert_eq!(
+            editor.editor().as_ref(ctx).interaction_state(ctx),
+            InteractionState::Selectable
+        );
+        assert!(!editor.has_unsaved_changes(ctx));
+        assert_eq!(editor.editor().as_ref(ctx).text(ctx).as_str(), expected);
+    });
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_transition_preserves_unsaved_regular_file_edits() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let test = symlink_review_test_context(&mut app, dir.path().to_path_buf());
+        let link = dir.path().join("link");
+        std::fs::write(&link, "ordinary\n").unwrap();
+        let file = added_review_file(&test, "ordinary");
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.update_from_single_file_diff_result("link".to_string(), Some(file), ctx);
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded review state");
+            };
+            let editor = state.file_states["link"]
+                .editor_state
+                .as_ref()
+                .unwrap()
+                .editor()
+                .clone();
+            editor.update(ctx, |local_editor, ctx| {
+                local_editor.reset_with_state(InitialBufferState::plain_text("ordinary\n"), ctx);
+                local_editor.editor().update(ctx, |editor, ctx| {
+                    editor.apply_edits(
+                        vec1![(
+                            "unsaved edit\n".to_string(),
+                            CharOffset::from(1)..CharOffset::from(10)
+                        )],
+                        ctx,
+                    );
+                });
+                assert!(local_editor.has_unsaved_changes(ctx));
+            });
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink("missing", &link).unwrap();
+            view.update_from_single_file_diff_result(
+                "link".to_string(),
+                Some(added_review_file(&test, "missing")),
+                ctx,
+            );
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded review state");
+            };
+            let retained_editor = state.file_states["link"]
+                .editor_state
+                .as_ref()
+                .unwrap()
+                .editor();
+            assert_eq!(retained_editor.id(), editor.id());
+            assert_eq!(
+                retained_editor
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .text(ctx)
+                    .as_str(),
+                "unsaved edit\n"
+            );
+            assert!(retained_editor.as_ref(ctx).has_unsaved_changes(ctx));
         });
     });
 }

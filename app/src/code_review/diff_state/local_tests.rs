@@ -456,3 +456,212 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_to_text_counts_target_path_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("text.txt");
+    std::fs::write(&target, "code\n".repeat(3000)).unwrap();
+
+    let count = count_symlink_target_lines(&target).await;
+
+    assert_eq!(count, Some(1));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_to_binary_counts_target_path_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("binary.bin");
+    std::fs::write(&target, [0, 1, 2]).unwrap();
+
+    let count = count_symlink_target_lines(&target).await;
+
+    assert_eq!(count, Some(1));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_to_directory_counts_target_path_lines() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let count = count_symlink_target_lines(dir.path()).await;
+
+    assert_eq!(count, Some(1));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dangling_symlink_counts_target_path_lines() {
+    let count = count_symlink_target_lines(Path::new("missing")).await;
+
+    assert_eq!(count, Some(1));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_target_with_embedded_newline_counts_both_lines() {
+    let count = count_symlink_target_lines(Path::new("missing\nwith newline")).await;
+
+    assert_eq!(count, Some(2));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_target_with_trailing_newline_counts_one_line() {
+    let count = count_symlink_target_lines(Path::new("missing\n")).await;
+
+    assert_eq!(count, Some(1));
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[tokio::test]
+async fn untracked_symlink_metadata_counts_link_targets() {
+    let root = symlink_diff_test_repository().await;
+    let repo = root.path().join("repo");
+
+    assert_symlink_metadata(&repo).await;
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[tokio::test]
+async fn staged_symlink_metadata_counts_link_targets() {
+    let root = symlink_diff_test_repository().await;
+    let repo = root.path().join("repo");
+    run_git_command(&repo, &["add", "."]).await.unwrap();
+
+    assert_symlink_metadata(&repo).await;
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[tokio::test]
+async fn untracked_symlink_diff_snapshots_show_link_targets() {
+    let root = symlink_diff_test_repository().await;
+    let repo = root.path().join("repo");
+
+    let head = LocalDiffStateModel::diff_state_against_head(&repo)
+        .await
+        .unwrap();
+    let branch =
+        LocalDiffStateModel::diff_state_against_specific_branch(&repo, "main".to_string(), false)
+            .await
+            .unwrap();
+
+    assert_symlink_diff_snapshot(&head, &GitFileStatus::Untracked);
+    assert_symlink_diff_snapshot(&branch, &GitFileStatus::Untracked);
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[tokio::test]
+async fn staged_symlink_diff_snapshots_show_link_targets() {
+    let root = symlink_diff_test_repository().await;
+    let repo = root.path().join("repo");
+    run_git_command(&repo, &["add", "."]).await.unwrap();
+
+    let head = LocalDiffStateModel::diff_state_against_head(&repo)
+        .await
+        .unwrap();
+    let branch =
+        LocalDiffStateModel::diff_state_against_specific_branch(&repo, "main".to_string(), false)
+            .await
+            .unwrap();
+
+    assert_symlink_diff_snapshot(&head, &GitFileStatus::New);
+    assert_symlink_diff_snapshot(&branch, &GitFileStatus::New);
+}
+
+#[cfg(unix)]
+async fn count_symlink_target_lines(target: &Path) -> Option<usize> {
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(target, &link).unwrap();
+    LocalDiffStateModel::num_lines_in_file_if_non_binary(&link)
+        .await
+        .unwrap()
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+async fn symlink_diff_test_repository() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::create_dir_all(root.path().join("targets/directory")).unwrap();
+    std::fs::write(root.path().join("targets/file"), "code\n".repeat(3000)).unwrap();
+    run_git_command(&repo, &["init", "-b", "main"])
+        .await
+        .unwrap();
+    run_git_command(
+        &repo,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+        ],
+    )
+    .await
+    .unwrap();
+    std::os::unix::fs::symlink("../targets/file", repo.join("file")).unwrap();
+    std::os::unix::fs::symlink("../targets/directory", repo.join("directory")).unwrap();
+    std::os::unix::fs::symlink("../targets/missing", repo.join("missing")).unwrap();
+    root
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+async fn assert_symlink_metadata(repo: &Path) {
+    let head = diff_metadata_against_head(repo).await.unwrap();
+    let branch = LocalDiffStateModel::diff_metadata_against_specific_branch(repo, "main")
+        .await
+        .unwrap();
+
+    assert_eq!(head.aggregate_stats.files_changed, 3);
+    assert_eq!(head.aggregate_stats.total_additions, 3);
+    assert_eq!(head.aggregate_stats.total_deletions, 0);
+    assert_eq!(branch.aggregate_stats.files_changed, 3);
+    assert_eq!(branch.aggregate_stats.total_additions, 3);
+    assert_eq!(branch.aggregate_stats.total_deletions, 0);
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn assert_symlink_diff_snapshot(snapshot: &GitDiffWithBaseContent, status: &GitFileStatus) {
+    assert_eq!(snapshot.files_changed, 3);
+    assert_eq!(snapshot.total_additions, 3);
+    assert_eq!(snapshot.total_deletions, 0);
+    let file = snapshot
+        .files
+        .iter()
+        .find(|file| file.file_diff.file_path == "file")
+        .unwrap();
+    assert_symlink_addition(file, "../targets/file", status);
+    let directory = snapshot
+        .files
+        .iter()
+        .find(|file| file.file_diff.file_path == "directory")
+        .unwrap();
+    assert_symlink_addition(directory, "../targets/directory", status);
+    let missing = snapshot
+        .files
+        .iter()
+        .find(|file| file.file_diff.file_path == "missing")
+        .unwrap();
+    assert_symlink_addition(missing, "../targets/missing", status);
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+fn assert_symlink_addition(file: &FileDiffAndContent, target: &str, status: &GitFileStatus) {
+    assert_eq!(&file.file_diff.status, status);
+    assert_eq!(file.content_at_head.as_deref(), Some(""));
+    assert!(!file.file_diff.is_binary);
+    assert_eq!(file.file_diff.hunks.len(), 1);
+    let lines = &file.file_diff.hunks[0].lines;
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].line_type, DiffLineType::Add);
+    assert_eq!(lines[0].text, target);
+}
