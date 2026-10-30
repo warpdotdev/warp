@@ -276,6 +276,12 @@ pub struct FileTreeView {
     ///
     /// The root header collapse is represented by including the root path itself in the set.
     explicitly_collapsed: HashMap<StandardizedPath, HashSet<StandardizedPath>>,
+    /// Folders (per root) whose subdirectories still need to be expanded.
+    ///
+    /// Set when a folder is expanded from the context menu before its
+    /// contents finished loading. The subdirectories only become known once
+    /// the load completes, so the expansion is resumed at that point.
+    pending_child_expansions: HashMap<StandardizedPath, HashSet<StandardizedPath>>,
     /// Lazy-loaded paths that this view has registered with the
     /// [`LocalRepoMetadataModel`] for file watching.
     #[cfg(feature = "local_fs")]
@@ -555,6 +561,7 @@ impl FileTreeView {
                         }
 
                         for root_path in &root_paths {
+                            self.expand_pending_children(root_path, ctx);
                             self.rebuild_flattened_items_for_root(root_path);
                         }
                         self.apply_pending_focus_target();
@@ -602,6 +609,7 @@ impl FileTreeView {
                     if let Some(root_dir) = self.root_directories.get_mut(&repo_path) {
                         root_dir.entry = state.entry.clone();
                     }
+                    self.expand_pending_children(&repo_path, ctx);
                     // Only rebuild the affected remote root instead of all roots.
                     // Remote servers stream frequent incremental updates; a full
                     // rebuild would cause unrelated local roots to re-render on
@@ -722,6 +730,7 @@ impl FileTreeView {
             active_file_model: None,
             has_terminal_session: false,
             explicitly_collapsed: HashMap::new(),
+            pending_child_expansions: HashMap::new(),
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
@@ -1514,20 +1523,131 @@ impl FileTreeView {
                     .or_default()
                     .insert(folder_path.clone());
             } else {
-                root_dir.expanded_folders.insert(folder_path.clone());
-                self.ensure_loaded_path(root_path, folder_path, ctx);
-
-                if let Some(collapsed) = self.explicitly_collapsed.get_mut(root_path) {
-                    collapsed.remove(folder_path);
-                    if collapsed.is_empty() {
-                        self.explicitly_collapsed.remove(root_path);
-                    }
-                }
+                self.expand_folder(root_path, folder_path, ctx);
             }
         }
 
         self.rebuild_flattened_items();
         ctx.notify();
+    }
+
+    /// Expands a single folder and loads its contents.
+    fn expand_folder(
+        &mut self,
+        root_path: &StandardizedPath,
+        folder_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(root_dir) = self.root_directories.get_mut(root_path) {
+            root_dir.expanded_folders.insert(folder_path.clone());
+        }
+        self.ensure_loaded_path(root_path, folder_path, ctx);
+
+        if let Some(collapsed) = self.explicitly_collapsed.get_mut(root_path) {
+            collapsed.remove(folder_path);
+            if collapsed.is_empty() {
+                self.explicitly_collapsed.remove(root_path);
+            }
+        }
+    }
+
+    /// Expands a folder along with its immediate subdirectories.
+    ///
+    /// Expanding from the context menu reveals one level of subfolders so the
+    /// shape of the tree is visible without opening each level by hand.
+    fn expand_folder_with_children(
+        &mut self,
+        root_path: &StandardizedPath,
+        folder_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.expand_folder(root_path, folder_path, ctx);
+
+        // A folder that has not finished loading does not know its
+        // subdirectories yet, so the expansion is resumed once it loads.
+        let loaded = self
+            .root_directories
+            .get(root_path)
+            .and_then(|root_dir| root_dir.entry.get(folder_path))
+            .is_some_and(|entry| entry.loaded());
+        if loaded {
+            self.expand_subdirectories(root_path, folder_path, ctx);
+        } else {
+            self.pending_child_expansions
+                .entry(root_path.clone())
+                .or_default()
+                .insert(folder_path.clone());
+        }
+
+        self.rebuild_flattened_items();
+        ctx.notify();
+    }
+
+    /// Expands the immediate subdirectories of an already-loaded folder.
+    fn expand_subdirectories(
+        &mut self,
+        root_path: &StandardizedPath,
+        folder_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let subdirectories: Vec<StandardizedPath> = self
+            .root_directories
+            .get(root_path)
+            .map(|root_dir| {
+                root_dir
+                    .entry
+                    .child_paths(folder_path)
+                    .filter(|child| {
+                        matches!(
+                            root_dir.entry.get(child),
+                            Some(FileTreeEntryState::Directory(_))
+                        )
+                    })
+                    .map(|child| (**child).clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for subdirectory in subdirectories {
+            // An earlier manual collapse of the subfolder wins.
+            if self.is_explicitly_collapsed(root_path, &subdirectory) {
+                continue;
+            }
+            self.expand_folder(root_path, &subdirectory, ctx);
+        }
+    }
+
+    /// Expands the subdirectories of folders whose contents just finished
+    /// loading.
+    fn expand_pending_children(
+        &mut self,
+        root_path: &StandardizedPath,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pending) = self.pending_child_expansions.get(root_path).cloned() else {
+            return;
+        };
+
+        let mut still_pending = HashSet::new();
+        for folder_path in pending {
+            let loaded = self
+                .root_directories
+                .get(root_path)
+                .and_then(|root_dir| root_dir.entry.get(&folder_path))
+                .is_some_and(|entry| entry.loaded());
+            if loaded {
+                self.expand_subdirectories(root_path, &folder_path, ctx);
+            } else {
+                still_pending.insert(folder_path);
+            }
+        }
+
+        if still_pending.is_empty() {
+            self.pending_child_expansions.remove(root_path);
+        } else {
+            self.pending_child_expansions
+                .insert(root_path.clone(), still_pending);
+        }
     }
 
     fn is_folder_expanded(&self, root_path: &StandardizedPath, path: &StandardizedPath) -> bool {
@@ -2388,6 +2508,19 @@ impl FileTreeView {
                             .with_on_select_action(FileTreeAction::OpenInNewTab { id: id.clone() })
                             .into_item(),
                     );
+                    if self.is_folder_expanded(&id.root, item.path()) {
+                        items.push(
+                            MenuItemFields::new("Collapse")
+                                .with_on_select_action(FileTreeAction::Collapse)
+                                .into_item(),
+                        );
+                    } else {
+                        items.push(
+                            MenuItemFields::new("Expand")
+                                .with_on_select_action(FileTreeAction::Expand)
+                                .into_item(),
+                        );
+                    }
                 }
             };
 
@@ -3049,9 +3182,10 @@ impl TypedActionView for FileTreeView {
                     && let Some(sp) = self.selected_item_std_path()
                     && !self.is_folder_expanded(&selected_item.root, &sp)
                 {
-                    self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
+                    self.expand_folder_with_children(&selected_item.root, &sp, ctx);
                     ctx.notify();
                 }
+                self.context_menu_state.take();
             }
             FileTreeAction::Collapse => {
                 if let Some(selected_item) = self.selected_item.clone()
@@ -3061,6 +3195,7 @@ impl TypedActionView for FileTreeView {
                     self.toggle_folder_expansion(&selected_item.root, &sp, ctx);
                     ctx.notify();
                 }
+                self.context_menu_state.take();
             }
             FileTreeAction::ExecuteSelectedItem => {
                 if let Some(id) = self.selected_item.clone() {

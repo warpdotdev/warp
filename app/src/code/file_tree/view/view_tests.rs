@@ -1219,3 +1219,156 @@ fn absorbed_descendant_is_unregistered_from_lazy_loaded_paths() {
         });
     });
 }
+
+#[test]
+fn context_menu_offers_expand_or_collapse_for_directory_header() {
+    VirtualFS::test("file_tree_context_menu_expand_collapse", |dirs, mut vfs| {
+        vfs.mkdir("tree/sub")
+            .with_files(vec![Stub::FileWithContent("tree/sub/file.txt", "f")]);
+        let tree = dirs.tests().join("tree");
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![tree.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let item = view
+                    .root_directories
+                    .get(&std_path(&tree))
+                    .unwrap()
+                    .items
+                    .first()
+                    .cloned()
+                    .expect("root header item");
+                let id = super::FileTreeIdentifier {
+                    root: std_path(&tree),
+                    index: 0,
+                };
+                let menu_items = view.context_menu_items(&item, &id);
+
+                let mut found = 0;
+                for m in &menu_items {
+                    if let super::MenuItem::Item(f) = m {
+                        let label = f.label();
+                        if label == "Expand" {
+                            found += 1;
+                            assert!(matches!(
+                                f.on_select_action(),
+                                Some(super::FileTreeAction::Expand)
+                            ));
+                            assert!(!view.is_folder_expanded(&id.root, item.path()));
+                        } else if label == "Collapse" {
+                            found += 1;
+                            assert!(matches!(
+                                f.on_select_action(),
+                                Some(super::FileTreeAction::Collapse)
+                            ));
+                            assert!(view.is_folder_expanded(&id.root, item.path()));
+                        }
+                    }
+                }
+                assert_eq!(found, 1, "expected exactly one Expand/Collapse menu item");
+            });
+
+            // Toggle the root's expansion and verify the offered action flips.
+            file_tree_view.update(&mut app, |view, ctx| {
+                let sp = std_path(&tree);
+                view.toggle_folder_expansion(&sp, &sp, ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let item = view
+                    .root_directories
+                    .get(&std_path(&tree))
+                    .unwrap()
+                    .items
+                    .first()
+                    .cloned()
+                    .expect("root header item");
+                let id = super::FileTreeIdentifier {
+                    root: std_path(&tree),
+                    index: 0,
+                };
+                let menu_items = view.context_menu_items(&item, &id);
+
+                let mut found = 0;
+                for m in &menu_items {
+                    if let super::MenuItem::Item(f) = m {
+                        let label = f.label();
+                        if label == "Expand" {
+                            found += 1;
+                            assert!(matches!(
+                                f.on_select_action(),
+                                Some(super::FileTreeAction::Expand)
+                            ));
+                            assert!(!view.is_folder_expanded(&id.root, item.path()));
+                        } else if label == "Collapse" {
+                            found += 1;
+                            assert!(matches!(
+                                f.on_select_action(),
+                                Some(super::FileTreeAction::Collapse)
+                            ));
+                            assert!(view.is_folder_expanded(&id.root, item.path()));
+                        }
+                    }
+                }
+                assert_eq!(
+                    found, 1,
+                    "expected exactly one Expand/Collapse menu item after toggle"
+                );
+            });
+        });
+    });
+}
+
+#[test]
+fn expanding_a_folder_also_expands_its_subdirectories() {
+    VirtualFS::test("file_tree_expand_with_children", |dirs, mut vfs| {
+        vfs.mkdir("tree/main/sub/deep").with_files(vec![
+            Stub::FileWithContent("tree/main/other.txt", "o"),
+            Stub::FileWithContent("tree/main/sub/file.txt", "f"),
+            Stub::FileWithContent("tree/main/sub/deep/deeper.txt", "d"),
+        ]);
+        let tree = dirs.tests().join("tree");
+        let main = tree.join("main");
+        let sub = main.join("sub");
+        let deep = sub.join("deep");
+
+        App::test((), |mut app| async move {
+            let (_, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![tree.clone()], ctx);
+            });
+            await_repository_indexed(&mut app, &repository_metadata_model, &tree).await;
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.expand_folder_with_children(&std_path(&tree), &std_path(&main), ctx);
+            });
+            await_directory_loaded(&mut app, &repository_metadata_model, &tree, &main).await;
+            await_directory_loaded(&mut app, &repository_metadata_model, &tree, &sub).await;
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
+                assert!(root_dir.expanded_folders.contains(&std_path(&main)));
+                assert!(root_dir.expanded_folders.contains(&std_path(&sub)));
+                // Only one level of subfolders is expanded.
+                assert!(!root_dir.expanded_folders.contains(&std_path(&deep)));
+
+                let paths = flattened_paths(view, &tree);
+                assert!(paths.contains(&std_path(&sub)));
+                assert!(paths.contains(&std_path(&sub.join("file.txt"))));
+                assert!(paths.contains(&std_path(&deep)));
+                // `deep` is visible but collapsed, so its contents are not.
+                assert!(!paths.contains(&std_path(&deep.join("deeper.txt"))));
+            });
+        });
+    });
+}
