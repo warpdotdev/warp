@@ -20,6 +20,7 @@ fn response(preview_count: usize) -> ListRunPreviewsResponse {
 
 #[test]
 fn preview_retention_rejects_malformed_launch_execution_id() {
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
     let task_id = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     for raw in ["", "not-an-id", "0", "-1", "9223372036854775808"] {
         assert!(
@@ -33,6 +34,38 @@ fn preview_retention_rejects_malformed_launch_execution_id() {
         );
     }
 }
+#[test]
+fn preview_retention_disabled_without_preview_urls_flag() {
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(false);
+    let task_id = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+
+    assert!(
+        PreviewRetention::new(
+            task_id,
+            Some("42"),
+            Arc::new(crate::server::server_api::ai::MockAIClient::new()),
+            Arc::new(Background::new(1, |_| "preview-retention-test".into())),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn preview_retention_enabled_with_preview_urls_flag() {
+    let _flag = FeatureFlag::PreviewUrlsMcp.override_enabled(true);
+    let task_id = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+
+    assert!(
+        PreviewRetention::new(
+            task_id,
+            Some("42"),
+            Arc::new(crate::server::server_api::ai::MockAIClient::new()),
+            Arc::new(Background::new(1, |_| "preview-retention-test".into())),
+        )
+        .is_some()
+    );
+}
+
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn preview_retention_only_applies_to_namespace() {

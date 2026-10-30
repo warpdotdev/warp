@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use warp_core::features::FeatureFlag;
 use warp_isolation_platform::IsolationPlatformType;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{BoxFuture, FutureExt as _, Timer};
@@ -56,6 +57,9 @@ impl PreviewRetention {
         client: Arc<dyn AIClient>,
         background: Arc<Background>,
     ) -> Option<Self> {
+        if !FeatureFlag::PreviewUrlsMcp.is_enabled() {
+            return None;
+        }
         let expected_execution_id = match execution_id {
             Some(raw) => Some(raw.parse::<i64>().ok().filter(|id| *id > 0)?),
             None => None,
