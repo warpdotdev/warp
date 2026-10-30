@@ -205,7 +205,7 @@ jobs:
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
       - name: Archive ${{ matrix.arch }} macOS settings schema
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: settings-schema-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -236,7 +236,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -270,7 +270,7 @@ jobs:
             ${{ steps.bundle_app.outputs.frameworks_dir }}
 
       - name: Archive ${{ matrix.arch }} build artifacts for universal build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -310,7 +310,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download aarch64 build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-aarch64-${{ steps.get-config.outputs.channel }}
 
@@ -319,7 +319,7 @@ jobs:
         shell: bash
 
       - name: Download x86_64 build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-x86_64-${{ steps.get-config.outputs.channel }}
 
@@ -328,13 +328,13 @@ jobs:
         shell: bash
 
       - name: Download canonical aarch64 macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
 
       - name: Download x86_64 macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-macos-x86_64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos-x86_64
@@ -434,7 +434,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -512,7 +512,7 @@ jobs:
         shell: bash
 
       - name: Archive ${{ matrix.arch }} CLI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -553,7 +553,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -562,7 +562,7 @@ jobs:
         shell: bash
 
       - name: Download canonical macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
@@ -612,7 +612,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -706,7 +706,7 @@ jobs:
         shell: bash
 
       - name: Archive ${{ matrix.arch }} TUI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -747,7 +747,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} TUI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -756,7 +756,7 @@ jobs:
         shell: bash
 
       - name: Download canonical macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
@@ -833,7 +833,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -917,7 +917,7 @@ jobs:
           DEBUG_EXECUTABLE_PATH: ${{ steps.build_tui.outputs.debug_executable_path }}
 
       - name: Archive ${{ matrix.arch }} TUI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -968,7 +968,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} TUI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -977,7 +977,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
@@ -1047,7 +1047,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
@@ -1151,7 +1151,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Archive canonical Linux settings schema
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -1215,7 +1215,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1293,7 +1293,7 @@ jobs:
           DEBUG_EXECUTABLE_PATH: ${{ steps.build_cli.outputs.debug_executable_path }}
 
       - name: Archive Linux CLI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -1381,7 +1381,7 @@ jobs:
         shell: bash
 
       - name: Download Linux CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
 
@@ -1390,7 +1390,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
@@ -1487,7 +1487,7 @@ jobs:
 
       - name: Upload CLI packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1585,7 +1585,7 @@ jobs:
           SETTINGS_SCHEMA_PATH: ${{ steps.build_app.outputs.settings_schema_path }}
 
       - name: Archive build files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1666,7 +1666,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_cli.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1694,7 +1694,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
@@ -1774,7 +1774,7 @@ jobs:
         shell: bash
 
       - name: Download app build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
 
@@ -1820,7 +1820,7 @@ jobs:
       # Bundle the CLI packages
 
       - name: Download CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
 
@@ -1937,7 +1937,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-arm64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2056,7 +2056,7 @@ jobs:
 
       - name: Upload web bundle as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -2121,7 +2121,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_tui.outputs.pdb_file_path }}
 
       - name: Archive Windows TUI binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2171,7 +2171,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download Windows TUI binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -2180,7 +2180,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2274,7 +2274,7 @@ jobs:
           RELEASE_ARCH: ${{ matrix.release_arch }}
 
       - name: Upload Windows TUI installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2345,7 +2345,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_cli.outputs.pdb_file_path }}
 
       - name: Archive Windows CLI binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2401,7 +2401,7 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download Windows CLI binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -2410,7 +2410,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2528,7 +2528,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2606,14 +2606,14 @@ jobs:
 
       - name: Archive canonical Windows settings schema
         if: ${{ matrix.arch == 'x64' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           retention-days: 1
           path: ${{ runner.temp }}\settings_schema.json
 
       - name: Archive Windows binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2659,13 +2659,13 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Download Windows binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: .
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2782,7 +2782,7 @@ jobs:
 
       - name: Upload installer as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
@@ -2964,7 +2964,7 @@ jobs:
       - name: Upload raw Markdown changelog artifact (stable only)
         if: inputs.channel == 'stable'
         id: upload_changelog_draft_markdown
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changelog-draft-markdown
           path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
