@@ -32,6 +32,7 @@ pub enum LanguageId {
     JavaScriptReact,
     C,
     Cpp,
+    Dart,
 }
 
 impl LanguageId {
@@ -52,6 +53,7 @@ impl LanguageId {
             // compile_commands.json is present, clangd will use the correct language
             // regardless of the languageId we send.
             "h" | "H" | "hh" | "hpp" | "hxx" => Some(Self::Cpp),
+            "dart" => Some(Self::Dart),
             _ => None,
         }
     }
@@ -69,6 +71,7 @@ impl LanguageId {
             LanguageId::JavaScriptReact => "javascriptreact",
             LanguageId::C => "c",
             LanguageId::Cpp => "cpp",
+            LanguageId::Dart => "dart",
         }
     }
 
@@ -83,6 +86,7 @@ impl LanguageId {
             | LanguageId::JavaScript
             | LanguageId::JavaScriptReact => LSPServerType::TypeScriptLanguageServer,
             LanguageId::C | LanguageId::Cpp => LSPServerType::Clangd,
+            LanguageId::Dart => LSPServerType::DartAnalysisServer,
         }
     }
 }
