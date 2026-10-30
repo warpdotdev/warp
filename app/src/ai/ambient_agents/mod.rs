@@ -3,6 +3,7 @@ use crate::ai::agent::{
     AIAgentOutputStatus, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
 };
 
+pub mod discovery;
 pub mod github_auth_notifier;
 pub mod github_auth_url;
 pub mod scheduled;

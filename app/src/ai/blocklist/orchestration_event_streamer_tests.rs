@@ -52,6 +52,187 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
+fn restored_local_child_observer_seed_generation() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent = make_parent_task_id_for_test(0xe1);
+        let stale = make_parent_task_id_for_test(0xe2);
+        let current = make_parent_task_id_for_test(0xe3);
+        let mut mock = MockAIClient::new();
+        mock.expect_list_agent_runs_page()
+            .returning(|_, _| Err(anyhow!("completion is supplied at the production boundary")));
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(Arc::new(mock), server_api, ctx)
+        });
+        let consumer = warpui::EntityId::new();
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(parent, AIConversationId::new(), consumer, ctx);
+            let old_generation = streamer.viewer_mode_orchestrators[&parent]
+                .seed_generation
+                .unwrap();
+            streamer.unregister_viewer_mode_consumer(parent, consumer);
+            streamer.register_viewer_mode_consumer(
+                parent,
+                AIConversationId::new(),
+                warpui::EntityId::new(),
+                ctx,
+            );
+            let entry = streamer.viewer_mode_orchestrators.get_mut(&parent).unwrap();
+            entry.event_cursor = 37;
+            let generation = entry.seed_generation.unwrap();
+            assert_ne!(generation, old_generation);
+            assert!(!entry.seeded);
+            assert!(entry.sse_connection.is_none());
+
+            streamer.finish_ancestor_seed_fetch(
+                parent,
+                old_generation,
+                Ok(vec![make_ambient_task_with_task_id(stale, Some(999))]),
+                ctx,
+            );
+            let entry = &streamer.viewer_mode_orchestrators[&parent];
+            assert!(!entry.seeded);
+            assert!(entry.seed_fetch_in_flight);
+            assert!(entry.sse_connection.is_none());
+            assert!(entry.known_children.is_empty());
+            assert_eq!(entry.event_cursor, 37);
+            assert_eq!(entry.seed_generation, Some(generation));
+
+            streamer.finish_ancestor_seed_fetch(
+                parent,
+                generation,
+                Ok(vec![make_ambient_task_with_task_id(current, Some(999))]),
+                ctx,
+            );
+            let entry = &streamer.viewer_mode_orchestrators[&parent];
+            assert!(entry.seeded);
+            assert!(!entry.seed_fetch_in_flight);
+            assert_eq!(entry.known_children, HashSet::from([current.to_string()]));
+            assert_eq!(entry.event_cursor, 37);
+            assert!(entry.sse_connection.is_some());
+        });
+    });
+}
+
+#[test]
+fn restored_local_child_transcript_error() {
+    use crate::ai::agent::conversation::LocalChildRestorationStatus;
+    for failure in ["fetch/decode", "token", "harness", "conversion"] {
+        App::test((), |mut app| async move {
+            initialize_settings_for_tests(&mut app);
+            let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+            let mut resources = GlobalResourceHandles::mock(&mut app);
+            resources.model_event_sender = Some(sender);
+            app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+            let history =
+                app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+            let child_id = AIConversationId::new();
+            let task_id = make_parent_task_id_for_test(0xf1);
+            let mut child = AIConversation::new_local_child_for_restoration(child_id);
+            child.set_task_id(task_id);
+            child.set_parent_agent_id(make_parent_task_id_for_test(0xf0).to_string());
+            child.set_parent_conversation_id(AIConversationId::new());
+            child.set_server_conversation_token("server-token".into());
+            child.set_last_event_sequence(13);
+            history.update(&mut app, |history, ctx| {
+                history.restore_conversations(warpui::EntityId::new(), vec![child], ctx);
+            });
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_ai_conversation()
+                .times(1)
+                .returning(move |_| {
+                    if failure == "fetch/decode" {
+                        return Err(anyhow::anyhow!("invalid transcript"));
+                    }
+                    let mut metadata = make_server_metadata_with_harness(AIAgentHarness::Oz);
+                    if failure == "token" {
+                        metadata.server_conversation_token =
+                            crate::ai::agent::api::ServerConversationToken::new(
+                                "wrong-token".into(),
+                            );
+                    }
+                    if failure == "harness" {
+                        metadata.harness = AIAgentHarness::ClaudeCode;
+                    }
+                    Ok((api::ConversationData::default(), metadata))
+                });
+            let reported_error = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            client
+                .expect_update_agent_task()
+                .times(1)
+                .withf(move |id, state, _, _, status, _, _| {
+                    *id == task_id
+                        && *state == Some(warp_graphql::ai::AgentTaskState::Error)
+                        && status.is_some()
+                })
+                .returning({
+                    let reported_error = reported_error.clone();
+                    move |_, _, _, _, _, _, _| {
+                        reported_error.store(true, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    }
+                });
+            let server_api = ServerApiProvider::new_for_test().get();
+            let streamer = app.add_singleton_model(|ctx| {
+                OrchestrationEventStreamer::new_with_clients_for_test(
+                    Arc::new(client),
+                    server_api,
+                    ctx,
+                )
+            });
+            streamer.update(&mut app, |streamer, ctx| {
+                assert!(!streamer.is_eligible(child_id, ctx));
+                assert!(streamer.restore_local_child(child_id, ctx));
+                assert!(streamer.restore_local_child(child_id, ctx));
+                assert!(streamer.restore_local_child(child_id, ctx));
+                assert_eq!(
+                    streamer.local_child_restoration_status(child_id, ctx),
+                    Some(LocalChildRestorationStatus::Restoring)
+                );
+                assert!(!streamer.is_eligible(child_id, ctx));
+            });
+            crate::test_util::assert_eventually!(
+                history.read(&app, |history, _| history
+                    .conversation(&child_id)
+                    .unwrap()
+                    .status()
+                    == &ConversationStatus::Error)
+                    && reported_error.load(std::sync::atomic::Ordering::SeqCst),
+                "hydration failure {failure} did not become Error"
+            );
+            streamer.update(&mut app, |streamer, ctx| {
+                assert!(streamer.restore_local_child(child_id, ctx));
+                assert!(!streamer.is_eligible(child_id, ctx));
+                assert!(
+                    streamer
+                        .streams
+                        .get(&child_id)
+                        .unwrap()
+                        .sse_connection
+                        .is_none()
+                );
+                let child = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_id)
+                    .unwrap();
+                assert_eq!(
+                    child.local_child_restoration_status(),
+                    Some(LocalChildRestorationStatus::Error)
+                );
+                assert_eq!(child.last_event_sequence(), Some(13));
+                assert!(
+                    child
+                        .status_error_message()
+                        .unwrap()
+                        .contains(&task_id.to_string())
+                );
+            });
+        });
+    }
+}
+
+#[test]
 fn restored_observer_registration_hydrates_local_cursor() {
     App::test((), |mut app| async move {
         let history_model =
@@ -1744,9 +1925,9 @@ fn repeated_viewer_registration_starts_one_ancestor_seed_fetch() {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut mock = MockAIClient::new();
-        mock.expect_list_ambient_agent_tasks()
+        mock.expect_list_agent_runs_page()
             .times(1)
-            .returning(|_, _, _| Err(anyhow::anyhow!("fetch observed")));
+            .returning(|_, _| Err(anyhow::anyhow!("fetch observed")));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let server_api = ServerApiProvider::new_for_test().get();
         let streamer = app.add_singleton_model(|ctx| {
@@ -2276,6 +2457,9 @@ fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
         streamer.update(&mut app, |me, ctx| {
             me.finish_ancestor_seed_fetch(
                 parent_task_id,
+                me.viewer_mode_orchestrators[&parent_task_id]
+                    .seed_generation
+                    .unwrap(),
                 Ok(vec![
                     make_ambient_task_with_task_id(parent_task_id, Some(5)),
                     make_ambient_task_with_task_id(child_a, Some(11)),
@@ -2319,8 +2503,8 @@ fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
                 .expect("viewer-mode entry exists after seed");
             assert!(entry.seeded, "seeded flag must flip after seed apply");
             assert_eq!(
-                entry.event_cursor, 11,
-                "event_cursor must advance to max(child.last_event_sequence)"
+                entry.event_cursor, 0,
+                "listing must not advance the locally processed Observer cursor"
             );
         });
     });
@@ -2338,22 +2522,26 @@ fn repeated_ancestor_seed_results_do_not_rebroadcast_known_children() {
         });
         let parent_task_id = make_parent_task_id_for_test(0xd4);
         let child_task_id = make_parent_task_id_for_test(0xd5);
+        let generation = Uuid::new_v4();
         streamer.update(&mut app, |streamer, _| {
             streamer
                 .viewer_mode_orchestrators
                 .entry(parent_task_id)
-                .or_default();
+                .or_default()
+                .seed_generation = Some(generation);
         });
         let captured_spawns = capture_child_spawns(&mut app, &streamer);
 
         streamer.update(&mut app, |streamer, ctx| {
             streamer.finish_ancestor_seed_fetch(
                 parent_task_id,
+                generation,
                 Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
                 ctx,
             );
             streamer.finish_ancestor_seed_fetch(
                 parent_task_id,
+                generation,
                 Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
                 ctx,
             );
@@ -2396,6 +2584,9 @@ fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
             me.register_viewer_mode_consumer(parent_task_id, placeholder_a, consumer_a, ctx);
             me.finish_ancestor_seed_fetch(
                 parent_task_id,
+                me.viewer_mode_orchestrators[&parent_task_id]
+                    .seed_generation
+                    .unwrap(),
                 Ok(vec![make_ambient_task_with_task_id(child_a, Some(3))]),
                 ctx,
             );

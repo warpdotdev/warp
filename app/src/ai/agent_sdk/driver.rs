@@ -118,6 +118,7 @@ mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod prewarmed;
+mod restored_children;
 mod snapshot;
 pub(crate) mod terminal;
 mod termination;
@@ -2378,6 +2379,7 @@ impl AgentDriver {
                 )
                 .await?;
 
+                Self::prepare_local_subtree(&foreground).await?;
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
@@ -3857,6 +3859,12 @@ impl AgentDriver {
                         return;
                     }
                     let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                    let bound_conversation_id = me.run_conversation_id
+                        .or(restored_conversation_id)
+                        .or_else(|| history_model.active_conversation_id(terminal_id));
+                    if bound_conversation_id != Some(*conversation_id) {
+                        return;
+                    }
                     let Some(conversation) = history_model.conversation(conversation_id) else {
                         log::warn!("No active conversation for terminal view {conversation_terminal_id} with id {conversation_id}");
                         return;

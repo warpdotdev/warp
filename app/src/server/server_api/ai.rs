@@ -1003,6 +1003,52 @@ struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
 
+#[derive(Debug)]
+pub struct AgentRunsPage {
+    pub runs: Vec<AmbientAgentTask>,
+    pub page_info: AgentRunsPageInfo,
+    /// Wire harness names, retaining unknown variants for duplicate validation.
+    pub harness_names: Vec<Option<String>>,
+}
+
+impl<'de> serde::Deserialize<'de> for AgentRunsPage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct RawPage {
+            runs: Vec<serde_json::Value>,
+            page_info: AgentRunsPageInfo,
+        }
+        let raw = RawPage::deserialize(deserializer)?;
+        let mut runs = Vec::with_capacity(raw.runs.len());
+        let mut harness_names = Vec::with_capacity(raw.runs.len());
+        for row in raw.runs {
+            let harness = row
+                .get("agent_config_snapshot")
+                .or_else(|| row.get("agent_config"))
+                .and_then(|config| config.get("harness"))
+                .and_then(|harness| harness.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            runs.push(serde_json::from_value(row).map_err(serde::de::Error::custom)?);
+            harness_names.push(harness);
+        }
+        Ok(Self {
+            runs,
+            page_info: raw.page_info,
+            harness_names,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AgentRunsPageInfo {
+    pub has_next_page: bool,
+    pub next_cursor: Option<String>,
+}
+
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1409,6 +1455,12 @@ pub trait AIClient: 'static + Send + Sync {
         filter: TaskListFilter,
         request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
+
+    async fn list_agent_runs_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<AgentRunsPage>;
 
     /// List agent runs and return the raw server JSON response.
     async fn list_agent_runs_raw(
@@ -2679,6 +2731,15 @@ impl AIClient for ServerApi {
             .get_public_api_with_team_scope(&url, request_team_scope)
             .await?;
         Ok(response.runs)
+    }
+
+    async fn list_agent_runs_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<AgentRunsPage> {
+        self.get_public_api(&build_list_agent_runs_url(limit, &filter))
+            .await
     }
 
     async fn list_agent_runs_raw(
