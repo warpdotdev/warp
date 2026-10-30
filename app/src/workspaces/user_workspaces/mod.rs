@@ -1489,11 +1489,30 @@ impl UserWorkspaces {
         credits: i32,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.purchase_addon_amount(team_uid, Some(credits), None, ctx);
+    }
+
+    pub fn purchase_addon_usage(
+        &mut self,
+        team_uid: Option<ServerId>,
+        usage_cents: i32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.purchase_addon_amount(team_uid, None, Some(usage_cents), ctx);
+    }
+
+    fn purchase_addon_amount(
+        &mut self,
+        team_uid: Option<ServerId>,
+        credits: Option<i32>,
+        usage_cents: Option<i32>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
                 workspace_client
-                    .purchase_addon_credits(team_uid, credits)
+                    .purchase_addon_credits(team_uid, credits, usage_cents)
                     .await
             },
             Self::on_purchase_addon_credits,
@@ -1544,6 +1563,42 @@ impl UserWorkspaces {
         selected_auto_reload_credit_denomination: Option<i32>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.update_addon_amount_settings(
+            team_uid,
+            auto_reload_enabled,
+            max_monthly_spend_cents,
+            selected_auto_reload_credit_denomination,
+            None,
+            ctx,
+        );
+    }
+
+    pub fn update_addon_usage_settings(
+        &mut self,
+        team_uid: ServerId,
+        auto_reload_enabled: Option<bool>,
+        usage_cents: Option<i32>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.update_addon_amount_settings(
+            team_uid,
+            auto_reload_enabled,
+            None,
+            None,
+            usage_cents,
+            ctx,
+        );
+    }
+
+    fn update_addon_amount_settings(
+        &mut self,
+        team_uid: ServerId,
+        auto_reload_enabled: Option<bool>,
+        max_monthly_spend_cents: Option<i32>,
+        selected_auto_reload_credit_denomination: Option<i32>,
+        selected_auto_reload_usage_cents: Option<i32>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
@@ -1553,6 +1608,7 @@ impl UserWorkspaces {
                         auto_reload_enabled,
                         max_monthly_spend_cents,
                         selected_auto_reload_credit_denomination,
+                        selected_auto_reload_usage_cents,
                     )
                     .await
             },

@@ -99,6 +99,7 @@ pub struct AddonCreditsSettingsInput {
     pub auto_reload_enabled: Option<bool>,
     pub max_monthly_spend_cents: Option<i32>,
     pub selected_auto_reload_credit_denomination: Option<i32>,
+    pub selected_auto_reload_usage_cents: Option<i32>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

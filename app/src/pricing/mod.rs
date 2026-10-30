@@ -1,9 +1,11 @@
 use warp_graphql::billing::{
-    AddonCreditsOption, OveragesPricing, PlanPricing, PricingInfo, StripeSubscriptionPlan,
+    AddonCreditsOption, AddonUsagePurchaseRange, OveragesPricing, PlanPricing, PricingInfo,
+    StripeSubscriptionPlan,
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 pub mod addon_pack;
+pub mod usage_amount_input;
 
 /// A global model for maintaining pricing information from the server.
 #[derive(Debug)]
@@ -66,6 +68,12 @@ impl PricingInfoModel {
         self.pricing_info
             .as_ref()
             .map(|info| info.addon_credits_options.as_slice())
+    }
+
+    pub fn addon_usage_purchase_range(&self) -> Option<&AddonUsagePurchaseRange> {
+        self.pricing_info
+            .as_ref()
+            .map(|info| &info.addon_usage_purchase_range)
     }
 
     pub fn promotion_message(&self) -> Option<&str> {

@@ -2929,6 +2929,7 @@ type PrewarmedSandboxVariable {
 
 type PricingInfo {
   addonCreditsOptions: [AddonCreditsOption!]!
+  addonUsagePurchaseRange: AddonUsagePurchaseRange!
   overages: OveragesPricing!
   plans: [PlanPricing!]!
   promotionMessage: String
@@ -2988,8 +2989,15 @@ type PurchaseAddonCreditsCheckoutOutput implements Response {
   responseContext: ResponseContext!
 }
 
+type AddonUsagePurchaseRange {
+  minUsageCents: Int!
+  maxUsageCents: Int!
+  stepUsageCents: Int!
+}
+
 input PurchaseAddonCreditsInput {
-  credits: Int!
+  credits: Int
+  usageCents: Int
   teamUid: ID
 }
 
