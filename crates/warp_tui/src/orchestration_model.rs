@@ -22,14 +22,15 @@ use warp::tui_export::{
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
     RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
-    TeamContextForOperation, UserWorkspaces, aggregated_orchestrator_status,
-    apply_child_agent_model_override, child_conversations_in_pill_order,
-    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
-    descendant_conversations_in_pill_order, finish_local_oz_child_conversation,
-    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
-    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    StartAgentExecutionMode, StartAgentRequest, StartAgentRequestId,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, TeamContextForOperation, UserWorkspaces,
+    aggregated_orchestrator_status, apply_child_agent_model_override,
+    child_conversations_in_pill_order, classify_cloud_agent_startup_error,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    finish_local_oz_child_conversation, inherit_child_agent_settings, loaded_subtree_rollup,
+    local_oz_child_launch_config, orchestration_root_conversation_id, oz_run_url,
+    prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
+    unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -630,6 +631,7 @@ impl TuiOrchestrationModel {
             move |me, result, ctx| {
                 let result = result.map_err(|error| classify_cloud_agent_startup_error(&error));
                 me.finish_remote_child_launch(
+                    request.id,
                     conversation_id,
                     surface_id,
                     cloud_run_state_for_launch,
@@ -673,6 +675,7 @@ impl TuiOrchestrationModel {
 
     fn finish_remote_child_launch(
         &mut self,
+        request_id: StartAgentRequestId,
         conversation_id: AIConversationId,
         child_surface_id: EntityId,
         cloud_run_state: ModelHandle<TuiCloudRunState>,
@@ -688,9 +691,22 @@ impl TuiOrchestrationModel {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                     history.assign_run_id_for_conversation(
                         conversation_id,
-                        response.run_id,
+                        response.run_id.clone(),
                         Some(response.task_id),
                         child_surface_id,
+                        ctx,
+                    );
+                    if let Some(harness) = response.launch_config.as_ref().and_then(|config| {
+                        Harness::parse_orchestration_harness(&config.harness_type)
+                    }) && let Some(conversation) = history.conversation_mut(&conversation_id)
+                    {
+                        conversation.set_orchestration_harness(harness);
+                    }
+                    history.record_child_agent_launch_complete(
+                        request_id,
+                        conversation_id,
+                        response.run_id,
+                        response.launch_config,
                         ctx,
                     );
                 });
@@ -843,11 +859,13 @@ impl TuiOrchestrationModel {
             history.set_active_conversation_id(conversation_id, child_surface_id, ctx);
             conversation_id
         });
+        let launch_config = local_oz_child_launch_config(child_surface_id, team_scope, ctx);
         finish_local_oz_child_conversation(
             conversation_id,
             child_surface_id,
             task_id,
             request.id,
+            Some(launch_config),
             ctx,
         );
 

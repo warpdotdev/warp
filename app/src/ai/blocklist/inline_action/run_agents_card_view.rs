@@ -15,8 +15,9 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_graphql::queries::get_runners::RunnerSortBy;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text, Wrap,
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Expanded, Flex, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Radius, Stack, Text, Wrap,
 };
 use warpui::keymap::FixedBinding;
 use warpui::{
@@ -58,6 +59,7 @@ use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::orchestration::{OptionSnapshot, model_snapshot};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
@@ -66,19 +68,24 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, KeystrokeSource, NakedTheme,
+};
 use crate::view_components::compactible_action_button::{
     CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD, RenderCompactibleActionButton,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
-use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
+use crate::view_components::{
+    FilterableDropdown, FilterableDropdownEvent, FilterableDropdownOrientation,
+};
 use crate::workspaces::user_workspaces::{
     TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
 };
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
+const AGENT_ROW_CONTROL_HEIGHT: f32 = 28.;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -114,6 +121,22 @@ pub struct RunAgentsCardFields {
     pub skills: Vec<SkillReference>,
     /// The plan that this RunAgents call is executing for.
     pub plan_id: String,
+}
+
+impl RunAgentsCardFields {
+    fn reset_invalid_child_model_overrides(&mut self, models: &OptionSnapshot) {
+        for child in &mut self.agent_run_configs {
+            let model_id = child.model_id.trim();
+            if !model_id.is_empty()
+                && !models
+                    .rows
+                    .iter()
+                    .any(|row| row.id == model_id && row.disabled_reason.is_none())
+            {
+                child.model_id.clear();
+            }
+        }
+    }
 }
 
 /// Per-action edit state for the orchestrate confirmation card: the
@@ -203,6 +226,9 @@ struct RunAgentsCardHandles {
     reject_button: Option<CompactibleActionButton>,
     accept_button: Option<CompactibleSplitActionButton>,
     pickers: OrchestrationPickerHandles<RunAgentsCardViewAction>,
+    child_model_pickers: Vec<ViewHandle<FilterableDropdown<RunAgentsCardViewAction>>>,
+    edit_models_button: Option<ViewHandle<ActionButton>>,
+    done_editing_models_button: Option<ViewHandle<ActionButton>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,11 +236,16 @@ pub enum RunAgentsCardViewAction {
     Accept,
     AcceptWithoutOrchestration,
     ToggleAcceptMenu,
+    ToggleModelEditor,
     Reject,
     ExecutionModeToggled {
         is_remote: bool,
     },
     ModelChanged {
+        model_id: String,
+    },
+    ChildModelChanged {
+        index: usize,
         model_id: String,
     },
     HarnessChanged {
@@ -249,6 +280,7 @@ pub struct RunAgentsCardView {
     /// Card-only request fields.
     card: RunAgentsCardFields,
     handles: RunAgentsCardHandles,
+    is_editing_models: bool,
     spawning: Option<RunAgentsSpawningSnapshot>,
     /// Retained for interactive defaults and telemetry about plan-sourced
     /// orchestration state.
@@ -291,10 +323,18 @@ pub struct RunAgentsCardView {
 /// 3. Defaults a Remote environment from settings / recency.
 fn resolve_interactive_defaults(
     orchestration_config_state: &mut OrchestrationConfigState,
+    card: &RunAgentsCardFields,
+    has_approved_config: bool,
     block_model: &dyn AIBlockModel<View = AIBlock>,
     ctx: &ViewContext<RunAgentsCardView>,
 ) {
-    if orchestration_config_state.model_id.is_empty() {
+    if !has_approved_config
+        && orchestration_config_state.model_id.is_empty()
+        && card
+            .agent_run_configs
+            .iter()
+            .all(|cfg| cfg.agent_identity_uid.is_empty())
+    {
         let harness = warp_cli::agent::Harness::parse_orchestration_harness(
             &orchestration_config_state.harness_type,
         );
@@ -304,11 +344,12 @@ fn resolve_interactive_defaults(
             orchestration_config_state.model_id = base;
         }
     }
-    if let RunAgentsExecutionMode::Remote {
-        environment_id,
-        worker_host,
-        ..
-    } = &orchestration_config_state.execution_mode
+    if !has_approved_config
+        && let RunAgentsExecutionMode::Remote {
+            environment_id,
+            worker_host,
+            ..
+        } = &orchestration_config_state.execution_mode
     {
         let needs_host = worker_host.is_empty();
         let needs_env = environment_id.is_empty();
@@ -338,9 +379,17 @@ impl RunAgentsCardView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let RunAgentsEditState {
-            orchestration_config_state,
-            card,
+            mut orchestration_config_state,
+            mut card,
         } = RunAgentsEditState::from_request(request);
+        if let Some((config, status)) = &active_config
+            && status.is_approved()
+        {
+            orchestration_config_state.override_from_approved_config(config);
+            if FeatureFlag::ChildModelRouting.is_enabled() {
+                config.resolve_agent_configs(&mut card.agent_run_configs);
+            }
+        }
         // Snapshot the raw incoming request so we can diff against the
         // edited state at Accept time.
         let original_tool_call_request = request.clone();
@@ -358,6 +407,22 @@ impl RunAgentsCardView {
             ctx,
         );
         let position_id_prefix = format!("{action_id:?}");
+        let edit_models_button = ctx.add_view(|_| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::Pencil)
+                .with_tooltip("Edit agent models")
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(RunAgentsCardViewAction::ToggleModelEditor);
+                })
+        });
+        let done_editing_models_button = ctx.add_view(|_| {
+            ActionButton::new("Done", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(RunAgentsCardViewAction::ToggleModelEditor);
+                })
+        });
         let accept_button = CompactibleSplitActionButton::new(
             "Accept".to_string(),
             Some(KeystrokeSource::Fixed(accept_keystroke)),
@@ -423,6 +488,10 @@ impl RunAgentsCardView {
                 // to the full confirmation UI.
                 resolve_interactive_defaults(
                     &mut me.orchestration_edit_state.orchestration_config_state,
+                    &me.card,
+                    me.active_config
+                        .as_ref()
+                        .is_some_and(|(_, status)| status.is_approved()),
                     &*me.block_model,
                     ctx,
                 );
@@ -486,6 +555,8 @@ impl RunAgentsCardView {
                     is_local,
                     ctx,
                 );
+                me.refresh_accept_button_state(ctx);
+                ctx.notify();
             }
         });
 
@@ -585,8 +656,11 @@ impl RunAgentsCardView {
             handles: RunAgentsCardHandles {
                 reject_button: Some(reject_button),
                 accept_button: Some(accept_button),
+                edit_models_button: Some(edit_models_button),
+                done_editing_models_button: Some(done_editing_models_button),
                 ..Default::default()
             },
+            is_editing_models: false,
             spawning: None,
             active_config,
             is_accept_menu_open: false,
@@ -634,15 +708,27 @@ impl RunAgentsCardView {
         // streamed chunk.
         self.original_tool_call_request = request.clone();
         let mut new_state = RunAgentsEditState::from_request(request);
-        // Resolve empty fields from the active config (same as in new()).
         if let Some((config, status)) = &self.active_config
             && status.is_approved()
         {
             new_state
                 .orchestration_config_state
-                .resolve_from_config(config);
+                .override_from_approved_config(config);
+            if FeatureFlag::ChildModelRouting.is_enabled() {
+                config.resolve_agent_configs(&mut new_state.card.agent_run_configs);
+            }
         }
-        if new_state.orchestration_config_state.model_id.is_empty() {
+        if !self
+            .active_config
+            .as_ref()
+            .is_some_and(|(_, status)| status.is_approved())
+            && new_state.orchestration_config_state.model_id.is_empty()
+            && new_state
+                .card
+                .agent_run_configs
+                .iter()
+                .all(|cfg| cfg.agent_identity_uid.is_empty())
+        {
             let harness = warp_cli::agent::Harness::parse_orchestration_harness(
                 &new_state.orchestration_config_state.harness_type,
             );
@@ -746,10 +832,7 @@ impl RunAgentsCardView {
         if self.spawning.is_some() {
             return;
         }
-        if let Some(reason) = oc::accept_disabled_reason_with_auth(
-            &self.orchestration_edit_state.orchestration_config_state,
-            ctx,
-        ) {
+        if let Some(reason) = self.accept_disabled_reason(ctx) {
             log::warn!("RunAgentsCardView: refusing Accept because action is disabled: {reason}");
             return;
         }
@@ -870,10 +953,8 @@ impl RunAgentsCardView {
     /// Re-derives the Accept button's `disabled` + tooltip from the gate.
     /// Call after every code path that mutates `self.orchestration_edit_state.orchestration_config_state`.
     fn refresh_accept_button_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let reason = oc::accept_disabled_reason_with_auth(
-            &self.orchestration_edit_state.orchestration_config_state,
-            ctx,
-        );
+        self.refresh_model_pickers(ctx);
+        let reason = self.accept_disabled_reason(ctx);
         let Some(mut accept) = self.handles.accept_button.clone() else {
             return;
         };
@@ -881,6 +962,84 @@ impl RunAgentsCardView {
         // Tooltip explains why the button is disabled; falls back to "Accept".
         accept.set_tooltip(reason.or_else(|| Some("Accept".to_string())), ctx);
         self.handles.accept_button = Some(accept);
+    }
+
+    fn accept_disabled_reason(&self, ctx: &AppContext) -> Option<String> {
+        if let Some((config, status)) = &self.active_config
+            && status.is_approved()
+            && {
+                let mut edited = self
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .to_orchestration_config();
+                edited.agent_configs = config.agent_configs.clone();
+                edited != *config
+                    || (FeatureFlag::ChildModelRouting.is_enabled()
+                        && self.card.agent_run_configs.iter().any(|agent| {
+                            config.agent_configs.iter().any(|approved| {
+                                approved.name.trim().eq_ignore_ascii_case(agent.name.trim())
+                                    && approved.model_id != agent.model_id
+                            })
+                        }))
+            }
+        {
+            return Some("These settings are controlled by the approved plan. Update the plan configuration to change them.".to_string());
+        }
+        oc::accept_disabled_reason_with_auth(
+            &self.orchestration_edit_state.orchestration_config_state,
+            ctx,
+        )
+        .or_else(|| {
+            crate::ai::orchestration::child_model_validation_error(
+                &self.orchestration_edit_state.orchestration_config_state,
+                self.card
+                    .agent_run_configs
+                    .iter()
+                    .map(|agent| (agent.name.as_str(), agent.model_id.as_str())),
+                ctx,
+            )
+        })
+    }
+
+    fn refresh_model_pickers(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::ChildModelRouting.is_enabled() {
+            self.handles.child_model_pickers.clear();
+            return;
+        }
+        let (mut styles, _) = oc::picker_styles(Appearance::as_ref(ctx));
+        styles.height = Some(AGENT_ROW_CONTROL_HEIGHT);
+        if let Some(padding) = &mut styles.padding {
+            padding.top = 4.;
+            padding.bottom = 4.;
+            padding.left = 8.;
+            padding.right = 8.;
+        }
+        self.handles
+            .child_model_pickers
+            .truncate(self.card.agent_run_configs.len());
+        while self.handles.child_model_pickers.len() < self.card.agent_run_configs.len() {
+            let picker = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
+            picker.update(ctx, |dropdown, ctx| {
+                dropdown.set_top_bar_height(AGENT_ROW_CONTROL_HEIGHT, ctx);
+                dropdown.set_vertical_margin(0., ctx);
+            });
+            Self::set_upward_filterable_menu_position(&picker, ctx);
+            Self::subscribe_filterable_picker_close(&picker, ctx);
+            self.handles.child_model_pickers.push(picker);
+        }
+        let state = &self.orchestration_edit_state.orchestration_config_state;
+        if let Some(picker) = &self.handles.pickers.model_picker {
+            populate_run_agents_model_picker(picker, state, &state.model_id, None, ctx);
+        }
+        for (index, (child, picker)) in self
+            .card
+            .agent_run_configs
+            .iter()
+            .zip(&self.handles.child_model_pickers)
+            .enumerate()
+        {
+            populate_run_agents_model_picker(picker, state, &child.model_id, Some(index), ctx);
+        }
     }
 
     /// Construct the picker dropdown views (idempotent).
@@ -1322,11 +1481,19 @@ impl View for RunAgentsCardView {
         }
 
         let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
-        let card = render_confirmation_card(
+        let body = render_body(
             &self.orchestration_edit_state.orchestration_config_state,
             &self.card,
             &self.handles,
+            self.is_editing_models,
+            app,
+        );
+        let card = render_confirmation_card(
+            &self.orchestration_edit_state.orchestration_config_state,
+            body,
+            &self.handles,
             is_blocked,
+            self.accept_disabled_reason(app),
             &(self.team_context_resolver)(app),
             app,
         );
@@ -1381,6 +1548,16 @@ impl TypedActionView for RunAgentsCardView {
             RunAgentsCardViewAction::ToggleAcceptMenu => {
                 self.toggle_accept_menu(ctx);
             }
+            RunAgentsCardViewAction::ToggleModelEditor => {
+                self.is_editing_models = !self.is_editing_models;
+                if !self.is_editing_models {
+                    for picker in &self.handles.child_model_pickers {
+                        picker.update(ctx, |dropdown, ctx| dropdown.close(ctx));
+                    }
+                }
+                ctx.focus_self();
+                ctx.notify();
+            }
             RunAgentsCardViewAction::Reject => {
                 self.emit_decision(RunAgentsCardDecision::Reject, ctx);
                 ctx.emit(RunAgentsCardViewEvent::RejectRequested);
@@ -1394,6 +1571,13 @@ impl TypedActionView for RunAgentsCardView {
                     fallback,
                     ctx,
                 );
+                if FeatureFlag::ChildModelRouting.is_enabled() {
+                    self.card
+                        .reset_invalid_child_model_overrides(&model_snapshot(
+                            &self.orchestration_edit_state.orchestration_config_state,
+                            ctx,
+                        ));
+                }
                 // Switching to Cloud reveals the Runner control (when the
                 // flag is on); build + fetch it lazily so Local cards never
                 // hit `getRunners`.
@@ -1409,8 +1593,20 @@ impl TypedActionView for RunAgentsCardView {
                 self.orchestration_edit_state
                     .orchestration_config_state
                     .model_id = model_id.clone();
-                self.refresh_accept_button_state(ctx);
+                ctx.spawn(async {}, |me, _, ctx| {
+                    me.refresh_accept_button_state(ctx);
+                    ctx.notify();
+                });
                 ctx.notify();
+            }
+            RunAgentsCardViewAction::ChildModelChanged { index, model_id } => {
+                if let Some(child) = self.card.agent_run_configs.get_mut(*index) {
+                    child.model_id = model_id.clone();
+                }
+                ctx.spawn(async {}, |me, _, ctx| {
+                    me.refresh_accept_button_state(ctx);
+                    ctx.notify();
+                });
             }
             RunAgentsCardViewAction::HarnessChanged { harness_type } => {
                 let fallback = self.block_model.base_model(ctx).map(|id| id.to_string());
@@ -1421,6 +1617,13 @@ impl TypedActionView for RunAgentsCardView {
                     fallback,
                     ctx,
                 );
+                if FeatureFlag::ChildModelRouting.is_enabled() {
+                    self.card
+                        .reset_invalid_child_model_overrides(&model_snapshot(
+                            &self.orchestration_edit_state.orchestration_config_state,
+                            ctx,
+                        ));
+                }
                 // Harness change resets per-harness selection state, so
                 // give the new harness a fresh auto-open prompt.
                 self.has_auto_opened_create_modal = false;
@@ -1493,11 +1696,32 @@ impl TypedActionView for RunAgentsCardView {
     }
 }
 
+fn populate_run_agents_model_picker(
+    picker: &ViewHandle<FilterableDropdown<RunAgentsCardViewAction>>,
+    state: &OrchestrationConfigState,
+    model_id: &str,
+    child_index: Option<usize>,
+    ctx: &mut ViewContext<RunAgentsCardView>,
+) {
+    oc::populate_agent_model_picker(
+        picker,
+        state,
+        model_id,
+        child_index.is_some(),
+        |model_id| match child_index {
+            Some(index) => RunAgentsCardViewAction::ChildModelChanged { index, model_id },
+            None => RunAgentsCardViewAction::ModelChanged { model_id },
+        },
+        ctx,
+    );
+}
+
 fn render_confirmation_card(
     orchestration_config_state: &OrchestrationConfigState,
-    card: &RunAgentsCardFields,
+    body: Box<dyn Element>,
     handles: &RunAgentsCardHandles,
     is_blocked: bool,
+    disabled_reason: Option<String>,
     scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -1505,7 +1729,6 @@ fn render_confirmation_card(
     let theme = appearance.theme();
 
     let header = render_header(handles, app);
-    let body = render_body(card, app);
 
     let mut content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -1515,6 +1738,7 @@ fn render_confirmation_card(
     content.add_child(render_editor(
         orchestration_config_state,
         handles,
+        disabled_reason,
         scope,
         app,
     ));
@@ -1554,13 +1778,25 @@ fn render_header(handles: &RunAgentsCardHandles, app: &AppContext) -> Box<dyn El
     config.render(app)
 }
 
-fn render_body(card: &RunAgentsCardFields, app: &AppContext) -> Box<dyn Element> {
+fn render_body(
+    state: &OrchestrationConfigState,
+    card: &RunAgentsCardFields,
+    handles: &RunAgentsCardHandles,
+    is_editing_models: bool,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     column.add_child(render_summary(card, appearance));
-    column.add_child(render_agents_section(card, app));
+    column.add_child(render_agents_section(
+        state,
+        card,
+        handles,
+        is_editing_models,
+        app,
+    ));
 
     Container::new(column.finish())
         .with_horizontal_padding(16.)
@@ -1589,35 +1825,18 @@ fn render_summary(card: &RunAgentsCardFields, appearance: &Appearance) -> Box<dy
     .with_selectable(true)
     .finish();
 
-    let mut column = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(summary_text);
-    // Multi-level orchestration: the server may grant launched children the
-    // run_agents tool, so tell the approver up front. The client cannot
-    // cheaply know the server-side depth budget, so this line is gated on
-    // the client-side multi-level enablement flag.
-    if FeatureFlag::MultiLevelOrchestration.is_enabled() {
-        column = column.with_child(
-            Container::new(
-                Text::new(
-                    "These agents may start their own child agents".to_string(),
-                    appearance.ui_font_family(),
-                    appearance.monospace_font_size() - 1.,
-                )
-                .with_color(blended_colors::text_disabled(theme, theme.background()))
-                .finish(),
-            )
-            .with_margin_top(4.)
-            .finish(),
-        );
-    }
-
-    Container::new(column.finish())
+    Container::new(summary_text)
         .with_margin_bottom(12.)
         .finish()
 }
 
-fn render_agents_section(card: &RunAgentsCardFields, app: &AppContext) -> Box<dyn Element> {
+fn render_agents_section(
+    state: &OrchestrationConfigState,
+    card: &RunAgentsCardFields,
+    handles: &RunAgentsCardHandles,
+    is_editing_models: bool,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let label = Text::new(
@@ -1628,21 +1847,124 @@ fn render_agents_section(card: &RunAgentsCardFields, app: &AppContext) -> Box<dy
     .with_color(blended_colors::text_disabled(theme, theme.background()))
     .finish();
 
-    let pills_row = Wrap::row()
+    let routing_enabled = FeatureFlag::ChildModelRouting.is_enabled();
+    let mut heading = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(4.)
-        .with_run_spacing(4.)
-        .with_children(
-            card.agent_run_configs
-                .iter()
-                .map(|cfg| render_static_agent_pill(&cfg.name, app)),
-        )
-        .finish();
+        .with_spacing(8.)
+        .with_child(label);
+    if routing_enabled {
+        let button = if is_editing_models {
+            &handles.done_editing_models_button
+        } else {
+            &handles.edit_models_button
+        };
+        if let Some(button) = button {
+            heading.add_child(ChildView::new(button).finish());
+        }
+    }
 
-    Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(Container::new(label).with_margin_bottom(6.).finish())
-        .with_child(pills_row)
+    let agents = if routing_enabled && is_editing_models {
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(6.)
+            .with_children(
+                card.agent_run_configs
+                    .iter()
+                    .zip(&handles.child_model_pickers)
+                    .map(|(cfg, picker)| {
+                        ConstrainedBox::new(
+                            Flex::row()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_spacing(8.)
+                                .with_child(oc::render_agent_chip(&cfg.name, None, appearance))
+                                .with_child(
+                                    Expanded::new(1., ChildView::new(picker).finish()).finish(),
+                                )
+                                .finish(),
+                        )
+                        .with_max_width(360.)
+                        .finish()
+                    }),
+            )
+            .finish()
+    } else if routing_enabled {
+        let snapshot = model_snapshot(state, app);
+        Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.)
+            .with_run_spacing(6.)
+            .with_children(card.agent_run_configs.iter().map(|cfg| {
+                let model_label = if cfg.model_id.trim().is_empty() {
+                    None
+                } else {
+                    Some(
+                        snapshot
+                            .rows
+                            .iter()
+                            .find(|row| row.id == cfg.model_id)
+                            .map(|row| row.label.clone())
+                            .unwrap_or_else(|| format!("{} (unavailable)", cfg.model_id)),
+                    )
+                };
+                oc::render_agent_chip(&cfg.name, model_label.as_deref(), appearance)
+            }))
+            .finish()
+    } else {
+        Wrap::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.)
+            .with_run_spacing(4.)
+            .with_children(
+                card.agent_run_configs
+                    .iter()
+                    .map(|cfg| render_static_agent_pill(&cfg.name, app)),
+            )
+            .finish()
+    };
+
+    let mut guidance = Vec::new();
+    // Multi-level orchestration: the server may grant launched children the
+    // run_agents tool, so tell the approver up front. The client cannot
+    // cheaply know the server-side depth budget, so this line is gated on
+    // the client-side multi-level enablement flag.
+    if FeatureFlag::MultiLevelOrchestration.is_enabled() {
+        guidance.push("These agents may start their own child agents.");
+    }
+    if routing_enabled
+        && card
+            .agent_run_configs
+            .iter()
+            .any(|cfg| cfg.model_id.trim().is_empty())
+    {
+        guidance.push(if state.model_id.trim().is_empty() {
+            "Agents without an override use their agent defaults."
+        } else {
+            "Agents without an override use the batch model."
+        });
+    }
+    let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    if !guidance.is_empty() {
+        column.add_child(
+            Container::new(
+                Text::new(
+                    guidance.join(" "),
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size() - 1.,
+                )
+                .with_color(blended_colors::text_disabled(theme, theme.background()))
+                .finish(),
+            )
+            .with_margin_bottom(12.)
+            .finish(),
+        );
+    }
+    column
+        .with_child(
+            Container::new(heading.finish())
+                .with_margin_bottom(6.)
+                .finish(),
+        )
+        .with_child(agents)
         .finish()
 }
 
@@ -1652,7 +1974,60 @@ fn render_terminal_state(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let (label, kind) = format_terminal_state(result);
-    render_status_only_card(label, appearance, kind, app)
+    let status = render_status_only_card(label, appearance, kind, app);
+    if !FeatureFlag::ChildModelRouting.is_enabled() {
+        return status;
+    }
+    let details = format_launch_details(result);
+    if details.is_empty() {
+        return status;
+    }
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_child(status)
+        .with_child(
+            Container::new(
+                Text::new(
+                    details.join("\n"),
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(blended_colors::text_main(
+                    appearance.theme(),
+                    appearance.theme().background(),
+                ))
+                .with_selectable(true)
+                .finish(),
+            )
+            .with_horizontal_padding(16.)
+            .with_vertical_padding(8.)
+            .finish(),
+        )
+        .finish()
+}
+
+fn format_launch_details(result: &RunAgentsResult) -> Vec<String> {
+    let RunAgentsResult::Launched { agents, .. } = result else {
+        return Vec::new();
+    };
+    agents
+        .iter()
+        .map(|agent| {
+            let model = if agent.resolved_model_id.is_empty() {
+                "Unreported"
+            } else {
+                &agent.resolved_model_id
+            };
+            match &agent.kind {
+                RunAgentsAgentOutcomeKind::Launched { agent_id } => {
+                    format!("{} · {model} · Started ({agent_id})", agent.name)
+                }
+                RunAgentsAgentOutcomeKind::Failed { error } => {
+                    format!("{} · {model} · Failed: {error}", agent.name)
+                }
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, StatusKind) {
@@ -1799,10 +2174,10 @@ fn render_status_only_card(
 fn render_editor(
     orchestration_config_state: &OrchestrationConfigState,
     handles: &RunAgentsCardHandles,
+    disabled_reason: Option<String>,
     scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
-    use warpui::elements::ConstrainedBox;
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -1834,7 +2209,7 @@ fn render_editor(
         oc::runner_controls_enabled(app),
     ));
 
-    if let Some(reason) = oc::accept_disabled_reason_with_auth(orchestration_config_state, app) {
+    if let Some(reason) = disabled_reason {
         column.add_child(oc::render_validation_error(
             reason,
             theme.ui_error_color(),

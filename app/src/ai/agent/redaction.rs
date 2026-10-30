@@ -5,7 +5,8 @@ pub(crate) use secret_redaction::redact_secrets;
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
     AskUserQuestionAnswerItem, AskUserQuestionResult, BlockContext, PassiveSuggestionResultType,
-    PassiveSuggestionTrigger, RequestCommandOutputResult, TransferShellCommandControlToUserResult,
+    PassiveSuggestionTrigger, RequestCommandOutputResult, RunAgentsAgentOutcomeKind,
+    RunAgentsResult, TransferShellCommandControlToUserResult,
 };
 
 /// Redact secrets in-place for all user-provided text fields inside the inputs that will be
@@ -90,8 +91,14 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             // No user-provided text to redact in inter-agent relay inputs.
             AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. }
             | AIAgentInput::AgentWake => {}
+            AIAgentInput::OrchestrationConfigUpdate { config, .. } => {
+                redact_secrets(&mut config.model_id);
+                for agent in &mut config.agent_configs {
+                    redact_secrets(&mut agent.name);
+                    redact_secrets(&mut agent.model_id);
+                }
+            }
             AIAgentInput::ActionResult { result, context } => {
                 redact_context(Arc::make_mut(context));
                 match &mut result.result {
@@ -259,10 +266,27 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     AIAgentActionResultType::AskUserQuestion(result) => {
                         redact_ask_user_question_result(result);
                     }
-                    // Orchestrate results contain agent IDs / canonical error
-                    // strings only; no user-provided text to redact.
-                    AIAgentActionResultType::RunAgents(_)
-                    | AIAgentActionResultType::WaitForEvents(_) => {}
+                    AIAgentActionResultType::RunAgents(result) => match result {
+                        RunAgentsResult::Launched {
+                            model_id, agents, ..
+                        } => {
+                            redact_secrets(model_id);
+                            for agent in agents {
+                                redact_secrets(&mut agent.name);
+                                redact_secrets(&mut agent.resolved_model_id);
+                                match &mut agent.kind {
+                                    RunAgentsAgentOutcomeKind::Failed { error } => {
+                                        redact_secrets(error);
+                                    }
+                                    RunAgentsAgentOutcomeKind::Launched { .. } => {}
+                                }
+                            }
+                        }
+                        RunAgentsResult::Denied { reason } => redact_secrets(reason),
+                        RunAgentsResult::Failure { error } => redact_secrets(error),
+                        RunAgentsResult::Cancelled => {}
+                    },
+                    AIAgentActionResultType::WaitForEvents(_) => {}
 
                     // Recording results carry an artifact ref and metadata only.
                     AIAgentActionResultType::StartRecording(_)
@@ -412,3 +436,7 @@ fn redact_attachment(attachment: &mut AIAgentAttachment) {
         AIAgentAttachment::FilePathReference { .. } => {}
     }
 }
+
+#[cfg(test)]
+#[path = "redaction_tests.rs"]
+mod tests;

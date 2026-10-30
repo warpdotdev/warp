@@ -125,7 +125,8 @@ pub use crate::ai::blocklist::{
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
     PreparedLocalOzChildLaunch, apply_child_agent_model_override,
-    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
+    finish_local_oz_child_conversation, local_oz_child_launch_config,
+    prepare_local_oz_child_launch,
 };
 pub use crate::ai::cloud_environments::{
     CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
@@ -192,7 +193,8 @@ pub use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "voice_input")]
 pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
-    AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
+    AIClient, AgentConfigSnapshot, AgentLaunchConfig, AttachmentInput, SpawnAgentRequest,
+    SpawnAgentResponse,
 };
 pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};

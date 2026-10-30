@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use warp_multi_agent_api as api;
 
-use super::action::RunAgentsRequest;
+use super::action::{RunAgentsAgentRunConfig, RunAgentsRequest};
 
 /// Client-side representation of the orchestration config attached to a
 /// conversation via `OrchestrationConfigSnapshot`.
@@ -12,6 +14,17 @@ pub struct OrchestrationConfig {
     pub model_id: String,
     pub harness_type: String,
     pub execution_mode: OrchestrationExecutionMode,
+    /// Complete batch roster, including children inheriting the batch model.
+    /// Empty denotes a legacy config without per-child approval.
+    pub agent_configs: Vec<OrchestrationAgentConfig>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OrchestrationAgentConfig {
+    /// Batch-local identity; compared after trimming, ignoring ASCII case.
+    pub name: String,
+    /// Empty inherits the batch model, or the adapter default when that is also empty.
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -56,13 +69,13 @@ impl OrchestrationConfigStatus {
 // ---------------------------------------------------------------------------
 
 /// Returns `true` when the `run_agents` call's run-wide fields match
-/// the active approved `OrchestrationConfig`, meaning the confirmation
-/// card can be skipped (auto-launch).
+/// the active `OrchestrationConfig`.
 ///
 /// Empty/unset fields on the call are treated as inheriting from the
 /// config (and therefore matching). Fields not in the config
-/// (`computer_use_enabled`, `skills`, `base_prompt`, `agent_run_configs`,
-/// per-agent `title`) are excluded from the check.
+/// (`computer_use_enabled`, `skills`, `base_prompt`, per-agent `title`) are excluded.
+/// This check alone does not authorize auto-launch: roster identity and model
+/// availability must also be validated before reusing a per-child approval.
 pub fn matches_active_config(request: &RunAgentsRequest, config: &OrchestrationConfig) -> bool {
     // model_id — empty on the call means "inherit from config" → matches.
     if !request.model_id.is_empty() && request.model_id != config.model_id {
@@ -106,6 +119,40 @@ pub fn matches_active_config(request: &RunAgentsRequest, config: &OrchestrationC
 // ---------------------------------------------------------------------------
 
 impl OrchestrationConfig {
+    /// Checks complete roster identity, not model equality. Order is irrelevant; duplicate,
+    /// empty, added, removed, or renamed identities prevent approval reuse.
+    pub fn has_matching_agent_roster(&self, agents: &[RunAgentsAgentRunConfig]) -> bool {
+        if self.agent_configs.is_empty() || self.agent_configs.len() != agents.len() {
+            return false;
+        }
+        let mut names = HashSet::new();
+        agents.iter().all(|agent| {
+            let name = agent.name.trim().to_ascii_lowercase();
+            !name.is_empty()
+                && names.insert(name.clone())
+                && self
+                    .agent_configs
+                    .iter()
+                    .filter(|approved| approved.name.trim().eq_ignore_ascii_case(&name))
+                    .count()
+                    == 1
+        })
+    }
+
+    /// Substitutes configured models by normalized name. Approval reuse additionally requires
+    /// complete roster identity and model validation for the selected harness and location.
+    pub fn resolve_agent_configs(&self, agents: &mut [RunAgentsAgentRunConfig]) {
+        for agent in agents {
+            if let Some(approved) = self
+                .agent_configs
+                .iter()
+                .find(|approved| approved.name.trim().eq_ignore_ascii_case(agent.name.trim()))
+            {
+                agent.model_id = approved.model_id.clone();
+            }
+        }
+    }
+
     /// Converts from the proto `OrchestrationConfig` message.
     pub fn from_proto(proto: &api::OrchestrationConfig) -> Self {
         let execution_mode = match &proto.execution_mode {
@@ -127,6 +174,14 @@ impl OrchestrationConfig {
             model_id: proto.model_id.clone(),
             harness_type,
             execution_mode,
+            agent_configs: proto
+                .agent_configs
+                .iter()
+                .map(|agent| OrchestrationAgentConfig {
+                    name: agent.name.clone(),
+                    model_id: agent.model_id.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -155,6 +210,14 @@ impl OrchestrationConfig {
             model_id: self.model_id.clone(),
             harness: harness_type_to_proto(&self.harness_type),
             execution_mode,
+            agent_configs: self
+                .agent_configs
+                .iter()
+                .map(|agent| api::orchestration_config::AgentConfig {
+                    name: agent.name.clone(),
+                    model_id: agent.model_id.clone(),
+                })
+                .collect(),
         }
     }
 }

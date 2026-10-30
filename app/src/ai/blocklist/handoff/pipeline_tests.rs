@@ -790,6 +790,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
             spawn_count.fetch_add(1, Ordering::SeqCst);
             *observed_request.lock().expect("request lock") = Some(request);
             Ok(SpawnAgentResponse {
+                launch_config: None,
                 task_id: task_id(),
                 run_id: "run-id".to_owned(),
                 at_capacity: false,
@@ -866,6 +867,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
             assert!(materialized.load(Ordering::SeqCst));
             assert!(request.conversation_id.is_none());
             Ok(SpawnAgentResponse {
+                launch_config: None,
                 task_id: task_id(),
                 run_id: "fresh-run".to_owned(),
                 at_capacity: true,
@@ -943,6 +945,7 @@ async fn cancellation_during_spawn_cancels_the_created_task() {
                 .send(())
                 .expect("handoff cancellation receiver");
             Ok(SpawnAgentResponse {
+                launch_config: None,
                 task_id: task_id(),
                 run_id: "cancelled-run".to_owned(),
                 at_capacity: false,
@@ -993,6 +996,7 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     mock.expect_spawn_agent().times(1).returning(|request, _| {
         assert!(request.initial_snapshot_token.is_none());
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: task_id(),
             run_id: "degraded-run".to_owned(),
             at_capacity: false,

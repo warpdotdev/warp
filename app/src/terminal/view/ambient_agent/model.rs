@@ -23,9 +23,9 @@ use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated, handoff_dispatch_error};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequestId};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
     CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
@@ -1170,14 +1170,15 @@ impl AmbientAgentViewModel {
             orchestration_handoff: None,
         };
 
-        self.spawn_internal(request, RequestTeamScope::from_scope(scope), ctx);
+        self.spawn_internal(request, RequestTeamScope::from_scope(scope), None, ctx);
     }
 
-    /// Spawn an ambient agent with a fully-constructed request.
+    /// Spawns a request, optionally reporting completion to a child-agent executor.
     pub fn spawn_agent_with_request(
         &mut self,
         request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
+        request_id: Option<StartAgentRequestId>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Apply pane settings from the request.
@@ -1207,7 +1208,7 @@ impl AmbientAgentViewModel {
             }
         }
 
-        self.spawn_internal(request, team_scope, ctx);
+        self.spawn_internal(request, team_scope, request_id, ctx);
     }
 
     /// Stores `request` and starts the combined spawn-and-monitor stream.
@@ -1215,6 +1216,7 @@ impl AmbientAgentViewModel {
         &mut self,
         mut request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
+        request_id: Option<StartAgentRequestId>,
         ctx: &mut ModelContext<Self>,
     ) {
         request.interactive = Some(true);
@@ -1225,7 +1227,36 @@ impl AmbientAgentViewModel {
         let stream = spawn_task(request, team_scope, ai_client, None);
         ctx.spawn_stream_local(
             stream,
-            |me, event_result, ctx| me.handle_ambient_agent_event_result(event_result, ctx),
+            move |me, event_result, ctx| {
+                let launch = match &event_result {
+                    Ok(AmbientAgentEvent::TaskSpawned {
+                        run_id,
+                        launch_config,
+                        ..
+                    }) if !matches!(
+                        me.status,
+                        Status::Cancelled { .. } | Status::Failed { .. }
+                    ) =>
+                    {
+                        Some((run_id.clone(), launch_config.clone()))
+                    }
+                    _ => None,
+                };
+                me.handle_ambient_agent_event_result(event_result, ctx);
+                if let (Some(request_id), Some(conversation_id), Some((agent_id, launch_config))) =
+                    (request_id, me.conversation_id, launch)
+                {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.record_child_agent_launch_complete(
+                            request_id,
+                            conversation_id,
+                            agent_id,
+                            launch_config,
+                            ctx,
+                        );
+                    });
+                }
+            },
             |_me, _ctx| {},
         );
     }
@@ -1235,9 +1266,10 @@ impl AmbientAgentViewModel {
         &mut self,
         request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
+        request_id: Option<StartAgentRequestId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.start_spawn_stream(request, team_scope, ctx);
+        self.start_spawn_stream(request, team_scope, request_id, ctx);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
@@ -1274,7 +1306,11 @@ impl AmbientAgentViewModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
-            AmbientAgentEvent::TaskSpawned { task_id, run_id } => {
+            AmbientAgentEvent::TaskSpawned {
+                task_id,
+                run_id,
+                launch_config,
+            } => {
                 self.task_id = Some(task_id);
                 if matches!(self.status, Status::Cancelled { .. }) {
                     log::info!(
@@ -1289,6 +1325,12 @@ impl AmbientAgentViewModel {
                     let terminal_view_id = self.terminal_view_id;
                     let spawned_task_id = Some(task_id);
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        if let Some(harness) = launch_config.as_ref().and_then(|config| {
+                            Harness::parse_orchestration_harness(&config.harness_type)
+                        }) && let Some(conversation) = history.conversation_mut(&conversation_id)
+                        {
+                            conversation.set_orchestration_harness(harness);
+                        }
                         history.assign_run_id_for_conversation(
                             conversation_id,
                             run_id,
@@ -1546,7 +1588,7 @@ impl AmbientAgentViewModel {
         else {
             return;
         };
-        self.spawn_internal(request, team_scope, ctx);
+        self.spawn_internal(request, team_scope, None, ctx);
     }
 
     /// Handles cancellation by transitioning to the Cancelled state.

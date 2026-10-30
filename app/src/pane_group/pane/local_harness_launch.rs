@@ -32,6 +32,7 @@ pub(super) struct PreparedLocalHarnessLaunch {
     pub env_vars: HashMap<OsString, OsString>,
     pub run_id: String,
     pub task_id: AmbientAgentTaskId,
+    pub configured_model_id: Option<String>,
 }
 
 async fn ensure_local_claude_child_plugins(manager: &dyn CliAgentPluginManager) {
@@ -254,12 +255,25 @@ pub(super) async fn prepare_local_harness_child_launch(
         }
     };
 
+    let configured_model_id = (harness == Harness::Claude)
+        .then(|| {
+            harness_model_config
+                .as_ref()
+                .map(|config| config.model_id.clone())
+        })
+        .flatten();
+    let mut task_config = local_child_task_config(harness, agent_name);
+    if let Some(config) = task_config.as_mut()
+        && let Some(harness) = config.harness.as_mut()
+    {
+        harness.model_id = configured_model_id.clone();
+    }
     let task_id = ai_client
         .create_agent_task(
             prompt.clone(),
             None,
             parent_run_id.clone(),
-            local_child_task_config(harness, agent_name),
+            task_config,
             metadata,
             team_scope,
         )
@@ -301,6 +315,7 @@ pub(super) async fn prepare_local_harness_child_launch(
         env_vars,
         run_id: task_id.to_string(),
         task_id,
+        configured_model_id,
     })
 }
 

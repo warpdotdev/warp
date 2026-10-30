@@ -560,12 +560,21 @@ pub struct ReadAgentMessageResponse {
     pub read_at: Option<String>,
 }
 
+/// Configured-at-launch settings, not inference verification. Cloud responses describe the
+/// persisted server-accepted enqueue snapshot; absent model IDs remain unknown.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AgentLaunchConfig {
+    pub harness_type: String,
+    pub model_id: Option<String>,
+}
+
 #[derive(serde::Deserialize)]
 pub struct SpawnAgentResponse {
     pub task_id: AmbientAgentTaskId,
     pub run_id: String,
     #[serde(default)]
     pub at_capacity: bool,
+    pub launch_config: Option<AgentLaunchConfig>,
 }
 
 /// Response from the artifact endpoint.

@@ -11,6 +11,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -19,6 +20,7 @@ use warpui::elements::{
 };
 use warpui::event::DispatchedEvent;
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::{
@@ -27,6 +29,7 @@ use warpui::{
 };
 
 use crate::LLMPreferences;
+use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_agent_avatar_disc;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
 use crate::ai::cloud_environments::{CloudEnvironmentCatalog, environment_matches_scope};
 use crate::ai::execution_profiles::model_menu_items::{
@@ -1373,6 +1376,100 @@ pub fn render_validation_error(
         .finish(),
     )
     .with_margin_bottom(8.)
+    .finish()
+}
+
+pub fn populate_agent_model_picker<A: OrchestrationControlAction, V: View>(
+    picker: &ViewHandle<FilterableDropdown<A>>,
+    state: &OrchestrationConfigState,
+    model_id: &str,
+    is_child: bool,
+    action: impl Fn(String) -> A,
+    ctx: &mut ViewContext<V>,
+) {
+    let mut model_state = state.clone();
+    model_state.model_id = model_id.to_string();
+    let snapshot = model_snapshot(&model_state, ctx);
+    let inherited_label = match is_child {
+        true if !state.model_id.is_empty() => "Use batch default".to_string(),
+        true => "Use agent default".to_string(),
+        false => "Use agent defaults".to_string(),
+    };
+    let selected_label = if model_id.is_empty() {
+        inherited_label.clone()
+    } else {
+        snapshot
+            .rows
+            .iter()
+            .find(|row| row.id == model_id)
+            .map(|row| row.label.clone())
+            .unwrap_or_else(|| format!("{model_id} (unavailable)"))
+    };
+    let mut items = vec![MenuItem::Item(
+        MenuItemFields::new(&inherited_label).with_on_select_action(
+            DropdownAction::select_action_and_close(action(String::new())),
+        ),
+    )];
+    for row in snapshot.rows.into_iter().filter(|row| !row.id.is_empty()) {
+        let mut item = MenuItemFields::new(&row.label);
+        if let Some(reason) = row.disabled_reason {
+            item = item.with_disabled(true).with_tooltip(reason);
+        } else {
+            item =
+                item.with_on_select_action(DropdownAction::select_action_and_close(action(row.id)));
+        }
+        items.push(MenuItem::Item(item));
+    }
+    if !model_id.is_empty() && selected_label.ends_with(" (unavailable)") {
+        items.push(MenuItem::Item(
+            MenuItemFields::new(&selected_label).with_disabled(true),
+        ));
+    }
+    picker.update(ctx, |dropdown, ctx| {
+        dropdown.set_rich_items(items, ctx);
+        dropdown.set_selected_by_name(&selected_label, ctx);
+    });
+}
+
+pub fn render_agent_chip(
+    name: &str,
+    model_label: Option<&str>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text_color = theme.ansi_fg_magenta();
+    let label = Text::new(name.to_string(), appearance.ui_font_family(), 12.)
+        .with_color(text_color)
+        .soft_wrap(false)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+    let mut row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_spacing(6.)
+        .with_child(render_agent_avatar_disc(name, 16., theme, appearance))
+        .with_child(ConstrainedBox::new(label).with_max_width(110.).finish());
+    if let Some(model_label) = model_label {
+        row.add_child(
+            ConstrainedBox::new(
+                Text::new(format!("· {model_label}"), appearance.ui_font_family(), 12.)
+                    .with_color(blended_colors::text_main(theme, theme.background()))
+                    .soft_wrap(false)
+                    .with_clip(ClipConfig::ellipsis())
+                    .finish(),
+            )
+            .with_max_width(200.)
+            .finish(),
+        );
+    }
+    ConstrainedBox::new(
+        Container::new(row.finish())
+            .with_horizontal_padding(8.)
+            .with_background_color(coloru_with_opacity(text_color, 10))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish(),
+    )
+    .with_height(28.)
     .finish()
 }
 

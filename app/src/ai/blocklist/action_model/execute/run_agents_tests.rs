@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 use ai::agent::orchestration_config::{
@@ -13,6 +14,7 @@ use warpui::{App, Entity, EntityId, ModelHandle};
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
 };
@@ -28,6 +30,8 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::MockAIClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -44,6 +48,83 @@ struct RunAgentsTestState {
     conversation_id: AIConversationId,
     executor: ModelHandle<RunAgentsExecutor>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
+}
+
+#[test]
+fn approved_child_roster_requires_confirmation_for_renamed_agents() {
+    let _child_models = FeatureFlag::ChildModelRouting.override_enabled(true);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let mut action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
+        let AIAgentActionType::RunAgents(request) = &mut action.action else {
+            panic!("expected run_agents action");
+        };
+        let mut config = OrchestrationConfig {
+            agent_configs: vec![ai::agent::orchestration_config::OrchestrationAgentConfig {
+                name: request.agent_run_configs[0].name.clone(),
+                model_id: String::new(),
+            }],
+            model_id: String::new(),
+            harness_type: "oz".to_string(),
+            execution_mode: OrchestrationExecutionMode::Local,
+        };
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+            history
+                .conversation_mut(&state.conversation_id)
+                .unwrap()
+                .set_orchestration_config_for_plan(
+                    "plan-1".into(),
+                    config.clone(),
+                    OrchestrationConfigStatus::Approved,
+                );
+        });
+        state.executor.update(&mut app, |executor, ctx| {
+            assert!(executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id
+                },
+                ctx,
+            ));
+        });
+        config.agent_configs[0].name = "renamed".into();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+            history
+                .conversation_mut(&state.conversation_id)
+                .unwrap()
+                .set_orchestration_config_for_plan(
+                    "plan-1".into(),
+                    config,
+                    OrchestrationConfigStatus::Approved,
+                );
+        });
+        state.executor.update(&mut app, |executor, ctx| {
+            assert!(!executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id
+                },
+                ctx,
+            ));
+        });
+    });
+}
+
+#[test]
+fn child_model_overrides_require_a_batch_fallback_only_when_routing_is_enabled() {
+    for enabled in [false, true] {
+        let _child_models = FeatureFlag::ChildModelRouting.override_enabled(enabled);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        assert!(validate_request(&request).is_ok());
+        request.model_id = " \t".to_string();
+        request.agent_run_configs[0].model_id = "child-model".to_string();
+        assert_eq!(validate_request(&request).is_err(), enabled);
+        request.model_id = "batch-model".to_string();
+        assert!(validate_request(&request).is_ok());
+    }
 }
 
 #[derive(Default)]
@@ -83,6 +164,7 @@ fn persist_plan_config_with_harness(
             .set_orchestration_config_for_plan(
                 plan_id.to_string(),
                 OrchestrationConfig {
+                    agent_configs: Vec::new(),
                     model_id: "auto".to_string(),
                     harness_type: harness_type.to_string(),
                     execution_mode: OrchestrationExecutionMode::Remote {
@@ -94,6 +176,33 @@ fn persist_plan_config_with_harness(
                 status,
             );
     });
+}
+
+#[test]
+fn disabled_child_model_routing_preserves_batch_confirmation_policy() {
+    let _child_models = FeatureFlag::ChildModelRouting.override_enabled(false);
+    for mode in [ExecutionMode::App, ExecutionMode::Sdk] {
+        App::test((), |mut app| async move {
+            let state = initialize_run_agents_test(&mut app, mode);
+            let mut action = remote_run_agents_action("oz");
+            let AIAgentActionType::RunAgents(request) = &mut action.action else {
+                panic!("expected run_agents action");
+            };
+            request.agent_run_configs[0].model_id = "child-model".to_string();
+            state.executor.update(&mut app, |executor, ctx| {
+                assert_eq!(
+                    executor.should_autoexecute(
+                        ExecuteActionInput {
+                            action: &action,
+                            conversation_id: state.conversation_id
+                        },
+                        ctx,
+                    ),
+                    mode == ExecutionMode::Sdk
+                );
+            });
+        });
+    }
 }
 
 fn team_scope_for_team(team_uid: i64) -> TeamContextForOperation {
@@ -260,6 +369,7 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     });
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(LLMPreferences::new);
     let conversation_id = history.update(app, |history_model, ctx| {
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
@@ -292,6 +402,97 @@ fn subscribe_to_start_agent_requests(
         });
     });
     captured
+}
+
+#[test]
+fn launch_completion_waits_for_adapter_receipt_and_preserves_unknowns() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let ai_client = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        for (index, reported_model) in [None, Some(None), Some(Some("accepted-model"))]
+            .into_iter()
+            .enumerate()
+        {
+            let receiver = state
+                .start_agent_executor
+                .update(&mut app, |executor, ctx| {
+                    executor.dispatch(
+                        format!("child-{index}"),
+                        "work".to_string(),
+                        StartAgentExecutionMode::Local {
+                            harness_type: None,
+                            model_id: Some("requested-model".to_string()),
+                        },
+                        Default::default(),
+                        None,
+                        state.conversation_id,
+                        None,
+                        RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                        ctx,
+                    )
+                });
+            let request_id = captured.read(&app, |requests, _| requests.0[index].id);
+            let surface_id = EntityId::new();
+            let run_id = format!("00000000-0000-0000-0000-{:012}", index + 2);
+            let child_id =
+                BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                    let child_id = history.start_new_child_conversation(
+                        surface_id,
+                        format!("child-{index}"),
+                        state.conversation_id,
+                        None,
+                        false,
+                        ctx,
+                    );
+                    history.record_new_conversation_request_complete(request_id, child_id, ctx);
+                    history.assign_run_id_for_conversation(
+                        child_id,
+                        run_id.clone(),
+                        None,
+                        surface_id,
+                        ctx,
+                    );
+                    child_id
+                });
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(async_channel::TryRecvError::Empty)
+            ));
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.record_child_agent_launch_complete(
+                    request_id,
+                    child_id,
+                    run_id.clone(),
+                    reported_model.map(|model_id| {
+                        crate::server::server_api::ai::AgentLaunchConfig {
+                            harness_type: "oz".to_string(),
+                            model_id: model_id.map(str::to_string),
+                        }
+                    }),
+                    ctx,
+                );
+            });
+            let StartAgentOutcome::Started {
+                agent_id,
+                launch_config,
+            } = receiver.try_recv().expect("adapter completion")
+            else {
+                panic!("expected successful launch");
+            };
+            assert_eq!(agent_id, run_id);
+            assert_eq!(
+                launch_config
+                    .as_ref()
+                    .map(|config| config.model_id.as_deref()),
+                reported_model,
+            );
+        }
+    });
 }
 
 #[test]
@@ -432,6 +633,282 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
     );
 }
 
+#[test]
+fn child_models_survive_approved_batch_defaults_and_local_remote_translation() {
+    for enabled in [false, true] {
+        let _child_models = FeatureFlag::ChildModelRouting.override_enabled(enabled);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "original-batch".to_string();
+        request.agent_run_configs[0].model_id = " child-model ".to_string();
+        let mut fallback = request.agent_run_configs[0].clone();
+        fallback.name = "fallback".to_string();
+        fallback.model_id.clear();
+        request.agent_run_configs.push(fallback);
+        resolve_request_from_config(
+            &mut request,
+            &OrchestrationConfig {
+                agent_configs: Vec::new(),
+                model_id: "approved-batch".to_string(),
+                harness_type: "oz".to_string(),
+                execution_mode: OrchestrationExecutionMode::Local,
+            },
+        );
+        assert_eq!(request.agent_run_configs[0].model_id, " child-model ");
+        for execution_mode in [
+            RunAgentsExecutionMode::Local,
+            RunAgentsExecutionMode::Remote {
+                environment_id: "env-1".to_string(),
+                worker_host: "warp".to_string(),
+                computer_use_enabled: false,
+                runner_id: String::new(),
+            },
+        ] {
+            for (cfg, expected_model) in request.agent_run_configs.iter().zip([
+                if enabled {
+                    "child-model"
+                } else {
+                    "approved-batch"
+                },
+                "approved-batch",
+            ]) {
+                let mode = run_agents_to_start_agent_mode(
+                    &execution_mode,
+                    &request.harness_type,
+                    &request.model_id,
+                    &[],
+                    None,
+                    cfg,
+                )
+                .unwrap();
+                match mode {
+                    StartAgentExecutionMode::Local { model_id, .. } => {
+                        assert_eq!(model_id.as_deref(), Some(expected_model));
+                    }
+                    StartAgentExecutionMode::Remote { model_id, .. } => {
+                        assert_eq!(model_id, expected_model);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn dispatch_reports_child_models_and_rejects_incompatible_harness_overrides() {
+    let _child_models = FeatureFlag::ChildModelRouting.override_enabled(true);
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        for harness_type in ["oz", "codex"] {
+            let AIAgentActionType::RunAgents(mut request) =
+                remote_run_agents_action(harness_type).action
+            else {
+                panic!("expected run_agents action");
+            };
+            request.model_id = "approved-batch".to_string();
+            request.agent_run_configs[0].model_id = " child-model ".to_string();
+            let mut fallback = request.agent_run_configs[0].clone();
+            fallback.name = "fallback".to_string();
+            fallback.model_id = " ".to_string();
+            request.agent_run_configs.push(fallback);
+            if harness_type == "codex" {
+                request.execution_mode = RunAgentsExecutionMode::Local;
+            }
+            let action_id = AIAgentActionId::from(format!("models-{harness_type}"));
+            let (sender, receiver) = async_channel::bounded(1);
+            state.executor.update(&mut app, |executor, ctx| {
+                executor.dispatch_children_for_prepared_request(
+                    action_id.clone(),
+                    *request,
+                    state.conversation_id,
+                    RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                    sender,
+                    ctx,
+                );
+            });
+            let RunAgentsResult::Launched {
+                model_id, agents, ..
+            } = receiver.recv().await.unwrap()
+            else {
+                panic!("expected aggregated run_agents result");
+            };
+            assert_eq!(model_id, "approved-batch");
+            assert_eq!(agents.len(), 2);
+            for (agent, expected_model) in agents.iter().zip(["child-model", "approved-batch"]) {
+                assert!(agent.resolved_model_id.is_empty());
+                let RunAgentsAgentOutcomeKind::Failed { error } = &agent.kind else {
+                    panic!("expected per-child launch failure");
+                };
+                if harness_type == "codex" {
+                    assert!(error.contains("not supported"));
+                    assert!(error.contains(expected_model));
+                } else {
+                    assert!(error.contains("parent run_id"));
+                }
+            }
+            state.executor.read(&app, |executor, _| {
+                assert!(!executor.is_pending(&action_id));
+            });
+        }
+        captured.read(&app, |captured, _| assert!(captured.0.is_empty()));
+    });
+}
+#[test]
+fn dispatch_preserves_models_in_successful_launches_and_partial_failures() {
+    let _child_models = FeatureFlag::ChildModelRouting.override_enabled(true);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let base_model = LLMPreferences::handle(&app).read(&app, |preferences, ctx| {
+            preferences
+                .get_base_llm_choices_for_agent_mode_for_team_uid(None, ctx)
+                .next()
+                .unwrap()
+                .clone()
+        });
+        for model_id in ["child-model", "approved-batch", "invalid-child-model"] {
+            let mut model = base_model.clone();
+            model.id = LLMId::from(model_id);
+            UserWorkspaces::handle(&app).update(&mut app, |workspaces, _| {
+                workspaces.add_agent_mode_model_for_test_for_team_uid(None, model);
+            });
+        }
+        let ai_client = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action
+        else {
+            panic!("expected run_agents action");
+        };
+        request.model_id = "original-batch".to_string();
+        request.agent_run_configs[0].model_id = "child-model".to_string();
+        let mut fallback = request.agent_run_configs[0].clone();
+        fallback.name = "fallback".to_string();
+        fallback.model_id.clear();
+        let mut invalid = fallback.clone();
+        invalid.name = "invalid".to_string();
+        invalid.agent_identity_uid = "named-local-agent".to_string();
+        invalid.model_id = "invalid-child-model".to_string();
+        let mut incompatible = fallback.clone();
+        incompatible.name = "wrong-harness-model".to_string();
+        incompatible.model_id = "non-oz-model".to_string();
+        request
+            .agent_run_configs
+            .extend([fallback, invalid, incompatible]);
+        resolve_request_from_config(
+            &mut request,
+            &OrchestrationConfig {
+                agent_configs: Vec::new(),
+                model_id: "approved-batch".to_string(),
+                harness_type: "oz".to_string(),
+                execution_mode: OrchestrationExecutionMode::Local,
+            },
+        );
+        let (sender, receiver) = async_channel::bounded(1);
+        state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_children_for_prepared_request(
+                AIAgentActionId::from("mixed-models".to_string()),
+                *request,
+                state.conversation_id,
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                sender,
+                ctx,
+            );
+        });
+        let dispatched = captured.read(&app, |captured, _| captured.0.clone());
+        assert_eq!(dispatched.len(), 2);
+        for (request, expected_model, run_id) in [
+            (
+                &dispatched[0],
+                "child-model",
+                "00000000-0000-0000-0000-000000000002",
+            ),
+            (
+                &dispatched[1],
+                "approved-batch",
+                "00000000-0000-0000-0000-000000000003",
+            ),
+        ] {
+            assert_eq!(
+                request.execution_mode,
+                StartAgentExecutionMode::Local {
+                    harness_type: None,
+                    model_id: Some(expected_model.to_string()),
+                }
+            );
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let child_id = history.start_new_child_conversation(
+                    EntityId::new(),
+                    request.name.clone(),
+                    state.conversation_id,
+                    None,
+                    false,
+                    ctx,
+                );
+                history.assign_run_id_for_conversation(
+                    child_id,
+                    run_id.to_string(),
+                    None,
+                    EntityId::new(),
+                    ctx,
+                );
+                history.record_child_agent_launch_complete(
+                    request.id,
+                    child_id,
+                    run_id.to_string(),
+                    Some(crate::server::server_api::ai::AgentLaunchConfig {
+                        harness_type: "oz".to_string(),
+                        model_id: Some(format!("configured-{expected_model}")),
+                    }),
+                    ctx,
+                );
+            });
+        }
+        let RunAgentsResult::Launched { agents, .. } = receiver.recv().await.unwrap() else {
+            panic!("expected aggregated run_agents result");
+        };
+        assert_eq!(agents.len(), 4);
+        for (agent, expected_model, run_id) in [
+            (
+                &agents[0],
+                "child-model",
+                "00000000-0000-0000-0000-000000000002",
+            ),
+            (
+                &agents[1],
+                "approved-batch",
+                "00000000-0000-0000-0000-000000000003",
+            ),
+        ] {
+            assert_eq!(
+                agent.resolved_model_id,
+                format!("configured-{expected_model}")
+            );
+            assert_eq!(
+                agent.kind,
+                RunAgentsAgentOutcomeKind::Launched {
+                    agent_id: run_id.to_string(),
+                }
+            );
+        }
+        assert!(agents[2].resolved_model_id.is_empty());
+        let RunAgentsAgentOutcomeKind::Failed { error } = &agents[2].kind else {
+            panic!("expected named-local launch failure");
+        };
+        assert!(error.contains("requires remote execution"));
+        assert!(agents[3].resolved_model_id.is_empty());
+        let RunAgentsAgentOutcomeKind::Failed { error } = &agents[3].kind else {
+            panic!("expected incompatible Oz model failure");
+        };
+        assert!(error.contains("unavailable or not supported"));
+    });
+}
 fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_name: &str) {
     CloudAgentSettings::handle(app).update(app, |settings, ctx| {
         let mut secrets = settings.last_selected_auth_secret.value().clone();
@@ -449,28 +926,39 @@ fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_
 
 #[test]
 fn should_autoexecute_when_plan_has_approved_orchestration_config() {
-    App::test((), |mut app| async move {
-        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
-        persist_plan_config(
-            &mut app,
-            state.conversation_id,
-            "plan-1",
-            OrchestrationConfigStatus::Approved,
-        );
-        let action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
-
-        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
-            executor.should_autoexecute(
-                ExecuteActionInput {
-                    action: &action,
-                    conversation_id: state.conversation_id,
-                },
-                ctx,
-            )
+    for enabled in [false, true] {
+        let _child_models = FeatureFlag::ChildModelRouting.override_enabled(enabled);
+        App::test((), |mut app| async move {
+            let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+            persist_plan_config(
+                &mut app,
+                state.conversation_id,
+                "plan-1",
+                OrchestrationConfigStatus::Approved,
+            );
+            for (model_id, expected) in [("", true), ("auto", true), ("different-model", false)] {
+                let mut action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
+                let AIAgentActionType::RunAgents(request) = &mut action.action else {
+                    panic!("expected run_agents action");
+                };
+                request.agent_run_configs[0].model_id = model_id.to_string();
+                let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+                    executor.should_autoexecute(
+                        ExecuteActionInput {
+                            action: &action,
+                            conversation_id: state.conversation_id,
+                        },
+                        ctx,
+                    )
+                });
+                assert_eq!(
+                    should_autoexecute,
+                    !enabled || expected,
+                    "child model: {model_id}"
+                );
+            }
         });
-
-        assert!(should_autoexecute);
-    });
+    }
 }
 
 #[test]

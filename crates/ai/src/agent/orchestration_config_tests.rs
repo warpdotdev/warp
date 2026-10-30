@@ -3,6 +3,7 @@ use crate::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunA
 
 fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig {
     OrchestrationConfig {
+        agent_configs: Vec::new(),
         model_id: model.to_string(),
         harness_type: harness.to_string(),
         execution_mode: if remote {
@@ -15,6 +16,37 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
             OrchestrationExecutionMode::Local
         },
     }
+}
+
+#[test]
+fn approved_child_allocation_matches_names_and_resolves_models() {
+    let mut config = make_config("batch", "oz", false);
+    config.agent_configs = vec![
+        OrchestrationAgentConfig {
+            name: "a".into(),
+            model_id: "approved".into(),
+        },
+        OrchestrationAgentConfig {
+            name: "b".into(),
+            model_id: String::new(),
+        },
+    ];
+    assert_eq!(OrchestrationConfig::from_proto(&config.to_proto()), config);
+    let mut children = make_request("batch", "oz", false).agent_run_configs;
+    let mut second = children[0].clone();
+    second.name = " B ".into();
+    second.model_id = "requested".into();
+    children.insert(0, second);
+    assert!(config.has_matching_agent_roster(&children));
+    config.resolve_agent_configs(&mut children);
+    assert!(children[0].model_id.is_empty());
+    assert_eq!(children[1].model_id, "approved");
+    for name in ["new", "b", ""] {
+        children[1].name = name.into();
+        assert!(!config.has_matching_agent_roster(&children));
+    }
+    children.pop();
+    assert!(!config.has_matching_agent_roster(&children));
 }
 
 #[test]

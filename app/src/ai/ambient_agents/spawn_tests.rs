@@ -709,6 +709,10 @@ async fn spawn_uses_resolved_team_scope() {
         })
         .returning(|_, _| {
             Ok(SpawnAgentResponse {
+                launch_config: Some(crate::server::server_api::ai::AgentLaunchConfig {
+                    harness_type: "oz".to_string(),
+                    model_id: Some("configured-model".to_string()),
+                }),
                 task_id: run_id(),
                 run_id: run_id().to_string(),
                 at_capacity: false,
@@ -740,10 +744,14 @@ async fn spawn_uses_resolved_team_scope() {
     let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
     let mut stream = Box::pin(spawn_task(request, team_scope, Arc::new(mock), None));
 
-    assert!(matches!(
-        stream.next().await.expect("spawned event").expect("ok"),
-        AmbientAgentEvent::TaskSpawned { .. }
-    ));
+    let AmbientAgentEvent::TaskSpawned {
+        launch_config: Some(receipt),
+        ..
+    } = stream.next().await.expect("spawned event").expect("ok")
+    else {
+        panic!("expected configured receipt on task acknowledgment");
+    };
+    assert_eq!(receipt.model_id.as_deref(), Some("configured-model"));
     assert!(matches!(
         stream.next().await.expect("state event").expect("ok"),
         AmbientAgentEvent::StateChanged {
@@ -777,6 +785,7 @@ async fn poll_retries_transient_429_errors() {
 
     mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             at_capacity: false,
@@ -855,6 +864,7 @@ async fn poll_fails_on_permanent_http_error() {
 
     mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             at_capacity: false,
@@ -922,6 +932,7 @@ async fn poll_gives_up_after_max_transient_retries() {
 
     mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             at_capacity: false,
@@ -992,6 +1003,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             at_capacity: false,
@@ -1126,6 +1138,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
+            launch_config: None,
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             at_capacity: false,

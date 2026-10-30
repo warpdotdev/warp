@@ -48,6 +48,7 @@ use crate::persistence::model::{AgentConversation, AgentConversationData};
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AgentLaunchConfig;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
 use crate::ui_components::icons::Icon;
@@ -3283,9 +3284,7 @@ pub enum BlocklistAIHistoryEvent {
         artifact: Artifact,
     },
 
-    /// Emitted when a conversation first receives its server-assigned conversation token
-    /// (during StreamInit). Used by the StartAgentExecutor to resolve pending StartAgent
-    /// actions for child agent conversations.
+    /// Emitted when a conversation first receives its server-assigned conversation token.
     ConversationServerTokenAssigned {
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
@@ -3310,6 +3309,7 @@ pub enum BlocklistAIHistoryEvent {
     NewConversationRequestComplete {
         request_id: crate::ai::blocklist::StartAgentRequestId,
         conversation_id: AIConversationId,
+        launch: Option<RegisteredChildAgentLaunch>,
     },
 
     /// Emitted when a conversation's orchestration config is updated
@@ -3335,6 +3335,13 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
         session_id: session_sharing_protocol::common::SessionId,
     },
+}
+
+/// Adapter completion for a child whose run has been registered in history.
+#[derive(Debug, Clone)]
+pub struct RegisteredChildAgentLaunch {
+    pub agent_id: String,
+    pub launch_config: Option<AgentLaunchConfig>,
 }
 
 impl BlocklistAIHistoryEvent {
@@ -3445,6 +3452,25 @@ impl BlocklistAIHistoryEvent {
 }
 
 impl BlocklistAIHistoryModel {
+    /// Completes a child launch after its adapter has registered the run.
+    pub fn record_child_agent_launch_complete(
+        &mut self,
+        request_id: crate::ai::blocklist::StartAgentRequestId,
+        conversation_id: AIConversationId,
+        agent_id: String,
+        launch_config: Option<AgentLaunchConfig>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(BlocklistAIHistoryEvent::NewConversationRequestComplete {
+            request_id,
+            conversation_id,
+            launch: Some(RegisteredChildAgentLaunch {
+                agent_id,
+                launch_config,
+            }),
+        });
+    }
+
     /// Emits [`BlocklistAIHistoryEvent::NewConversationRequestComplete`].
     pub fn record_new_conversation_request_complete(
         &mut self,
@@ -3455,6 +3481,7 @@ impl BlocklistAIHistoryModel {
         ctx.emit(BlocklistAIHistoryEvent::NewConversationRequestComplete {
             request_id,
             conversation_id,
+            launch: None,
         });
     }
 }

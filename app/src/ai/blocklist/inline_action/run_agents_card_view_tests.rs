@@ -8,8 +8,55 @@ use ai::agent::action_result::{
 use ai::skills::SkillReference;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::{RunAgentsCardFields, RunAgentsEditState};
+use super::{RunAgentsCardFields, RunAgentsEditState, format_launch_details};
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationConfigState;
+use crate::ai::orchestration::{OptionRow, OptionSnapshot, OptionSourceStatus};
+
+#[test]
+fn harness_change_clears_only_unavailable_child_models_from_launch_request() {
+    let mut request = make_request("oz", RunAgentsExecutionMode::Local);
+    request.agent_run_configs = ["old-harness-model", " compatible ", "", "disabled"]
+        .into_iter()
+        .map(|model_id| RunAgentsAgentRunConfig {
+            model_id: model_id.to_string(),
+            ..request.agent_run_configs[0].clone()
+        })
+        .collect();
+    let mut state = RunAgentsEditState::from_request(&request);
+    state.orchestration_config_state.harness_type = "claude".to_string();
+    state.orchestration_config_state.model_id = "new-batch-model".to_string();
+    let models = OptionSnapshot {
+        rows: [
+            ("compatible", None),
+            ("disabled", Some("Unavailable".to_string())),
+        ]
+        .into_iter()
+        .map(|(id, disabled_reason)| OptionRow {
+            id: id.to_string(),
+            label: id.to_string(),
+            harness: None,
+            badge: None,
+            disabled_reason,
+        })
+        .collect(),
+        selected_id: None,
+        status: OptionSourceStatus::Ready,
+        footer: None,
+    };
+
+    state.card.reset_invalid_child_model_overrides(&models);
+
+    let confirmed = state.to_request();
+    assert_eq!(confirmed.model_id, "new-batch-model");
+    assert_eq!(
+        confirmed
+            .agent_run_configs
+            .iter()
+            .map(|child| child.model_id.as_str())
+            .collect::<Vec<_>>(),
+        ["", " compatible ", "", ""]
+    );
+}
 
 fn make_request(harness: &str, mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     make_request_with_skills(harness, mode, Vec::new())
@@ -35,6 +82,38 @@ fn confirmation_preserves_metadata_defaults_and_child_overrides() {
     assert_eq!(
         confirmed.agent_run_configs[0].metadata,
         request.agent_run_configs[0].metadata
+    );
+}
+
+#[test]
+fn launch_details_keep_each_child_model_and_outcome() {
+    let result = RunAgentsResult::Launched {
+        model_id: "batch".to_string(),
+        harness_type: "oz".to_string(),
+        execution_mode: RunAgentsLaunchedExecutionMode::Local,
+        agents: vec![
+            RunAgentsAgentOutcome {
+                name: "review".to_string(),
+                resolved_model_id: "child-model".to_string(),
+                kind: RunAgentsAgentOutcomeKind::Launched {
+                    agent_id: "run-1".to_string(),
+                },
+            },
+            RunAgentsAgentOutcome {
+                name: "test".to_string(),
+                resolved_model_id: String::new(),
+                kind: RunAgentsAgentOutcomeKind::Failed {
+                    error: "not installed".to_string(),
+                },
+            },
+        ],
+    };
+    assert_eq!(
+        format_launch_details(&result),
+        [
+            "review · child-model · Started (run-1)",
+            "test · Unreported · Failed: not installed",
+        ]
     );
 }
 
@@ -490,6 +569,7 @@ mod override_from_approved_config_tests {
 
     fn local_config(model: &str, harness: &str) -> OrchestrationConfig {
         OrchestrationConfig {
+            agent_configs: Vec::new(),
             model_id: model.to_string(),
             harness_type: harness.to_string(),
             execution_mode: OrchestrationExecutionMode::Local,
@@ -498,6 +578,7 @@ mod override_from_approved_config_tests {
 
     fn remote_config(model: &str, harness: &str, env: &str) -> OrchestrationConfig {
         OrchestrationConfig {
+            agent_configs: Vec::new(),
             model_id: model.to_string(),
             harness_type: harness.to_string(),
             execution_mode: OrchestrationExecutionMode::Remote {

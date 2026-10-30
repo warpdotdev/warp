@@ -1523,9 +1523,10 @@ pub enum RunAgentsLaunchedExecutionMode {
 pub struct RunAgentsAgentOutcome {
     pub name: String,
     pub kind: RunAgentsAgentOutcomeKind,
-    /// The model that was actually used for this child agent. Set from the
-    /// per-agent `model_id` override when present; otherwise from the
-    /// batch-level resolved model. Empty when the server did not populate it.
+    /// Adapter-reported configured-at-launch model; empty means unreported, never inferred
+    /// from the request. Cloud reports the persisted server-accepted enqueue snapshot;
+    /// local Oz reports effective settings, and local Claude reports its supplied CLI model.
+    /// This does not verify worker acknowledgment or the model used for inference.
     #[serde(default)]
     pub resolved_model_id: String,
 }

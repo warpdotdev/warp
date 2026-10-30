@@ -7,6 +7,7 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{LifecycleEventType, StartAgentExecutionMode};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::server::server_api::ai::AgentLaunchConfig;
 use crate::server::team_scope::RequestTeamScope;
 pub const TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR: &str =
     "The window's team changed before the child agent could start. Run the orchestration again.";
@@ -16,6 +17,7 @@ pub const TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR: &str =
 pub enum StartAgentOutcome {
     Started {
         agent_id: String,
+        launch_config: Option<AgentLaunchConfig>,
     },
     /// An error occurred while starting the agent.
     Error(String),
@@ -103,24 +105,27 @@ impl StartAgentExecutor {
         &mut self,
         request_id: StartAgentRequestId,
         child_conversation_id: AIConversationId,
+        agent_id: String,
+        launch_config: Option<AgentLaunchConfig>,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(pending) = self.pending.remove(&request_id) else {
             return;
         };
-        let agent_id = BlocklistAIHistoryModel::as_ref(ctx)
+        let registered_agent_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&child_conversation_id)
             .and_then(|conversation| conversation.orchestration_agent_id());
-        match agent_id {
-            Some(id) => {
+        match registered_agent_id {
+            Some(id) if id == agent_id => {
                 let _ = pending.sender.try_send(StartAgentOutcome::Started {
                     agent_id: id.clone(),
+                    launch_config,
                 });
                 OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
                     streamer.register_watched_run_id(pending.parent_conversation_id, id, ctx);
                 });
             }
-            None => {
+            _ => {
                 report_error!(
                     "No agent identifier found for child conversation",
                     extra: { "child_conversation_id" => ?child_conversation_id }
@@ -174,10 +179,6 @@ impl StartAgentExecutor {
             conversation.status_error_message().as_deref(),
         ) {
             self.complete_pending_as_error(request_id, child_conversation_id, error_msg, ctx);
-            return;
-        }
-        if conversation.orchestration_agent_id().is_some() {
-            self.complete_pending_as_started(request_id, child_conversation_id, ctx);
         }
     }
 
@@ -188,14 +189,6 @@ impl StartAgentExecutor {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
-            BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                conversation_id, ..
-            } => {
-                let Some(request_id) = self.find_pending_by_child(conversation_id) else {
-                    return;
-                };
-                self.complete_pending_as_started(request_id, *conversation_id, ctx);
-            }
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id, ..
             } => {
@@ -217,10 +210,21 @@ impl StartAgentExecutor {
             BlocklistAIHistoryEvent::NewConversationRequestComplete {
                 request_id,
                 conversation_id,
+                launch,
             } => {
                 self.record_child_conversation(*request_id, *conversation_id, ctx);
+                if let Some(launch) = launch {
+                    self.complete_pending_as_started(
+                        *request_id,
+                        *conversation_id,
+                        launch.agent_id.clone(),
+                        launch.launch_config.clone(),
+                        ctx,
+                    );
+                }
             }
-            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
             | BlocklistAIHistoryEvent::AppendedExchange { .. }

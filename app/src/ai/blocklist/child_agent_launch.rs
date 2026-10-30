@@ -19,6 +19,8 @@ use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::ai::AgentLaunchConfig;
 use crate::workspaces::user_workspaces::TeamScope;
 
 /// Server-side state prepared before a frontend creates the child's surface.
@@ -79,6 +81,7 @@ pub fn finish_local_oz_child_conversation(
     terminal_surface_id: EntityId,
     task_id: AmbientAgentTaskId,
     request_id: StartAgentRequestId,
+    launch_config: Option<AgentLaunchConfig>,
     ctx: &mut AppContext,
 ) {
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
@@ -89,7 +92,13 @@ pub fn finish_local_oz_child_conversation(
             terminal_surface_id,
             ctx,
         );
-        model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
+        model.record_child_agent_launch_complete(
+            request_id,
+            conversation_id,
+            task_id.to_string(),
+            launch_config,
+            ctx,
+        );
     });
 }
 
@@ -139,4 +148,21 @@ pub fn apply_child_agent_model_override(
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
         preferences.set_agent_mode_llm_override(scope, child_surface_id, model_id, ctx);
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn local_oz_child_launch_config(
+    terminal_surface_id: EntityId,
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> AgentLaunchConfig {
+    AgentLaunchConfig {
+        harness_type: "oz".to_string(),
+        model_id: Some(
+            LLMPreferences::as_ref(ctx)
+                .get_active_base_model(scope, ctx, Some(terminal_surface_id))
+                .id
+                .to_string(),
+        ),
+    }
 }

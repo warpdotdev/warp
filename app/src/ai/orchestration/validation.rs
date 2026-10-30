@@ -11,6 +11,7 @@ use crate::ai::local_harness_setup::{
     LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
+use crate::features::FeatureFlag;
 
 /// Whether a harness's local setup allows selecting it: always true for
 /// Cloud, otherwise requires the local CLI to be installed and the
@@ -137,6 +138,40 @@ pub fn empty_env_recommendation_message(
     } else {
         "We recommend creating an environment for cloud agents.".to_string()
     })
+}
+
+/// Validates effective child models against the current harness/location catalog, including disabled
+/// entries, and requires a batch fallback for explicit overrides. Does not resolve IDs or grant approval.
+pub fn child_model_validation_error<'a>(
+    state: &OrchestrationConfigState,
+    agents: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ctx: &AppContext,
+) -> Option<String> {
+    if !FeatureFlag::ChildModelRouting.is_enabled() {
+        return None;
+    }
+    let snapshot = super::model_snapshot(state, ctx);
+    for (name, child_model_id) in agents {
+        if state.model_id.trim().is_empty() && !child_model_id.trim().is_empty() {
+            return Some("Choose a batch model before using child model overrides.".to_string());
+        }
+        let model_id = if child_model_id.trim().is_empty() {
+            state.model_id.trim()
+        } else {
+            child_model_id.trim()
+        };
+        if model_id.is_empty() {
+            continue;
+        }
+        let reason = match snapshot.rows.iter().find(|row| row.id == model_id) {
+            Some(row) => row.disabled_reason.clone(),
+            None => Some("unavailable for this harness and location".to_string()),
+        };
+        if let Some(reason) = reason {
+            return Some(format!("{name}: model '{model_id}' is {reason}."));
+        }
+    }
+    None
 }
 
 #[cfg(test)]

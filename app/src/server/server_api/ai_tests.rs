@@ -29,6 +29,34 @@ fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
 }
 
+#[test]
+fn spawn_response_preserves_omitted_launch_settings() {
+    for (launch_config, expected) in [
+        (None, None),
+        (Some(json!({"harness_type": "oz"})), Some(None)),
+        (
+            Some(json!({"harness_type": "claude", "model_id": "accepted"})),
+            Some(Some("accepted")),
+        ),
+    ] {
+        let mut response = json!({
+            "task_id": "550e8400-e29b-41d4-a716-446655440000",
+            "run_id": "550e8400-e29b-41d4-a716-446655440000",
+        });
+        if let Some(config) = launch_config {
+            response["launch_config"] = config;
+        }
+        let response: super::SpawnAgentResponse = serde_json::from_value(response).unwrap();
+        assert_eq!(
+            response
+                .launch_config
+                .as_ref()
+                .map(|config| config.model_id.as_deref()),
+            expected,
+        );
+    }
+}
+
 fn execution_bootstrap_response() -> Value {
     json!({
         "data": {
