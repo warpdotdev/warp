@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6,6 +8,7 @@ use base64::Engine;
 use futures::executor::block_on;
 use instant::Instant;
 use warp_core::channel::{ChannelState, IapConfig};
+use warpui_core::App;
 use warpui_core::r#async::BoxFuture;
 
 use super::*;
@@ -316,6 +319,289 @@ fn fetch_iap_token_via_wif_errors_on_sts_failure() {
         err.to_string().contains("STS token exchange failed"),
         "unexpected error: {err:#}"
     );
+}
+
+/// Builds an `IapManager` directly (bypassing `IapManager::new`) so tests can
+/// exercise `ensure_access` / `apply_refresh_result` without the
+/// constructor's `start_refresh` side effect kicking off a real gcloud/WIF
+/// fetch.
+fn test_manager() -> IapManager {
+    IapManager {
+        state: Some(Arc::new(test_state())),
+        path_resolver: Box::new(
+            |_ctx: &mut AppContext| -> BoxFuture<'static, Option<String>> {
+                Box::pin(async { None })
+            },
+        ),
+        managed_mint: None,
+        consecutive_failures: 0,
+        access_gate: None,
+        next_access_gate_id: 0,
+    }
+}
+
+fn set_env_var(name: &str, value: &str) -> Option<std::ffi::OsString> {
+    let previous = std::env::var_os(name);
+    // Safety: tests that mutate process environment are marked `#[serial]` so
+    // we do not race with other environment readers/writers in this crate.
+    unsafe { std::env::set_var(name, value) };
+    previous
+}
+
+fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
+    match previous {
+        // Safety: see `set_env_var`.
+        Some(value) => unsafe { std::env::set_var(name, value) },
+        // Safety: see `set_env_var`.
+        None => unsafe { std::env::remove_var(name) },
+    }
+}
+
+#[test]
+fn non_retryable_failure_fails_access_gate_immediately_without_retry() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_manager());
+
+        let access_unavailable_messages: Rc<RefCell<Vec<String>>> = Rc::default();
+        {
+            let access_unavailable_messages = access_unavailable_messages.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model, move |_, event, _ctx| {
+                    if let IapManagerEvent::AccessUnavailable { message } = event {
+                        access_unavailable_messages
+                            .borrow_mut()
+                            .push(message.clone());
+                    }
+                });
+            });
+        }
+
+        model.update(&mut app, |manager, ctx| {
+            // Pre-mark the shared state as already refreshing so `ensure_access`'s
+            // internal `start_refresh` call is a no-op instead of spawning a real
+            // gcloud/WIF fetch; the test drives completion itself via
+            // `apply_refresh_result` below, exactly as the real fetch would on
+            // finishing.
+            manager.state.as_ref().unwrap().set_refreshing();
+            manager.ensure_access(ctx);
+        });
+
+        model.update(&mut app, |manager, ctx| {
+            manager.apply_refresh_result(
+                Err(anyhow::Error::new(NonRetryableIapError(
+                    "WARP_STAGING_IAP_BOOTSTRAP_JWT is unset; cannot mint an IAP token via WIF"
+                        .to_string(),
+                ))),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            access_unavailable_messages.borrow().as_slice(),
+            ["WARP_STAGING_IAP_BOOTSTRAP_JWT is unset; cannot mint an IAP token via WIF"],
+            "a non-retryable failure should fail the access gate immediately with its cause"
+        );
+        model.read(&app, |manager, _| {
+            assert!(
+                manager.access_gate.is_none(),
+                "the access gate should be resolved, not left waiting for the timeout"
+            );
+            assert_eq!(
+                manager.consecutive_failures, 0,
+                "a non-retryable failure must not burn the failure-retry budget"
+            );
+        });
+    });
+}
+
+#[test]
+fn retryable_failure_schedules_retry_and_leaves_access_gate_pending() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_manager());
+
+        let access_unavailable_messages: Rc<RefCell<Vec<String>>> = Rc::default();
+        {
+            let access_unavailable_messages = access_unavailable_messages.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model, move |_, event, _ctx| {
+                    if let IapManagerEvent::AccessUnavailable { message } = event {
+                        access_unavailable_messages
+                            .borrow_mut()
+                            .push(message.clone());
+                    }
+                });
+            });
+        }
+
+        model.update(&mut app, |manager, ctx| {
+            manager.state.as_ref().unwrap().set_refreshing();
+            manager.ensure_access(ctx);
+        });
+
+        model.update(&mut app, |manager, ctx| {
+            manager.apply_refresh_result(Err(anyhow::anyhow!("gcloud: connection reset")), ctx);
+        });
+
+        assert!(
+            access_unavailable_messages.borrow().is_empty(),
+            "a retryable failure must not fail the access gate early"
+        );
+        model.read(&app, |manager, _| {
+            assert_eq!(
+                manager.consecutive_failures, 1,
+                "a retryable failure should still schedule a failure retry"
+            );
+            assert!(
+                manager.access_gate.is_some(),
+                "the access gate should keep waiting out IAP_ACCESS_TIMEOUT for a retryable failure"
+            );
+        });
+    });
+}
+
+#[test]
+fn stale_gate_timeout_does_not_clobber_a_newer_gate() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_ctx| test_manager());
+
+        let access_unavailable_messages: Rc<RefCell<Vec<String>>> = Rc::default();
+        {
+            let access_unavailable_messages = access_unavailable_messages.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model, move |_, event, _ctx| {
+                    if let IapManagerEvent::AccessUnavailable { message } = event {
+                        access_unavailable_messages
+                            .borrow_mut()
+                            .push(message.clone());
+                    }
+                });
+            });
+        }
+
+        // Gate A: arm it via `ensure_access`, pre-marking the shared state as
+        // already refreshing so the call doesn't spawn a real gcloud/WIF fetch.
+        let gate_a = model.update(&mut app, |manager, ctx| {
+            manager.state.as_ref().unwrap().set_refreshing();
+            manager.ensure_access(ctx);
+            manager
+                .access_gate
+                .expect("ensure_access should arm a gate")
+        });
+
+        // Gate A resolves early via a non-retryable failure, exactly as the
+        // real WIF fetch would on completion.
+        model.update(&mut app, |manager, ctx| {
+            manager.apply_refresh_result(
+                Err(anyhow::Error::new(NonRetryableIapError(
+                    "WARP_STAGING_IAP_BOOTSTRAP_JWT is unset; cannot mint an IAP token via WIF"
+                        .to_string(),
+                ))),
+                ctx,
+            );
+        });
+        assert_eq!(access_unavailable_messages.borrow().len(), 1);
+
+        // Gate B starts before A's original timer would have fired.
+        let gate_b = model.update(&mut app, |manager, ctx| {
+            manager.state.as_ref().unwrap().set_refreshing();
+            manager.ensure_access(ctx);
+            manager
+                .access_gate
+                .expect("ensure_access should arm a new gate")
+        });
+        assert_ne!(
+            gate_a, gate_b,
+            "each `ensure_access` call should be assigned a fresh gate id"
+        );
+
+        // A's stale timer finally fires: it must be a no-op, not clobber B.
+        model.update(&mut app, |manager, ctx| {
+            manager.resolve_access_gate_timeout(gate_a, ctx);
+        });
+        assert_eq!(
+            access_unavailable_messages.borrow().len(),
+            1,
+            "a stale timer belonging to an already-resolved gate must not fire again"
+        );
+        model.read(&app, |manager, _| {
+            assert_eq!(
+                manager.access_gate,
+                Some(gate_b),
+                "a stale timer must not clear a newer, still-pending gate"
+            );
+        });
+
+        // B's own timer fires: this is the real timeout for the still-pending gate.
+        model.update(&mut app, |manager, ctx| {
+            manager.resolve_access_gate_timeout(gate_b, ctx);
+        });
+        assert_eq!(access_unavailable_messages.borrow().len(), 2);
+        model.read(&app, |manager, _| {
+            assert!(manager.access_gate.is_none());
+        });
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn ensure_access_resolves_gate_immediately_on_cache_hit() {
+    let home_dir = tempfile::TempDir::new().expect("failed to create temp HOME");
+    let previous_home = set_env_var(
+        "HOME",
+        home_dir.path().to_str().expect("temp dir path is utf8"),
+    );
+
+    let cached_token = jwt_with_payload(&format!(r#"{{"exp":{}}}"#, now_unix() + 3600));
+    cache::write(&cached_token);
+
+    App::test((), |mut app| async move {
+        let (minter, _) = fake_minter("unused");
+        let model = app.add_singleton_model(|_ctx| IapManager {
+            managed_mint: Some(ManagedIapMint::new(minter)),
+            ..test_manager()
+        });
+
+        model.update(&mut app, |manager, ctx| {
+            manager.ensure_access(ctx);
+        });
+
+        model.read(&app, |manager, _| {
+            assert!(
+                manager.access_gate.is_none(),
+                "a cache hit should resolve the gate immediately instead of waiting out \
+                 IAP_ACCESS_TIMEOUT"
+            );
+            assert!(
+                manager.has_valid_token(),
+                "the cached token should be loaded"
+            );
+        });
+    });
+
+    restore_env_var("HOME", previous_home);
+}
+
+#[test]
+fn fetch_iap_token_via_wif_missing_aud_claim_is_non_retryable() {
+    let (minter, _) = fake_minter("unused");
+    // A syntactically valid JWT with no `aud` claim at all.
+    let injected = jwt_with_payload(&format!(r#"{{"exp":{}}}"#, now_unix() + 3600));
+    let endpoints = wif_endpoints("http://unused.invalid");
+
+    let err = block_on(fetch_iap_token_via_wif(
+        minter,
+        injected,
+        "iap-client-id".to_string(),
+        TEST_SA_EMAIL.to_string(),
+        &endpoints,
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.downcast_ref::<NonRetryableIapError>().is_some(),
+        "a JWT with no readable `aud` claim can never recover through retry: {err:#}"
+    );
+    assert!(err.to_string().contains("no readable `aud` claim"));
 }
 
 #[test]
