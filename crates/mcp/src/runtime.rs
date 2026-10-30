@@ -759,14 +759,16 @@ async fn send_preflight_request(
     let mut request = build_client_with_headers(headers)?
         .post(url)
         .timeout(Duration::from_secs(10))
-        .header(HEADER_MCP_PROTOCOL_VERSION, protocol.version.as_str())
         .header(
             http::header::ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
         )
         .json(&message);
     if protocol.discover {
-        request = request.header(HEADER_MCP_METHOD, "server/discover");
+        // Legacy initialize negotiates in its body; an unsupported header prevents a counteroffer.
+        request = request
+            .header(HEADER_MCP_PROTOCOL_VERSION, protocol.version.as_str())
+            .header(HEADER_MCP_METHOD, "server/discover");
     }
 
     if let Some(auth_client) = auth_client.as_ref() {
