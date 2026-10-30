@@ -299,6 +299,24 @@ impl<T: EventLoopSender> PtyController<T> {
         self.line_editor_status.as_ref(ctx).is_line_editor_active()
     }
 
+    /// Whether a user/agent command write may go to the PTY immediately.
+    ///
+    /// Prefers [`LineEditorStatus`], but also allows writes when the active block has
+    /// already received precmd and has not started a command. That recovers from cases
+    /// where LineEditorStatus dropped or delayed activation while command submission
+    /// correctly observed block-level precmd — previously those submits started the block
+    /// UI and queued a write that never drained (e.g. multiple Enter presses in Warpified
+    /// SSH).
+    fn can_write_user_command_to_pty(&self, ctx: &mut ModelContext<Self>) -> bool {
+        if self.can_write_to_pty(ctx) {
+            return true;
+        }
+
+        let model = self.terminal_model.lock();
+        let active_block = model.block_list().active_block();
+        !active_block.started() && active_block.has_received_precmd()
+    }
+
     /// Executes the next queued `PtyWrite`, if able.
     ///
     /// This is a no-op if the line editor is currently inactive; in the constructor of
@@ -474,8 +492,9 @@ impl<T: EventLoopSender> PtyController<T> {
 
     /// Converts the given `command` into a byte array and writes its corresponding bytes to the PTY.
     ///
-    /// If the line editor is active, the command is written immediately. Otherwise, the command is
-    /// written when the line editor becomes active.
+    /// If the line editor is active (or the active block is already at a prompt — see
+    /// [`Self::can_write_user_command_to_pty`]), the command is written immediately. Otherwise,
+    /// the command is written when the line editor becomes active.
     ///
     /// This also clears pending_writes, since the priority is to execute the user's command.
     ///
@@ -489,6 +508,11 @@ impl<T: EventLoopSender> PtyController<T> {
         source: CommandExecutionSource,
         ctx: &mut ModelContext<Self>,
     ) -> StartCommandOutcome {
+        // Snapshot writability before start_command_execution mutates the active block.
+        // Otherwise a LineEditorStatus desync would queue the write after the block is
+        // already marked started, and the queued write could never drain.
+        let can_write = self.can_write_user_command_to_pty(ctx);
+
         {
             let mut model = self.terminal_model.lock();
 
@@ -529,9 +553,7 @@ impl<T: EventLoopSender> PtyController<T> {
             in_band_command_id: None,
             before_write_fn: None,
         };
-        if self.can_write_to_pty(ctx) {
-            // Cancel the async writer task and clear the async write queue.
-            // Check if line editor is active
+        if can_write {
             self.send_write_to_event_loop(write, ctx);
         } else {
             self.pending_writes.push_back(write);
