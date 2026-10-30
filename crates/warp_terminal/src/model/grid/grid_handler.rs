@@ -470,7 +470,10 @@ pub struct GridHandler {
     /// processing pass, this field accumulates dirty rows until find explicitly consumes them.
     /// This allows find to be updated less frequently than byte processing while still
     /// knowing exactly which rows have changed.
-    find_dirty_rows_range: Option<RangeInclusive<usize>>,
+    ///
+    /// Rows are absolute (offset by [`Self::num_lines_truncated`]) so that scrollback truncation
+    /// while rows accumulate does not shift the range away from the rows that were written.
+    find_dirty_rows_range: Option<RangeInclusive<u64>>,
 }
 
 impl GridHandler {
@@ -1754,6 +1757,7 @@ impl GridHandler {
     /// This accumulates dirty rows across multiple byte processing passes
     /// until find explicitly consumes them.
     fn update_find_dirty_rows_range(&mut self, row: usize) {
+        let row = row as u64 + self.num_lines_truncated();
         self.find_dirty_rows_range = Some(match &self.find_dirty_rows_range {
             Some(existing) => {
                 let start = min(*existing.start(), row);
@@ -1764,19 +1768,11 @@ impl GridHandler {
         });
     }
 
-    /// Returns the accumulated dirty row range for find operations, if any.
-    ///
-    /// Unlike `dirty_cells_range()`, this range accumulates across multiple byte
-    /// processing passes until explicitly consumed with `take_find_dirty_rows_range()`.
-    pub fn find_dirty_rows_range(&self) -> Option<RangeInclusive<usize>> {
-        self.find_dirty_rows_range.clone()
-    }
-
-    /// Returns and clears the accumulated dirty row range for find operations.
+    /// Returns and clears the accumulated dirty row range for find operations, in absolute rows.
     ///
     /// This should be called when find has processed the dirty range and no longer
     /// needs to track those rows as dirty.
-    pub fn take_find_dirty_rows_range(&mut self) -> Option<RangeInclusive<usize>> {
+    pub fn take_find_dirty_rows_range(&mut self) -> Option<RangeInclusive<u64>> {
         self.find_dirty_rows_range.take()
     }
 
