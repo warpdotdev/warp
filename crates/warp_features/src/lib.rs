@@ -501,8 +501,6 @@ pub enum FeatureFlag {
 
     /// Enables rendering of images in markdown files and AI responses.
     MarkdownImages,
-    /// Enables rendering Mermaid diagrams in markdown notebooks.
-    MarkdownMermaid,
     /// Enables editable Mermaid diagrams to behave atomically in notebook and plan editors.
     EditableMarkdownMermaid,
 
