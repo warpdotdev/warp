@@ -1849,8 +1849,6 @@ fn noop_setup_events(ctx: &ModelContext<AgentDriver>) -> SetupClientEventReporte
 #[test]
 #[serial_test::serial]
 fn initial_global_scan_wait_resolves_after_pending_scan_completes() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let fixture = FileBasedMcpFixture::register(&mut app);
@@ -1929,7 +1927,6 @@ fn assert_initial_global_mcp_readiness_wait_unblocks_on(state: MCPServerState) {
 #[test]
 #[serial_test::serial]
 fn initial_global_mcp_readiness_wait_unblocks_on_terminal_states() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     assert_initial_global_mcp_readiness_wait_unblocks_on(MCPServerState::Running);
     assert_initial_global_mcp_readiness_wait_unblocks_on(MCPServerState::FailedToStart);
 }
@@ -1941,8 +1938,6 @@ fn initial_global_mcp_readiness_wait_unblocks_on_terminal_states() {
 #[test]
 #[serial_test::serial]
 fn initial_global_scan_and_readiness_share_one_bounded_timeout_budget() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let fixture = FileBasedMcpFixture::register(&mut app);
@@ -2008,8 +2003,6 @@ fn initial_global_scan_and_readiness_share_one_bounded_timeout_budget() {
 #[test]
 #[serial_test::serial]
 fn initial_global_mcp_readiness_wait_settles_immediately_when_config_removed_before_subscribing() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let fixture = FileBasedMcpFixture::register(&mut app);
@@ -2059,8 +2052,6 @@ fn initial_global_mcp_readiness_wait_settles_immediately_when_config_removed_bef
 #[test]
 #[serial_test::serial]
 fn initial_global_mcp_readiness_wait_settles_on_notrunning_after_subscribing() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let fixture = FileBasedMcpFixture::register(&mut app);
@@ -2125,8 +2116,6 @@ fn initial_global_mcp_readiness_wait_settles_on_notrunning_after_subscribing() {
 #[test]
 #[serial_test::serial]
 fn timed_out_wait_does_not_tear_down_a_later_waits_subscription() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let fixture = FileBasedMcpFixture::register(&mut app);
