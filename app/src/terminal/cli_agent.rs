@@ -157,7 +157,15 @@ const MUSE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Grok Build, Kiro CLI, Muse Code)
+/// uta brand purple (#7C5CFF, from https://unleashtheagents.ai/favicon.svg)
+const UTA_PURPLE: ColorU = ColorU {
+    r: 124,
+    g: 92,
+    b: 255,
+    a: 255,
+};
+
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Grok Build, Kiro CLI, Muse Code, uta)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -178,6 +186,7 @@ pub enum CLIAgent {
     Grok,
     Kiro,
     Muse,
+    Uta,
     /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
@@ -206,6 +215,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok",
             CLIAgent::Kiro => "Kiro",
             CLIAgent::Muse => "Muse",
+            CLIAgent::Uta => "Uta",
             CLIAgent::WarpTui => "WarpTui",
             CLIAgent::Unknown => "Unknown",
         }
@@ -240,6 +250,7 @@ impl CLIAgent {
             CLIAgent::Grok => &["grok"],
             CLIAgent::Kiro => &["kiro-cli", "kiro"],
             CLIAgent::Muse => &["muse"],
+            CLIAgent::Uta => &["uta"],
             CLIAgent::Unknown => &[],
         }
     }
@@ -298,6 +309,7 @@ impl CLIAgent {
             CLIAgent::Grok => "Grok Build",
             CLIAgent::Kiro => "Kiro CLI",
             CLIAgent::Muse => "Muse Code",
+            CLIAgent::Uta => "uta",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -327,6 +339,7 @@ impl CLIAgent {
             CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Kiro => Some(Icon::KiroLogo),
             CLIAgent::Muse => Some(Icon::MuseLogo),
+            CLIAgent::Uta => Some(Icon::UtaLogo),
             CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
@@ -367,6 +380,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
                 SkillProvider::Codex,
             ],
+            CLIAgent::Uta => &[SkillProvider::Agents, SkillProvider::Claude],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
@@ -397,6 +411,7 @@ impl CLIAgent {
                 | CLIAgent::Grok
                 | CLIAgent::Kiro
                 | CLIAgent::Muse
+                | CLIAgent::Uta
         )
     }
 
@@ -426,6 +441,7 @@ impl CLIAgent {
             CLIAgent::Grok => Some(GROK_COLOR),
             CLIAgent::Kiro => Some(KIRO_PURPLE),
             CLIAgent::Muse => Some(MUSE_COLOR),
+            CLIAgent::Uta => Some(UTA_PURPLE),
             CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }
