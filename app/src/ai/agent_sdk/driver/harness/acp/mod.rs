@@ -25,6 +25,7 @@ mod mapping;
 mod model_config;
 mod policy;
 mod protocol;
+mod resume;
 mod turn_driver;
 
 use std::collections::{HashMap, VecDeque};
@@ -65,10 +66,11 @@ use self::model_config::configure_model_and_thinking_through_acp;
 use self::policy::{PolicyDecision, PolicyRequest};
 use self::protocol::{
     CancelParams, ClientCapabilities, ClientInfo, FsCapabilities, InitializeParams,
-    InitializeResponse, McpServer, NewSessionParams, NewSessionResponse, PROTOCOL_VERSION,
-    PermissionOptionKind, PermissionOutcome, ReadTextFileParams, ReadTextFileResponse,
-    RequestPermissionParams, RequestPermissionResponse, WriteTextFileParams,
+    InitializeResponse, McpServer, PROTOCOL_VERSION, PermissionOptionKind, PermissionOutcome,
+    ReadTextFileParams, ReadTextFileResponse, RequestPermissionParams, RequestPermissionResponse,
+    WriteTextFileParams,
 };
+use self::resume::{SessionOrigin, open_session, rehydrate_cli_session, session_to_resume};
 use self::turn_driver::{
     EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, TurnCancellation, TurnDriver, TurnHost, TurnState,
     cancel_deadline,
@@ -629,10 +631,11 @@ impl HarnessRunner for AcpHarnessRunner {
         foreground: &ModelSpawner<AgentDriver>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
-        let (background, shell_family, restored_conversation_id): (
+        let (background, shell_family, restored_conversation_id, restored_server_id): (
             Arc<Background>,
             ShellFamily,
             Option<AIConversationId>,
+            Option<ServerConversationToken>,
         ) = foreground
             .spawn(|me, ctx| {
                 let shell_family = me
@@ -641,14 +644,36 @@ impl HarnessRunner for AcpHarnessRunner {
                     .active_session_shell_type(ctx)
                     .map(ShellFamily::from)
                     .unwrap_or(ShellFamily::Posix);
+                let restored_server_id = me.restored_conversation_id.and_then(|id| {
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)?
+                        .server_conversation_token()
+                        .cloned()
+                });
                 (
                     ctx.background_executor(),
                     shell_family,
                     me.restored_conversation_id,
+                    restored_server_id,
                 )
             })
             .await
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+
+        // A run that continues a restored conversation puts the CLI's session back on disk
+        // before the agent starts, so the handshake can resume it.
+        let rehydrated = match &restored_server_id {
+            Some(server_id) => Some(
+                rehydrate_cli_session(
+                    self.cli_session.as_ref().map(|cli| cli.kind),
+                    server_id,
+                    self.client.clone(),
+                    &self.harness_working_dir,
+                )
+                .await,
+            ),
+            None => None,
+        };
 
         let listener = BridgeListener::bind(&self.launch.program, &self.launch.args)
             .map_err(|error| self.setup_failed(format!("{error:#}")))?;
@@ -739,16 +764,13 @@ impl HarnessRunner for AcpHarnessRunner {
             );
             self.attachments
                 .set_prompt_capabilities(capabilities.prompt_capabilities);
-            let mut session: NewSessionResponse = connection
-                .request(
-                    protocol::METHOD_SESSION_NEW,
-                    NewSessionParams {
-                        cwd: self.harness_working_dir.display().to_string(),
-                        mcp_servers: self.mcp_servers.clone(),
-                    },
-                )
-                .await
-                .context("session/new failed")?;
+            let (mut session, origin) = open_session(
+                &connection,
+                session_to_resume(rehydrated, &capabilities.session_capabilities),
+                self.harness_working_dir.display().to_string(),
+                self.mcp_servers.clone(),
+            )
+            .await?;
             configure_model_and_thinking_through_acp(
                 &connection,
                 &mut session,
@@ -764,7 +786,7 @@ impl HarnessRunner for AcpHarnessRunner {
                 | Harness::OpenCode
                 | Harness::Unknown => None,
             };
-            Ok::<_, anyhow::Error>((session.session_id, suppressed_startup_message))
+            Ok::<_, anyhow::Error>((session.session_id, suppressed_startup_message, origin))
         }
         .fuse();
         pin_mut!(handshake);
@@ -775,7 +797,7 @@ impl HarnessRunner for AcpHarnessRunner {
                 Err(anyhow!("the agent did not complete its handshake within {HANDSHAKE_TIMEOUT:?}"))
             }
         };
-        let (session_id, suppressed_startup_message) = match session_id {
+        let (session_id, suppressed_startup_message, origin) = match session_id {
             Ok(session) => session,
             Err(error) => {
                 connection.close().await;
@@ -799,7 +821,14 @@ impl HarnessRunner for AcpHarnessRunner {
                 return Err(self.setup_failed(reason));
             }
         };
-        log::info!("ACP session {session_id} created");
+        match &origin {
+            SessionOrigin::New => log::info!("ACP session {session_id} created"),
+            SessionOrigin::Resumed => log::info!("ACP session {session_id} resumed"),
+            SessionOrigin::ResumeMissed(miss) => log::warn!(
+                "Could not resume the restored conversation's ACP session ({miss}); continuing \
+                 in new session {session_id} without its earlier turns"
+            ),
+        }
         if let Some(agent) = self.agent.lock().as_mut() {
             agent.session_id = Some(session_id.clone());
         }

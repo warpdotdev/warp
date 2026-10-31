@@ -7,6 +7,7 @@ pub(super) const PROTOCOL_VERSION: u16 = 1;
 
 pub(super) const METHOD_INITIALIZE: &str = "initialize";
 pub(super) const METHOD_SESSION_NEW: &str = "session/new";
+pub(super) const METHOD_SESSION_RESUME: &str = "session/resume";
 pub(super) const METHOD_SESSION_SET_CONFIG_OPTION: &str = "session/set_config_option";
 pub(super) const METHOD_SESSION_PROMPT: &str = "session/prompt";
 pub(super) const METHOD_SESSION_CANCEL: &str = "session/cancel";
@@ -60,9 +61,26 @@ pub(super) struct InitializeResponse {
 pub(super) struct AgentCapabilities {
     pub load_session: bool,
     pub prompt_capabilities: PromptCapabilities,
+    pub session_capabilities: SessionCapabilities,
     /// Capabilities this client does not model (e.g. `mcpCapabilities`), kept for logging.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
+}
+
+/// The session methods beyond `session/new` that the agent supports. Each is announced by an
+/// object (currently always empty) under its name; this client only uses `resume`.
+#[derive(Deserialize, Default, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct SessionCapabilities {
+    resume: Option<Value>,
+}
+
+impl SessionCapabilities {
+    /// Whether the agent takes `session/resume`, which reopens a session it persisted without
+    /// replaying its history the way `session/load` does.
+    pub(super) fn supports_resume(&self) -> bool {
+        self.resume.is_some()
+    }
 }
 
 /// The prompt content kinds the agent accepts beyond text and resource links, which every ACP
@@ -85,6 +103,15 @@ pub(super) struct AgentInfo {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct NewSessionParams {
+    pub cwd: String,
+    pub mcp_servers: Vec<McpServer>,
+}
+
+/// Reopens a session the agent persisted, in place of `session/new`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ResumeSessionParams {
+    pub session_id: String,
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
 }
@@ -130,6 +157,26 @@ pub(super) struct NewSessionResponse {
     /// Adapter-specific extension data.
     #[serde(rename = "_meta", default)]
     pub meta: Value,
+}
+
+/// `session/resume`'s answer, which is `session/new`'s minus the session id the client already
+/// holds.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct ResumeSessionResponse {
+    pub config_options: Vec<AcpAdvertisedSetting>,
+    #[serde(rename = "_meta")]
+    pub meta: Value,
+}
+
+impl ResumeSessionResponse {
+    pub(super) fn into_session(self, session_id: String) -> NewSessionResponse {
+        NewSessionResponse {
+            session_id,
+            config_options: self.config_options,
+            meta: self.meta,
+        }
+    }
 }
 
 /// An adapter-advertised ACP setting. Model and thinking settings share this wire representation.
