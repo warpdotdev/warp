@@ -28,12 +28,18 @@ use super::settings_page::{
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
 use crate::menu::{Event as MenuEvent, Event, Menu, MenuItem, MenuItemFields};
+use crate::search_bar::SearchBar;
 use crate::server::block::Block;
 use crate::server::server_api::block::BlockClient;
 use crate::view_components::ToastFlavor;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
+const SEARCH_BAR_MAX_WIDTH: f32 = 640.;
 
 const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str = "Are you sure you want to unshare this block?\n\
 \nIt will no longer be accessible by link and will be permanently deleted from Warp servers.";
@@ -98,6 +104,17 @@ impl UserOwnedBlock {
             url.push_str("?preview=true");
         }
         url
+    }
+
+    fn matches_search_query(&self, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+
+        let needle = query.to_lowercase();
+        self.command.to_lowercase().contains(&needle)
+            || self.block_url().to_lowercase().contains(&needle)
     }
 
     fn render_overflow_icon(&self, appearance: &Appearance, index: usize) -> Box<dyn Element> {
@@ -277,6 +294,15 @@ impl UserOwnedBlock {
     }
 }
 
+fn visible_block_indices(blocks: &[UserOwnedBlock], query: &str) -> Vec<usize> {
+    blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block.is_shared() && block.matches_search_query(query))
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Status for the request to fetch the blocks owned by the current user.
 #[derive(Debug)]
 enum GetBlocksForUserRequestState {
@@ -298,6 +324,7 @@ impl GetBlocksForUserRequestState {
         appearance: &Appearance,
         list_state: UniformListState,
         scroll_state_handle: ScrollStateHandle,
+        search_query: &str,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         match self {
@@ -313,30 +340,27 @@ impl GetBlocksForUserRequestState {
                 .build()
                 .finish()),
             GetBlocksForUserRequestState::Done(user_blocks) => {
+                let has_shared_blocks = user_blocks.iter().any(UserOwnedBlock::is_shared);
+                let visible_indices = visible_block_indices(user_blocks, search_query);
                 let user_blocks = user_blocks.clone();
-                // Only consider the unshared blocks when rendering. We don't remove them from the
-                // list of blocks so that the indexing is consistent for the lifetime of the app.
-                let num_visible_blocks =
-                    user_blocks.iter().filter(|block| block.is_shared()).count();
-
-                if num_visible_blocks > 0 {
-                    let list =
-                        UniformList::new(list_state, num_visible_blocks, move |range, app| {
+                if !visible_indices.is_empty() {
+                    let list = UniformList::new(
+                        list_state,
+                        visible_indices.len(),
+                        move |range, app| {
                             let appearance = Appearance::as_ref(app);
-                            user_blocks
+                            visible_indices
                                 .iter()
-                                .enumerate()
-                                .filter(|(_, block)| block.is_shared())
                                 .skip(range.start)
                                 .take(range.end - range.start)
                                 .enumerate()
-                                .map(|(visible_index, (index, user_block))| {
+                                .map(|(visible_index, &index)| {
                                     let user_block_element =
-                                        Container::new(user_block.render(appearance, index))
+                                        Container::new(user_blocks[index].render(appearance, index))
                                             .with_uniform_padding(10.);
 
                                     // Add a background on alternating blocks.
-                                    if visible_index % 2 == 0 {
+                                    if (range.start + visible_index) % 2 == 0 {
                                         user_block_element
                                             .with_background(internal_colors::fg_overlay_1(
                                                 appearance.theme(),
@@ -348,7 +372,8 @@ impl GetBlocksForUserRequestState {
                                 })
                                 .collect::<Vec<_>>()
                                 .into_iter()
-                        });
+                        },
+                    );
 
                     Scrollable::vertical(
                         scroll_state_handle,
@@ -360,6 +385,8 @@ impl GetBlocksForUserRequestState {
                     )
                     .with_padding_start(5.)
                     .finish()
+                } else if has_shared_blocks {
+                    pad(ui_builder.label("No search results found").build().finish())
                 } else {
                     pad(ui_builder
                         .label("You don't have any shared blocks yet.")
@@ -391,6 +418,9 @@ struct StateHandles {
 pub struct ShowBlocksView {
     page: PageType<Self>,
     list_state: UniformListState,
+    search_query: String,
+    search_editor: ViewHandle<EditorView>,
+    search_bar: ViewHandle<SearchBar>,
     overflow_menu: ViewHandle<Menu<ShowBlocksAction>>,
     overflow_menu_index: Option<usize>,
     get_blocks_for_user_status: GetBlocksForUserRequestState,
@@ -418,6 +448,26 @@ pub enum ShowBlocksEvent {
 
 impl ShowBlocksView {
     pub fn new(block_client: Arc<dyn BlockClient>, ctx: &mut ViewContext<Self>) -> Self {
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.ui_font_family()),
+                    ..Default::default()
+                },
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("Search shared blocks", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&search_editor, |me, _, event, ctx| {
+            me.handle_search_editor_event(event, ctx);
+        });
+        let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
         let menu = ctx.add_typed_action_view(|ctx| {
             let mut menu = Menu::new().prevent_interaction_with_other_elements();
 
@@ -439,12 +489,32 @@ impl ShowBlocksView {
         Self {
             page,
             list_state: Default::default(),
+            search_query: String::new(),
+            search_editor,
+            search_bar,
             state_handles: Default::default(),
             overflow_menu: menu,
             overflow_menu_index: None,
             get_blocks_for_user_status: GetBlocksForUserRequestState::NotStarted,
             block_client,
             pending_unshared_block_index: None,
+        }
+    }
+
+    fn handle_search_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            EditorEvent::Edited(_) => {
+                self.search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+                ctx.notify();
+            }
+            EditorEvent::Escape => {
+                self.search_query.clear();
+                self.search_editor.update(ctx, |editor, ctx| {
+                    editor.clear_buffer_and_reset_undo_stack(ctx);
+                });
+                ctx.notify();
+            }
+            _ => {}
         }
     }
 
@@ -758,6 +828,7 @@ impl SettingsWidget for ShowBlocksWidget {
             appearance,
             view.list_state.clone(),
             view.state_handles.scroll_state_handle.clone(),
+            &view.search_query,
         );
 
         let inner_container = SavePosition::new(
@@ -798,10 +869,28 @@ impl SettingsWidget for ShowBlocksWidget {
         }
 
         let header = render_page_title("Shared blocks", HEADER_FONT_SIZE, appearance);
-        let col = Flex::column()
-            .with_child(header)
-            .with_child(Expanded::new(1., stack.finish()).finish());
+        let mut col = Flex::column().with_child(header);
+        if matches!(
+            &view.get_blocks_for_user_status,
+            GetBlocksForUserRequestState::Done(blocks)
+                if blocks.iter().any(UserOwnedBlock::is_shared)
+        ) {
+            col.add_child(
+                Container::new(
+                    ConstrainedBox::new(ChildView::new(&view.search_bar).finish())
+                        .with_max_width(SEARCH_BAR_MAX_WIDTH)
+                        .finish(),
+                )
+                .with_padding_bottom(12.)
+                .finish(),
+            );
+        }
+        col.add_child(Expanded::new(1., stack.finish()).finish());
 
         col.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "show_blocks_view_tests.rs"]
+mod tests;
