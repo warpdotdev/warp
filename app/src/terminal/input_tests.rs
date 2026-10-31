@@ -38,6 +38,7 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentInput, AIAgentOutputStatus, UserQueryMode,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
 use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
@@ -58,6 +59,7 @@ use crate::context_chips::prompt::Prompt;
 use crate::editor::{DisplayPoint, EditorAction, Point, TextStyleOperation};
 use crate::input_suggestions::{HistoryOrder, Item};
 use crate::network::NetworkStatus;
+use crate::pane_group::TerminalViewResources;
 use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
 use crate::search::slash_command_menu::static_commands::commands;
@@ -109,6 +111,7 @@ use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::Event as TerminalViewEvent;
+use crate::terminal::view::ambient_agent::{Host, HostSelectorAction, create_cloud_mode_view};
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::test_util::assert_eventually;
@@ -1845,6 +1848,323 @@ fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
             sent.borrow().as_slice(),
             ["continue please"],
             "an executor viewer must forward the prompt to the sharer"
+        );
+    });
+}
+
+#[test]
+fn cloud_host_selection_restores_saved_host_before_first_launch() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+        CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .last_selected_host
+                .set_value(Some("saved-worker".to_string()), ctx)
+                .unwrap();
+        });
+
+        let (_, input) = add_host_selection_composer(&mut app);
+        assert_cloud_host_selection(
+            &input,
+            &Host::SelfHosted {
+                slug: "saved-worker".to_string(),
+            },
+            Some("saved-worker"),
+            &app,
+        );
+    });
+}
+
+fn host_selection_team(uid: i64, host: Option<&str>) -> Team {
+    let mut team = Team::from_local_cache(uid.into(), "Team".to_string(), None, None, None, None);
+    team.settings.default_host_slug = host.map(str::to_string);
+    team
+}
+
+fn update_host_selection_teams(app: &mut App, teams: Vec<Team>) {
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_string().into(),
+        "Workspace".to_string(),
+        Some(teams),
+        None,
+    );
+    let uid = workspace.uid;
+    UserWorkspaces::handle(app).update(app, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(uid, ctx);
+    });
+}
+
+fn add_host_selection_composer(app: &mut App) -> (WindowId, ViewHandle<Input>) {
+    let tips = app.add_model(|_| TipsCompleted::default());
+    let (window, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+        TerminalView::new_for_test(tips, None, ctx)
+    });
+    terminal.update(app, |view, _| {
+        let mut model = view.model.lock();
+        model.set_shared_session_status(SharedSessionStatus::ViewPending);
+        model.set_is_dummy_cloud_mode_session(true);
+    });
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let terminal_id = terminal.id();
+    let weak_terminal = terminal.downgrade();
+    input.update(app, |input, ctx| {
+        let view_model =
+            ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_id, weak_terminal, ctx));
+        view_model.update(ctx, |model, _| {
+            model.set_worker_host(Some("previous-worker".to_string()));
+        });
+        input.attach_ambient_agent_view_model(view_model, ctx);
+    });
+    (window, input)
+}
+
+fn assert_cloud_host_selection(
+    input: &ViewHandle<Input>,
+    selected: &Host,
+    request_host: Option<&str>,
+    app: &App,
+) {
+    input.read(app, |input, ctx| {
+        assert_eq!(
+            input.host_selector().unwrap().as_ref(ctx).selected(),
+            selected
+        );
+        let config = input
+            .ambient_agent_view_model()
+            .unwrap()
+            .as_ref(ctx)
+            .build_default_spawn_config(&input.team_scope(ctx), ctx);
+        assert_eq!(config.worker_host.as_deref(), request_host);
+        let json = serde_json::to_value(config).unwrap();
+        assert_eq!(
+            json.get("worker_host"),
+            request_host.map(serde_json::Value::from).as_ref()
+        );
+    });
+}
+
+fn select_cloud_host(input: &ViewHandle<Input>, host: Host, app: &mut App) {
+    let selector = input.read(app, |input, _| input.host_selector().unwrap().clone());
+    selector.update(app, |selector, ctx| {
+        selector.handle_action(&HostSelectorAction::SelectHost(host), ctx);
+    });
+}
+
+#[test]
+fn cloud_host_selection_eager_composer_restores_saved_host_over_team_default() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+        update_host_selection_teams(&mut app, vec![host_selection_team(1, Some("team-worker"))]);
+        CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .last_selected_host
+                .set_value(Some("saved-worker".to_string()), ctx)
+                .unwrap();
+        });
+        let tips = app.add_model(|_| TipsCompleted::default());
+        let (window, _root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            TerminalView::new_for_test(tips.clone(), None, ctx)
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window, 1.into(), ctx);
+        });
+        let (terminal, _manager) = app.update(|ctx| {
+            create_cloud_mode_view(
+                TerminalViewResources {
+                    tips_completed: tips,
+                    server_api: ServerApiProvider::as_ref(ctx).get(),
+                    model_event_sender: None,
+                },
+                vec2f(800., 600.),
+                window,
+                false,
+                ctx,
+            )
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        assert_cloud_host_selection(
+            &input,
+            &Host::SelfHosted {
+                slug: "saved-worker".to_string(),
+            },
+            Some("saved-worker"),
+            &app,
+        );
+    });
+}
+
+#[test]
+fn cloud_host_selection_distinguishes_unset_from_explicit_and_restored_warp() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+        let (window, input) = add_host_selection_composer(&mut app);
+        assert_cloud_host_selection(&input, &Host::Warp, None, &app);
+
+        update_host_selection_teams(&mut app, vec![host_selection_team(1, Some("team-worker"))]);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window, 1.into(), ctx);
+        });
+        assert_cloud_host_selection(
+            &input,
+            &Host::SelfHosted {
+                slug: "team-worker".to_string(),
+            },
+            Some("team-worker"),
+            &app,
+        );
+        select_cloud_host(&input, Host::Warp, &mut app);
+        assert_cloud_host_selection(
+            &input,
+            &Host::Warp,
+            Some(ORCHESTRATION_WARP_WORKER_HOST),
+            &app,
+        );
+
+        let (_, restored) = add_host_selection_composer(&mut app);
+        assert_cloud_host_selection(
+            &restored,
+            &Host::Warp,
+            Some(ORCHESTRATION_WARP_WORKER_HOST),
+            &app,
+        );
+    });
+}
+
+#[test]
+fn cloud_host_selection_inherits_current_team_default_despite_sibling_preference() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+        let mut team_a = host_selection_team(1, None);
+        let mut team_b = host_selection_team(2, Some("worker-b"));
+        update_host_selection_teams(&mut app, vec![team_a.clone(), team_b.clone()]);
+        let (window_a, input_a) = add_host_selection_composer(&mut app);
+        let (window_b, input_b) = add_host_selection_composer(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_a.uid, ctx);
+            workspaces.switch_window_to_team(window_b, team_a.uid, ctx);
+        });
+        select_cloud_host(&input_b, Host::Warp, &mut app);
+
+        team_a.settings.default_host_slug = Some("worker-a".to_string());
+        update_host_selection_teams(&mut app, vec![team_a.clone(), team_b.clone()]);
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "worker-a".to_string(),
+            },
+            Some("worker-a"),
+            &app,
+        );
+
+        team_a.settings.default_host_slug = Some("replacement-a".to_string());
+        update_host_selection_teams(&mut app, vec![team_a.clone(), team_b.clone()]);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_b, team_b.uid, ctx);
+        });
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "replacement-a".to_string(),
+            },
+            Some("replacement-a"),
+            &app,
+        );
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_b.uid, ctx);
+        });
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "worker-b".to_string(),
+            },
+            Some("worker-b"),
+            &app,
+        );
+
+        team_b.settings.default_host_slug = None;
+        update_host_selection_teams(&mut app, vec![team_a, team_b]);
+        assert_cloud_host_selection(&input_a, &Host::Warp, None, &app);
+    });
+}
+
+#[test]
+fn cloud_host_selection_keeps_explicit_host_through_team_refresh_and_disconnect() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+        let mut team_a = host_selection_team(1, Some("worker-a"));
+        let team_b = host_selection_team(2, None);
+        update_host_selection_teams(&mut app, vec![team_a.clone(), team_b.clone()]);
+        let (window_a, input_a) = add_host_selection_composer(&mut app);
+        let (_, input_b) = add_host_selection_composer(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_a.uid, ctx);
+        });
+        select_cloud_host(
+            &input_a,
+            Host::SelfHosted {
+                slug: "chosen-worker".to_string(),
+            },
+            &mut app,
+        );
+        select_cloud_host(
+            &input_b,
+            Host::SelfHosted {
+                slug: "sibling-worker".to_string(),
+            },
+            &mut app,
+        );
+        let scope = TeamContextForOperation::new_for_test(team_a.uid);
+        ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
+            model.set_workers_for_test(&scope, &["chosen-worker"], ctx);
+        });
+        ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
+            model.set_workers_for_test(&scope, &[], ctx);
+        });
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "chosen-worker".to_string(),
+            },
+            Some("chosen-worker"),
+            &app,
+        );
+
+        team_a.settings.default_host_slug = Some("replacement-a".to_string());
+        update_host_selection_teams(&mut app, vec![team_a, team_b.clone()]);
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "chosen-worker".to_string(),
+            },
+            Some("chosen-worker"),
+            &app,
+        );
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_b.uid, ctx);
+        });
+        assert_cloud_host_selection(
+            &input_a,
+            &Host::SelfHosted {
+                slug: "chosen-worker".to_string(),
+            },
+            Some("chosen-worker"),
+            &app,
+        );
+        assert_cloud_host_selection(
+            &input_b,
+            &Host::SelfHosted {
+                slug: "sibling-worker".to_string(),
+            },
+            Some("sibling-worker"),
+            &app,
         );
     });
 }
