@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use ai::api_keys::{
-    ApiKeyManager, AwsCredentials, AwsCredentialsState, CustomEndpointParams, GeapCredentials,
-    GeapCredentialsState,
+    ApiKeyManager, AwsCredentials, AwsCredentialsState, CustomEndpointModel, CustomEndpointParams,
+    GeapCredentials, GeapCredentialsState,
 };
 use chrono::Local;
 use uuid::Uuid;
@@ -973,7 +973,10 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
                     name: "member-endpoint".to_string(),
                     url: "https://example.com/v1".to_string(),
                     api_key: "endpoint-key".to_string(),
-                    models: vec![("member-model".to_string(), None, None)],
+                    models: vec![CustomEndpointModel {
+                        name: "member-model".to_string(),
+                        ..Default::default()
+                    }],
                     schema: Default::default(),
                 },
                 ctx,

@@ -1,13 +1,46 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use ai::api_keys::CustomEndpointSchema;
+use ai::api_keys::{ComputerUseToolset, CustomEndpointModel, CustomEndpointSchema};
 use settings::Setting as _;
 use warpui::{App, SingletonEntity as _};
 use warpui_extras::secure_storage;
 
 use super::*;
 use crate::settings::init_and_register_user_preferences;
+
+#[test]
+fn endpoint_params_supply_toolsets_for_existing_and_new_models() {
+    let edited = definition_from_params(CustomEndpointParams {
+        name: "Renamed gateway".into(),
+        url: "https://gateway.example/v1".into(),
+        api_key: "rotated-key".into(),
+        schema: CustomEndpointSchema::AnthropicMessages,
+        models: vec![
+            CustomEndpointModel {
+                name: "model".into(),
+                alias: Some("Alias".into()),
+                config_key: "pinned-key".into(),
+                computer_use_toolset: ComputerUseToolset::None,
+            },
+            CustomEndpointModel {
+                name: "new".into(),
+                computer_use_toolset: ComputerUseToolset::AnthropicComputer20251124,
+                ..Default::default()
+            },
+        ],
+    });
+    assert_eq!(edited.models[0].config_key, "pinned-key");
+    assert!(!edited.models[1].config_key.is_empty());
+    assert_eq!(
+        edited.models[0].computer_use_toolset,
+        ComputerUseToolset::None
+    );
+    assert_eq!(
+        edited.models[1].computer_use_toolset,
+        ComputerUseToolset::AnthropicComputer20251124
+    );
+}
 
 struct FailingSecureStorage {
     write_attempts: Rc<Cell<usize>>,
@@ -57,6 +90,7 @@ fn removal_succeeds_when_credential_cleanup_fails() {
                         name: "model".to_owned(),
                         alias: None,
                         config_key: "config-key".to_owned(),
+                        computer_use_toolset: Default::default(),
                     }],
                 },
             )

@@ -19,6 +19,7 @@ fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
                 name: format!("model-{index}"),
                 alias: None,
                 config_key: format!("config-{index}"),
+                computer_use_toolset: Default::default(),
             })
             .collect(),
     }
@@ -26,6 +27,43 @@ fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
 
 fn init_modal_test_models(app: &mut App) {
     initialize_app_for_terminal_view(app);
+}
+
+#[test]
+fn endpoint_edit_emits_declared_toolset_metadata() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let mut endpoint = endpoint_with_models(1);
+        endpoint.schema = CustomEndpointSchema::AnthropicMessages;
+        endpoint.models[0].computer_use_toolset = ComputerUseToolset::AnthropicComputer20251124;
+        let (_window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            let mut modal = CustomEndpointModal::new(None, None, ctx);
+            modal.prefill(Some(&endpoint), Some(0), ctx);
+            modal
+        });
+        let saved_models = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured_models = saved_models.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&modal, move |_, event, _| {
+                if let CustomEndpointModalEvent::SaveEndpoint { models, .. } = event {
+                    *captured_models.borrow_mut() = models.clone();
+                }
+            });
+        });
+
+        modal.update(&mut app, |modal, ctx| {
+            modal.model_rows[0].alias_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text("Renamed", ctx);
+            });
+            modal.save(ctx);
+        });
+
+        assert_eq!(saved_models.borrow()[0].config_key, "config-0");
+        assert_eq!(
+            saved_models.borrow()[0].computer_use_toolset,
+            ComputerUseToolset::AnthropicComputer20251124
+        );
+    });
 }
 fn custom_endpoint_modal_height(scene: &Scene) -> f32 {
     let rects = scene

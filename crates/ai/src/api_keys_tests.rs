@@ -8,6 +8,51 @@ use super::*;
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
 }
+
+#[test]
+fn endpoint_params_update_computer_use_toolsets() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| warpui_extras::secure_storage::register_noop("test", ctx));
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let params = CustomEndpointParams {
+            name: "Gateway".into(),
+            url: "https://gateway.example/v1".into(),
+            api_key: "key".into(),
+            schema: CustomEndpointSchema::AnthropicMessages,
+            models: vec![CustomEndpointModel {
+                name: "model".into(),
+                config_key: "stable-key".into(),
+                computer_use_toolset: ComputerUseToolset::AnthropicComputer20250124,
+                ..Default::default()
+            }],
+        };
+        manager.update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(params.clone(), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert_eq!(
+                manager
+                    .custom_model_providers_for_request(true)
+                    .unwrap()
+                    .providers[0]
+                    .models[0]
+                    .computer_use_toolset,
+                ComputerUseToolset::AnthropicComputer20250124 as i32
+            );
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            let mut params = params;
+            params.models[0].computer_use_toolset = ComputerUseToolset::None;
+            manager.save_custom_endpoint(0, params, ctx);
+        });
+        manager.read(&app, |manager, _| {
+            let providers = manager.custom_model_providers_for_request(true).unwrap();
+            assert_eq!(providers.providers[0].models[0].config_key, "stable-key");
+            assert_eq!(providers.providers[0].models[0].computer_use_toolset, 0);
+        });
+    });
+}
 #[test]
 fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
     warpui_core::App::test((), |mut app| async move {
@@ -168,6 +213,50 @@ fn custom_model_providers_preserves_configured_schema() {
     );
 }
 
+#[test]
+fn custom_computer_use_toolsets_survive_storage_and_request_serialization() {
+    use prost::Message;
+    for (toolset, expected) in [
+        (ComputerUseToolset::None, 0),
+        (ComputerUseToolset::AnthropicComputer20250124, 1),
+        (ComputerUseToolset::AnthropicComputer20251124, 2),
+        (ComputerUseToolset::AnthropicComputerToolset20260801, 3),
+        (ComputerUseToolset::OpenaiResponsesComputerTool, 4),
+    ] {
+        let mut endpoint = endpoint_with_keys(
+            "Gateway",
+            "https://gateway.example/v1",
+            "key",
+            &[("model", None, "custom-key")],
+        );
+        endpoint.models[0].computer_use_toolset = toolset;
+        let encoded = serde_json::to_string(&endpoint).unwrap();
+        let decoded = serde_json::from_str(&encoded).unwrap();
+        let manager = make_manager(ApiKeys {
+            custom_endpoints: vec![decoded],
+            ..Default::default()
+        });
+        let providers = manager.custom_model_providers_for_request(true).unwrap();
+        let decoded = api::request::settings::CustomModelProviders::decode(
+            providers.encode_to_vec().as_slice(),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.providers[0].models[0].computer_use_toolset,
+            expected
+        );
+        assert_eq!(decoded.providers[0].models[0].config_key, "custom-key");
+    }
+    let legacy: CustomEndpointModel =
+        serde_json::from_str(r#"{"name":"model","config_key":"legacy"}"#).unwrap();
+    assert_eq!(legacy.computer_use_toolset, ComputerUseToolset::None);
+    assert!(
+        serde_json::from_str::<CustomEndpointModel>(
+            r#"{"name":"model","config_key":"custom","computer_use_toolset":"future_toolset"}"#
+        )
+        .is_err()
+    );
+}
 fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> ApiKeyManager {
     let custom_endpoints = keys.custom_endpoints.clone();
     ApiKeyManager {
@@ -283,6 +372,7 @@ fn endpoint_with_keys(
                 name: (*n).into(),
                 alias: a.map(|s| s.into()),
                 config_key: (*cfg).into(),
+                computer_use_toolset: Default::default(),
             })
             .collect(),
     }
@@ -700,6 +790,7 @@ fn display_label_uses_alias_when_present() {
         name: "raw-name".into(),
         alias: Some("My Alias".into()),
         config_key: "k".into(),
+        computer_use_toolset: Default::default(),
     };
     assert_eq!(m.display_label(), "My Alias");
 }
@@ -710,6 +801,7 @@ fn display_label_falls_back_to_name_when_alias_missing() {
         name: "raw-name".into(),
         alias: None,
         config_key: "k".into(),
+        computer_use_toolset: Default::default(),
     };
     assert_eq!(m.display_label(), "raw-name");
 }
@@ -720,6 +812,7 @@ fn display_label_falls_back_to_name_when_alias_is_whitespace() {
         name: "raw-name".into(),
         alias: Some("   ".into()),
         config_key: "k".into(),
+        computer_use_toolset: Default::default(),
     };
     assert_eq!(m.display_label(), "raw-name");
 }

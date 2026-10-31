@@ -27,6 +27,7 @@ fn endpoint_definitions(names: &[&str]) -> CustomEndpointDefinitions {
                 name: format!("model-{index}"),
                 alias: None,
                 config_key: format!("config-{index}"),
+                computer_use_toolset: Default::default(),
             }],
         })
         .collect::<Vec<_>>();
