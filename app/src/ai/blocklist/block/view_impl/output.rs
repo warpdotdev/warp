@@ -935,10 +935,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             }
                         }
                         AIAgentOutputMessageType::WebFetch(web_fetch_status) => {
-                            if !FeatureFlag::WebFetchUI.is_enabled() {
-                                continue;
-                            }
-
                             // Render the WebFetch inline at its first position in the message stream
                             if let Some(web_fetch_view) =
                                 props.web_fetch_views.get(&output_message.id)
