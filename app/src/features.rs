@@ -387,8 +387,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentViewConversationListView,
         #[cfg(feature = "inline_history_menu")]
         FeatureFlag::InlineHistoryMenu,
-        #[cfg(feature = "inline_repo_menu")]
-        FeatureFlag::InlineRepoMenu,
         #[cfg(feature = "cloud_mode")]
         FeatureFlag::CloudMode,
         #[cfg(feature = "cloud_mode_from_local_session")]
