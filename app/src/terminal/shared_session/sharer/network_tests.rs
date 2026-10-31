@@ -290,6 +290,7 @@ fn test_reconnect_retries_eof_before_ack() {
             Duration::from_secs(2),
         );
         assert_eventually!(
+            400 =>
             network.read(&app, |network, _| network.is_connected()),
             "EOF before acknowledgement should retry and reconnect"
         );
@@ -671,6 +672,7 @@ fn test_end_session_cancels_reconnect_backoff() {
             Duration::from_secs(2),
         );
         assert_eventually!(
+            400 =>
             attempts.load(Ordering::SeqCst) == 1,
             "First attempt should start"
         );
