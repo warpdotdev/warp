@@ -28,6 +28,128 @@ fn write_manifest(path: &Path, args: &[&str]) {
     .unwrap();
 }
 
+#[test]
+fn native_manifests_resolve_paths_after_relocation_without_rewriting_literal_args() {
+    let root = tempdir().unwrap();
+    let original = root.path().join("original");
+    let relocated = root.path().join("relocated package with spaces");
+    let sidecar = &original;
+    let node = format!("runtime/{PROGRAM}");
+    write_executable(&sidecar.join(&node));
+    fs::write(sidecar.join("adapter.js"), "").unwrap();
+    fs::write(
+        sidecar.join("warp-harness.pi.json"),
+        json!({
+            "schema_version": 1,
+            "harness": "pi",
+            "acp": {
+                "program": format!("${{SIDECAR_ROOT}}/{node}"),
+                "args": ["${SIDECAR_ROOT}/adapter.js", "--flag with spaces", "relative/value"]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::rename(&original, &relocated).unwrap();
+    let selected = discover(
+        Harness::Pi,
+        None,
+        &root.path().join("mnt"),
+        std::slice::from_ref(&relocated),
+    )
+    .unwrap();
+    assert_eq!(
+        Path::new(&selected.launch.program),
+        fs::canonicalize(relocated.join(node)).unwrap()
+    );
+    assert_eq!(
+        selected.launch.args,
+        [
+            fs::canonicalize(relocated.join("adapter.js"))
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "--flag with spaces",
+            "relative/value"
+        ]
+    );
+}
+
+#[test]
+fn native_discovery_preserves_override_mount_and_path_order_and_fails_closed() {
+    let root = tempdir().unwrap();
+    let mounts = root.path().join("mnt");
+    let override_dir = root.path().join("override");
+    let path_dirs = [root.path().join("first"), root.path().join("second")];
+    let mount = mounts.join("pi-cli-sidecar");
+    for (dir, name, arg) in [
+        (&override_dir, MANIFEST_FILE, "override"),
+        (&mount, MANIFEST_FILE, "mount"),
+        (&path_dirs[0], "warp-harness.pi.json", "first"),
+        (&path_dirs[1], "warp-harness.pi.json", "second"),
+    ] {
+        write_manifest(&dir.join(name), &[arg]);
+        write_executable(&dir.join("usr/local/bin").join(PROGRAM));
+    }
+    assert_eq!(
+        discover(Harness::Pi, Some(&override_dir), &mounts, &path_dirs)
+            .unwrap()
+            .launch
+            .args,
+        ["override"]
+    );
+    assert_eq!(
+        discover(Harness::Pi, None, &mounts, &path_dirs)
+            .unwrap()
+            .launch
+            .args,
+        ["mount"]
+    );
+    fs::remove_file(mount.join(MANIFEST_FILE)).unwrap();
+    assert_eq!(
+        discover(Harness::Pi, None, &mounts, &path_dirs)
+            .unwrap()
+            .launch
+            .args,
+        ["first"]
+    );
+    fs::write(path_dirs[0].join("warp-harness.pi.json"), "invalid").unwrap();
+    assert!(discover(Harness::Pi, None, &mounts, &path_dirs).is_err());
+}
+
+#[test]
+fn explicit_sidecar_paths_reject_traversal_absolute_paths_and_missing_files() {
+    let root = tempdir().unwrap();
+    for relative in [
+        "",
+        "/absolute",
+        "../escape",
+        "nested/../escape",
+        "./file",
+        r"C:\file.exe",
+        "C:file.exe",
+        r"nested\file",
+        "missing.js",
+    ] {
+        assert!(
+            super::resolve_sidecar_path(root.path(), &format!("${{SIDECAR_ROOT}}/{relative}"))
+                .is_err(),
+            "{relative}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("adapter.js"), "").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("adapter.js"),
+            root.path().join("escape"),
+        )
+        .unwrap();
+        assert!(super::resolve_sidecar_path(root.path(), "${SIDECAR_ROOT}/escape").is_err());
+    }
+}
+
 fn write_executable(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, "").unwrap();
@@ -48,17 +170,17 @@ fn discovery_selects_override_then_mount_then_defaults_without_merging() {
         write_executable(&dir.join("usr/local/bin").join(PROGRAM));
     }
 
-    let selected = discover(Harness::Pi, Some(&override_dir), &mounts).unwrap();
+    let selected = discover(Harness::Pi, Some(&override_dir), &mounts, &[]).unwrap();
     assert_eq!(selected.launch.args, ["override"]);
     assert_eq!(
         Path::new(&selected.launch.program),
         override_dir.join("usr/local/bin").join(PROGRAM)
     );
     assert!(selected.is_sidecar);
-    let selected = discover(Harness::Pi, None, &mounts).unwrap();
+    let selected = discover(Harness::Pi, None, &mounts, &[]).unwrap();
     assert_eq!(selected.launch.args, ["mount"]);
     fs::remove_file(mount_manifest).unwrap();
-    let selected = discover(Harness::Pi, None, &mounts).unwrap();
+    let selected = discover(Harness::Pi, None, &mounts, &[]).unwrap();
     assert_eq!(selected.launch.program, "pi-acp");
     assert!(selected.launch.args.is_empty());
     assert!(!selected.is_sidecar);
@@ -74,12 +196,12 @@ fn override_errors_do_not_fall_through_to_defaults() {
     wrong["harness"] = json!("codex");
     fs::write(&path, wrong.to_string()).unwrap();
 
-    let error = discover(Harness::Pi, Some(&override_dir), root.path())
+    let error = discover(Harness::Pi, Some(&override_dir), root.path(), &[])
         .err()
         .unwrap();
     assert!(error.to_string().contains("expected pi"));
     fs::remove_file(&path).unwrap();
-    let error = discover(Harness::Pi, Some(&override_dir), root.path())
+    let error = discover(Harness::Pi, Some(&override_dir), root.path(), &[])
         .err()
         .unwrap();
     assert!(error.to_string().contains(&path.display().to_string()));
