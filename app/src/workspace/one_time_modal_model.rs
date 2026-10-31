@@ -827,11 +827,6 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_oz_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        // Only show if the feature flag is enabled.
-        if !FeatureFlag::OzLaunchModal.is_enabled() {
-            return false;
-        }
-
         let ai_settings = AISettings::as_ref(ctx);
         let oz_modal_shown = *ai_settings.did_check_to_trigger_oz_launch_modal;
 
