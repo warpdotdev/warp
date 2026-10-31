@@ -1,3 +1,5 @@
+use float_cmp::assert_approx_eq;
+
 use super::*;
 
 #[test]
@@ -781,4 +783,108 @@ fn test_hide_multiple_child_agent_panes() {
     tree.show_pane_for_child_agent(panes[1]);
     assert_eq!(tree.visible_pane_ids(), vec![panes[0], panes[1]]);
     assert!(tree.is_pane_hidden(&panes[2]));
+}
+
+/// A left/right split with default flexes, and the id of the divider between the two panes.
+fn left_right_split() -> (PaneData, EntityId) {
+    let left = PaneId::dummy_pane_id();
+    let mut pane_data = PaneData::new(left);
+    pane_data.split(left, PaneId::dummy_pane_id(), Direction::Right);
+    let PaneNode::Branch(branch) = &pane_data.root else {
+        panic!("expected the root to be a split");
+    };
+    let border_id = branch.dividers[0].id;
+    (pane_data, border_id)
+}
+
+fn flexes(pane_data: &PaneData) -> (f32, f32) {
+    let PaneNode::Branch(branch) = &pane_data.root else {
+        panic!("expected the root to be a split");
+    };
+    (branch.nodes[0].0.0, branch.nodes[1].0.0)
+}
+
+/// Two 500px panes, as measured when the drag started.
+const EVEN_SPLIT_ANCHOR: DividerDragAnchor = DividerDragAnchor {
+    leading_size: 500.,
+    total_size: 1000.,
+};
+
+#[test]
+fn divider_drag_positions_divider_by_offset_from_drag_start() {
+    let (mut pane_data, border_id) = left_right_split();
+
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, 10., 50.);
+    let after_first_event = flexes(&pane_data);
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, 20., 50.);
+    let after_second_event = flexes(&pane_data);
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, 30., 50.);
+    let after_third_event = flexes(&pane_data);
+
+    assert_approx_eq!(f32, after_first_event.0, 1.02, epsilon = 0.0001);
+    assert_approx_eq!(f32, after_first_event.1, 0.98, epsilon = 0.0001);
+    assert_approx_eq!(f32, after_second_event.0, 1.04, epsilon = 0.0001);
+    assert_approx_eq!(f32, after_second_event.1, 0.96, epsilon = 0.0001);
+    assert_approx_eq!(f32, after_third_event.0, 1.06, epsilon = 0.0001);
+    assert_approx_eq!(f32, after_third_event.1, 0.94, epsilon = 0.0001);
+}
+
+#[test]
+fn divider_drag_toward_leading_pane_shrinks_it() {
+    let (mut pane_data, border_id) = left_right_split();
+
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, -120., 50.);
+
+    let (leading, trailing) = flexes(&pane_data);
+    assert_approx_eq!(f32, leading, 0.76, epsilon = 0.0001);
+    assert_approx_eq!(f32, trailing, 1.24, epsilon = 0.0001);
+}
+
+#[test]
+fn divider_drag_stops_leading_pane_at_minimum_size() {
+    let (mut pane_data, border_id) = left_right_split();
+
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, -480., 50.);
+
+    let (leading, trailing) = flexes(&pane_data);
+    assert_approx_eq!(f32, leading, 0.1, epsilon = 0.0001);
+    assert_approx_eq!(f32, trailing, 1.9, epsilon = 0.0001);
+}
+
+#[test]
+fn divider_drag_stops_trailing_pane_at_minimum_size() {
+    let (mut pane_data, border_id) = left_right_split();
+
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, 480., 50.);
+
+    let (leading, trailing) = flexes(&pane_data);
+    assert_approx_eq!(f32, leading, 1.9, epsilon = 0.0001);
+    assert_approx_eq!(f32, trailing, 0.1, epsilon = 0.0001);
+}
+
+#[test]
+fn divider_drag_rejoins_mouse_after_hitting_minimum_size() {
+    let (mut pane_data, border_id) = left_right_split();
+
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, -480., 50.);
+    pane_data.drag_divider(border_id, EVEN_SPLIT_ANCHOR, -100., 50.);
+
+    let (leading, trailing) = flexes(&pane_data);
+    assert_approx_eq!(f32, leading, 0.8, epsilon = 0.0001);
+    assert_approx_eq!(f32, trailing, 1.2, epsilon = 0.0001);
+}
+
+#[test]
+fn divider_drag_does_not_snap_pane_that_started_below_minimum_size() {
+    let (mut pane_data, border_id) = left_right_split();
+    let anchor = DividerDragAnchor {
+        leading_size: 30.,
+        total_size: 1000.,
+    };
+
+    pane_data.drag_divider(border_id, anchor, -10., 50.);
+
+    let (leading, trailing) = flexes(&pane_data);
+    assert_approx_eq!(f32, leading, 0.06, epsilon = 0.0001);
+    assert_approx_eq!(f32, trailing, 1.94, epsilon = 0.0001);
 }
