@@ -89,6 +89,7 @@ impl EditorAndCodeReviewPageView {
             Box::new(ShowHiddenFilesToggleWidget::default()),
             Box::new(FormatOnSaveToggleWidget::default()),
             Box::new(AutoSaveToggleWidget::default()),
+            Box::new(TabCloseButtonInIconSlotToggleWidget::default()),
         ]);
 
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
@@ -155,6 +156,7 @@ pub enum EditorAndCodeReviewPageAction {
     ToggleShowHiddenFiles,
     ToggleFormatOnSave,
     ToggleAutoSave,
+    ToggleTabCloseButtonInIconSlot,
     SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
@@ -206,6 +208,16 @@ impl TypedActionView for EditorAndCodeReviewPageView {
             EditorAndCodeReviewPageAction::ToggleAutoSave => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            EditorAndCodeReviewPageAction::ToggleTabCloseButtonInIconSlot => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .tab_close_button_in_icon_slot
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -333,6 +345,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 context,
                 flags::SHOW_HIDDEN_FILES,
+            ),
+            ToggleSettingActionPair::new(
+                "close button in place of file icon on editor tabs",
+                builder(SettingsAction::EditorAndCodeReview(
+                    EditorAndCodeReviewPageAction::ToggleTabCloseButtonInIconSlot,
+                )),
+                context,
+                flags::TAB_CLOSE_BUTTON_IN_ICON_SLOT,
             ),
         ],
         app,
@@ -695,6 +715,51 @@ impl SettingsWidget for AutoSaveToggleWidget {
                 .finish(),
             Some(
                 "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct TabCloseButtonInIconSlotToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for TabCloseButtonInIconSlotToggleWidget {
+    type View = EditorAndCodeReviewPageView;
+
+    fn search_terms(&self) -> &str {
+        "close button tab tabs file icon hover narrow editor"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<EditorAndCodeReviewPageAction>(
+            "Show close button in place of file icon on hover".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.tab_close_button_in_icon_slot)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(
+                        EditorAndCodeReviewPageAction::ToggleTabCloseButtonInIconSlot,
+                    );
+                })
+                .finish(),
+            Some(
+                "In editor tabs, hovering a tab replaces its file icon with a close button instead of showing one after the file name, so tabs stay closable when many files are open."
                     .into(),
             ),
         )
