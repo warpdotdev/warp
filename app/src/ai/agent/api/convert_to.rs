@@ -11,7 +11,8 @@ use crate::ai::agent::base_user_query::warp_client_origin;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
     BaseUserQuery, DriveObjectPayload, MCPContext, PassiveSuggestionResultType,
-    PassiveSuggestionTrigger, RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
+    PassiveSuggestionTrigger, RequestFileEditsResult, RunningCommand, StaticQueryType, Suggestions,
+    UserQueryMode,
 };
 use crate::ai::block_context::BlockContext;
 
@@ -685,6 +686,11 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::SearchCodebase(search_codebase_result) => {
                 Some(search_codebase_result.try_into()?)
             }
+            AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Cancelled) => Some(
+                api::request::input::tool_call_result::Result::ApplyFileDiffs(
+                    api::ApplyFileDiffsResult { result: None },
+                ),
+            ),
             AIAgentActionResultType::RequestFileEdits(request_file_edits_result) => {
                 Some(request_file_edits_result.try_into()?)
             }
