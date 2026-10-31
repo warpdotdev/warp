@@ -15,11 +15,13 @@ use session_sharing_protocol::common::SessionId;
 use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use terminal::view::ActiveSessionState;
+use warp_core::ui::theme::{Details, Image as ThemeImage, WarpTheme, mock_terminal_colors};
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
+use warpui::assets::asset_cache::AssetSource;
 use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use warpui::{AddSingletonModel, App, Presenter, ViewHandle, WindowInvalidation};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -579,6 +581,75 @@ fn test_theme_chooser_does_not_suppress_tab_bar_traffic_light_padding() {
                 closed_padding,
                 "Open tools panel should still reserve tab bar traffic light padding"
             );
+        });
+    });
+}
+
+/// Regression for #16690: with a background image, only the panels painted the dimming
+/// overlay, so the `WORKSPACE_PADDING` around them showed the image undimmed along every edge.
+#[test]
+fn test_background_image_overlay_covers_workspace_padding() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        Appearance::handle(&app).update(&mut app, |appearance, ctx| {
+            appearance.set_theme(
+                WarpTheme::new(
+                    Fill::Solid(ColorU::black()),
+                    ColorU::white(),
+                    Fill::Solid(ColorU::new(18, 123, 156, 255)),
+                    None,
+                    Some(Details::Darker),
+                    mock_terminal_colors(),
+                    Some(ThemeImage {
+                        source: AssetSource::Bundled {
+                            path: "async/jpg/dark_city_bg.jpg",
+                        },
+                        opacity: 20,
+                    }),
+                    Some("Background image".to_string()),
+                ),
+                ctx,
+            );
+        });
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            let scene = presenter.build_scene(vec2f(800., 600.), 1., None, ctx);
+
+            let rects: Vec<_> = scene.layers().flat_map(|layer| layer.rects.iter()).collect();
+            let workspace_bounds = rects
+                .iter()
+                .map(|rect| rect.bounds)
+                .reduce(|bounds, other| bounds.union_rect(other))
+                .expect("the workspace should paint");
+            let overlay = util::get_terminal_background_fill(window_id, ctx);
+            let center = workspace_bounds.center();
+
+            // The middle of each workspace edge, inside the 1px padding.
+            for point in [
+                vec2f(workspace_bounds.min_x() + 0.5, center.y()),
+                vec2f(workspace_bounds.max_x() - 0.5, center.y()),
+                vec2f(center.x(), workspace_bounds.min_y() + 0.5),
+                vec2f(center.x(), workspace_bounds.max_y() - 0.5),
+            ] {
+                assert!(
+                    rects
+                        .iter()
+                        .any(|rect| rect.background == overlay && rect.bounds.contains_point(point)),
+                    "the background image overlay should reach the workspace edge at {point:?}"
+                );
+            }
         });
     });
 }
