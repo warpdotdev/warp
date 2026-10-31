@@ -194,7 +194,6 @@ pub(crate) struct OnboardingStateModel {
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
     /// shown; the value records which entry point triggered it.
     no_ai_confirmation: Option<NoAiConfirmationSource>,
-    pricing_promotion_message: Option<String>,
 }
 
 impl OnboardingStateModel {
@@ -218,7 +217,6 @@ impl OnboardingStateModel {
             auth_state,
             offer_variant: None,
             no_ai_confirmation: None,
-            pricing_promotion_message: None,
         }
     }
 
@@ -353,22 +351,6 @@ impl OnboardingStateModel {
             ctx
         );
         self.ai_access_choice = choice;
-        ctx.notify();
-    }
-
-    pub(crate) fn pricing_promotion_message(&self) -> Option<&str> {
-        self.pricing_promotion_message.as_deref()
-    }
-
-    pub(crate) fn set_pricing_promotion_message(
-        &mut self,
-        message: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.pricing_promotion_message == message {
-            return;
-        }
-        self.pricing_promotion_message = message;
         ctx.notify();
     }
 
