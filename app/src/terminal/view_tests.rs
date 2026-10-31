@@ -8741,7 +8741,6 @@ fn attach_path_as_context_routes_to_open_cli_agent_rich_input() {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
-        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
@@ -10723,7 +10722,6 @@ fn warp_tui_listener_does_not_auto_open_rich_input() {
 fn active_cli_agent_recognizes_detected_warp_tui_session() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
@@ -10740,34 +10738,10 @@ fn active_cli_agent_recognizes_detected_warp_tui_session() {
     });
 }
 
-/// `active_cli_agent` must return `None` for the Warp TUI when `HoaCodeReview`
-/// is disabled, preserving the pre-feature behavior (no review destination).
-#[test]
-fn active_cli_agent_ignores_warp_tui_when_hoa_code_review_disabled() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(false);
-
-        let terminal = add_window_with_terminal(&mut app, None);
-        terminal.update(&mut app, |view, ctx| {
-            set_warp_tui_session(view, ctx);
-        });
-
-        terminal.read(&app, |view, ctx| {
-            assert_eq!(
-                view.active_cli_agent(ctx),
-                None,
-                "Warp TUI should not be a review destination when HoaCodeReview is disabled"
-            );
-        });
-    });
-}
-
 #[test]
 fn active_cli_agent_ignores_non_tui_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, _| {
@@ -10791,7 +10765,6 @@ fn active_cli_agent_ignores_non_tui_long_running_command() {
 fn send_review_comments_to_warp_tui_writes_prompt_to_pty() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
-        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
