@@ -78,6 +78,10 @@ pub struct PullRequestArtifactArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ReportExternalReferenceArgs {
+    /// Component reporting a Factory review branch; omitted values remain unknown.
+    #[arg(long, value_parser = ["factory_ui", "factory_agent", "unknown"])]
+    pub origin: Option<String>,
+
     /// URL of the external reference (required, max 2048 chars).
     #[arg(long)]
     pub url: String,
