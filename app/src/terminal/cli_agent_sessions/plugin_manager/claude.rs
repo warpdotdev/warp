@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{env, fs, io};
 
 use async_trait::async_trait;
@@ -28,6 +29,9 @@ const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.2";
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,
     path_env_var: Option<String>,
+    /// Whether this manager already added the marketplace, which clones it fresh; the
+    /// notification and platform plugins are installed back to back from the same clone.
+    marketplace_added: AtomicBool,
 }
 
 impl ClaudeCodePluginManager {
@@ -40,6 +44,7 @@ impl ClaudeCodePluginManager {
         Self {
             executor: LocalCommandExecutor::new(shell_path, shell_type),
             path_env_var,
+            marketplace_added: AtomicBool::new(false),
         }
     }
 
@@ -49,6 +54,16 @@ impl ClaudeCodePluginManager {
             .as_deref()
             .map(|path| HashMap::from([("PATH".to_owned(), path.to_owned())]));
         run_cli_command_logged("claude", args, &self.executor, env_vars, log).await
+    }
+
+    async fn add_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        if self.marketplace_added.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], log)
+            .await?;
+        self.marketplace_added.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -97,11 +112,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     /// Runs `claude plugin` CLI commands via the session shell.
     async fn install(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        self.add_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "install", PLUGIN_KEY], &mut log)
             .await?;
         Ok(())
@@ -114,17 +125,15 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
         // We use `plugin install` (not `plugin update`) because `marketplace
         // remove` unlinks the plugin, so `plugin update` would fail with
         // "Plugin is not installed".
-        let _ = self
-            .run_logged(
-                &["plugin", "marketplace", "remove", MARKETPLACE_NAME],
-                &mut log,
-            )
-            .await;
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        if !self.marketplace_added.load(Ordering::Acquire) {
+            let _ = self
+                .run_logged(
+                    &["plugin", "marketplace", "remove", MARKETPLACE_NAME],
+                    &mut log,
+                )
+                .await;
+        }
+        self.add_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "install", PLUGIN_KEY], &mut log)
             .await?;
 
@@ -173,11 +182,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        self.add_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
         Ok(())
@@ -185,11 +190,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
     async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        self.add_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
 

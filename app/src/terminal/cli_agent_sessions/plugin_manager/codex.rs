@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{env, fs, io};
 
 use async_trait::async_trait;
@@ -33,6 +34,9 @@ const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.1";
 pub(super) struct CodexPluginManager {
     executor: LocalCommandExecutor,
     path_env_var: Option<String>,
+    /// Whether this manager already added or upgraded the marketplace; the notification and
+    /// platform plugins are installed back to back from the same checkout.
+    marketplace_refreshed: AtomicBool,
 }
 
 impl CodexPluginManager {
@@ -45,6 +49,7 @@ impl CodexPluginManager {
         Self {
             executor: LocalCommandExecutor::new(shell_path, shell_type),
             path_env_var,
+            marketplace_refreshed: AtomicBool::new(false),
         }
     }
 
@@ -61,20 +66,32 @@ impl CodexPluginManager {
     /// Git repo, upgrade it; if it is a non-Git source, leave it alone; otherwise
     /// add it from the canonical repository.
     async fn ensure_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        if self.marketplace_refreshed.load(Ordering::Acquire) {
+            return Ok(());
+        }
         match codex_home_dir()
             .ok()
             .and_then(|dir| codex_warp_marketplace_config(&dir))
         {
-            Some(config) if config.is_git() => {
-                self.run_logged(&["plugin", "marketplace", "upgrade", MARKETPLACE_NAME], log)
-                    .await
-            }
+            Some(config) if config.is_git() => self.upgrade_marketplace(log).await,
             Some(_) => Ok(()),
             None => {
                 self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], log)
-                    .await
+                    .await?;
+                self.marketplace_refreshed.store(true, Ordering::Release);
+                Ok(())
             }
         }
+    }
+
+    async fn upgrade_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        if self.marketplace_refreshed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.run_logged(&["plugin", "marketplace", "upgrade", MARKETPLACE_NAME], log)
+            .await?;
+        self.marketplace_refreshed.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -169,11 +186,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         }
         let mut log = String::new();
         ensure_codex_home_dir()?;
-        self.run_logged(
-            &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
-            &mut log,
-        )
-        .await?;
+        self.upgrade_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log)
             .await?;
 
@@ -249,11 +262,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         }
         let mut log = String::new();
         ensure_codex_home_dir()?;
-        self.run_logged(
-            &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
-            &mut log,
-        )
-        .await?;
+        self.upgrade_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
         let updated = codex_home_dir()
