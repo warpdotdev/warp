@@ -188,6 +188,12 @@ pub enum WorkspaceAction {
     },
     /// Removes the tab at the given index from its current group.
     RemoveTabFromGroup(usize),
+    /// Moves every pane of the tab at `source_tab_index` into the tab at
+    /// `destination_tab_index` as splits, then closes the emptied source tab.
+    MergeTabIntoTab {
+        source_tab_index: usize,
+        destination_tab_index: usize,
+    },
     /// Selects every tab between the active tab and the shift-clicked row (inclusive).
     ShiftSelectTabRange {
         locator: PaneViewLocator,
@@ -962,6 +968,7 @@ impl WorkspaceAction {
             | NewTabGroupFromTab(_)
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
+            | MergeTabIntoTab { .. }
             | NewTabGroupFromSelectedTabs
             | NewTabGroupFromActiveOrSelectedTabs
             | MoveSelectedTabsToGroup { .. }

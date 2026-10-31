@@ -235,6 +235,9 @@ integration_tests! {
 
     test_close_tab_with_long_running_process,
     test_reorder_tabs_with_drag,
+    test_merge_tab_into_tab_keeps_sessions_alive,
+    test_merge_tab_into_tab_from_vertical_tab_context_menu,
+    test_merge_tab_into_tab_from_horizontal_tab_context_menu,
     test_detach_tab_to_new_window_with_drag,
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
