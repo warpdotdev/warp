@@ -255,8 +255,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DriveObjectsAsContext,
         #[cfg(feature = "pr_comments_v2")]
         FeatureFlag::PRCommentsV2,
-        #[cfg(feature = "pr_comments_skill")]
-        FeatureFlag::PRCommentsSkill,
         #[cfg(feature = "selection_as_context")]
         FeatureFlag::SelectionAsContext,
         #[cfg(feature = "code_mode_chip")]

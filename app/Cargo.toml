@@ -654,7 +654,6 @@ default = [
     "markdown_mermaid",
     "blocklist_markdown_images",
     "pr_comments_v2",
-    "pr_comments_skill",
     "revert_to_checkpoints",
     "rewind_slash_command",
     "hoa_code_review",
@@ -920,7 +919,6 @@ selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
 pr_comments_v2 = []
-pr_comments_skill = []
 conversation_artifacts = []
 conversations_as_context = []
 conversation_api = []
