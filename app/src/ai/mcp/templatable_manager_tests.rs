@@ -265,3 +265,24 @@ fn shutdown_ends_ephemeral_reconnect_lifecycle() {
         assert_eq!(error, "Server shut down");
     });
 }
+
+#[test]
+fn builtin_spawn_with_failed_token_is_not_retried_until_token_rotates() {
+    use crate::ai::mcp::MCPServerState;
+
+    let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
+    let mut manager = TemplatableMCPServerManager::default();
+    assert!(!manager.builtin_spawn_settled_for_token(installation_uuid, "token"));
+
+    manager.builtin_server_token = Some("token".into());
+    manager
+        .server_states
+        .insert(installation_uuid, MCPServerState::FailedToStart);
+    assert!(manager.builtin_spawn_settled_for_token(installation_uuid, "token"));
+    assert!(!manager.builtin_spawn_settled_for_token(installation_uuid, "rotated-token"));
+
+    manager
+        .server_states
+        .insert(installation_uuid, MCPServerState::NotRunning);
+    assert!(!manager.builtin_spawn_settled_for_token(installation_uuid, "token"));
+}
