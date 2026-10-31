@@ -51,13 +51,13 @@ impl FileSearchModel {
                     }
                 }
                 RepoMetadataEvent::RepositoryRemoved { id }
-                | RepoMetadataEvent::RepositoryUpdated { id } => {
+                | RepoMetadataEvent::RepositoryUpdated { id }
+                | RepoMetadataEvent::FileTreeEntryUpdated { id, .. } => {
                     if let Some(key) = id.to_local_or_remote_path() {
                         me.repo_contents_cache.borrow_mut().remove(&key);
                     }
                 }
-                RepoMetadataEvent::FileTreeEntryUpdated { .. }
-                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
+                RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
             },
@@ -68,7 +68,6 @@ impl FileSearchModel {
             repo_contents_cache: RefCell::new(HashMap::new()),
         }
     }
-
     #[cfg(not(feature = "local_fs"))]
     pub fn repo_root(&self, _app: &AppContext) -> Option<PathBuf> {
         None
