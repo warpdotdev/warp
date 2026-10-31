@@ -121,6 +121,7 @@ pub struct ConversationUsageMetadata {
     pub platform_credits_spent: f64,
     pub total_billed_cost_in_cents: Option<f64>,
     pub total_platform_cost_in_cents: Option<f64>,
+    pub charged_usage_by_category: Option<Vec<ChargedUsageEntry>>,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
@@ -214,8 +215,6 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
                 gql.total_platform_cost_in_cents,
             ),
             credits_spent_for_last_block: None,
-            // Not yet fetched by this GraphQL query (persisted-history
-            // vertical, milestone 3) -- left `None` rather than fabricated.
             charged_usage_for_last_block: None,
             total_charged_usage: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
@@ -346,4 +345,52 @@ impl From<&ToolUsageMetadata> for persistence::model::ToolUsageMetadata {
             },
         }
     }
+}
+
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargedUsageType {
+    DirectApi,
+    Byok,
+    CustomEndpoint,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ChargedUsageEntry {
+    pub category: String,
+    pub usage_type: ChargedUsageType,
+    pub model_id: String,
+    pub display_model_name: Option<String>,
+    pub token_count: ChargedUsageTokenCount,
+    pub token_cost: TokenCostBreakdown,
+    pub token_cost_in_credits: Option<TokenCreditBreakdown>,
+    pub web_search_count: i32,
+    pub web_search_cost_in_cents: f64,
+    pub web_search_cost_in_credits: Option<f64>,
+    pub web_fetch_page_count: Option<i32>,
+    pub web_fetch_cost_in_cents: Option<f64>,
+    pub web_fetch_cost_in_credits: Option<f64>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ChargedUsageTokenCount {
+    pub input: i32,
+    pub output: i32,
+    pub cache_read: i32,
+    pub cache_write: i32,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TokenCostBreakdown {
+    pub input_cost_cents: f64,
+    pub output_cost_cents: f64,
+    pub cache_read_cost_cents: f64,
+    pub cache_write_cost_cents: f64,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TokenCreditBreakdown {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
 }

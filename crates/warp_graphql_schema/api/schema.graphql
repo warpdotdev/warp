@@ -919,6 +919,8 @@ type ConversationUsage {
 
 """Metadata about resource usage within a conversation."""
 type ConversationUsageMetadata {
+  chargedUsageByCategory: [ChargedUsageEntry!]
+
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
 
@@ -5344,4 +5346,91 @@ type SourceRepo {
   codeForge: CodeForge!
   owner: String!
   repo: String!
+}
+
+type TokenCostBreakdown {
+  inputCostCents: Float!
+  outputCostCents: Float!
+  cacheReadCostCents: Float!
+  cacheWriteCostCents: Float!
+}
+
+"""
+Which inference channel a model's usage within a ChargedUsageEntry was charged
+through.
+"""
+enum ChargedUsageType {
+  DIRECT_API
+  BYOK
+  CUSTOM_ENDPOINT
+}
+
+"""
+Per-token-type token counts for a single ChargedUsageEntry.
+"""
+type ChargedUsageTokenCount {
+  input: Int!
+  output: Int!
+  cacheRead: Int!
+  cacheWrite: Int!
+}
+
+"""
+A single per-category, per-usage-type, per-model entry from the full, un-summed
+charged-usage breakdown for a conversation. Flattens the underlying
+map[category]ChargedUsage{DirectApiInferenceUsage/ByokInferenceUsage/CustomEndpointInferenceUsage:
+map[modelId]InferenceUsage} persisted shape into a list: one entry per
+(category, usageType, modelId) combination that has usage.
+"""
+type ChargedUsageEntry {
+  category: String!
+  usageType: ChargedUsageType!
+  modelId: String!
+  """Public model label; custom endpoint configuration keys are preserved."""
+  displayModelName: String
+  tokenCount: ChargedUsageTokenCount!
+  tokenCost: TokenCostBreakdown!
+  """Token charges in the subject's credits, when the billing rate is available."""
+  tokenCostInCredits: TokenCreditBreakdown
+  """
+  Number of web searches performed for this category/usageType/model combination.
+  Web search is priced per-search rather than per-token, so it is tracked separately
+  from tokenCost. See ConversationUsageMetadata.totalWebSearchCount for the summed
+  aggregate.
+  """
+  webSearchCount: Int!
+  """
+  Cost (in US cents) of web searches performed for this category/usageType/model
+  combination. See ConversationUsageMetadata.totalWebSearchCostInCents for the summed
+  aggregate.
+  """
+  webSearchCostInCents: Float!
+  webSearchCostInCredits: Float
+  """
+  Recorded URL pages requested by native web-fetch calls, not successful responses.
+  Null when fetch usage was not recorded. Historical unrecorded usage is not included.
+  """
+  webFetchPageCount: Int
+  """
+  Cost of recorded requested web-fetch pages, in US cents.
+  Null when fetch cost was not recorded. Historical unrecorded costs are not included.
+  """
+  webFetchCostInCents: Float
+  webFetchCostInCredits: Float
+  """
+  This entry's share of what the customer was billed for its category's
+  inference, in US cents, allocated across the category's DIRECT_API entries in
+  proportion to their charged cost. Null for BYOK and custom endpoint usage,
+  which Warp does not bill, and when the conversation's
+  totalBilledCostInCents is unknown.
+  """
+  billedCostInCents: Float
+}
+
+
+type TokenCreditBreakdown {
+  input: Float!
+  output: Float!
+  cacheRead: Float!
+  cacheWrite: Float!
 }
