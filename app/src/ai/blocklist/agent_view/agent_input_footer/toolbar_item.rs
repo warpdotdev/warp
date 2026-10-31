@@ -216,17 +216,14 @@ impl AgentToolbarItemKind {
 
     /// Default left-side items for the agent view footer.
     pub fn default_left() -> Vec<Self> {
-        let mut items = vec![
+        vec![
             Self::ContextChip(ContextChipKind::Ssh),
             Self::ContextChip(ContextChipKind::WorkingDirectory),
             Self::ContextChip(ContextChipKind::ShellGitBranch),
             Self::ContextChip(ContextChipKind::GitDiffStats),
-        ];
-        if FeatureFlag::GithubPrPromptChip.is_enabled() {
-            items.push(Self::ContextChip(ContextChipKind::GithubPullRequest));
-        }
-        items.push(Self::NLDToggle);
-        items
+            Self::ContextChip(ContextChipKind::GithubPullRequest),
+            Self::NLDToggle,
+        ]
     }
 
     /// Default right-side items for the agent view footer.
