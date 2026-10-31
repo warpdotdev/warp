@@ -65,7 +65,7 @@ fn repository_label(request: &CheckoutRequest) -> String {
     failure_output::prepare_failure_output(
         &format!(
             "{}/{}/{} (checkout {})",
-            repo.code_forge.unwrap_or_default().host(),
+            repo.host(),
             repo.owner,
             repo.repo,
             request.checkout_name
@@ -292,8 +292,8 @@ async fn collect_failure_identity(
         .iter()
         .filter(|outcome| outcome.failure.is_some())
         .filter_map(|outcome| batch.repositories.get(outcome.request_index))
-        .map(|request| source_repo(request).code_forge.unwrap_or_default().host())
-        .filter(|host| seen.insert(*host))
+        .map(|request| request.source.host().to_owned())
+        .filter(|host| seen.insert(host.clone()))
         .collect::<Vec<_>>();
     let credentials = futures::future::join_all(hosts.into_iter().map(|host| async move {
         let input = format!("protocol=https\nhost={host}\n\n");
@@ -368,21 +368,20 @@ fn source_repo(request: &CheckoutRequest) -> SourceRepo {
         RepositoryForge::GitLab => CodeForge::GitLab,
         RepositoryForge::AzureDevOps => CodeForge::AzureDevOps,
     };
-    SourceRepo::new(
+    let mut repo = SourceRepo::new(
         forge,
         request.source.repo_owner.clone(),
         request.source.repo_name.clone(),
-    )
+    );
+    repo.git_host = request.source.git_host.clone();
+    repo.github_instance_uid = request.source.github_instance_uid.clone();
+    repo
 }
 
 /// Returns the cache key that identifies the mirror for the request's source repository.
 fn mirror_key(request: &CheckoutRequest) -> RepoCacheKey {
     let repo = source_repo(request);
-    RepoCacheKey::derive(&RepoIdentity::new(
-        repo.code_forge.unwrap_or_default().host(),
-        repo.owner,
-        repo.repo,
-    ))
+    RepoCacheKey::derive(&RepoIdentity::new(repo.host(), &repo.owner, &repo.repo))
 }
 
 /// Runs every request in the batch, returning one outcome per request in order. Requests that

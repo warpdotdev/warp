@@ -59,7 +59,7 @@ pub struct BootstrapTaskOutput {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Task", variables = "ExecutionBootstrapVariables")]
 pub struct BootstrapTask {
-    #[arguments(executionId: $execution_id, supportsDeferredRepositories: $supports_deferred_repositories)]
+    #[arguments(executionId: $execution_id, supportsDeferredRepositories: $supports_deferred_repositories, supportsGithubInstances: true)]
     pub execution_config: ExecutionConfiguration,
     pub attachments: Vec<TaskAttachment>,
 }
@@ -130,6 +130,8 @@ pub struct ExecutionRepositoryRef {
 #[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct SourceRepo {
     pub code_forge: CodeForge,
+    pub git_host: Option<String>,
+    pub github_instance_uid: Option<cynic::Id>,
     pub owner: String,
     pub repo: String,
 }
@@ -137,6 +139,8 @@ pub struct SourceRepo {
 #[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct ExecutionRepository {
     pub forge: CodeForge,
+    pub git_host: Option<String>,
+    pub github_instance_uid: Option<cynic::Id>,
     pub owner: String,
     pub name: String,
     #[cynic(rename = "ref")]

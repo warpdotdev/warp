@@ -68,13 +68,27 @@ fn resolved_repositories_apply_origin_policy_per_checkout() {
 }
 
 #[test]
-fn deferred_policy_keeps_same_name_identities_for_unused_target_selection() {
+fn github_host_collisions_include_deferred_repositories() {
+    let eager = resolved_repo(CodeForge::GitHub, "owner", "repo");
+    let mut deferred = eager.clone();
+    deferred.source.git_host = Some("github.company.com".into());
+    deferred.source.github_instance_uid = Some("enterprise".into());
+    let result = WorkspaceConfiguration::from_resolved(vec![eager], vec![deferred], Vec::new());
+    assert!(
+        matches!(result, Err(PrepareEnvironmentError::CloneDirectoryCollision {
+        first_owner, second_owner, ..
+    }) if first_owner == "github.com/owner" && second_owner == "github.company.com/owner")
+    );
+}
+
+#[test]
+fn deferred_policy_keeps_identities_for_unused_target_selection() {
     let root = tempfile::TempDir::new().unwrap();
     let mut workspace = WorkspaceConfiguration::from_resolved(
         Vec::new(),
         vec![
             resolved_repo(CodeForge::GitHub, "first", "api"),
-            resolved_repo(CodeForge::GitLab, "second", "api"),
+            resolved_repo(CodeForge::GitLab, "second", "api-other"),
         ],
         Vec::new(),
     )
@@ -376,6 +390,8 @@ fn checkout_batch<const COUNT: usize>(checkout_names: [&str; COUNT]) -> Checkout
                 remove_origin: false,
 
                 source: RepositoryIdentity {
+                    git_host: None,
+                    github_instance_uid: None,
                     code_forge: RepositoryForge::GitHub,
                     repo_owner: "warpdotdev".to_owned(),
                     repo_name: checkout_name.to_owned(),
@@ -551,6 +567,8 @@ fn commit_head_override(
     sha: &str,
 ) -> RepositoryPreparationOverride {
     RepositoryPreparationOverride {
+        git_host: None,
+        github_instance_uid: None,
         code_forge,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
@@ -687,11 +705,15 @@ fn substitution_override(
     target_repo: &str,
 ) -> RepositoryPreparationOverride {
     RepositoryPreparationOverride {
+        git_host: None,
+        github_instance_uid: None,
         code_forge: RepositoryForge::GitHub,
         repo_owner: owner.to_string(),
         repo_name: repo.to_string(),
         head: RepositoryHeadRef::CommitSha(sha.to_string()),
         clone_from: Some(RepositoryIdentity {
+            git_host: None,
+            github_instance_uid: None,
             code_forge: RepositoryForge::GitHub,
             repo_owner: target_owner.to_string(),
             repo_name: target_repo.to_string(),
@@ -779,7 +801,7 @@ fn merge_repos_rejects_clone_directory_collisions() {
             repo_name,
             first_owner,
             second_owner,
-        } if repo_name == "widget" && first_owner == "a" && second_owner == "b"
+        } if repo_name == "widget" && first_owner == "github.com/a" && second_owner == "gitlab.com/b"
     ));
 }
 
@@ -829,7 +851,7 @@ fn resolved_empty_eager_membership_skips_preparation_with_deferred_inventory() {
 #[test]
 fn resolved_workspace_keeps_deferred_inventory_out_of_preparation() {
     let eager = repo(CodeForge::GitHub, "acme", "billing");
-    let deferred = vec![resolved_repo(CodeForge::GitLab, "other", "billing")];
+    let deferred = vec![resolved_repo(CodeForge::GitLab, "other", "inventory")];
     let workspace = WorkspaceConfiguration::from_resolved(
         vec![ResolvedRepository {
             expected_sha: None,
@@ -1058,6 +1080,8 @@ fn clone_requests_reject_a_mixed_repository_missing_forge() {
                 "warp".to_string(),
             ),
             SourceRepo {
+                git_host: None,
+                github_instance_uid: None,
                 code_forge: None,
                 owner: "platform/backend".to_string(),
                 repo: "api".to_string(),
@@ -1096,6 +1120,8 @@ fn clone_requests_reject_an_omitted_forge_when_github_is_paired_with_an_unknown_
                 "warp".to_string(),
             ),
             SourceRepo {
+                git_host: None,
+                github_instance_uid: None,
                 code_forge: None,
                 owner: "acme".to_string(),
                 repo: "widgets".to_string(),

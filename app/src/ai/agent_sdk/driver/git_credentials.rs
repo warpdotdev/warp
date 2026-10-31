@@ -87,7 +87,40 @@ pub(crate) fn ensure_workload_token_available() -> Result<(), TaskGitCredentials
     Ok(())
 }
 
+pub(crate) fn protect_managed_auth_environment(env: &mut HashMap<OsString, OsString>) {
+    if std::env::var_os("WARP_GIT_AUTH_DIR").is_none() {
+        return;
+    }
+    for name in [
+        "WARP_GIT_AUTH_DIR",
+        "WARP_GIT_AUTH_BINDING",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GH_CONFIG_DIR",
+        "GLAB_CONFIG_DIR",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            env.insert(name.into(), value);
+        }
+    }
+    for name in [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+        "GITHUB_ACCESS_TOKEN",
+        "GIT_CONFIG_PARAMETERS",
+    ] {
+        env.insert(name.into(), OsString::new());
+    }
+    env.insert("GIT_CONFIG_COUNT".into(), "0".into());
+}
+
 fn home_dir() -> Result<PathBuf> {
+    if let Some(root) = std::env::var_os("WARP_GIT_AUTH_DIR") {
+        return Ok(root.into());
+    }
     let home = if cfg!(windows) {
         git_home_dir(|key| std::env::var_os(key))
     } else {
@@ -95,6 +128,72 @@ fn home_dir() -> Result<PathBuf> {
     };
     home.or_else(dirs::home_dir)
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ManagedAuthScope(PathBuf);
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for ManagedAuthScope {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn isolate_managed_auth(binding: &str) -> Result<ManagedAuthScope> {
+    if std::env::var("WARP_GIT_AUTH_BINDING").as_deref() == Ok(binding) {
+        let root = std::env::var_os("WARP_GIT_AUTH_DIR")
+            .context("Missing managed Git authentication directory")?;
+        return Ok(ManagedAuthScope(root.into()));
+    }
+    let directory = tempfile::Builder::new().prefix("oz-git-auth-").tempdir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+    }
+    let root = directory.path();
+    write_secret_file(&root.join(".gitconfig"), "")?;
+    let mut command = BlockingCommand::new(std::env::current_exe()?);
+    command
+        .args(std::env::args_os().skip(1))
+        .env("WARP_GIT_AUTH_BINDING", binding)
+        .env("WARP_GIT_AUTH_DIR", root)
+        .env("GIT_CONFIG_GLOBAL", root.join(".gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GH_CONFIG_DIR", root.join("gh"))
+        .env("GLAB_CONFIG_DIR", root.join(".config/glab-cli"));
+    for name in [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_HOST",
+        "GITHUB_ACCESS_TOKEN",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+    ] {
+        command.env_remove(name);
+    }
+    // Direct runner cancellation targets this PID. Re-exec also avoids changing a multithreaded
+    // process's environment while retaining the runner's shared HOME.
+    #[cfg(unix)]
+    {
+        use command::unix::CommandExt as _;
+        Err(command.exec()).context("Failed to enter managed Git authentication scope")
+    }
+    #[cfg(windows)]
+    {
+        let status = command
+            .status()
+            .context("Failed to enter managed Git authentication scope")?;
+        drop(directory);
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 /// Resolves `~` the way git does on Windows: from the environment, not from the profile of the
@@ -264,7 +363,6 @@ fn write_azure_cli_auth(credentials: &[GitCredential], home: &Path) -> Result<()
         let auth_dir = prepare_azure_devops_auth_dir(home)?;
         return write_azure_cli_token(&auth_dir, &credential.token);
     }
-
     let Some(azure_cli) = resolve_executable(AZURE_CLI_FILENAME) else {
         log::warn!("Azure CLI not found; skipped Azure DevOps CLI authentication");
         return Ok(());
@@ -307,11 +405,85 @@ fn prepend_azure_cli_wrapper_to_path_for_home(
 }
 
 fn git_credentials_line(cred: &GitCredential) -> String {
-    let userinfo = match &cred.username {
-        Some(username) => format!("{username}:{}", cred.token),
-        None => format!("x-access-token:{}", cred.token),
-    };
-    format!("https://{}@{}", userinfo, cred.host)
+    let mut url = url::Url::parse(&format!("https://{}", cred.host)).expect("validated git host");
+    url.set_username(cred.username.as_deref().unwrap_or("x-access-token"))
+        .expect("HTTPS username");
+    url.set_password(Some(&cred.token)).expect("HTTPS password");
+    url.as_str().trim_end_matches('/').to_owned()
+}
+
+fn read_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_yaml::from_str(&content)
+            .map_err(|_| anyhow::anyhow!("Invalid forge CLI configuration")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(serde_yaml::Mapping::new())
+        }
+        Err(error) => Err(error).context("Failed to read forge CLI configuration"),
+    }
+}
+
+fn remove_credentials_for_hosts(hosts: &[String]) -> Result<()> {
+    if hosts.is_empty() {
+        return Ok(());
+    }
+    for host in hosts {
+        warp_cli::agent::validate_git_host(host).map_err(anyhow::Error::msg)?;
+    }
+    let home = home_dir()?;
+    let path = home.join(".git-credentials");
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        let retained = content
+            .lines()
+            .filter(|line| {
+                !host_of_credentials_line(line)
+                    .is_some_and(|host| hosts.iter().any(|removed| removed == host))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tmp_path = home.join(".git-credentials.tmp");
+        write_secret_file(&tmp_path, &format!("{retained}\n"))?;
+        std::fs::rename(tmp_path, path)?;
+    }
+    for path in [
+        gh_config_dir(&home).join(GH_HOSTS_FILENAME),
+        home.join(".config/glab-cli").join(GLAB_CONFIG_FILENAME),
+    ] {
+        if !path.exists() {
+            continue;
+        }
+        let mut config = read_yaml_mapping(&path)?;
+        let entries = if path.file_name() == Some(OsStr::new(GLAB_CONFIG_FILENAME)) {
+            config
+                .get_mut(&serde_yaml::Value::from("hosts"))
+                .and_then(serde_yaml::Value::as_mapping_mut)
+        } else {
+            Some(&mut config)
+        };
+        if let Some(entries) = entries {
+            for host in hosts {
+                entries.remove(&serde_yaml::Value::from(host.clone()));
+            }
+        }
+        let yaml = serde_yaml::to_string(&config)
+            .context("Failed to serialize forge CLI configuration")?;
+        let tmp_path = path.with_extension("tmp");
+        write_secret_file(&tmp_path, &yaml)?;
+        std::fs::rename(tmp_path, path)?;
+    }
+    if hosts.iter().any(|host| host == AZURE_DEVOPS_HOST) {
+        let path = azure_devops_auth_dir(&home).join(AZURE_DEVOPS_TOKEN_FILENAME);
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if let Ok(mut identities) = HOST_IDENTITIES.write() {
+        identities.retain(|identity| !hosts.contains(&identity.host));
+    }
+    Ok(())
 }
 
 fn host_of_credentials_line(line: &str) -> Option<&str> {
@@ -325,11 +497,16 @@ fn unique_credentials_by_host(credentials: &[GitCredential]) -> Result<Vec<GitCr
     let mut index_by_host = HashMap::new();
     let mut unique = Vec::new();
     for cred in credentials {
+        warp_cli::agent::validate_git_host(&cred.host).map_err(anyhow::Error::msg)?;
+        if cred.token.is_empty() || cred.token.contains(['\r', '\n']) {
+            bail!("Invalid git credential token");
+        }
         if let Some(&index) = index_by_host.get(&cred.host) {
             let existing: &GitCredential = &unique[index];
             if existing.token != cred.token
                 || existing.username != cred.username
                 || existing.email != cred.email
+                || existing.code_forge != cred.code_forge
             {
                 bail!(
                     "Conflicting git credentials for host {}; refusing to write duplicate mapping keys",
@@ -423,6 +600,9 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
 /// The directory `gh` reads its config from, in `gh`'s own precedence order. On Windows `gh`
 /// ignores `~/.config/gh` whenever `APPDATA` is set.
 fn gh_config_dir(home: &Path) -> PathBuf {
+    if std::env::var_os("WARP_GIT_AUTH_DIR").is_some() {
+        return home.join("gh");
+    }
     resolve_gh_config_dir(home, cfg!(windows), |key| std::env::var_os(key))
 }
 
@@ -462,7 +642,10 @@ fn resolve_gh_config_dir(
 fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Result<()> {
     let github_credentials = credentials
         .iter()
-        .filter(|credential| credential.host == GITHUB_HOST)
+        .filter(|credential| {
+            credential.code_forge == Some(cloud_object_models::CodeForge::GitHub)
+                || (credential.code_forge.is_none() && credential.host == GITHUB_HOST)
+        })
         .collect::<Vec<_>>();
     if github_credentials.is_empty() {
         return Ok(());
@@ -472,15 +655,17 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Re
     let path = gh_config_dir.join(GH_HOSTS_FILENAME);
     let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
 
-    let mut yaml = String::new();
+    let mut hosts = read_yaml_mapping(&path)?;
     for cred in github_credentials {
-        yaml.push_str(&format!("{}:\n", cred.host));
-        yaml.push_str(&format!("    oauth_token: {}\n", cred.token));
-        yaml.push_str("    git_protocol: https\n");
+        let mut entry = serde_yaml::Mapping::new();
+        entry.insert("oauth_token".into(), cred.token.clone().into());
+        entry.insert("git_protocol".into(), "https".into());
         if let Some(username) = &cred.username {
-            yaml.push_str(&format!("    user: {username}\n"));
+            entry.insert("user".into(), username.clone().into());
         }
+        hosts.insert(cred.host.clone().into(), entry.into());
     }
+    let yaml = serde_yaml::to_string(&hosts).context("Failed to serialize GitHub CLI hosts")?;
 
     write_secret_file(&tmp_path, &yaml)?;
     std::fs::rename(&tmp_path, &path).with_context(|| {
@@ -656,8 +841,7 @@ pub(crate) fn configure_assignment_git_credentials(
     for (path, host) in managed_repositories {
         let credential = credentials
             .iter()
-            .find(|credential| credential.host == *host)
-            .or_else(|| credentials.first());
+            .find(|credential| credential.host == *host);
         let (name, email) = identity_of(credential);
         run_repository_git_config(path, "user.name", &name);
         run_repository_git_config(path, "user.email", &email);
@@ -716,7 +900,12 @@ fn run_git_config_add(key: &str, value: &str) {
 ///   URL forms, so operations on either form use HTTPS credentials instead
 ///   of looking for an SSH key.
 pub(crate) fn setup_git_config(credentials: &[GitCredential]) {
-    run_git_config("credential.helper", READ_ONLY_CREDENTIAL_HELPER);
+    let helper = if std::env::var_os("WARP_GIT_AUTH_DIR").is_some() {
+        r#"!f() { test "$1" = get && exec git credential-store --file "$WARP_GIT_AUTH_DIR/.git-credentials" get; }; f"#
+    } else {
+        READ_ONLY_CREDENTIAL_HELPER
+    };
+    run_git_config("credential.helper", helper);
     // Use --add for both forms per host so all values coexist as a
     // multi-value key rather than each entry overwriting the previous one.
     for cred in credentials {
@@ -786,10 +975,7 @@ fn select_host_identity<'a>(
     identities: &'a [HostIdentity],
     host: &str,
 ) -> Option<&'a HostIdentity> {
-    identities
-        .iter()
-        .find(|identity| identity.host == host)
-        .or_else(|| identities.first())
+    identities.iter().find(|identity| identity.host == host)
 }
 
 fn recorded_identity_for_host(host: &str) -> Option<(String, String)> {
@@ -935,11 +1121,24 @@ fn run_repository_git_config(repository_dir: &std::path::Path, key: &str, value:
 /// when some refreshed and others failed. Returns `Err` when the local write
 /// fails.
 fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<bool> {
-    if response.credentials.is_empty() && response.failed_hosts.is_empty() {
+    if response.credentials.is_empty()
+        && response.failed_hosts.is_empty()
+        && response.removed_hosts.is_empty()
+    {
         log::debug!("No git credentials returned during refresh; skipping file write");
         return Ok(true);
     }
 
+    if response.removed_hosts.iter().any(|host| {
+        response.failed_hosts.contains(host)
+            || response
+                .credentials
+                .iter()
+                .any(|credential| &credential.host == host)
+    }) {
+        bail!("Conflicting git credential refresh outcomes");
+    }
+    remove_credentials_for_hosts(&response.removed_hosts)?;
     write_git_credentials_with_failures(&response.credentials, &response.failed_hosts)
         .context("Failed to write refreshed git credentials")?;
     log::info!("Git credentials refreshed successfully");

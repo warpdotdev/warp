@@ -18,6 +18,8 @@ const REPORT_MAX_ATTEMPTS: usize = 3;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RepositoryRevision {
     pub code_forge: CodeForge,
+    pub git_host: Option<String>,
+    pub github_instance_uid: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub checkout_path: String,
@@ -49,6 +51,8 @@ impl From<EnvironmentSnapshot> for AgentRunEnvironmentSnapshotRequest {
                 .into_iter()
                 .map(|revision| AgentRunRepositoryRevision {
                     code_forge: revision.code_forge,
+                    git_host: revision.git_host,
+                    github_instance_uid: revision.github_instance_uid,
                     repo_owner: revision.repo_owner,
                     repo_name: revision.repo_name,
                     checkout_path: revision.checkout_path,

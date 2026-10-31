@@ -829,6 +829,18 @@ pub fn run() -> Result<()> {
             }
             warp_cli::Command::CommandLine(cmd) => {
                 #[cfg(not(target_family = "wasm"))]
+                let _managed_auth_scope = match cmd.as_ref() {
+                    CliCommand::Agent(AgentCommand::Run(args)) if args.sandboxed => args
+                        .task_id
+                        .as_deref()
+                        .map(ai::agent_sdk::driver::git_credentials::isolate_managed_auth)
+                        .transpose()?,
+                    CliCommand::Agent(AgentCommand::RunCloudStandby(_)) => Some(
+                        ai::agent_sdk::driver::git_credentials::isolate_managed_auth("standby")?,
+                    ),
+                    _ => None,
+                };
+                #[cfg(not(target_family = "wasm"))]
                 if let CliCommand::EnvironmentCheckout(args) = cmd.as_ref() {
                     let (mut tracing_initialization, parent_context) =
                         tracing::init_child_process(&args.requests_file)?;

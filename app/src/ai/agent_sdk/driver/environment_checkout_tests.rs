@@ -28,6 +28,32 @@ use super::super::environment_checkout_protocol::{
 use super::{CachedCheckout, attempt_cached_checkout};
 use super::{Git, capture, mirror_key, optional_mirror_root, run};
 #[test]
+fn github_mirrors_are_qualified_by_host() {
+    let first = CheckoutRequest {
+        source: RepositoryIdentity {
+            code_forge: RepositoryForge::GitHub,
+            git_host: Some("github.company.com".into()),
+            github_instance_uid: Some("enterprise".into()),
+            repo_owner: "owner".into(),
+            repo_name: "repo".into(),
+        },
+        checkout_name: "repo".into(),
+        head: None,
+        expected_sha: None,
+        fetch_branch_only: false,
+        remove_origin: false,
+    };
+    let mut second = first.clone();
+    second.source.git_host = Some("github.other.com".into());
+    second.source.github_instance_uid = Some("other".into());
+    assert_ne!(mirror_key(&first), mirror_key(&second));
+    assert_eq!(
+        super::source_repo(&first).https_clone_url(),
+        "https://github.company.com/owner/repo.git"
+    );
+}
+
+#[test]
 fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
     fixture_test(
         "strict_checkout_preserves_existing_work_and_reports_partial_success",
@@ -1853,6 +1879,8 @@ impl Fixture {
             remove_origin: false,
 
             source: RepositoryIdentity {
+                git_host: None,
+                github_instance_uid: None,
                 code_forge: RepositoryForge::GitHub,
                 repo_owner: "fixtures".to_owned(),
                 repo_name: "source".to_owned(),

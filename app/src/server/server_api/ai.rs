@@ -506,6 +506,10 @@ pub struct AgentRunEnvironmentSnapshotRequest {
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunRepositoryRevision {
     pub code_forge: CodeForge,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_instance_uid: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub checkout_path: String,
@@ -801,6 +805,8 @@ pub struct CreateFileArtifactUploadResponse {
 /// Credentials for one managed Git host.
 #[derive(Clone, serde::Deserialize)]
 pub struct GitCredential {
+    #[serde(default)]
+    pub code_forge: Option<cloud_object_models::CodeForge>,
     /// The provider's OAuth or installation access token.
     pub token: String,
     /// The provider-specific git username, when available.
@@ -827,6 +833,7 @@ impl std::fmt::Debug for GitCredential {
 pub struct TaskGitCredentialsResponse {
     pub credentials: Vec<GitCredential>,
     pub failed_hosts: Vec<String>,
+    pub removed_hosts: Vec<String>,
 }
 
 /// Filter parameters for listing ambient agent tasks.
@@ -1905,6 +1912,7 @@ impl ServerApi {
                 workload_token,
                 accepts_partial_refresh: Some(accepts_partial_refresh),
                 use_factory_repositories: use_factory_repositories.then_some(true),
+                supports_github_instances: Some(true),
             },
             request_context: get_request_context(),
         };
@@ -1923,6 +1931,7 @@ impl ServerApi {
                         .map(into_git_credential)
                         .collect(),
                     failed_hosts: output.failed_hosts,
+                    removed_hosts: output.removed_hosts,
                 })
             }
             TaskGitCredentialsResult::UserFacingError(error) => {
@@ -1958,9 +1967,16 @@ impl ServerApi {
                     credentials: output
                         .credentials
                         .into_iter()
-                        .map(into_git_credential)
+                        .map(|credential| GitCredential {
+                            token: credential.token,
+                            username: credential.username,
+                            email: credential.email,
+                            host: credential.host,
+                            code_forge: None,
+                        })
                         .collect(),
                     failed_hosts: Vec::new(),
+                    removed_hosts: Vec::new(),
                 })
             }
             TaskGitCredentialsLegacyResult::UserFacingError(error) => {
@@ -1977,6 +1993,20 @@ pub(super) fn into_git_credential(
     credential: warp_graphql::queries::task_git_credentials::TaskGitCredential,
 ) -> GitCredential {
     GitCredential {
+        code_forge: credential.code_forge.map(|forge| match forge {
+            warp_graphql::queries::execution_config::CodeForge::GitHub => {
+                cloud_object_models::CodeForge::GitHub
+            }
+            warp_graphql::queries::execution_config::CodeForge::GitLab => {
+                cloud_object_models::CodeForge::GitLab
+            }
+            warp_graphql::queries::execution_config::CodeForge::AzureDevOps => {
+                cloud_object_models::CodeForge::AzureDevOps
+            }
+            warp_graphql::queries::execution_config::CodeForge::Unknown => {
+                cloud_object_models::CodeForge::Unknown
+            }
+        }),
         token: credential.token,
         username: credential.username,
         email: credential.email,
@@ -1989,8 +2019,11 @@ fn is_unknown_git_credential_schema_error(error: &TaskGitCredentialsError) -> bo
         return false;
     };
     let message = error.to_string();
-    let names_partial_refresh_field =
-        message.contains("failedHosts") || message.contains("acceptsPartialRefresh");
+    let names_partial_refresh_field = message.contains("failedHosts")
+        || message.contains("acceptsPartialRefresh")
+        || message.contains("removedHosts")
+        || message.contains("supportsGithubInstances")
+        || message.contains("codeForge");
     names_partial_refresh_field
         && (message.contains("Cannot query field")
             || message.contains("Unknown argument")

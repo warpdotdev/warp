@@ -34,6 +34,55 @@ pub enum OutputFormat {
     Text,
 }
 
+/// Validates a canonical bare HTTPS authority supplied by repository execution configuration.
+pub fn validate_git_host(host: &str) -> Result<(), &'static str> {
+    let url = url::Url::parse(&format!("https://{host}")).map_err(|_| "invalid git host")?;
+    if host.is_empty()
+        || !host.is_ascii()
+        || host.chars().any(|c| c.is_whitespace() || c.is_control())
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+        || url.host_str().is_none()
+        || url[url::Position::BeforeHost..url::Position::AfterPort] != *host
+    {
+        return Err("git host must be a canonical bare HTTPS authority");
+    }
+    Ok(())
+}
+
+pub fn validate_repository_host(
+    forge: RepositoryForge,
+    host: Option<&str>,
+    instance: Option<&str>,
+) -> Result<(), &'static str> {
+    if let Some(host) = host {
+        validate_git_host(host)?;
+        let default = match forge {
+            RepositoryForge::GitHub => "github.com",
+            RepositoryForge::GitLab => "gitlab.com",
+            RepositoryForge::AzureDevOps => "dev.azure.com",
+        };
+        if forge != RepositoryForge::GitHub && host != default {
+            return Err("explicit host is unsupported for this forge");
+        }
+    }
+    if instance.is_some_and(str::is_empty)
+        || (instance.is_some() && (forge != RepositoryForge::GitHub || host.is_none()))
+    {
+        return Err("GitHub instance requires an explicit GitHub host");
+    }
+    if forge == RepositoryForge::GitHub
+        && host.is_some_and(|host| host != "github.com")
+        && instance.is_none()
+    {
+        return Err("enterprise GitHub host requires an instance");
+    }
+    Ok(())
+}
+
 impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.to_possible_value().expect("no values are skipped");
@@ -72,6 +121,10 @@ impl RepositoryHeadRef {
 #[serde(deny_unknown_fields)]
 pub struct RepositoryIdentity {
     pub code_forge: RepositoryForge,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_instance_uid: Option<String>,
     #[serde(rename = "owner")]
     pub repo_owner: String,
     #[serde(rename = "repo")]
@@ -79,15 +132,31 @@ pub struct RepositoryIdentity {
 }
 
 impl RepositoryIdentity {
-    pub fn identity(&self) -> (RepositoryForge, String, String) {
+    pub fn host(&self) -> &str {
+        self.git_host.as_deref().unwrap_or(match self.code_forge {
+            RepositoryForge::GitHub => "github.com",
+            RepositoryForge::GitLab => "gitlab.com",
+            RepositoryForge::AzureDevOps => "dev.azure.com",
+        })
+    }
+
+    pub fn identity(&self) -> (RepositoryForge, String, Option<String>, String, String) {
         (
             self.code_forge,
+            self.host().to_owned(),
+            self.github_instance_uid.clone(),
             self.repo_owner.to_lowercase(),
             self.repo_name.to_lowercase(),
         )
     }
 
     fn validate(&self) -> Result<(), String> {
+        validate_repository_host(
+            self.code_forge,
+            self.git_host.as_deref(),
+            self.github_instance_uid.as_deref(),
+        )
+        .map_err(str::to_owned)?;
         if self.repo_owner.is_empty() || self.repo_owner.trim() != self.repo_owner {
             return Err(
                 "repo_owner must not be empty or contain surrounding whitespace".to_string(),
@@ -107,6 +176,10 @@ impl RepositoryIdentity {
 #[serde(deny_unknown_fields)]
 pub struct RepositoryPreparationOverride {
     pub code_forge: RepositoryForge,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_instance_uid: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub head: RepositoryHeadRef,
@@ -116,21 +189,22 @@ pub struct RepositoryPreparationOverride {
 }
 
 impl RepositoryPreparationOverride {
-    pub fn identity(&self) -> (RepositoryForge, String, String) {
-        (
-            self.code_forge,
-            self.repo_owner.to_lowercase(),
-            self.repo_name.to_lowercase(),
-        )
+    pub fn identity(&self) -> (RepositoryForge, String, Option<String>, String, String) {
+        self.repository_identity().identity()
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn repository_identity(&self) -> RepositoryIdentity {
         RepositoryIdentity {
             code_forge: self.code_forge,
+            git_host: self.git_host.clone(),
+            github_instance_uid: self.github_instance_uid.clone(),
             repo_owner: self.repo_owner.clone(),
             repo_name: self.repo_name.clone(),
         }
-        .validate()?;
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        self.repository_identity().validate()?;
         if let Some(clone_from) = &self.clone_from {
             clone_from.validate()?;
         }

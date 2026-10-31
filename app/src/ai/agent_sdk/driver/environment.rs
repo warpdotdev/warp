@@ -216,6 +216,8 @@ fn environment_snapshot(
         .filter_map(|request| {
             Some(RepositoryRevision {
                 code_forge: request.remote.code_forge?,
+                git_host: request.remote.git_host.clone(),
+                github_instance_uid: request.remote.github_instance_uid.clone(),
                 repo_owner: request.remote.owner.clone(),
                 repo_name: request.remote.repo.clone(),
                 checkout_path: checkout_path(working_dir, &request.checkout_name),
@@ -287,6 +289,8 @@ impl WorkspaceConfiguration {
                     request.remove_origin = clones[0].remove_origin;
                     Ok(PreparationRepository {
                         source: RepositoryIdentity {
+                            git_host: repo.source.git_host.clone(),
+                            github_instance_uid: repo.source.github_instance_uid.clone(),
                             code_forge: repository_forge_for_repo(&repo.source)
                                 .ok_or(PrepareEnvironmentError::InvalidRuntimeState)?,
                             repo_owner: repo.source.owner.clone(),
@@ -359,6 +363,14 @@ impl WorkspaceConfiguration {
         setup_commands: Vec<String>,
     ) -> Result<Self, PrepareEnvironmentError> {
         let clone_requests = resolved_repository_clone_requests(&repositories)?;
+        merge_repos_deduped(
+            repositories
+                .iter()
+                .chain(&deferred_repos)
+                .map(|repo| repo.source.clone())
+                .collect(),
+            Vec::new(),
+        )?;
         Ok(Self {
             source_repos: repositories
                 .iter()
@@ -504,24 +516,24 @@ pub(crate) fn merge_repos_deduped(
     additional_repos: Vec<SourceRepo>,
 ) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
     let mut seen = HashSet::new();
-    let mut names = HashMap::<String, (String, Option<CodeForge>)>::new();
+    let mut names = HashMap::new();
     let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
 
     for repo in environment_repos.into_iter().chain(additional_repos) {
-        let forge = repo.code_forge;
-        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
-        if !seen.insert(key) {
+        let key = source_repo_identity(&repo)?;
+        if !seen.insert(key.clone()) {
             continue;
         }
 
-        if let Some((owner, existing_forge)) =
-            names.insert(repo.repo.to_lowercase(), (repo.owner.clone(), forge))
-            && (!owner.eq_ignore_ascii_case(&repo.owner) || existing_forge != forge)
+        if let Some((identity, owner)) = names.insert(
+            repo.repo.to_lowercase(),
+            (key.clone(), format!("{}/{}", repo.host(), repo.owner)),
+        ) && identity != key
         {
             return Err(PrepareEnvironmentError::CloneDirectoryCollision {
-                repo_name: repo.repo,
+                repo_name: repo.repo.clone(),
                 first_owner: owner,
-                second_owner: repo.owner,
+                second_owner: format!("{}/{}", repo.host(), repo.owner),
             });
         }
 
@@ -782,7 +794,7 @@ async fn prepare_environment_impl(
     for request in &repository_clone_requests {
         git_credentials::configure_repository_git_identity_if_unset(
             &working_dir.join(&request.checkout_name),
-            request.remote.code_forge.map(CodeForge::host).unwrap_or(""),
+            request.remote.host(),
             git_identity_baseline.clone(),
         );
     }
@@ -875,7 +887,7 @@ fn code_forge_for_repository_forge(forge: RepositoryForge) -> CodeForge {
 
 fn source_repo_identity(
     repo: &SourceRepo,
-) -> Result<(RepositoryForge, String, String), PrepareEnvironmentError> {
+) -> Result<(RepositoryForge, String, Option<String>, String, String), PrepareEnvironmentError> {
     let Some(forge) = repository_forge_for_repo(repo) else {
         return Err(PrepareEnvironmentError::UnsupportedRepositoryForge {
             repo_name: format!("{}/{}", repo.owner, repo.repo),
@@ -895,7 +907,18 @@ fn source_repo_identity(
             },
         );
     }
-    Ok((forge, repo.owner.to_lowercase(), repo.repo.to_lowercase()))
+    repo.validate_host().map_err(|reason| {
+        PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
+            reason: reason.to_owned(),
+        }
+    })?;
+    Ok((
+        forge,
+        repo.host().to_owned(),
+        repo.github_instance_uid.clone(),
+        repo.owner.to_lowercase(),
+        repo.repo.to_lowercase(),
+    ))
 }
 
 fn preparation_override_matches_repo(
@@ -942,11 +965,16 @@ fn repository_clone_requests(
             let remote = match preparation_override
                 .and_then(|preparation_override| preparation_override.clone_from.as_ref())
             {
-                Some(identity) => SourceRepo::new(
-                    code_forge_for_repository_forge(identity.code_forge),
-                    identity.repo_owner.clone(),
-                    identity.repo_name.clone(),
-                ),
+                Some(identity) => {
+                    let mut remote = SourceRepo::new(
+                        code_forge_for_repository_forge(identity.code_forge),
+                        identity.repo_owner.clone(),
+                        identity.repo_name.clone(),
+                    );
+                    remote.git_host = identity.git_host.clone();
+                    remote.github_instance_uid = identity.github_instance_uid.clone();
+                    remote
+                }
                 None => repo.clone(),
             };
             let remove_origin = remove_repository_origins
@@ -1109,12 +1137,9 @@ fn read_checkout_report(path: &Path, request_count: usize) -> Option<CheckoutRep
             .author
             .as_deref()
             .and_then(sanitize_git_author_name);
-        identity.credentials.retain(|credential| {
-            matches!(
-                credential.host.as_str(),
-                "github.com" | "gitlab.com" | "dev.azure.com"
-            )
-        });
+        identity
+            .credentials
+            .retain(|credential| warp_cli::agent::validate_git_host(&credential.host).is_ok());
         for credential in &mut identity.credentials {
             credential.username = credential
                 .username
@@ -1184,6 +1209,8 @@ fn checkout_requests_batch(
                 })?;
                 Ok(CheckoutRequest {
                     source: RepositoryIdentity {
+                        git_host: request.remote.git_host.clone(),
+                        github_instance_uid: request.remote.github_instance_uid.clone(),
                         code_forge,
                         repo_owner: request.remote.owner.clone(),
                         repo_name: request.remote.repo.clone(),

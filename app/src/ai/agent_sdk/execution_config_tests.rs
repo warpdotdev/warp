@@ -19,6 +19,70 @@ fn execution_scope_uses_configuration_team_uid() {
 }
 
 #[test]
+fn execution_repository_and_fork_keep_their_own_github_hosts() {
+    let resolved = repositories(vec![ExecutionRepository {
+        git_host: Some("github.company.com".into()),
+        github_instance_uid: Some(cynic::Id::new("enterprise")),
+        forge: CodeForge::GitHub,
+        owner: "owner".into(),
+        name: "repo".into(),
+        ref_: None,
+        clone_from: Some(ConfigSourceRepo {
+            code_forge: CodeForge::GitHub,
+            git_host: Some("github.other.com".into()),
+            github_instance_uid: Some(cynic::Id::new("other")),
+            owner: "fork".into(),
+            repo: "repo".into(),
+        }),
+        preserve_origin: true,
+        expected_sha: None,
+    }])
+    .unwrap();
+    assert_eq!(
+        resolved[0].source.https_clone_url(),
+        "https://github.company.com/owner/repo.git"
+    );
+    assert_eq!(
+        resolved[0].clone_from.as_ref().unwrap().https_clone_url(),
+        "https://github.other.com/fork/repo.git"
+    );
+}
+
+#[test]
+fn execution_repository_rejects_an_unresolved_or_malformed_instance_host() {
+    assert!(
+        source_repo(ConfigSourceRepo {
+            code_forge: CodeForge::GitHub,
+            git_host: None,
+            github_instance_uid: Some(cynic::Id::new("enterprise")),
+            owner: "owner".into(),
+            repo: "repo".into(),
+        })
+        .is_err()
+    );
+    for host in [
+        "github.company.com@github.com",
+        "github.company.com/path",
+        "github.company.com?query",
+        "github.company.com#fragment",
+        "github.company.com\n",
+        "https://github.company.com",
+    ] {
+        assert!(
+            source_repo(ConfigSourceRepo {
+                code_forge: CodeForge::GitHub,
+                git_host: Some(host.into()),
+                github_instance_uid: Some(cynic::Id::new("enterprise")),
+                owner: "owner".into(),
+                repo: "repo".into(),
+            })
+            .is_err(),
+            "accepted {host:?}"
+        );
+    }
+}
+
+#[test]
 fn execution_mcp_config_preserves_literal_environment_and_headers() {
     let json = r#"{"literal":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer literal-value"},"env":{"TOKEN":"literal-value"}}}"#;
     let specs = mcp_specs(json).unwrap();
@@ -40,6 +104,8 @@ fn execution_mcp_config_preserves_literal_environment_and_headers() {
 fn execution_repositories_keep_individual_origin_policy_and_refs() {
     let resolved = repositories(vec![
         ExecutionRepository {
+            git_host: None,
+            github_instance_uid: None,
             expected_sha: None,
 
             forge: CodeForge::GitHub,
@@ -50,6 +116,8 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
             preserve_origin: true,
         },
         ExecutionRepository {
+            git_host: None,
+            github_instance_uid: None,
             expected_sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
 
             forge: CodeForge::GitLab,
@@ -60,6 +128,8 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
                 value: "abcdef".into(),
             }),
             clone_from: Some(ConfigSourceRepo {
+                git_host: None,
+                github_instance_uid: None,
                 code_forge: CodeForge::GitLab,
                 owner: "source".into(),
                 repo: "second".into(),
@@ -85,6 +155,8 @@ fn execution_repositories_keep_individual_origin_policy_and_refs() {
 fn execution_repositories_reject_unknown_forges() {
     assert!(
         repositories(vec![ExecutionRepository {
+            git_host: None,
+            github_instance_uid: None,
             forge: CodeForge::Unknown,
             owner: "owner".into(),
             name: "repo".into(),

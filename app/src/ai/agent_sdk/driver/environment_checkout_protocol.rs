@@ -189,6 +189,11 @@ impl CheckoutBatch {
 
 impl CheckoutRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
+        warp_cli::agent::validate_repository_host(
+            self.source.code_forge,
+            self.source.git_host.as_deref(),
+            self.source.github_instance_uid.as_deref(),
+        )?;
         let owner = &self.source.repo_owner;
         let repo = &self.source.repo_name;
         let azure = self.source.code_forge == RepositoryForge::AzureDevOps;

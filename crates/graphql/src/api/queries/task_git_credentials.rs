@@ -32,6 +32,8 @@ pub struct TaskGitCredentialsInput {
     pub accepts_partial_refresh: Option<bool>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub use_factory_repositories: Option<bool>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub supports_github_instances: Option<bool>,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
@@ -46,12 +48,12 @@ pub enum TaskGitCredentialsResult {
 pub struct TaskGitCredentialsOutput {
     pub credentials: Vec<TaskGitCredential>,
     pub failed_hosts: Vec<String>,
+    pub removed_hosts: Vec<String>,
 }
 
 /// Pre-#16215 operation: omits `acceptsPartialRefresh` and `failedHosts` so a
 /// server that has not deployed those fields can still validate the query.
 pub mod legacy {
-    use super::TaskGitCredential;
     use crate::error::UserFacingError;
     use crate::request_context::RequestContext;
     use crate::schema;
@@ -95,7 +97,16 @@ pub mod legacy {
     #[derive(cynic::QueryFragment, Debug)]
     #[cynic(graphql_type = "TaskGitCredentialsOutput")]
     pub struct TaskGitCredentialsLegacyOutput {
-        pub credentials: Vec<TaskGitCredential>,
+        pub credentials: Vec<TaskGitCredentialLegacy>,
+    }
+
+    #[derive(cynic::QueryFragment, Debug)]
+    #[cynic(graphql_type = "TaskGitCredential")]
+    pub struct TaskGitCredentialLegacy {
+        pub token: String,
+        pub username: Option<String>,
+        pub email: Option<String>,
+        pub host: String,
     }
 }
 
@@ -106,6 +117,7 @@ pub use legacy::{
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct TaskGitCredential {
+    pub code_forge: Option<super::execution_config::CodeForge>,
     pub token: String,
     pub username: Option<String>,
     pub email: Option<String>,

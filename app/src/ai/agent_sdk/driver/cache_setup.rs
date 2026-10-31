@@ -49,7 +49,7 @@ pub(crate) fn repository_cache_source(
     checkout_name: &str,
     working_dir: &Path,
 ) -> RepositoryCacheSource {
-    let forge_host = repo.code_forge.unwrap_or_default().host();
+    let forge_host = repo.host();
     RepositoryCacheSource {
         name: format!("{}/{}", repo.owner, repo.repo),
         identity: RepoIdentity::new(forge_host, &repo.owner, &repo.repo),

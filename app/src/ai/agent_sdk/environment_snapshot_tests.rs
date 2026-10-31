@@ -18,6 +18,8 @@ fn request() -> AgentRunEnvironmentSnapshotRequest {
     EnvironmentSnapshot {
         captured_at: Utc::now(),
         repositories: vec![RepositoryRevision {
+            git_host: None,
+            github_instance_uid: None,
             code_forge: CodeForge::GitHub,
             repo_owner: "warpdotdev".to_string(),
             repo_name: "warp".to_string(),

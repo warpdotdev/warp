@@ -11,18 +11,41 @@
             "forge": "GITHUB",
             "owner": "warpdotdev",
             "name": "warp",
-            "ref": { "type": "BRANCH", "value": "main" },
-            "cloneFrom": { "codeForge": "GITHUB", "owner": "warpdotdev", "repo": "warp-fork" },
-            "preserveOrigin": true
+            "ref": {
+              "type": "BRANCH",
+              "value": "main"
+            },
+            "cloneFrom": {
+              "codeForge": "GITHUB",
+              "owner": "warpdotdev",
+              "repo": "warp-fork",
+              "gitHost": null,
+              "githubInstanceUid": null
+            },
+            "preserveOrigin": true,
+            "gitHost": null,
+            "githubInstanceUid": null
           }
         ],
         "deferredRepositories": [
-          { "codeForge": "GITHUB", "owner": "warpdotdev", "repo": "warp-server" }
+          {
+            "codeForge": "GITHUB",
+            "owner": "warpdotdev",
+            "repo": "warp-server",
+            "gitHost": null,
+            "githubInstanceUid": null
+          }
         ],
-        "setupCommands": ["./script/bootstrap"],
+        "setupCommands": [
+          "./script/bootstrap"
+        ],
         "mcpServersJson": "{\"linear\":{\"warp_id\":\"7f1d2c3b-4a59-4e6f-8b70-1c2d3e4f5a6b\"}}",
-        "skills": ["warpdotdev/warp:review"],
-        "factorySkillDirs": [".agents/skills"],
+        "skills": [
+          "warpdotdev/warp:review"
+        ],
+        "factorySkillDirs": [
+          ".agents/skills"
+        ],
         "computerUseEnabled": true,
         "providers": {
           "gcp": {
@@ -31,21 +54,40 @@
             "providerId": "oz-provider",
             "serviceAccountEmail": "agent@example.iam.gserviceaccount.com"
           },
-          "aws": { "roleArn": "arn:aws:iam::123456789012:role/OzAgent" }
+          "aws": {
+            "roleArn": "arn:aws:iam::123456789012:role/OzAgent"
+          }
         }
       },
-      "environmentVariables": [{ "name": "WARP_FACTORY_REPO_DIR", "value": "factory" }],
+      "environmentVariables": [
+        {
+          "name": "WARP_FACTORY_REPO_DIR",
+          "value": "factory"
+        }
+      ],
       "gitCredentials": [
-        { "host": "github.com", "username": "x-access-token", "token": "ghs_secret", "email": null }
+        {
+          "host": "github.com",
+          "username": "x-access-token",
+          "token": "ghs_secret",
+          "email": null,
+          "codeForge": null
+        }
       ],
       "managedSecrets": [
         {
           "name": "API_TOKEN",
-          "value": { "__typename": "ManagedSecretRawValue", "value": "value" }
+          "value": {
+            "__typename": "ManagedSecretRawValue",
+            "value": "value"
+          }
         },
         {
           "name": "CLAUDE_AUTH",
-          "value": { "__typename": "ManagedSecretAnthropicApiKeyValue", "apiKey": "sk-ant-key" }
+          "value": {
+            "__typename": "ManagedSecretAnthropicApiKeyValue",
+            "apiKey": "sk-ant-key"
+          }
         }
       ],
       "expiresAt": "2026-01-01T00:00:00Z"

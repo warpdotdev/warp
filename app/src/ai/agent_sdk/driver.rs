@@ -857,6 +857,7 @@ fn split_run_options(
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
     );
 
+    git_credentials::protect_managed_auth_environment(&mut env_vars);
     // Inject cloud provider env vars.
     cloud_provider::collect_env_vars(&cloud_providers, &mut env_vars)?;
     env_vars.extend(task_env_vars(

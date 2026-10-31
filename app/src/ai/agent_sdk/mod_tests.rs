@@ -572,11 +572,15 @@ fn driver_validation_uses_live_repository_membership() {
         "added-after-dispatch".to_string(),
     )];
     let repository_preparation_overrides = vec![RepositoryPreparationOverride {
+        git_host: None,
+        github_instance_uid: None,
         code_forge: RepositoryForge::GitHub,
         repo_owner: "WarpDotDev".to_string(),
         repo_name: "Warp".to_string(),
         head: RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string()),
         clone_from: Some(warp_cli::agent::RepositoryIdentity {
+            git_host: None,
+            github_instance_uid: None,
             code_forge: RepositoryForge::GitHub,
             repo_owner: "warpdotdev".to_string(),
             repo_name: "warp-for-benchmarks".to_string(),
