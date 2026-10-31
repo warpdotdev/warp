@@ -1,18 +1,18 @@
 # Basic parser
 
-This parser is a type driven, recursive descent parser. This work in progress guide goes over a friendly overview of the workings of it with examples. In some places `Did you know?` notes are included, they are good to know tips because the parser relies on them.
+This parser uses type-driven recursive descent. This guide describes its parsing stages through examples and provides background on supporting types in the `Did you know?` sections.
 
 # Steps
 1. Lex. - [What happens when we start the parse](#what-happens-when-we-start-the-parse)
 2. Lite Parse. - [Working with the tokens](#working-with-the-tokens)
-3. Type driven full parse. - [Full parse](#)
+3. Type-driven full parse. - [Full parse](#)
 
 ## What happens when we start the parse?
 
 Let's say we are interested in parsing the input `warp --disable-telemetry`. Command calls generally have the form `cmd <arg1> <arg2> <argN>` where `<arg>`s are positional parameters. Let's use the primary functions of the parser and inspect. The first step we do is calling the tokenizer (the function `lex` here):
 
 ```rust
-let input = "warp --disable_telemetry";
+let input = "warp --disable-telemetry";
 let start_offset = 0;
 
 let (tokens, _) = lex(input, start_offset);
@@ -110,7 +110,7 @@ pub struct LiteCommand {
 
 #### Did you know? The `Spanned<T>` generic struct.
 
-The `LiteCommand` has a `parts` field that holds a vector of `Spanned<String>`. We mentioned about the `Span` type before. Here, we talk about a generic `Spanned<T>` that allows wrapping any `T` with a `Span` value along with it. Here is the type along with a few examples using it's helper functions.
+The `LiteCommand` has a `parts` field that holds a vector of `Spanned<String>`. We mentioned the `Span` type before. Here, we talk about a generic `Spanned<T>` that allows wrapping any `T` with a `Span` value along with it. Here is the type along with a few examples using its helper functions.
 
 ```rust
 pub struct Spanned<T> {
@@ -271,6 +271,6 @@ LiteRootNode {
 }
  ```
 
- ## Type driven full parse
+ ## Type-driven full parse
 
 TODO
