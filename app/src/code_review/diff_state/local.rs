@@ -42,7 +42,7 @@ use crate::terminal::local_shell::LocalShellState;
 use crate::throttle::throttle;
 use crate::util::git::{
     Commit, FileChangeEntry, detect_current_branch, detect_main_branch, get_unpushed_commits,
-    parse_unified_diff_header,
+    parse_unified_diff_header, paths_with_diff_attr_unset,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::git::{get_all_branches, git_operation_in_progress};
@@ -2178,6 +2178,12 @@ impl LocalDiffStateModel {
 
         let num_stat_metadata =
             Self::get_diff_metadata_using_numstat(repo_path, &merge_base).await?;
+        let untracked: Vec<&str> = changed_files
+            .iter()
+            .filter(|(_, status)| matches!(status, GitFileStatus::Untracked))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        let diff_unset = paths_with_diff_attr_unset(repo_path, &untracked).await;
 
         let mut total_additions = 0;
         let mut total_deletions = 0;
@@ -2186,7 +2192,8 @@ impl LocalDiffStateModel {
         for (file_path, status) in &changed_files {
             let (additions, deletions) = if let Some(metadata) = num_stat_metadata.get(file_path) {
                 (metadata.lines_added, metadata.lines_removed)
-            } else if matches!(status, GitFileStatus::Untracked) {
+            } else if matches!(status, GitFileStatus::Untracked) && !diff_unset.contains(file_path)
+            {
                 // Degrade per entry: an uncountable untracked path (e.g. a nested
                 // repo/worktree directory, or an unreadable file) contributes 0
                 // lines instead of failing the whole metadata computation.
@@ -2902,6 +2909,12 @@ pub(crate) async fn diff_metadata_against_head(
     let changed_files = LocalDiffStateModel::parse_git_status(&status_output)?;
     let num_stat_metadata =
         LocalDiffStateModel::get_diff_metadata_using_numstat(repo_path, "HEAD").await?;
+    let untracked: Vec<&str> = changed_files
+        .iter()
+        .filter(|(_, status)| matches!(status, GitFileStatus::Untracked))
+        .map(|(path, _)| path.as_str())
+        .collect();
+    let diff_unset = paths_with_diff_attr_unset(repo_path, &untracked).await;
 
     let mut total_additions = 0;
     let mut total_deletions = 0;
@@ -2910,7 +2923,7 @@ pub(crate) async fn diff_metadata_against_head(
     for (file_path, status) in &changed_files {
         let (additions, deletions) = if let Some(metadata) = num_stat_metadata.get(file_path) {
             (metadata.lines_added, metadata.lines_removed)
-        } else if matches!(status, GitFileStatus::Untracked) {
+        } else if matches!(status, GitFileStatus::Untracked) && !diff_unset.contains(file_path) {
             // Degrade per entry: an uncountable untracked path (e.g. a nested
             // repo/worktree directory, or an unreadable file) contributes 0
             // lines instead of failing the whole metadata computation.
