@@ -440,12 +440,41 @@ fn test_action_open_file_editor_parse_with_path_only() {
 
     let action = Action::parse(&url).unwrap();
     match action {
-        Action::OpenFileEditor { path, line_col } => {
+        Action::OpenFileEditor { path, line_col, .. } => {
             assert_eq!(path, expected_path);
             assert_eq!(line_col, None);
         }
         _ => panic!("unexpected action: {action:?}"),
     }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_session() {
+    let (path_param, _) = open_file_editor_test_path("test.rs");
+    let uuid_hex = "00112233445566778899aabbccddeeff";
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&session={uuid_hex}",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    match Action::parse(&url).unwrap() {
+        Action::OpenFileEditor { session_uuid, .. } => {
+            assert_eq!(session_uuid, decode_uuid_hex(uuid_hex));
+        }
+        action => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_rejects_invalid_session() {
+    let (path_param, _) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&session=nope",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&url).is_err());
 }
 
 #[test]
@@ -459,7 +488,7 @@ fn test_action_open_file_editor_parse_with_line_only() {
 
     let action = Action::parse(&url).unwrap();
     match action {
-        Action::OpenFileEditor { path, line_col } => {
+        Action::OpenFileEditor { path, line_col, .. } => {
             assert_eq!(path, expected_path);
             assert_eq!(
                 line_col,
@@ -484,7 +513,7 @@ fn test_action_open_file_editor_parse_with_line_and_column() {
 
     let action = Action::parse(&url).unwrap();
     match action {
-        Action::OpenFileEditor { path, line_col } => {
+        Action::OpenFileEditor { path, line_col, .. } => {
             assert_eq!(path, expected_path);
             assert_eq!(
                 line_col,
@@ -510,7 +539,7 @@ fn test_action_open_file_editor_parse_decodes_percent_encoded_path() {
 
     let action = Action::parse(&url).unwrap();
     match action {
-        Action::OpenFileEditor { path, line_col } => {
+        Action::OpenFileEditor { path, line_col, .. } => {
             assert_eq!(path, expected_path);
             assert_eq!(
                 line_col,
@@ -534,7 +563,7 @@ fn test_action_open_file_editor_parse_expands_home_dir() {
 
     let action = Action::parse(&url).unwrap();
     match action {
-        Action::OpenFileEditor { path, line_col } => {
+        Action::OpenFileEditor { path, line_col, .. } => {
             assert_eq!(
                 path,
                 PathBuf::from(shellexpand::tilde("~/tmp/test.rs").into_owned())
