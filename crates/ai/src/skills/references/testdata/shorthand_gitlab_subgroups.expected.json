@@ -1,7 +1,0 @@
-{
-  "reference": {
-    "source": {"code_forge": null, "owner": "acme/platform/tools", "repo": "shared-skills", "ref": {"kind": "named", "value": "main"}},
-    "include": [{"kind": "name", "value": "safe-secrets"}],
-    "exclude": []
-  }
-}

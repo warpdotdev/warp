@@ -1,7 +1,0 @@
-source:
-  codeForge: GITLAB
-  owner: acme/platform
-  repo: shared-skills
-  ref: v2.0.0
-include:
-  - review-checklist

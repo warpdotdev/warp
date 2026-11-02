@@ -1,3 +1,0 @@
-source: bitbucket.org:acme/shared-skills
-include:
-  - safe-secrets

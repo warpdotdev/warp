@@ -1,3 +1,0 @@
-source: acme/platform/tools/shared-skills@main
-include:
-  - safe-secrets

@@ -1,6 +1,0 @@
-source:
-  owner: acme
-  repo: shared-skills
-  ref: feature@2026
-include:
-  - deploy

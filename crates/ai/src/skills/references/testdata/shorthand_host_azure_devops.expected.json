@@ -1,7 +1,0 @@
-{
-  "reference": {
-    "source": {"code_forge": "AZURE_DEVOPS", "owner": "acme/project", "repo": "shared-skills", "ref": null},
-    "include": [{"kind": "name", "value": "safe-secrets"}],
-    "exclude": []
-  }
-}

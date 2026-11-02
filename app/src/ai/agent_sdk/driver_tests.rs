@@ -1742,7 +1742,7 @@ fn skill_dirs_first_name_wins_hides_later_duplicates() {
             let spawner = ctx.spawner();
             ctx.spawn(
                 async move {
-                    AgentDriver::load_skills_dirs(&spawner).await;
+                    super::agent_setup::load_skills_dirs(&spawner).await;
                     let _ = done_tx.send(());
                 },
                 |_, _, _| {},

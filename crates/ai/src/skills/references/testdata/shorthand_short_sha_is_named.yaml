@@ -1,3 +1,0 @@
-source: acme/shared-skills@0123abc
-include:
-  - safe-secrets

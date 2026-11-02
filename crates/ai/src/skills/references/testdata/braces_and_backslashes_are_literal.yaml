@@ -1,6 +1,0 @@
-source: acme/shared-skills
-include:
-  - "docs-{draft,final}"
-  - "docs-{draft-*"
-  - "frontend/{web,mobile}"
-  - 'tool-*\'

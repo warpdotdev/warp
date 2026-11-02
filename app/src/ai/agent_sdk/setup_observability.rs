@@ -320,6 +320,8 @@ impl SetupStep {
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
+            // Skill references resolve only for a claimed task, with its checkout credentials.
+            | Self::SkillReferenceResolution
             // Pre-warming is Oz-only, so these are unreachable from a standby.
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart

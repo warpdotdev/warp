@@ -1,6 +1,0 @@
-source:
-  codeForge: BITBUCKET
-  owner: acme
-  repo: shared-skills
-include:
-  - safe-secrets

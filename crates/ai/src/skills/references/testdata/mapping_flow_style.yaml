@@ -1,3 +1,0 @@
-source: {owner: acme, repo: shared-skills, ref: v1}
-include: [deploy, review]
-exclude: [legacy]

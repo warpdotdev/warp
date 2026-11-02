@@ -123,6 +123,7 @@ impl Workspace {
             })
             .collect();
         CheckoutReport {
+            requests: Vec::new(),
             outcomes,
             identity_diagnostics: None,
         }
@@ -270,6 +271,7 @@ fn referenced_skills_are_their_folders_inside_the_checkout() {
         let discovered = discover(&dirs, Some(RepositoryForge::GitHub)).unwrap();
         let plan = discovered.checkout_plan(&workspace.sources());
         let report = CheckoutReport {
+            requests: Vec::new(),
             outcomes: vec![CheckoutOutcome {
                 request_index: 0,
                 failure: None,
@@ -716,6 +718,7 @@ fn checkouts_without_a_reported_head_read_it_from_the_repository() {
         .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
         .unwrap();
     let report = CheckoutReport {
+        requests: Vec::new(),
         outcomes: vec![CheckoutOutcome {
             request_index: 0,
             failure: None,

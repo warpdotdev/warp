@@ -1,3 +1,0 @@
-source: acme/..
-include:
-  - safe-secrets

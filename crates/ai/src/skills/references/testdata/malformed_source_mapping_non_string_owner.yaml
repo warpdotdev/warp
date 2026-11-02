@@ -1,5 +1,0 @@
-source:
-  owner: 42
-  repo: shared-skills
-include:
-  - safe-secrets

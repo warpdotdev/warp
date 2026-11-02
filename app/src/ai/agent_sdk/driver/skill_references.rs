@@ -525,6 +525,8 @@ impl DiscoveredReferences {
                 checkout_name: spec.source.checkout_name(forge),
                 head: spec.source.head(),
                 fetch_branch_only: false,
+                expected_sha: None,
+                remove_origin: false,
             };
             match request.validate() {
                 Ok(()) => {
@@ -692,7 +694,8 @@ impl SourceCheckoutPlan {
                 Some(Some(
                     CheckoutFailureKind::Clone
                     | CheckoutFailureKind::Checkout
-                    | CheckoutFailureKind::RemoveOrigin,
+                    | CheckoutFailureKind::RemoveOrigin
+                    | CheckoutFailureKind::VerifyHead,
                 ))
                 | None => Err(UnresolvedReason::CloneFailed),
             };

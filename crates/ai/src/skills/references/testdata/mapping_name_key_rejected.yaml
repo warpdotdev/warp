@@ -1,5 +1,0 @@
-source:
-  owner: acme
-  name: shared-skills
-include:
-  - safe-secrets

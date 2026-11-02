@@ -164,9 +164,15 @@ fn generated_skill_reference_folders_publish_for_claude_code_and_codex() {
 
     for relative_root in [".claude/skills", ".agents/skills"] {
         let skill_root = root.path().join("harness").join(relative_root);
-        let published =
-            publish_skills_for_harness(&skill_root, root.path(), false, &source_dirs, false)
-                .unwrap();
+        let published = publish_skills_for_harness(
+            &skill_root,
+            root.path(),
+            false,
+            &source_dirs,
+            false,
+            HarnessSupportSkills::Plugin,
+        )
+        .unwrap();
         let link = skill_root.join("safe-secrets");
         assert!(published.contains(&link));
         assert!(published.contains(&skill_root.join("deploy")));

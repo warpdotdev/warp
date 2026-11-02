@@ -1,7 +1,0 @@
-{
-  "reference": {
-    "source": {"code_forge": "GITLAB", "owner": "acme/platform", "repo": "shared-skills", "ref": null},
-    "include": [{"kind": "name", "value": "safe-secrets"}],
-    "exclude": []
-  }
-}

@@ -1,5 +1,0 @@
-source: "  acme/shared-skills@v2  "
-include:
-  - "  safe-secrets  "
-exclude:
-  - " legacy-* "

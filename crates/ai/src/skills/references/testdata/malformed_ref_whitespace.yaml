@@ -1,6 +1,0 @@
-source:
-  owner: acme
-  repo: shared-skills
-  ref: "v1 beta"
-include:
-  - safe-secrets

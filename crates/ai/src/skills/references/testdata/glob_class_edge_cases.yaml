@@ -1,8 +1,0 @@
-source: acme/shared-skills
-include:
-  - "[]]-tool"
-  - "[!a-c]*"
-  - "[^x]*"
-  - "[a-]*"
-  - "[-a]*"
-  - "tool-a**"

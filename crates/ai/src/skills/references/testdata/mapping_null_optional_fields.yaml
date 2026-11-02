@@ -1,8 +1,0 @@
-source:
-  owner: acme
-  repo: shared-skills
-  codeForge:
-  ref:
-include:
-  - deploy
-exclude:

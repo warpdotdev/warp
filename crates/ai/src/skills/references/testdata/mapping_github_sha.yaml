@@ -1,7 +1,0 @@
-source:
-  codeForge: GITHUB
-  owner: acme
-  repo: shared-skills
-  ref: 0123456789abcdef0123456789abcdef01234567
-include:
-  - deploy

@@ -1199,7 +1199,13 @@ async fn clone_from_mirror(
                     .run(
                         "requested head checkout",
                         target,
-                        &["-c", "checkout.workers=0", "checkout", "--detach", &branch_ref],
+                        &[
+                            "-c",
+                            "checkout.workers=0",
+                            "checkout",
+                            "--detach",
+                            &branch_ref,
+                        ],
                     )
                     .await
                 {

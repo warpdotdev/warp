@@ -1,6 +1,0 @@
-source:
-  codeForge: github
-  owner: acme
-  repo: shared-skills
-include:
-  - safe-secrets

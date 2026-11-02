@@ -1,4 +1,0 @@
-source:
-  owner: acme
-include:
-  - safe-secrets
