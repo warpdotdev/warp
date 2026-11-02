@@ -15,8 +15,9 @@ REVISION="c387350116ab341f0d36918bf80bc312f6d8d731"
 BIN_NAME="warp-channel-config"
 
 # Check for repo access before attempting to `cargo install` the binary.
-if ! git ls-remote --exit-code "${REPO}" HEAD >/dev/null 2>&1; then
-    echo "Cannot access ${REPO} (no SSH access?). Skipping install."
+if ! ls_remote_error=$(git ls-remote --exit-code "${REPO}" HEAD 2>&1 >/dev/null); then
+    echo "Cannot access ${REPO}. Skipping install." >&2
+    echo "${ls_remote_error}" >&2
     exit 1
 fi
 
