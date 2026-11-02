@@ -206,14 +206,21 @@ The exact rules are in `skill_reference.schema.json` from the schema endpoint;
 these are the ones that are easy to get wrong:
 
 - Only `source`, `include` (required, non-empty) and `exclude` are allowed.
-- `source` is `owner/name` or `owner/name@ref`, or a mapping with `owner`,
-  `name`, and optional `codeForge` and `ref`. The shorthand always uses the
-  Factory's primary code forge, and its ref can't contain `@`; use the mapping
-  form for either.
-- A 40- or 64-character lowercase hex `ref` pins a commit. Any other value is a
-  branch or tag name, and a branch wins when both exist. With no `ref`, every
-  run uses the latest commit on the default branch, so pin when runs need to be
-  reproducible.
+- `source` is the shorthand `[<host>:]<owner>/<repo>[@<ref>]`, or a mapping
+  with `owner`, `repo`, and optional `codeForge` and `ref`. The host is
+  `github.com`, `gitlab.com` or `dev.azure.com`, as in
+  `github.com:acme/shared-skills@v1.4.0`. The owner may contain `/` (a GitLab
+  subgroup or an Azure DevOps `org/project`). Owner and repo can't contain `@`
+  or `:`, so a ref that contains `@` needs the mapping form.
+- The forge (the host, or `codeForge`) follows the same rule as `repositories`
+  entries. Omit it only when the Factory has exactly one code forge; name it
+  when the Factory has more than one. It must be one of the Factory's code
+  forges: the declared `codeForges`, otherwise the forges its `repositories`
+  use. Nothing guesses a missing forge.
+- A 40-character lowercase hex `ref` pins a commit; 64-character SHAs are
+  rejected. Any other value is a branch or tag name, and a branch wins when both
+  exist. With no `ref`, every run uses the latest commit on the default branch,
+  so pin when runs need to be reproducible.
 - Quote any entry that starts with `*`: unquoted, it is a YAML alias. Anchors
   and aliases are rejected.
 - Paths and path globs are relative to the source repository root and can't
@@ -233,8 +240,14 @@ apply in file-name order.
 Planning and the validator check reference files for structure only. Whether
 the repository, ref and skills exist is found out when a run starts: a
 reference that doesn't resolve never fails the run; its skills are skipped and
-the run detail shows a warning. Private repositories must be readable with the
-credentials the Factory's runs already have.
+the run detail shows a warning.
+
+A public source repository works as it is. A private one must be attached in
+the Factory's `repositories`; `deferred: true` attaches it without preparing it
+for every run. On GitHub it must belong to the same organization as the
+Factory's other GitHub repositories. References never add credentials, so a
+private repository that isn't attached can't be cloned and its skills are
+skipped.
 
 ## Do not add a local copy of the format
 It is tempting to bundle the schema, or to reimplement a few checks here so

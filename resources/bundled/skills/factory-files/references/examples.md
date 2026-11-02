@@ -255,15 +255,38 @@ exclude:
   - review-legacy
 ```
 
-`agents/reviewer/skills/platform.yaml` uses the mapping form to name another
-code forge, for the reviewer agent only:
+That shorthand names no forge, which only works when the Factory has exactly
+one code forge. A Factory with more than one names it with a host prefix, and
+the forge must be one of the Factory's code forges. For example,
+`agents/reviewer/skills/platform.yaml`, for the reviewer agent only:
+
+```yaml
+source: gitlab.com:acme/platform/review-skills@main
+include:
+  - tools/review-style
+```
+
+The mapping form says the same with `codeForge`, and also fits a ref that
+contains `@`:
 
 ```yaml
 source:
   codeForge: GITLAB
   owner: acme/platform
-  name: review-skills
-  ref: main
+  repo: review-skills
+  ref: release@2026
 include:
   - tools/review-style
+```
+
+A private source repository must be attached to the Factory. `deferred: true`
+attaches it without preparing it for every run:
+
+```yaml
+repositories:
+  - owner: acme
+    name: platform
+  - owner: acme
+    name: shared-skills
+    deferred: true
 ```
