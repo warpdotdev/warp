@@ -1,6 +1,6 @@
 {
   "reference": {
-    "source": {"code_forge": null, "owner": "acme", "name": "shared-skills", "ref": {"kind": "named", "value": "v1.4.0"}},
+    "source": {"code_forge": null, "owner": "acme", "repo": "shared-skills", "ref": {"kind": "named", "value": "v1.4.0"}},
     "include": [
       {"kind": "name", "value": "safe-secrets"},
       {"kind": "path", "value": "skills/release-notes"},

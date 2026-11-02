@@ -1,0 +1,3 @@
+source: github.com:acme/shared-skills@v1.4.0
+include:
+  - safe-secrets

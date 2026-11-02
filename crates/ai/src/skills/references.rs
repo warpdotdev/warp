@@ -17,7 +17,7 @@ const SOURCE_KEY: &str = "source";
 const INCLUDE_KEY: &str = "include";
 const EXCLUDE_KEY: &str = "exclude";
 const SOURCE_OWNER_KEY: &str = "owner";
-const SOURCE_NAME_KEY: &str = "name";
+const SOURCE_REPO_KEY: &str = "repo";
 const SOURCE_CODE_FORGE_KEY: &str = "codeForge";
 const SOURCE_REF_KEY: &str = "ref";
 
@@ -33,11 +33,12 @@ pub struct SkillReferenceFile {
 /// The repository a reference file loads skills from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SkillSource {
-    /// `None` when the file doesn't name a forge, which means the Factory's primary forge.
+    /// `None` when the file doesn't name a forge, which is allowed only for a Factory with a
+    /// single code forge.
     pub code_forge: Option<SkillSourceForge>,
     /// May contain `/`, for GitLab subgroups or an Azure DevOps `org/project`.
     pub owner: String,
-    pub name: String,
+    pub repo: String,
     /// `None` selects the latest commit on the default branch.
     pub reference: Option<SkillSourceRef>,
 }
@@ -68,6 +69,16 @@ impl SkillSourceForge {
             Self::AzureDevOps => "AZURE_DEVOPS",
         }
     }
+
+    /// Parses a shorthand host prefix such as `github.com`.
+    fn from_host(host: &str) -> Option<Self> {
+        match host {
+            "github.com" => Some(Self::GitHub),
+            "gitlab.com" => Some(Self::GitLab),
+            "dev.azure.com" => Some(Self::AzureDevOps),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for SkillSourceForge {
@@ -79,21 +90,13 @@ impl fmt::Display for SkillSourceForge {
 /// The revision of a skill source to load.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SkillSourceRef {
-    /// A 40- or 64-character lowercase hexadecimal commit SHA.
+    /// A 40-character lowercase hexadecimal commit SHA.
     Sha(String),
     /// A branch or tag name; a branch wins when both exist.
     Named(String),
 }
 
 impl SkillSourceRef {
-    fn classify(value: String) -> Self {
-        if is_commit_sha(&value) {
-            Self::Sha(value)
-        } else {
-            Self::Named(value)
-        }
-    }
-
     pub fn value(&self) -> &str {
         match self {
             Self::Sha(value) | Self::Named(value) => value,
@@ -180,7 +183,7 @@ pub enum SkillReferenceParseError {
     MalformedSource,
     #[error("`ref` is empty or malformed")]
     MalformedRef,
-    #[error("`codeForge` is not a supported code forge")]
+    #[error("`codeForge` or the shorthand host is not a supported code forge")]
     UnknownCodeForge,
     #[error("`include` is missing")]
     MissingInclude,
@@ -281,7 +284,7 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
             for key in mapping.keys() {
                 match key.as_str() {
                     Some(
-                        SOURCE_OWNER_KEY | SOURCE_NAME_KEY | SOURCE_CODE_FORGE_KEY | SOURCE_REF_KEY,
+                        SOURCE_OWNER_KEY | SOURCE_REPO_KEY | SOURCE_CODE_FORGE_KEY | SOURCE_REF_KEY,
                     ) => {}
                     _ => return Err(SkillReferenceParseError::UnknownKey),
                 }
@@ -291,8 +294,8 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
                 Some(Yaml::String(owner)) if is_valid_owner(owner.trim()) => owner.trim(),
                 _ => return Err(SkillReferenceParseError::MalformedSource),
             };
-            let name = match field(SOURCE_NAME_KEY) {
-                Some(Yaml::String(name)) if is_valid_repository_segment(name.trim()) => name.trim(),
+            let repo = match field(SOURCE_REPO_KEY) {
+                Some(Yaml::String(repo)) if is_valid_repository_segment(repo.trim()) => repo.trim(),
                 _ => return Err(SkillReferenceParseError::MalformedSource),
             };
             let code_forge = match field(SOURCE_CODE_FORGE_KEY) {
@@ -311,7 +314,7 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
             Ok(SkillSource {
                 code_forge,
                 owner: owner.to_owned(),
-                name: name.to_owned(),
+                repo: repo.to_owned(),
                 reference,
             })
         }
@@ -319,34 +322,48 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
     }
 }
 
+/// Parses `[<host>:]<owner>/<repo>[@<ref>]`. Text before the first `:` is a host only when it
+/// has no `/` or `@`; otherwise the `:` belongs to the owner, repo or ref, which reject it.
 fn parse_source_shorthand(shorthand: &str) -> Result<SkillSource, SkillReferenceParseError> {
     if shorthand.is_empty() {
         return Err(SkillReferenceParseError::MissingSource);
     }
-    let (repository, reference) = match shorthand.rsplit_once('@') {
-        Some((repository, reference)) => (repository, Some(reference)),
-        None => (shorthand, None),
+    let (host, rest) = match shorthand.split_once(':') {
+        Some((host, rest)) if !host.contains(['/', '@']) => (Some(host), rest),
+        _ => (None, shorthand),
     };
-    let Some((owner, name)) = repository.rsplit_once('/') else {
+    let (repository, reference) = match rest.rsplit_once('@') {
+        Some((repository, reference)) => (repository, Some(reference)),
+        None => (rest, None),
+    };
+    let Some((owner, repo)) = repository.rsplit_once('/') else {
         return Err(SkillReferenceParseError::MalformedSource);
     };
-    if !is_valid_owner(owner) || !is_valid_repository_segment(name) {
+    if !is_valid_owner(owner) || !is_valid_repository_segment(repo) {
         return Err(SkillReferenceParseError::MalformedSource);
     }
+    let code_forge = host
+        .map(|host| {
+            SkillSourceForge::from_host(host).ok_or(SkillReferenceParseError::UnknownCodeForge)
+        })
+        .transpose()?;
     Ok(SkillSource {
-        code_forge: None,
+        code_forge,
         owner: owner.to_owned(),
-        name: name.to_owned(),
+        repo: repo.to_owned(),
         reference: reference.map(parse_ref).transpose()?,
     })
 }
 
 fn parse_ref(value: &str) -> Result<SkillSourceRef, SkillReferenceParseError> {
-    if is_valid_ref(value) {
-        Ok(SkillSourceRef::classify(value.to_owned()))
-    } else {
-        Err(SkillReferenceParseError::MalformedRef)
+    if !is_valid_ref(value) || is_lowercase_hex(value, 64) {
+        return Err(SkillReferenceParseError::MalformedRef);
     }
+    Ok(if is_lowercase_hex(value, 40) {
+        SkillSourceRef::Sha(value.to_owned())
+    } else {
+        SkillSourceRef::Named(value.to_owned())
+    })
 }
 
 fn parse_entries(value: &Yaml) -> Result<Vec<SkillReferenceEntry>, SkillReferenceParseError> {
@@ -369,7 +386,7 @@ fn is_valid_owner(owner: &str) -> bool {
 }
 
 fn is_valid_repository_segment(segment: &str) -> bool {
-    !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['/', '@'])
+    !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['/', '@', ':'])
 }
 
 /// A subset of `git check-ref-format` that rejects anything git would refuse as a branch or tag.
@@ -389,8 +406,10 @@ fn is_valid_ref(value: &str) -> bool {
         })
 }
 
-fn is_commit_sha(value: &str) -> bool {
-    matches!(value.len(), 40 | 64)
+/// Whether `value` is exactly `len` lowercase hexadecimal characters. 64-character SHA-256 commit
+/// IDs are rejected because checkouts accept only 40-character SHAs.
+fn is_lowercase_hex(value: &str, len: usize) -> bool {
+    value.len() == len
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))

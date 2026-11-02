@@ -42,7 +42,7 @@ fn result_json(result: Result<SkillReferenceFile, SkillReferenceParseError>) -> 
             "source": {
                 "code_forge": file.source.code_forge.map(SkillSourceForge::token),
                 "owner": file.source.owner,
-                "name": file.source.name,
+                "repo": file.source.repo,
                 "ref": reference,
             },
             "include": entries_json(&file.include),
@@ -89,7 +89,7 @@ fn shorthand_splits_at_last_at_and_last_slash() {
         SkillSource {
             code_forge: None,
             owner: "acme/platform".to_owned(),
-            name: "shared-skills".to_owned(),
+            repo: "shared-skills".to_owned(),
             reference: Some(SkillSourceRef::Named("release/v1".to_owned())),
         }
     );
@@ -97,17 +97,38 @@ fn shorthand_splits_at_last_at_and_last_slash() {
 }
 
 #[test]
-fn refs_classify_full_lowercase_shas_only() {
-    let sha1 = "a".repeat(40);
-    let sha256 = "0123456789abcdef".repeat(4);
+fn shorthand_host_prefixes_name_the_code_forge() {
+    for (shorthand, forge, owner) in [
+        ("github.com:acme/skills", SkillSourceForge::GitHub, "acme"),
+        (
+            "gitlab.com:acme/platform/skills",
+            SkillSourceForge::GitLab,
+            "acme/platform",
+        ),
+        (
+            "dev.azure.com:acme/project/skills@v1",
+            SkillSourceForge::AzureDevOps,
+            "acme/project",
+        ),
+    ] {
+        let file = parse(&format!("source: {shorthand}\ninclude: [x]\n")).unwrap();
+        assert_eq!(file.source.code_forge, Some(forge), "{shorthand}");
+        assert_eq!(file.source.owner, owner, "{shorthand}");
+        assert_eq!(file.source.repo, "skills", "{shorthand}");
+    }
+}
+
+#[test]
+fn refs_classify_40_character_lowercase_shas_only() {
+    let sha = "a".repeat(40);
     for (reference, expected) in [
-        (sha1.clone(), SkillSourceRef::Sha(sha1)),
-        (sha256.clone(), SkillSourceRef::Sha(sha256)),
+        (sha.clone(), SkillSourceRef::Sha(sha)),
         (
             "abc1234".to_owned(),
             SkillSourceRef::Named("abc1234".to_owned()),
         ),
         ("A".repeat(40), SkillSourceRef::Named("A".repeat(40))),
+        ("a".repeat(41), SkillSourceRef::Named("a".repeat(41))),
     ] {
         let file = parse(&format!("source: acme/skills@{reference}\ninclude: [x]\n")).unwrap();
         assert_eq!(file.source.reference, Some(expected));
@@ -117,7 +138,7 @@ fn refs_classify_full_lowercase_shas_only() {
 #[test]
 fn mapping_source_accepts_code_forge_and_ref() {
     let file = parse(
-        "source:\n  owner: acme\n  name: shared-skills\n  codeForge: GITLAB\n  ref: v2\ninclude:\n  - \"*\"\n",
+        "source:\n  owner: acme\n  repo: shared-skills\n  codeForge: GITLAB\n  ref: v2\ninclude:\n  - \"*\"\n",
     )
     .unwrap();
     assert_eq!(file.source.code_forge, Some(SkillSourceForge::GitLab));
@@ -186,6 +207,7 @@ fn braces_commas_and_backslashes_match_literally() {
 
 #[test]
 fn invalid_files_report_their_error_kind() {
+    let sha256_source = format!("source: acme/skills@{}\ninclude: [x]\n", "a".repeat(64));
     let cases = [
         ("source: [", SkillReferenceParseError::InvalidYaml),
         (
@@ -201,7 +223,11 @@ fn invalid_files_report_their_error_kind() {
             SkillReferenceParseError::UnknownKey,
         ),
         (
-            "source:\n  owner: acme\n  name: skills\n  branch: main\ninclude: [x]\n",
+            "source:\n  owner: acme\n  repo: skills\n  branch: main\ninclude: [x]\n",
+            SkillReferenceParseError::UnknownKey,
+        ),
+        (
+            "source:\n  owner: acme\n  name: skills\ninclude: [x]\n",
             SkillReferenceParseError::UnknownKey,
         ),
         ("include: [x]\n", SkillReferenceParseError::MissingSource),
@@ -225,8 +251,45 @@ fn invalid_files_report_their_error_kind() {
             "source: acme/skills@bad..ref\ninclude: [x]\n",
             SkillReferenceParseError::MalformedRef,
         ),
+        (sha256_source.as_str(), SkillReferenceParseError::MalformedRef),
         (
-            "source:\n  owner: acme\n  name: skills\n  codeForge: BITBUCKET\ninclude: [x]\n",
+            "source: acme/skills@feature:x\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedRef,
+        ),
+        (
+            "source: github.com:acme/skills@v1:x\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedRef,
+        ),
+        (
+            "source: \"github.com:\"\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedSource,
+        ),
+        (
+            "source: \"github.com:  \"\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedSource,
+        ),
+        (
+            "source: acme/team:skills\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedSource,
+        ),
+        (
+            "source: \"bitbucket.org:acme\"\ninclude: [x]\n",
+            SkillReferenceParseError::MalformedSource,
+        ),
+        (
+            "source: bitbucket.org:acme/skills\ninclude: [x]\n",
+            SkillReferenceParseError::UnknownCodeForge,
+        ),
+        (
+            "source: bitbucket.org:acme/skills@a..b\ninclude: [x]\n",
+            SkillReferenceParseError::UnknownCodeForge,
+        ),
+        (
+            "source: GitHub.com:acme/skills\ninclude: [x]\n",
+            SkillReferenceParseError::UnknownCodeForge,
+        ),
+        (
+            "source:\n  owner: acme\n  repo: skills\n  codeForge: BITBUCKET\ninclude: [x]\n",
             SkillReferenceParseError::UnknownCodeForge,
         ),
         (

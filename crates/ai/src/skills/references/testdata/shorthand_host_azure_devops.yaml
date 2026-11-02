@@ -1,0 +1,3 @@
+source: dev.azure.com:acme/project/shared-skills
+include:
+  - safe-secrets

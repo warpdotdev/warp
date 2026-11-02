@@ -1,7 +1,7 @@
 source:
   codeForge: GITLAB
   owner: acme/platform
-  name: shared-skills
+  repo: shared-skills
   ref: v2.0.0
 include:
   - review-checklist

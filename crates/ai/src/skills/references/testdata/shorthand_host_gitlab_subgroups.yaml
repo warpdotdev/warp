@@ -1,0 +1,3 @@
+source: gitlab.com:acme/platform/shared-skills
+include:
+  - safe-secrets
