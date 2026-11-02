@@ -34,9 +34,9 @@ use super::environment_checkout_protocol::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 
-/// Environment variable naming the Factory's primary code forge, used for sources that don't
-/// name one.
-pub(super) const FACTORY_PRIMARY_CODE_FORGE_ENV: &str = "WARP_FACTORY_PRIMARY_CODE_FORGE";
+/// Environment variable naming the Factory's code forge, set only when the Factory has exactly
+/// one. Sources that don't name a forge use it.
+pub(super) const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
 
 const SKILL_SOURCES_DIRECTORY: &str = "oz-skill-sources";
 const SOURCE_CHECKOUTS_DIRECTORY: &str = "sources";
@@ -62,6 +62,8 @@ pub(crate) enum ReferenceLevel {
 pub(crate) enum UnresolvedReason {
     CloneFailed,
     RefNotFound,
+    /// Neither the source nor the run names the source's code forge.
+    UnknownForge,
     NoMatch,
     InvalidSkill,
     InvalidReferenceFile,
@@ -102,9 +104,11 @@ pub(crate) struct ReferenceFileReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ReferencedSource {
-    pub code_forge: RepositoryForge,
+    /// Absent when neither the source nor the run names a forge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_forge: Option<RepositoryForge>,
     pub owner: String,
-    pub name: String,
+    pub repo: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_ref: Option<String>,
     /// The commit the skills were loaded from, absent when the checkout failed.
@@ -138,7 +142,6 @@ impl AgentDriver {
     /// Finds the reference files in this run's skill folders. Returns `None` for runs without a
     /// task or without reference files, which then behave exactly as if references didn't exist.
     pub(super) async fn discover_skill_references(
-        environment_forges: Vec<RepositoryForge>,
         foreground: &ModelSpawner<Self>,
     ) -> Option<SkillReferenceDiscovery> {
         let (task_id, working_dir, configured_dirs) = foreground
@@ -147,9 +150,9 @@ impl AgentDriver {
             .ok()?;
         let task_id = task_id?;
         let resolved_dirs = resolve_skills_dirs(&working_dir, configured_dirs.clone());
-        let primary_forge = std::env::var(FACTORY_PRIMARY_CODE_FORGE_ENV).ok();
-        let default_forge = default_source_forge(primary_forge.as_deref(), environment_forges);
-        let references = discover(&resolved_dirs, default_forge)?;
+        let factory_forge =
+            factory_code_forge(std::env::var(FACTORY_CODE_FORGE_ENV).ok().as_deref());
+        let references = discover(&resolved_dirs, factory_forge)?;
         Some(SkillReferenceDiscovery {
             task_id,
             configured_dirs,
@@ -244,23 +247,14 @@ pub(super) fn skill_sources_root(task_id: &AmbientAgentTaskId) -> PathBuf {
         .join(task_id.to_string())
 }
 
-/// Picks the forge for sources that don't name one: the Factory's primary forge when the run
-/// provides it, otherwise the single forge shared by the run's repositories, otherwise GitHub.
-pub(super) fn default_source_forge(
-    primary_forge: Option<&str>,
-    environment_forges: impl IntoIterator<Item = RepositoryForge>,
-) -> RepositoryForge {
-    if let Some(forge) = primary_forge
+/// Parses the Factory's single code forge from the value of [`FACTORY_CODE_FORGE_ENV`]. `None`
+/// when the run doesn't provide one or the value isn't a known forge, so a source without a forge
+/// is never guessed onto one.
+pub(super) fn factory_code_forge(value: Option<&str>) -> Option<RepositoryForge> {
+    value
         .map(str::trim)
         .and_then(SkillSourceForge::from_token)
-    {
-        return repository_forge(forge);
-    }
-    let forges = environment_forges.into_iter().collect::<HashSet<_>>();
-    match forges.into_iter().collect::<Vec<_>>().as_slice() {
-        [forge] => *forge,
-        _ => RepositoryForge::GitHub,
-    }
+        .map(repository_forge)
 }
 
 fn repository_forge(forge: SkillSourceForge) -> RepositoryForge {
@@ -323,39 +317,42 @@ struct ReferenceSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SourceKey {
-    forge: RepositoryForge,
+    /// The source's own forge, else the Factory's single forge; `None` when neither is known.
+    forge: Option<RepositoryForge>,
     owner: String,
-    name: String,
+    repo: String,
     reference: Option<SkillSourceRef>,
 }
 
-/// Source identity for deduplication; owners and names are case-insensitive on every forge.
-type SourceIdentity = (RepositoryForge, String, String, Option<SkillSourceRef>);
+/// Source identity for deduplication: the repository identity (owners and repos are
+/// case-insensitive on every forge) plus the requested ref.
+type SourceIdentity = (Option<RepositoryForge>, String, String, Option<SkillSourceRef>);
 
 impl SourceKey {
     fn identity(&self) -> SourceIdentity {
         (
             self.forge,
             self.owner.to_lowercase(),
-            self.name.to_lowercase(),
+            self.repo.to_lowercase(),
             self.reference.clone(),
         )
     }
 
+    /// Tags ride branch heads; the checkout helper falls back to a tag when no branch matches.
     fn head(&self) -> Option<RepositoryHeadRef> {
         self.reference.as_ref().map(|reference| match reference {
             SkillSourceRef::Sha(sha) => RepositoryHeadRef::CommitSha(sha.clone()),
-            SkillSourceRef::Named(name) => RepositoryHeadRef::NamedRef(name.clone()),
+            SkillSourceRef::Named(name) => RepositoryHeadRef::Branch(name.clone()),
         })
     }
 
-    fn checkout_name(&self) -> String {
-        let (forge, owner, name, reference) = self.identity();
+    fn checkout_name(&self, forge: RepositoryForge) -> String {
+        let (_, owner, repo, reference) = self.identity();
         let mut hasher = Sha256::new();
         for part in [
             forge_token(forge),
             &owner,
-            &name,
+            &repo,
             reference.as_ref().map_or("", SkillSourceRef::value),
         ] {
             hasher.update(part.as_bytes());
@@ -367,7 +364,7 @@ impl SourceKey {
             .take(6)
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let readable = format!("{}-{owner}-{name}", forge_token(forge).to_lowercase())
+        let readable = format!("{}-{owner}-{repo}", forge_token(forge).to_lowercase())
             .chars()
             .map(|character| {
                 if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
@@ -391,10 +388,11 @@ fn forge_token(forge: RepositoryForge) -> &'static str {
 }
 
 /// Reads the reference files that sit directly in each skill folder, in file-name order.
-/// Returns `None` when there are none.
+/// `factory_forge` is the forge for sources that don't name one. Returns `None` when there are no
+/// reference files.
 pub(super) fn discover(
     skill_dirs: &[PathBuf],
-    default_forge: RepositoryForge,
+    factory_forge: Option<RepositoryForge>,
 ) -> Option<DiscoveredReferences> {
     let mut seen = HashSet::new();
     let mut levels = Vec::new();
@@ -424,12 +422,9 @@ pub(super) fn discover(
                     .and_then(|contents| parse_skill_reference_file(&contents))
                     .map(|file| {
                         let source = SourceKey {
-                            forge: file
-                                .source
-                                .code_forge
-                                .map_or(default_forge, repository_forge),
+                            forge: file.source.code_forge.map(repository_forge).or(factory_forge),
                             owner: file.source.owner.clone(),
-                            name: file.source.name.clone(),
+                            repo: file.source.repo.clone(),
                             reference: file.source.reference.clone(),
                         };
                         ReferenceSpec { file, source }
@@ -509,13 +504,16 @@ impl DiscoveredReferences {
             if !seen.insert(identity.clone()) {
                 continue;
             }
+            let Some(forge) = spec.source.forge else {
+                continue;
+            };
             let request = CheckoutRequest {
                 source: RepositoryIdentity {
-                    code_forge: spec.source.forge,
+                    code_forge: forge,
                     repo_owner: spec.source.owner.clone(),
-                    repo_name: spec.source.name.clone(),
+                    repo_name: spec.source.repo.clone(),
                 },
-                checkout_name: spec.source.checkout_name(),
+                checkout_name: spec.source.checkout_name(forge),
                 head: spec.source.head(),
                 fetch_branch_only: false,
             };
@@ -735,16 +733,19 @@ fn file_report_without_skills(
             return report;
         }
     };
-    let checkout = checkouts
-        .0
-        .get(&spec.source.identity())
-        .map_or(Err(UnresolvedReason::CloneFailed), |checkout| {
-            checkout.as_ref().map_err(|reason| *reason)
-        });
+    let checkout = match spec.source.forge {
+        None => Err(UnresolvedReason::UnknownForge),
+        Some(_) => checkouts
+            .0
+            .get(&spec.source.identity())
+            .map_or(Err(UnresolvedReason::CloneFailed), |checkout| {
+                checkout.as_ref().map_err(|reason| *reason)
+            }),
+    };
     report.source = Some(ReferencedSource {
         code_forge: spec.source.forge,
         owner: spec.source.owner.clone(),
-        name: spec.source.name.clone(),
+        repo: spec.source.repo.clone(),
         requested_ref: spec
             .source
             .reference

@@ -2381,23 +2381,16 @@ impl AgentDriver {
                 Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
             }
 
-            if FeatureFlag::FactorySkillReferences.is_enabled() {
-                let environment_forges = prepared_workspace
-                    .repositories
-                    .iter()
-                    .filter_map(environment::repository_forge_for_repo)
-                    .collect();
-                if let Some(discovery) =
-                    Self::discover_skill_references(environment_forges, &foreground).await
-                {
-                    setup_events
-                        .record_value_with_error_flag(
-                            SetupStep::SkillReferenceResolution,
-                            Self::resolve_skill_references(discovery, &foreground),
-                            |report| report.warning_count() > 0,
-                        )
-                        .await;
-                }
+            if FeatureFlag::FactorySkillReferences.is_enabled()
+                && let Some(discovery) = Self::discover_skill_references(&foreground).await
+            {
+                setup_events
+                    .record_value_with_error_flag(
+                        SetupStep::SkillReferenceResolution,
+                        Self::resolve_skill_references(discovery, &foreground),
+                        |report| report.warning_count() > 0,
+                    )
+                    .await;
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

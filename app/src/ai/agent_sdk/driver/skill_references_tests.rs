@@ -82,7 +82,7 @@ impl Workspace {
     /// `fixtures`. Sources without a fixture produce no outcome.
     fn resolve(&self, fixtures: &[(&str, SourceFixture)]) -> SkillReferenceResolution {
         let dirs = self.skill_dirs();
-        let discovered = discover(&dirs, RepositoryForge::GitHub).expect("reference files");
+        let discovered = discover(&dirs, Some(RepositoryForge::GitHub)).expect("reference files");
         let plan = discovered.checkout_plan(&self.sources());
         let report = self.run_fake_checkouts(&plan.batch.repositories, fixtures);
         let checkouts = plan.into_checkouts(Some(&report));
@@ -164,7 +164,7 @@ fn folders_without_reference_files_are_left_alone() {
         "config.yaml",
         "source: acme/shared-skills\ninclude: [x]\n",
     );
-    assert!(discover(&workspace.skill_dirs(), RepositoryForge::GitHub).is_none());
+    assert!(discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).is_none());
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn referenced_skills_are_their_folders_inside_the_checkout() {
     std::os::unix::fs::symlink(&outside, checkout.join("skills/escape")).unwrap();
     let resolution_with_escape = {
         let dirs = workspace.skill_dirs();
-        let discovered = discover(&dirs, RepositoryForge::GitHub).unwrap();
+        let discovered = discover(&dirs, Some(RepositoryForge::GitHub)).unwrap();
         let plan = discovered.checkout_plan(&workspace.sources());
         let report = CheckoutReport {
             outcomes: vec![CheckoutOutcome {
@@ -508,7 +508,7 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
     write_reference(
         &workspace.factory_skills,
         "c.yaml",
-        "source:\n  owner: platform/backend\n  name: skills\n  codeForge: GITLAB\ninclude: [x]\n",
+        "source:\n  owner: platform/backend\n  repo: skills\n  codeForge: GITLAB\ninclude: [x]\n",
     );
     write_reference(
         &workspace.factory_skills,
@@ -523,16 +523,29 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
         "e.yaml",
         "source: platform/backend/skills\ninclude: [x]\n",
     );
+    write_reference(
+        &workspace.factory_skills,
+        "f.yaml",
+        "source: github.com:ACME/shared-skills@v1\ninclude: [x]\n",
+    );
+    write_reference(
+        &workspace.factory_skills,
+        "g.yaml",
+        "source: gitlab.com:acme/shared-skills@v1\ninclude: [x]\n",
+    );
 
-    let discovered = discover(&workspace.skill_dirs(), RepositoryForge::GitHub).unwrap();
+    let discovered = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let requests = &plan.batch.repositories;
+    // Sources are keyed by forge, case-insensitive owner and repo, and ref, so a host prefix
+    // naming the Factory's forge dedupes with the forge-less form, and another forge doesn't.
     assert_eq!(
         requests
             .iter()
             .map(|request| (
                 request.source.code_forge,
                 request.source.repo_owner.as_str(),
+                request.source.repo_name.as_str(),
                 request.head.clone()
             ))
             .collect::<Vec<_>>(),
@@ -540,21 +553,29 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
             (
                 RepositoryForge::GitHub,
                 "Acme",
-                Some(RepositoryHeadRef::NamedRef("v1".to_owned()))
+                "Shared-Skills",
+                Some(RepositoryHeadRef::Branch("v1".to_owned()))
             ),
             (
                 RepositoryForge::GitHub,
                 "acme",
+                "shared-skills",
                 Some(RepositoryHeadRef::CommitSha(sha))
             ),
-            (RepositoryForge::GitLab, "platform/backend", None),
+            (RepositoryForge::GitLab, "platform/backend", "skills", None),
+            (
+                RepositoryForge::GitLab,
+                "acme",
+                "shared-skills",
+                Some(RepositoryHeadRef::Branch("v1".to_owned()))
+            ),
         ]
     );
     assert!(plan.batch.validate().is_ok());
 
     let checkouts = plan.into_checkouts(None);
     let reasons = |file: &str| {
-        let resolution_reports = discover(&workspace.skill_dirs(), RepositoryForge::GitHub)
+        let resolution_reports = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub))
             .unwrap()
             .materialize(
                 &workspace.skill_dirs(),
@@ -573,9 +594,101 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
             .map(|entry| entry.reason)
             .collect::<Vec<_>>()
     };
-    // A 64-character SHA can't be checked out, and a GitHub owner can't contain `/`.
-    assert_eq!(reasons("skills/d.yaml"), [UnresolvedReason::RefNotFound]);
+    // A 64-character SHA is a malformed reference file, and a GitHub owner can't contain `/`.
+    assert_eq!(
+        reasons("skills/d.yaml"),
+        [UnresolvedReason::InvalidReferenceFile]
+    );
     assert_eq!(reasons("skills/e.yaml"), [UnresolvedReason::CloneFailed]);
+}
+
+#[test]
+fn sources_without_a_known_forge_are_not_cloned() {
+    let workspace = Workspace::new();
+    write_reference(
+        &workspace.factory_skills,
+        "a-no-forge.yaml",
+        "source: acme/shared-skills@v1\ninclude: [one, two]\n",
+    );
+    write_reference(
+        &workspace.factory_skills,
+        "b-host.yaml",
+        "source: gitlab.com:acme/gitlab-skills\ninclude: [one]\n",
+    );
+    write_reference(
+        &workspace.factory_skills,
+        "c-mapping.yaml",
+        "source:\n  owner: acme\n  repo: github-skills\n  codeForge: GITHUB\ninclude: [one]\n",
+    );
+    let dirs = workspace.skill_dirs();
+    let discovered = discover(&dirs, None).unwrap();
+    let plan = discovered.checkout_plan(&workspace.sources());
+    assert_eq!(
+        plan.batch
+            .repositories
+            .iter()
+            .map(|request| (request.source.code_forge, request.source.repo_name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (RepositoryForge::GitLab, "gitlab-skills"),
+            (RepositoryForge::GitHub, "github-skills"),
+        ]
+    );
+    let report = workspace.run_fake_checkouts(
+        &plan.batch.repositories,
+        &[
+            (
+                "gitlab-skills",
+                SourceFixture::Skills(vec![skill(".agents/skills/one", "one")]),
+            ),
+            (
+                "github-skills",
+                SourceFixture::Fails(CheckoutFailureKind::Clone),
+            ),
+        ],
+    );
+    let resolution = discovered.materialize(
+        &dirs,
+        &dirs,
+        &plan.into_checkouts(Some(&report)),
+        &workspace.generated(),
+    );
+
+    let [no_forge, host, mapping] = resolution.report.references.as_slice() else {
+        panic!("expected three reports");
+    };
+    assert_eq!(
+        unresolved(no_forge),
+        [
+            ("one", UnresolvedReason::UnknownForge),
+            ("two", UnresolvedReason::UnknownForge)
+        ]
+    );
+    let source = no_forge.source.as_ref().unwrap();
+    assert_eq!(source.code_forge, None);
+    assert_eq!((source.owner.as_str(), source.repo.as_str()), ("acme", "shared-skills"));
+    assert_eq!(source.requested_ref.as_deref(), Some("v1"));
+    assert_eq!(source.resolved_sha, None);
+    assert_eq!(loaded_names(host), ["one"]);
+    assert_eq!(
+        host.source.as_ref().unwrap().code_forge,
+        Some(RepositoryForge::GitLab)
+    );
+    assert_eq!(
+        unresolved(mapping),
+        [("one", UnresolvedReason::CloneFailed)]
+    );
+
+    let json = serde_json::to_value(&resolution.report).unwrap();
+    assert_eq!(
+        json["references"][0]["source"],
+        serde_json::json!({"owner": "acme", "repo": "shared-skills", "requested_ref": "v1"})
+    );
+    assert_eq!(
+        json["references"][0]["unresolved"][0],
+        serde_json::json!({"entry": "one", "reason": "unknown_forge"})
+    );
+    assert_eq!(json["references"][1]["source"]["code_forge"], "GITLAB");
 }
 
 #[test]
@@ -586,7 +699,7 @@ fn checkouts_without_a_reported_head_read_it_from_the_repository() {
         "shared.yaml",
         "source: acme/shared-skills\ninclude: [x]\n",
     );
-    let discovered = discover(&workspace.skill_dirs(), RepositoryForge::GitHub).unwrap();
+    let discovered = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let checkout = workspace
         .sources()
@@ -626,26 +739,18 @@ fn checkouts_without_a_reported_head_read_it_from_the_repository() {
 }
 
 #[test]
-fn sources_without_a_forge_use_the_primary_then_the_environment_forge() {
-    assert_eq!(
-        default_source_forge(Some("GITLAB"), [RepositoryForge::AzureDevOps]),
-        RepositoryForge::GitLab
-    );
-    assert_eq!(
-        default_source_forge(
-            None,
-            [RepositoryForge::AzureDevOps, RepositoryForge::AzureDevOps]
-        ),
-        RepositoryForge::AzureDevOps
-    );
-    assert_eq!(
-        default_source_forge(
-            Some("UNKNOWN"),
-            [RepositoryForge::AzureDevOps, RepositoryForge::GitLab]
-        ),
-        RepositoryForge::GitHub
-    );
-    assert_eq!(default_source_forge(None, []), RepositoryForge::GitHub);
+fn factory_code_forge_accepts_only_known_forge_tokens() {
+    for (value, expected) in [
+        (Some("GITHUB"), Some(RepositoryForge::GitHub)),
+        (Some("GITLAB"), Some(RepositoryForge::GitLab)),
+        (Some(" AZURE_DEVOPS\n"), Some(RepositoryForge::AzureDevOps)),
+        (Some("github"), None),
+        (Some("BITBUCKET"), None),
+        (Some(""), None),
+        (None, None),
+    ] {
+        assert_eq!(factory_code_forge(value), expected, "{value:?}");
+    }
 }
 
 #[test]
@@ -658,7 +763,7 @@ fn relative_skill_dirs_keep_their_configured_form() {
     );
     let configured = vec![PathBuf::from("definition/skills")];
     let resolved = resolve_skills_dirs(&workspace.root, configured.clone());
-    let discovered = discover(&resolved, RepositoryForge::GitHub).unwrap();
+    let discovered = discover(&resolved, Some(RepositoryForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let report = workspace.run_fake_checkouts(
         &plan.batch.repositories,

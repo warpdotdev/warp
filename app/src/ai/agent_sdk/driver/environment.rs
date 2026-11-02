@@ -856,7 +856,7 @@ fn record_codebase_indexing(
 // doesn't recognize. Unlike `None`, a future server can assign the latter to
 // a real repository before this client updates, so callers must treat it as
 // an ordinary "can't clone this" outcome rather than an invariant violation.
-pub(super) fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
+fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge {
         Some(CodeForge::GitHub) => Some(RepositoryForge::GitHub),
         Some(CodeForge::GitLab) => Some(RepositoryForge::GitLab),
