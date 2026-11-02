@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::*;
@@ -51,32 +53,40 @@ fn result_json(result: Result<SkillReferenceFile, SkillReferenceParseError>) -> 
     })
 }
 
+/// One entry of the shared `cases.yaml`.
+#[derive(Deserialize)]
+struct SharedCase {
+    name: String,
+    input: String,
+    expected: Value,
+}
+
 #[test]
-fn shared_fixtures_parse_to_their_expected_results() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/skills/references/testdata");
-    let mut cases = 0;
+fn shared_cases_parse_to_their_expected_results() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/skills/references/testdata/cases.yaml");
+    let cases: Vec<SharedCase> = serde_yaml::from_str(&fs::read_to_string(&path).unwrap())
+        .unwrap_or_else(|error| panic!("invalid {}: {error}", path.display()));
+    assert!(!cases.is_empty(), "no cases in {}", path.display());
+    let mut names = HashSet::new();
     let mut failures = Vec::new();
-    for entry in fs::read_dir(&directory).unwrap() {
-        let path = entry.unwrap().path();
-        let Some(case) = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_suffix(".yaml"))
-        else {
-            continue;
-        };
-        let expected: Value = serde_json::from_str(
-            &fs::read_to_string(directory.join(format!("{case}.expected.json"))).unwrap(),
-        )
-        .unwrap();
-        let actual = result_json(parse(&fs::read_to_string(&path).unwrap()));
-        if actual != expected {
-            failures.push(format!("{case}: expected {expected}, got {actual}"));
+    for case in &cases {
+        assert!(names.insert(&case.name), "duplicate case {}", case.name);
+        let actual = result_json(parse(&case.input));
+        if actual != case.expected {
+            failures.push(format!(
+                "case {}: expected {}, got {actual}",
+                case.name, case.expected
+            ));
         }
-        cases += 1;
     }
-    assert!(cases > 0, "no cases in {}", directory.display());
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} shared cases failed:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
