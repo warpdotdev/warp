@@ -207,8 +207,7 @@ def _valid_benchmark_task_slug(slug: str) -> bool:
 
 def _resource_files(root: Path) -> list[Path]:
     files = [root / "factory.yaml"]
-    # Skill folders are an agent's own material; only the reference files that
-    # sit directly in a skills directory belong to the Factory format.
+    # Of a skills directory, only the reference files directly inside it are Factory format.
     if (root / "skills").is_dir():
         files.extend(_direct_files(root / "skills"))
     for directory_name in (

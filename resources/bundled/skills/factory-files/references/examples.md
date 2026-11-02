@@ -243,8 +243,8 @@ locations changes who can use it, so do not relocate a skill unless that is
 what was asked for.
 
 ## Skill references
-`skills/shared.yaml` loads skills from another repository for every agent,
-pinned to a tag:
+`skills/shared.yaml` loads skills for every agent from another repository on
+the Factory's only code forge, pinned to a tag:
 
 ```yaml
 source: acme/shared-skills@v1.4.0
@@ -255,38 +255,15 @@ exclude:
   - review-legacy
 ```
 
-That shorthand names no forge, which only works when the Factory has exactly
-one code forge. A Factory with more than one names it with a host prefix, and
-the forge must be one of the Factory's code forges. For example,
-`agents/reviewer/skills/platform.yaml`, for the reviewer agent only:
-
-```yaml
-source: gitlab.com:acme/platform/review-skills@main
-include:
-  - tools/review-style
-```
-
-The mapping form says the same with `codeForge`, and also fits a ref that
-contains `@`:
+`agents/reviewer/skills/platform.yaml` names its forge, as a Factory with more
+than one code forge must, using the mapping form:
 
 ```yaml
 source:
   codeForge: GITLAB
   owner: acme/platform
   repo: review-skills
-  ref: release@2026
+  ref: main
 include:
   - tools/review-style
-```
-
-A private source repository must be attached to the Factory. `deferred: true`
-attaches it without preparing it for every run:
-
-```yaml
-repositories:
-  - owner: acme
-    name: platform
-  - owner: acme
-    name: shared-skills
-    deferred: true
 ```

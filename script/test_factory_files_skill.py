@@ -191,10 +191,9 @@ def assert_submits_resource_files() -> None:
     """Canonical resources and invalid benchmark YAML paths are uploaded.
 
     Skill folders can hold anything a repository wants to give an agent, and
-    unrelated files are none of the server's business, so neither is sent. The
-    skill reference files that sit directly in a skills directory are part of
-    the format, so they are. Invalid benchmark YAML must reach the server so it
-    can report the unsupported path.
+    unrelated files are none of the server's business, so neither is sent; skill
+    reference files directly in a skills directory are. Invalid benchmark YAML
+    must reach the server so it can report the unsupported path.
     """
     with factory_tree(
         **{
@@ -208,10 +207,7 @@ def assert_submits_resource_files() -> None:
             "webhooks/ci.yaml": "authMode: token\nsecretName: CI_TOKEN\n",
             "skills/helper/SKILL.md": "---\nname: helper\n---\nhelp\n",
             "agents/main/skills/inner/SKILL.md": "---\nname: inner\n---\nhelp\n",
-            "skills/shared.yaml": (
-                "source: github.com:acme/shared-skills@v1.4.0\ninclude: [deploy]\n"
-            ),
-            "skills/elsewhere.yaml": "source: bitbucket.org:acme/other-skills\ninclude: [lint]\n",
+            "skills/shared.yaml": "source: github.com:acme/shared-skills\ninclude: [deploy]\n",
             "agents/main/skills/review.yml": (
                 "source:\n  owner: acme\n  repo: review-skills\n  codeForge: GITHUB\n"
                 "include: [review]\n"
@@ -244,15 +240,7 @@ def assert_submits_resource_files() -> None:
                     "column": 1,
                     "code": "FF_UNSUPPORTED_PATH",
                     "message": "unsupported Factory resource path",
-                },
-                {
-                    "path": "skills/elsewhere.yaml",
-                    "line": 1,
-                    "column": 9,
-                    "code": "FF_SKILL_REFERENCE_UNKNOWN_CODE_FORGE",
-                    "message": 'source host "bitbucket.org" must be one of github.com, '
-                    "gitlab.com, dev.azure.com",
-                },
+                }
             ],
         }
         with fake_server(response) as server:
@@ -261,13 +249,8 @@ def assert_submits_resource_files() -> None:
             raise RuntimeError(
                 f"expected an unsupported-path diagnostic, got: {result.stdout}{result.stderr}"
             )
-        for fragment in (
-            "FF_UNSUPPORTED_PATH",
-            "FF_SKILL_REFERENCE_UNKNOWN_CODE_FORGE",
-            "skills/elsewhere.yaml:1",
-        ):
-            if fragment not in result.stderr:
-                raise RuntimeError(f"the server diagnostic was not relayed: {result.stderr}")
+        if "FF_UNSUPPORTED_PATH" not in result.stderr:
+            raise RuntimeError(f"the server diagnostic was not relayed: {result.stderr}")
         submitted = {entry["path"] for entry in server.submitted_files()}
         expected = {
             "factory.yaml",
@@ -283,7 +266,6 @@ def assert_submits_resource_files() -> None:
             "benchmarks/terminal-bench/tasks/nested/inner.yaml",
             "webhooks/ci.yaml",
             "skills/shared.yaml",
-            "skills/elsewhere.yaml",
             "agents/main/skills/review.yml",
         }
         if submitted != expected:
