@@ -1037,9 +1037,8 @@ pub struct AgentDriver {
     /// The run's workspace, taken once when setup starts and `None` from then on.
     workspace: Option<WorkspaceState>,
     skill_dirs: Vec<PathBuf>,
-    /// Whether a skill name found in an earlier `skill_dirs` entry hides the same name in later
-    /// entries. Set once resolved skill references add generated folders, which rely on folder
-    /// order for precedence.
+    /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
+    /// Set once skill references add generated folders, which rely on folder order.
     skill_dirs_first_name_wins: bool,
     factory_repository_contract: bool,
     computer_use_configured: bool,

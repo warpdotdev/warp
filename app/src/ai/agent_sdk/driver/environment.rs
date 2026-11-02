@@ -1281,9 +1281,8 @@ async fn execute_checkout_helper(
     })
 }
 
-/// Runs `batch` through the checkout helper in the terminal session, returning the helper's
-/// report, or `None` when the helper couldn't produce one. Individual checkout failures are left
-/// for the caller to read from the report.
+/// Runs `batch` through the checkout helper, returning its report, or `None` when the helper
+/// produced none. Per-request failures are left in the report.
 pub(super) fn checkout_skill_sources(
     batch: CheckoutBatch,
     ctx: &mut ModelContext<TerminalDriver>,

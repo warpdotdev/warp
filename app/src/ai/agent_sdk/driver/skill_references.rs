@@ -1,12 +1,7 @@
-//! Resolves the skill reference files in a Factory definition's skill folders.
-//!
-//! Each referenced repository is checked out outside the working directory, so nothing else
-//! discovers it, and the selected skills are exposed through a generated skill folder that is
-//! placed immediately after the skill folder owning the reference files. Oz skill loading and
-//! third-party harness publishing then pick those folders up like any other skill folder.
-//!
-//! Resolution never fails a run: every problem is recorded as an unresolved entry and the rest
-//! still loads.
+//! Resolves the skill reference files in a Factory definition's skill folders. Sources are checked
+//! out outside the working directory, and the selected skills are linked into a generated skill
+//! folder placed right after the folder that owns the reference files. Resolution never fails a
+//! run: each problem is recorded as an unresolved entry and the rest still loads.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -23,7 +18,7 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
-use warp_core::{safe_info, safe_warn};
+use warp_core::safe_warn;
 use warpui::ModelSpawner;
 use warpui::r#async::executor::Background;
 
@@ -32,11 +27,11 @@ use super::environment;
 use super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest,
 };
+use super::harness::create_symlink;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 
-/// Environment variable naming the Factory's code forge, set only when the Factory has exactly
-/// one. Sources that don't name a forge use it.
-pub(super) const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
+/// Names the Factory's code forge; set only when the Factory has exactly one.
+const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
 
 const SKILL_SOURCES_DIRECTORY: &str = "oz-skill-sources";
 const SOURCE_CHECKOUTS_DIRECTORY: &str = "sources";
@@ -174,7 +169,7 @@ impl AgentDriver {
             references,
         } = discovery;
         let Ok(background) = foreground.spawn(|_, ctx| ctx.background_executor()).await else {
-            return references.unresolved_report();
+            return SkillSourcesReport::default();
         };
         let root = skill_sources_root(&task_id);
         let sources_dir = root.join(SOURCE_CHECKOUTS_DIRECTORY);
@@ -241,20 +236,15 @@ impl AgentDriver {
 }
 
 /// Directory holding a run's skill source checkouts and generated skill folders.
-pub(super) fn skill_sources_root(task_id: &AmbientAgentTaskId) -> PathBuf {
+fn skill_sources_root(task_id: &AmbientAgentTaskId) -> PathBuf {
     std::env::temp_dir()
         .join(SKILL_SOURCES_DIRECTORY)
         .join(task_id.to_string())
 }
 
-/// Parses the Factory's single code forge from the value of [`FACTORY_CODE_FORGE_ENV`]. `None`
-/// when the run doesn't provide one or the value isn't a known forge, so a source without a forge
-/// is never guessed onto one.
-pub(super) fn factory_code_forge(value: Option<&str>) -> Option<RepositoryForge> {
-    value
-        .map(str::trim)
-        .and_then(SkillSourceForge::from_token)
-        .map(repository_forge)
+/// Parses the value of [`FACTORY_CODE_FORGE_ENV`]; an unknown value counts as no forge.
+fn factory_code_forge(value: Option<&str>) -> Option<SkillSourceForge> {
+    value.map(str::trim).and_then(SkillSourceForge::from_token)
 }
 
 fn repository_forge(forge: SkillSourceForge) -> RepositoryForge {
@@ -289,13 +279,13 @@ fn prepare_root(root: &Path, sources_dir: &Path) -> std::io::Result<()> {
 }
 
 /// The run's skill folders with the generated folders inserted, and what was resolved.
-pub(super) struct SkillReferenceResolution {
-    pub(super) skill_dirs: Vec<PathBuf>,
-    pub(super) report: SkillSourcesReport,
+struct SkillReferenceResolution {
+    skill_dirs: Vec<PathBuf>,
+    report: SkillSourcesReport,
 }
 
 /// Reference files grouped by the skill folder that holds them.
-pub(super) struct DiscoveredReferences {
+struct DiscoveredReferences {
     levels: Vec<DiscoveredLevel>,
 }
 
@@ -318,7 +308,7 @@ struct ReferenceSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SourceKey {
     /// The source's own forge, else the Factory's single forge; `None` when neither is known.
-    forge: Option<RepositoryForge>,
+    forge: Option<SkillSourceForge>,
     owner: String,
     repo: String,
     reference: Option<SkillSourceRef>,
@@ -327,7 +317,7 @@ struct SourceKey {
 /// Source identity for deduplication: the repository identity (owners and repos are
 /// case-insensitive on every forge) plus the requested ref.
 type SourceIdentity = (
-    Option<RepositoryForge>,
+    Option<SkillSourceForge>,
     String,
     String,
     Option<SkillSourceRef>,
@@ -351,11 +341,11 @@ impl SourceKey {
         })
     }
 
-    fn checkout_name(&self, forge: RepositoryForge) -> String {
+    fn checkout_name(&self, forge: SkillSourceForge) -> String {
         let (_, owner, repo, reference) = self.identity();
         let mut hasher = Sha256::new();
         for part in [
-            forge_token(forge),
+            forge.token(),
             &owner,
             &repo,
             reference.as_ref().map_or("", SkillSourceRef::value),
@@ -369,7 +359,7 @@ impl SourceKey {
             .take(6)
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let readable = format!("{}-{owner}-{repo}", forge_token(forge).to_lowercase())
+        let readable = format!("{}-{owner}-{repo}", forge.token().to_lowercase())
             .chars()
             .map(|character| {
                 if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
@@ -384,20 +374,12 @@ impl SourceKey {
     }
 }
 
-fn forge_token(forge: RepositoryForge) -> &'static str {
-    match forge {
-        RepositoryForge::GitHub => SkillSourceForge::GitHub.token(),
-        RepositoryForge::GitLab => SkillSourceForge::GitLab.token(),
-        RepositoryForge::AzureDevOps => SkillSourceForge::AzureDevOps.token(),
-    }
-}
-
 /// Reads the reference files that sit directly in each skill folder, in file-name order.
 /// `factory_forge` is the forge for sources that don't name one. Returns `None` when there are no
 /// reference files.
-pub(super) fn discover(
+fn discover(
     skill_dirs: &[PathBuf],
-    factory_forge: Option<RepositoryForge>,
+    factory_forge: Option<SkillSourceForge>,
 ) -> Option<DiscoveredReferences> {
     let mut seen = HashSet::new();
     let mut levels = Vec::new();
@@ -427,11 +409,7 @@ pub(super) fn discover(
                     .and_then(|contents| parse_skill_reference_file(&contents))
                     .map(|file| {
                         let source = SourceKey {
-                            forge: file
-                                .source
-                                .code_forge
-                                .map(repository_forge)
-                                .or(factory_forge),
+                            forge: file.source.code_forge.or(factory_forge),
                             owner: file.source.owner.clone(),
                             repo: file.source.repo.clone(),
                             reference: file.source.reference.clone(),
@@ -480,25 +458,24 @@ fn reference_file_path(skills_dir: &Path, agent: Option<&str>, file_name: &str) 
 }
 
 /// The checkout batch for every distinct source, plus the sources that can't be requested.
-pub(super) struct SourceCheckoutPlan {
-    pub(super) batch: CheckoutBatch,
-    planned: Vec<(SourceIdentity, bool)>,
+struct SourceCheckoutPlan {
+    batch: CheckoutBatch,
+    /// The identity of each request in `batch`, by index.
+    planned: Vec<SourceIdentity>,
     rejected: HashMap<SourceIdentity, UnresolvedReason>,
 }
 
 /// The checkout of each source, or why there isn't one.
-pub(super) struct SourceCheckouts(
-    HashMap<SourceIdentity, Result<CheckedOutSource, UnresolvedReason>>,
-);
+struct SourceCheckouts(HashMap<SourceIdentity, Result<CheckedOutSource, UnresolvedReason>>);
 
-pub(super) struct CheckedOutSource {
+struct CheckedOutSource {
     dir: PathBuf,
     resolved_sha: Option<String>,
 }
 
 impl DiscoveredReferences {
     /// One request per distinct source, checked out into `sources_dir`.
-    pub(super) fn checkout_plan(&self, sources_dir: &Path) -> SourceCheckoutPlan {
+    fn checkout_plan(&self, sources_dir: &Path) -> SourceCheckoutPlan {
         let mut seen = HashSet::new();
         let mut repositories = Vec::new();
         let mut planned = Vec::new();
@@ -518,7 +495,7 @@ impl DiscoveredReferences {
             };
             let request = CheckoutRequest {
                 source: RepositoryIdentity {
-                    code_forge: forge,
+                    code_forge: repository_forge(forge),
                     repo_owner: spec.source.owner.clone(),
                     repo_name: spec.source.repo.clone(),
                 },
@@ -530,7 +507,7 @@ impl DiscoveredReferences {
             };
             match request.validate() {
                 Ok(()) => {
-                    planned.push((identity, request.head.is_some()));
+                    planned.push(identity);
                     repositories.push(request);
                 }
                 Err("invalid checkout commit" | "invalid checkout ref") => {
@@ -551,30 +528,13 @@ impl DiscoveredReferences {
         }
     }
 
-    /// A report that marks every reference as unresolved, for when resolution couldn't start.
-    fn unresolved_report(&self) -> SkillSourcesReport {
-        let checkouts = SourceCheckouts(HashMap::new());
-        SkillSourcesReport {
-            references: self
-                .levels
-                .iter()
-                .flat_map(|level| {
-                    level
-                        .files
-                        .iter()
-                        .map(|file| file_report_without_skills(level, file, &checkouts))
-                })
-                .collect(),
-        }
-    }
-
     /// Selects the skills of every reference file, generates a skill folder per level, and
     /// returns `configured_dirs` with each generated folder after the folder that owns it.
     ///
     /// `resolved_dirs` are `configured_dirs` resolved against the working directory. Skills are
     /// considered in folder order, so a referenced skill whose name is already provided by an
     /// earlier folder, or an earlier level's references, is not loaded.
-    pub(super) fn materialize(
+    fn materialize(
         self,
         configured_dirs: &[PathBuf],
         resolved_dirs: &[PathBuf],
@@ -623,13 +583,6 @@ impl DiscoveredReferences {
                         continue;
                     }
                     if claimed.contains(&candidate.name) {
-                        safe_info!(
-                            safe: ("A referenced skill is shadowed by a higher-precedence skill"),
-                            full: (
-                                "Referenced skill '{}' from {} is shadowed by a higher-precedence skill",
-                                candidate.name, file.reference_file
-                            )
-                        );
                         continue;
                     }
                     if let Err(error) = link_skill(&generated_dir, &candidate) {
@@ -666,13 +619,13 @@ impl DiscoveredReferences {
 impl SourceCheckoutPlan {
     /// Pairs each planned source with its outcome in the helper's report. A missing report or
     /// outcome means the source couldn't be cloned.
-    pub(super) fn into_checkouts(self, report: Option<&CheckoutReport>) -> SourceCheckouts {
+    fn into_checkouts(self, report: Option<&CheckoutReport>) -> SourceCheckouts {
         let mut checkouts = self
             .rejected
             .into_iter()
             .map(|(identity, reason)| (identity, Err(reason)))
             .collect::<HashMap<_, _>>();
-        for (index, (identity, has_ref)) in self.planned.into_iter().enumerate() {
+        for (index, identity) in self.planned.into_iter().enumerate() {
             let request = &self.batch.repositories[index];
             let outcome = report.and_then(|report| {
                 report
@@ -688,7 +641,7 @@ impl SourceCheckoutPlan {
                         .or_else(|| read_head(&dir));
                     Ok(CheckedOutSource { dir, resolved_sha })
                 }
-                Some(Some(CheckoutFailureKind::Checkout)) if has_ref => {
+                Some(Some(CheckoutFailureKind::Checkout)) if request.head.is_some() => {
                     Err(UnresolvedReason::RefNotFound)
                 }
                 Some(Some(
@@ -755,7 +708,7 @@ fn file_report_without_skills(
             }),
     };
     report.source = Some(ReferencedSource {
-        code_forge: spec.source.forge,
+        code_forge: spec.source.forge.map(repository_forge),
         owner: spec.source.owner.clone(),
         repo: spec.source.repo.clone(),
         requested_ref: spec
@@ -1075,17 +1028,7 @@ fn is_valid_skill_link_name(name: &str) -> bool {
 
 fn link_skill(generated_dir: &Path, candidate: &Candidate) -> std::io::Result<()> {
     fs::create_dir_all(generated_dir)?;
-    create_dir_symlink(&candidate.dir, &generated_dir.join(&candidate.name))
-}
-
-#[cfg(unix)]
-fn create_dir_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(source, target)
-}
-
-#[cfg(windows)]
-fn create_dir_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(source, target)
+    create_symlink(&candidate.dir, &generated_dir.join(&candidate.name))
 }
 
 fn log_report(report: &SkillSourcesReport) {

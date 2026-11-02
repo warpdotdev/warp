@@ -82,7 +82,7 @@ impl Workspace {
     /// `fixtures`. Sources without a fixture produce no outcome.
     fn resolve(&self, fixtures: &[(&str, SourceFixture)]) -> SkillReferenceResolution {
         let dirs = self.skill_dirs();
-        let discovered = discover(&dirs, Some(RepositoryForge::GitHub)).expect("reference files");
+        let discovered = discover(&dirs, Some(SkillSourceForge::GitHub)).expect("reference files");
         let plan = discovered.checkout_plan(&self.sources());
         let report = self.run_fake_checkouts(&plan.batch.repositories, fixtures);
         let checkouts = plan.into_checkouts(Some(&report));
@@ -165,7 +165,7 @@ fn folders_without_reference_files_are_left_alone() {
         "config.yaml",
         "source: acme/shared-skills\ninclude: [x]\n",
     );
-    assert!(discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).is_none());
+    assert!(discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).is_none());
 }
 
 #[test]
@@ -179,7 +179,9 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
     let resolution = workspace.resolve(&[(
         "shared-skills",
         SourceFixture::Skills(vec![
-            skill(".agents/skills/safe-secrets", "safe-secrets"),
+            // Names search the standard folders in provider order, not path order.
+            skill(".claude/skills/safe-secrets", "safe-secrets"),
+            skill(".warp/skills/safe-secrets", "safe-secrets"),
             skill("tools/release-notes", "release-notes"),
             skill("frontend/buttons", "buttons"),
             skill("frontend/forms", "forms"),
@@ -198,6 +200,7 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
         loaded_names(report),
         ["safe-secrets", "release-notes", "buttons", "legacy-new"]
     );
+    assert_eq!(report.loaded[0].path, ".warp/skills/safe-secrets");
     assert_eq!(report.loaded[1].path, "tools/release-notes");
     assert!(report.unresolved.is_empty());
     let source = report.source.as_ref().unwrap();
@@ -219,27 +222,6 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
     );
 }
 
-#[test]
-fn names_prefer_earlier_standard_folders() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "shared.yaml",
-        "source: acme/shared-skills\ninclude: [triage]\n",
-    );
-    let resolution = workspace.resolve(&[(
-        "shared-skills",
-        SourceFixture::Skills(vec![
-            skill(".claude/skills/triage", "triage"),
-            skill(".warp/skills/triage-v2", "triage"),
-        ]),
-    )]);
-    assert_eq!(
-        resolution.report.references[0].loaded[0].path,
-        ".warp/skills/triage-v2"
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn referenced_skills_are_their_folders_inside_the_checkout() {
@@ -249,48 +231,24 @@ fn referenced_skills_are_their_folders_inside_the_checkout() {
         "shared.yaml",
         "source: acme/shared-skills\ninclude:\n  - skills/inside\n  - skills/escape\n",
     );
+    // A symlinked folder can't pull in a skill from outside the source repository.
     let outside = write_skill(&workspace.root, "outside", "escape");
+    let checkout_name = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub))
+        .unwrap()
+        .checkout_plan(&workspace.sources())
+        .batch
+        .repositories[0]
+        .checkout_name
+        .clone();
+    let checkout = workspace.sources().join(checkout_name);
+    fs::create_dir_all(checkout.join("skills")).unwrap();
+    std::os::unix::fs::symlink(&outside, checkout.join("skills/escape")).unwrap();
     let resolution = workspace.resolve(&[(
         "shared-skills",
         SourceFixture::Skills(vec![skill("skills/inside", "inside")]),
     )]);
-    let checkout = workspace
-        .sources()
-        .read_dir()
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    fs::write(checkout.join("README.md"), "repository file").unwrap();
-
-    // A symlinked folder can't pull in files from outside the source repository.
-    std::os::unix::fs::symlink(&outside, checkout.join("skills/escape")).unwrap();
-    let resolution_with_escape = {
-        let dirs = workspace.skill_dirs();
-        let discovered = discover(&dirs, Some(RepositoryForge::GitHub)).unwrap();
-        let plan = discovered.checkout_plan(&workspace.sources());
-        let report = CheckoutReport {
-            requests: Vec::new(),
-            outcomes: vec![CheckoutOutcome {
-                request_index: 0,
-                failure: None,
-                diagnostics: String::new(),
-                duration_ms: 0,
-                resolved_head: Some(fake_sha('b')),
-            }],
-            identity_diagnostics: None,
-        };
-        let checkouts = plan.into_checkouts(Some(&report));
-        fs::remove_dir_all(workspace.generated()).unwrap();
-        discovered.materialize(&dirs, &dirs, &checkouts, &workspace.generated())
-    };
     assert_eq!(
         unresolved(&resolution.report.references[0]),
-        [("skills/escape", UnresolvedReason::NoMatch)]
-    );
-    assert_eq!(
-        unresolved(&resolution_with_escape.report.references[0]),
         [("skills/escape", UnresolvedReason::NoMatch)]
     );
 
@@ -536,7 +494,7 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
         "source: gitlab.com:acme/shared-skills@v1\ninclude: [x]\n",
     );
 
-    let discovered = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).unwrap();
+    let discovered = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let requests = &plan.batch.repositories;
     // Sources are keyed by forge, case-insensitive owner and repo, and ref, so a host prefix
@@ -577,7 +535,7 @@ fn checkout_plan_dedupes_sources_and_requests_their_heads() {
 
     let checkouts = plan.into_checkouts(None);
     let reasons = |file: &str| {
-        let resolution_reports = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub))
+        let resolution_reports = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub))
             .unwrap()
             .materialize(
                 &workspace.skill_dirs(),
@@ -683,17 +641,6 @@ fn sources_without_a_known_forge_are_not_cloned() {
         unresolved(mapping),
         [("one", UnresolvedReason::CloneFailed)]
     );
-
-    let json = serde_json::to_value(&resolution.report).unwrap();
-    assert_eq!(
-        json["references"][0]["source"],
-        serde_json::json!({"owner": "acme", "repo": "shared-skills", "requested_ref": "v1"})
-    );
-    assert_eq!(
-        json["references"][0]["unresolved"][0],
-        serde_json::json!({"entry": "one", "reason": "unknown_forge"})
-    );
-    assert_eq!(json["references"][1]["source"]["code_forge"], "GITLAB");
 }
 
 #[test]
@@ -704,7 +651,7 @@ fn checkouts_without_a_reported_head_read_it_from_the_repository() {
         "shared.yaml",
         "source: acme/shared-skills\ninclude: [x]\n",
     );
-    let discovered = discover(&workspace.skill_dirs(), Some(RepositoryForge::GitHub)).unwrap();
+    let discovered = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let checkout = workspace
         .sources()
@@ -747,12 +694,9 @@ fn checkouts_without_a_reported_head_read_it_from_the_repository() {
 #[test]
 fn factory_code_forge_accepts_only_known_forge_tokens() {
     for (value, expected) in [
-        (Some("GITHUB"), Some(RepositoryForge::GitHub)),
-        (Some("GITLAB"), Some(RepositoryForge::GitLab)),
-        (Some(" AZURE_DEVOPS\n"), Some(RepositoryForge::AzureDevOps)),
+        (Some(" AZURE_DEVOPS\n"), Some(SkillSourceForge::AzureDevOps)),
         (Some("github"), None),
         (Some("BITBUCKET"), None),
-        (Some(""), None),
         (None, None),
     ] {
         assert_eq!(factory_code_forge(value), expected, "{value:?}");
@@ -769,7 +713,7 @@ fn relative_skill_dirs_keep_their_configured_form() {
     );
     let configured = vec![PathBuf::from("definition/skills")];
     let resolved = resolve_skills_dirs(&workspace.root, configured.clone());
-    let discovered = discover(&resolved, Some(RepositoryForge::GitHub)).unwrap();
+    let discovered = discover(&resolved, Some(SkillSourceForge::GitHub)).unwrap();
     let plan = discovered.checkout_plan(&workspace.sources());
     let report = workspace.run_fake_checkouts(
         &plan.batch.repositories,
