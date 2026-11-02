@@ -82,42 +82,16 @@ fn shared_cases_parse_to_their_expected_results() {
 
 #[test]
 fn globs_match_with_literal_braces_commas_and_backslashes() {
+    let path = |pattern: &str| SkillReferenceEntry::PathGlob(pattern.to_owned());
+    let name = |pattern: &str| SkillReferenceEntry::NameGlob(pattern.to_owned());
     for (entry, candidate, expected) in [
-        (
-            SkillReferenceEntry::PathGlob("frontend/*".to_owned()),
-            "frontend/forms",
-            true,
-        ),
-        (
-            SkillReferenceEntry::PathGlob("frontend/*".to_owned()),
-            "frontend/forms/inner",
-            false,
-        ),
-        (
-            SkillReferenceEntry::PathGlob("frontend/**".to_owned()),
-            "frontend/forms/inner",
-            true,
-        ),
-        (
-            SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()),
-            "docs-{draft,final}-v2",
-            true,
-        ),
-        (
-            SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()),
-            "docs-draft",
-            false,
-        ),
-        (
-            SkillReferenceEntry::NameGlob(r"tool-*\".to_owned()),
-            r"tool-a\",
-            true,
-        ),
-        (
-            SkillReferenceEntry::NameGlob("[{,]*".to_owned()),
-            "{x",
-            true,
-        ),
+        (path("frontend/*"), "frontend/forms", true),
+        (path("frontend/*"), "frontend/forms/inner", false),
+        (path("frontend/**"), "frontend/forms/inner", true),
+        (name("docs-{draft,final}*"), "docs-{draft,final}-v2", true),
+        (name("docs-{draft,final}*"), "docs-draft", false),
+        (name(r"tool-*\"), r"tool-a\", true),
+        (name("[{,]*"), "{x", true),
     ] {
         let matcher = entry.glob_matcher().unwrap();
         assert_eq!(
