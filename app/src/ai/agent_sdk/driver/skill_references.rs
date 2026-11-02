@@ -15,6 +15,7 @@ use ai::skills::{
     parse_code_forge, parse_skill, parse_skill_reference_file, read_skills, resolve_skills_dirs,
 };
 use serde::Serialize;
+use strum_macros::IntoStaticStr;
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 use warpui::{ModelSpawner, SingletonEntity as _};
@@ -53,8 +54,9 @@ pub(crate) enum ReferenceLevel {
 }
 
 /// Why an entry, or a whole reference file, didn't load.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum UnresolvedReason {
     CloneFailed,
     RefNotFound,
@@ -147,15 +149,11 @@ impl SkillSourcesReport {
             .iter()
             .flat_map(|reference| {
                 reference.unresolved.iter().map(move |entry| {
+                    let reason: &str = entry.reason.into();
                     if entry.entry.is_empty() {
-                        format!("{} ({})", reference.reference_file, entry.reason.code())
+                        format!("{} ({reason})", reference.reference_file)
                     } else {
-                        format!(
-                            "{} '{}' ({})",
-                            reference.reference_file,
-                            entry.entry,
-                            entry.reason.code()
-                        )
+                        format!("{} '{}' ({reason})", reference.reference_file, entry.entry)
                     }
                 })
             })
@@ -178,20 +176,6 @@ impl SkillSourcesReport {
         Some(format!(
             "Warning: some referenced skills did not load ({details}); continuing without them."
         ))
-    }
-}
-
-impl UnresolvedReason {
-    fn code(self) -> &'static str {
-        match self {
-            Self::CloneFailed => "clone_failed",
-            Self::RefNotFound => "ref_not_found",
-            Self::UnknownForge => "unknown_forge",
-            Self::NoMatch => "no_match",
-            Self::InvalidSkill => "invalid_skill",
-            Self::InvalidReferenceFile => "invalid_reference_file",
-            Self::Collision => "collision",
-        }
     }
 }
 
@@ -357,7 +341,7 @@ impl AgentDriver {
         report
     }
 
-    /// Records `report` on this run. See [`post_skill_sources`].
+    /// Records `report` on this run; see [`post_skill_sources`].
     pub(super) async fn report_skill_sources(
         report: &SkillSourcesReport,
         setup_events: &SetupClientEventReporter,
