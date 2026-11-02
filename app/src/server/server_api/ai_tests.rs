@@ -13,8 +13,7 @@ use warp_server_client::base_client::{
 use super::super::ServerApi;
 use super::{
     AIClient, AgentMessageHeader, AgentRunClientEventRequest, AgentRunEvent, AgentSource,
-    AmbientAgentTaskId,
-    AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    AmbientAgentTaskId, AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
     CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
     ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
     ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
