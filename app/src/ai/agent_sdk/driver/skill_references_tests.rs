@@ -458,9 +458,9 @@ fn sample_report() -> SkillSourcesReport {
                 level: ReferenceLevel::Factory,
                 agent: None,
                 source: Some(ReferencedSource {
-                    code_forge: RepositoryForge::GitHub,
+                    code_forge: Some(RepositoryForge::GitHub),
                     owner: "acme".to_owned(),
-                    name: "shared-skills".to_owned(),
+                    repo: "shared-skills".to_owned(),
                     requested_ref: Some("v1.4.0".to_owned()),
                     resolved_sha: Some(fake_sha('c')),
                 }),
@@ -471,6 +471,23 @@ fn sample_report() -> SkillSourcesReport {
                 unresolved: vec![UnresolvedEntry {
                     entry: "legacy-*".to_owned(),
                     reason: UnresolvedReason::NoMatch,
+                }],
+            },
+            ReferenceFileReport {
+                reference_file: "skills/unqualified.yaml".to_owned(),
+                level: ReferenceLevel::Factory,
+                agent: None,
+                source: Some(ReferencedSource {
+                    code_forge: None,
+                    owner: "acme".to_owned(),
+                    repo: "other-skills".to_owned(),
+                    requested_ref: None,
+                    resolved_sha: None,
+                }),
+                loaded: Vec::new(),
+                unresolved: vec![UnresolvedEntry {
+                    entry: "deploy".to_owned(),
+                    reason: UnresolvedReason::UnknownForge,
                 }],
             },
         ],
@@ -495,12 +512,19 @@ fn timeline_payload_has_the_agreed_shape() {
                 "source": {
                     "code_forge": "GITHUB",
                     "owner": "acme",
-                    "name": "shared-skills",
+                    "repo": "shared-skills",
                     "requested_ref": "v1.4.0",
                     "resolved_sha": fake_sha('c'),
                 },
                 "loaded": [{"name": "safe-secrets", "path": ".agents/skills/safe-secrets"}],
                 "unresolved": [{"entry": "legacy-*", "reason": "no_match"}],
+            },
+            {
+                "reference_file": "skills/unqualified.yaml",
+                "level": "factory",
+                "source": {"owner": "acme", "repo": "other-skills"},
+                "loaded": [],
+                "unresolved": [{"entry": "deploy", "reason": "unknown_forge"}],
             },
         ]})
     );
@@ -550,8 +574,8 @@ fn status_message_names_the_first_warnings_only_when_there_are_any() {
     assert_eq!(
         report.status_message().unwrap(),
         "Warning: some referenced skills did not load (agents/triage/skills/broken.yaml \
-         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match)); continuing \
-         without them."
+         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match); \
+         skills/unqualified.yaml 'deploy' (unknown_forge)); continuing without them."
     );
 
     report.references[1].unresolved = (0..6)
@@ -560,7 +584,7 @@ fn status_message_names_the_first_warnings_only_when_there_are_any() {
             reason: UnresolvedReason::NoMatch,
         })
         .collect();
-    assert!(report.status_message().unwrap().contains("; and 2 more)"));
+    assert!(report.status_message().unwrap().contains("; and 3 more)"));
 
     for reference in &mut report.references {
         reference.unresolved.clear();

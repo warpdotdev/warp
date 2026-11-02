@@ -96,7 +96,7 @@ impl SkillSourcesReport {
                 source: reference.source.as_ref().map(|source| ReferencedSource {
                     code_forge: source.code_forge,
                     owner: truncated(&source.owner),
-                    name: truncated(&source.name),
+                    repo: truncated(&source.repo),
                     requested_ref: source.requested_ref.as_deref().map(truncated),
                     resolved_sha: source.resolved_sha.clone(),
                 }),
@@ -186,6 +186,7 @@ impl UnresolvedReason {
         match self {
             Self::CloneFailed => "clone_failed",
             Self::RefNotFound => "ref_not_found",
+            Self::UnknownForge => "unknown_forge",
             Self::NoMatch => "no_match",
             Self::InvalidSkill => "invalid_skill",
             Self::InvalidReferenceFile => "invalid_reference_file",
