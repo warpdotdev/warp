@@ -29,13 +29,14 @@ nohup <start command> </dev/null > /tmp/app.log 2>&1 &
 - If the browser fails to launch with a sandbox error, retry as `PLAYWRIGHT_MCP_SANDBOX=0 playwright-cli open --headed <url>`.
 - To drive a browser you launched yourself, start it with `chromium --remote-debugging-port=9222 <url>` and attach with `playwright-cli attach --cdp=http://localhost:9222`.
 
-## Capture and attach proof
+## Capture and report proof
 
 - Write captures outside the repository with ordered, descriptive names: `/tmp/ui-verification/01-initial.png`, `/tmp/ui-verification/02-after-submit.png`, `/tmp/ui-verification/checkout-flow.webm`.
-- Attach every capture that supports your conclusion to the run (see the oz-upload-file skill), with a description of what it shows:
+- Report every capture that supports your conclusion to the run, with a description of what it shows. Screenshots become run artifacts that the pull request description embeds inline; recordings become run artifacts with a thumbnail:
 
 ```sh
-"$OZ_CLI" artifact upload '/tmp/ui-verification/02-after-submit.png' --run-id "$OZ_RUN_ID" --description 'Checkout form after submit: success banner visible'
+"$OZ_CLI" harness-support report-artifact screenshot --path '/tmp/ui-verification/02-after-submit.png' --description 'Checkout form after submit: success banner visible'
+"$OZ_CLI" harness-support report-artifact video --path '/tmp/ui-verification/checkout-flow.webm' --title 'Checkout flow' --description 'Adding an item, submitting the form, and seeing the success banner'
 ```
 
 - Never commit screenshots, recordings, or `.playwright-cli/` output (snapshots are written to the current directory). Do not add them to git.
@@ -49,4 +50,10 @@ nohup <start command> </dev/null > /tmp/app.log 2>&1 &
 
 ## In the pull request
 
-Describe what you verified and note that the screenshots or recording are attached to the Oz run. Captures are not embedded in the pull request body; do not paste local file paths into it.
+After reporting the captures, run:
+
+```sh
+"$OZ_CLI" harness-support pr-media-markdown
+```
+
+Insert the printed blocks into the pull request body above the attribution line, videos above screenshots. The blocks carry managed markers, so when you report new captures later, run the command again and replace the whole existing block with the new one rather than adding a second copy. Describe what you verified next to the blocks; never paste local file paths into the pull request.

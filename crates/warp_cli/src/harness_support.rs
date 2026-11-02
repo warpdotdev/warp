@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 
 /// Commands to support third-party agent harnesses running within Oz.
@@ -25,6 +27,7 @@ impl HarnessSupportCommand {
             HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
             HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
             HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
+            HarnessSupportCommand::PrMediaMarkdown => "harness-support pr-media-markdown",
         }
     }
 }
@@ -51,6 +54,10 @@ pub enum HarnessSupportCommand {
 
     /// Report that the agent process is shutting down.
     ReportShutdown(ReportShutdownArgs),
+
+    /// Print the links and managed media blocks (screenshots and video recordings reported
+    /// by this run) that the pull request description should carry.
+    PrMediaMarkdown,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -63,6 +70,13 @@ pub struct ReportArtifactArgs {
 pub enum ReportArtifactCommand {
     /// Report a pull request artifact.
     PullRequest(PullRequestArtifactArgs),
+
+    /// Upload a screenshot captured in the sandbox and report it as a run artifact, so pull
+    /// request descriptions embed it inline.
+    Screenshot(ScreenshotArtifactArgs),
+
+    /// Upload a video recording captured in the sandbox and report it as a run artifact.
+    Video(VideoArtifactArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -74,6 +88,32 @@ pub struct PullRequestArtifactArgs {
     /// Branch name associated with the pull request.
     #[arg(long)]
     pub branch: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ScreenshotArtifactArgs {
+    /// Path to the screenshot image (PNG, JPEG, WebP, or GIF).
+    #[arg(long)]
+    pub path: PathBuf,
+
+    /// What the screenshot shows; used as its caption.
+    #[arg(long)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct VideoArtifactArgs {
+    /// Path to the video recording.
+    #[arg(long)]
+    pub path: PathBuf,
+
+    /// Short human-readable title for the recording.
+    #[arg(long)]
+    pub title: Option<String>,
+
+    /// One or two sentences describing what happens in the recording.
+    #[arg(long)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

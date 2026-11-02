@@ -102,6 +102,60 @@ fn upload_field_value_deserializes_every_server_kind() {
     ));
 }
 
+/// A reported screenshot carries the artifact UID returned by the screenshot-upload-target
+/// endpoint, matching warp-server's `ReportScreenshotArtifactRequest` schema.
+#[test]
+fn screenshot_artifact_serializes_to_expected_wire_format() {
+    let artifact = Artifact::Screenshot {
+        artifact_uid: "00000000-0000-7000-8000-00000000a001".to_string(),
+        mime_type: "image/png".to_string(),
+        description: Some("Login page after submit".to_string()),
+    };
+    let json = serde_json::to_value(&artifact).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "artifact_type": "SCREENSHOT",
+            "data": {
+                "artifact_uid": "00000000-0000-7000-8000-00000000a001",
+                "mime_type": "image/png",
+                "description": "Login page after submit"
+            }
+        })
+    );
+}
+
+/// The pr-media-markdown response tolerates omitted optional blocks, which the server sends as
+/// empty strings and older servers may omit entirely.
+#[test]
+fn pull_request_media_markdown_deserializes_with_defaults() {
+    use super::{PlanArtifactLink, PullRequestMediaMarkdown};
+
+    let media: PullRequestMediaMarkdown = serde_json::from_value(serde_json::json!({
+        "conversation_link": "https://app.warp.dev/conversations/conv-1",
+        "run_link": "https://app.warp.dev/runs/run-1",
+        "plan_artifacts": [{"title": "Plan", "link": "https://app.warp.dev/drive/notebook/nb-1"}],
+        "screenshot_markdown": "<!-- oz:computer-use-screenshots start -->\n<!-- oz:computer-use-screenshots end -->"
+    }))
+    .unwrap();
+    assert_eq!(
+        media,
+        PullRequestMediaMarkdown {
+            conversation_link: "https://app.warp.dev/conversations/conv-1".to_string(),
+            run_link: "https://app.warp.dev/runs/run-1".to_string(),
+            plan_artifacts: vec![PlanArtifactLink {
+                title: "Plan".to_string(),
+                link: "https://app.warp.dev/drive/notebook/nb-1".to_string(),
+            }],
+            screenshot_markdown:
+                "<!-- oz:computer-use-screenshots start -->\n<!-- oz:computer-use-screenshots end -->"
+                    .to_string(),
+            video_markdown: String::new(),
+            regressions_markdown: String::new(),
+        }
+    );
+}
+
 /// Assert that `Artifact`s serialize to the expected format for the /harness-support/report-artifact
 /// endpoint.
 /// If `Artifact` serialization changes, this test will catch it.

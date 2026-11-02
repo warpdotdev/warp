@@ -2,25 +2,39 @@
 //!
 //! Subcommands:
 //! - [`ping`] — fetches the current run by task ID and prints its info.
-//! - [`report_artifact`] — reports an artifact (e.g. a PR) back to the Oz platform.
+//! - [`report_artifact`] — reports an artifact (a PR, a screenshot, or a video recording)
+//!   back to the Oz platform.
+//! - [`pr_media_markdown`] — prints the links and managed media blocks for the run's pull
+//!   request description.
 
-use anyhow::Result;
+use std::path::Path;
+
+use anyhow::{Context as _, Result};
 #[cfg(target_os = "linux")]
 use command::blocking::Command;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::harness_support::{
     FinishTaskArgs, HarnessSupportArgs, HarnessSupportCommand, NotifyUserArgs, ReportArtifactArgs,
-    ReportArtifactCommand, ReportExternalReferenceArgs, ReportShutdownArgs, TaskStatus,
+    ReportArtifactCommand, ReportExternalReferenceArgs, ReportShutdownArgs, ScreenshotArtifactArgs,
+    TaskStatus, VideoArtifactArgs,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
+use super::artifact_upload::{
+    FileArtifactUploadRequest, FileArtifactUploader, file_size_and_prefix_for_path,
+};
 use super::common::set_ambient_task_context_from_run_id;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::harness_support::{
+    HarnessSupportClient, PullRequestMediaMarkdown, ReportArtifactResponse, UploadTarget,
+};
+use crate::server::server_api::presigned_upload::{FileUploadBody, upload_to_target};
+use crate::util::image::{MIME_SNIFF_BYTES, infer_mime_type};
 
 /// Run harness-support commands.
 pub fn run(
@@ -38,8 +52,15 @@ pub fn run(
 
     match args.command {
         HarnessSupportCommand::Ping => ping(ctx, runner, task_id, global_options.output_format),
-        HarnessSupportCommand::ReportArtifact(report_args) => {
-            report_artifact(ctx, runner, report_args, global_options.output_format)
+        HarnessSupportCommand::ReportArtifact(report_args) => report_artifact(
+            ctx,
+            runner,
+            task_id,
+            report_args,
+            global_options.output_format,
+        ),
+        HarnessSupportCommand::PrMediaMarkdown => {
+            pr_media_markdown(ctx, runner, global_options.output_format)
         }
         HarnessSupportCommand::ReportExternalReference(args) => {
             report_external_reference(ctx, runner, args, global_options.output_format)
@@ -97,26 +118,45 @@ fn ping(
 }
 
 /// Report an artifact back to the Oz platform.
+///
+/// Pull requests are reported directly. Screenshots and video recordings are uploaded first:
+/// a screenshot goes to a presigned target and becomes a run-scoped SCREENSHOT artifact, like
+/// a native `report_screenshot` capture, so pull request descriptions embed it inline; a video
+/// becomes a FILE artifact with a thumbnail, like a native `stop_recording` upload.
 fn report_artifact(
     ctx: &mut AppContext,
     runner: ModelHandle<HarnessSupportRunner>,
+    task_id: AmbientAgentTaskId,
     args: ReportArtifactArgs,
     output_format: OutputFormat,
 ) -> Result<()> {
     runner.update(ctx, |_, ctx| {
-        let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
-
-        let artifact = match args.command {
-            ReportArtifactCommand::PullRequest(pr_args) => Artifact::PullRequest {
-                url: pr_args.url,
-                branch: pr_args.branch,
-                repo: None,
-                number: None,
-            },
-        };
+        let provider = ServerApiProvider::as_ref(ctx);
+        let client = provider.get_harness_support_client();
+        let server_api = provider.get();
+        let ai_client = provider.get_ai_client();
 
         ctx.spawn(
-            async move { client.report_artifact(&artifact).await },
+            async move {
+                match args.command {
+                    ReportArtifactCommand::PullRequest(pr_args) => {
+                        let artifact = Artifact::PullRequest {
+                            url: pr_args.url,
+                            branch: pr_args.branch,
+                            repo: None,
+                            number: None,
+                        };
+                        client.report_artifact(&artifact).await
+                    }
+                    ReportArtifactCommand::Screenshot(screenshot_args) => {
+                        report_screenshot(client.as_ref(), screenshot_args).await
+                    }
+                    ReportArtifactCommand::Video(video_args) => {
+                        let uploader = FileArtifactUploader::new(ai_client, server_api);
+                        report_video(&uploader, task_id, video_args).await
+                    }
+                }
+            },
             move |_, result, ctx| match result {
                 Ok(response) => {
                     match output_format {
@@ -140,6 +180,173 @@ fn report_artifact(
     });
 
     Ok(())
+}
+
+/// Upload a screenshot to a presigned target and report it as a SCREENSHOT artifact.
+async fn report_screenshot(
+    client: &dyn HarnessSupportClient,
+    args: ScreenshotArtifactArgs,
+) -> Result<ReportArtifactResponse> {
+    let (size_bytes, sniff_bytes) = file_size_and_prefix_for_path(&args.path, MIME_SNIFF_BYTES)?;
+    if size_bytes == 0 {
+        anyhow::bail!("Screenshot '{}' is empty", args.path.display());
+    }
+    let mime_type = infer_mime_type(&args.path, &sniff_bytes);
+    let target = client
+        .get_screenshot_upload_target(&mime_type, size_bytes)
+        .await
+        .context("Failed to get a screenshot upload target")?;
+    let upload_target = with_content_type(&target.upload_target, &mime_type);
+    upload_to_target(
+        client.external_http_client(),
+        &upload_target,
+        FileUploadBody::new(args.path.clone()),
+    )
+    .await
+    .with_context(|| format!("Failed to upload screenshot '{}'", args.path.display()))?;
+    client
+        .report_artifact(&Artifact::Screenshot {
+            artifact_uid: target.artifact_uid,
+            mime_type,
+            description: args.description,
+        })
+        .await
+}
+
+/// Upload a video recording as a FILE artifact scoped to the run, then a best-effort
+/// `{artifact_uid}-thumb.png` thumbnail the server links to it by filename, mirroring the native
+/// recording upload so pull request descriptions render the video as a clickable thumbnail.
+async fn report_video(
+    uploader: &FileArtifactUploader,
+    task_id: AmbientAgentTaskId,
+    args: VideoArtifactArgs,
+) -> Result<ReportArtifactResponse> {
+    let request = FileArtifactUploadRequest {
+        path: args.path.clone(),
+        run_id: Some(task_id.clone()),
+        conversation_id: None,
+        title: args.title,
+        description: args.description,
+    };
+    let association = uploader.resolve_upload_association(&request).await?;
+    let uploaded = uploader
+        .upload_with_association(request, association.clone())
+        .await
+        .with_context(|| format!("Failed to upload video '{}'", args.path.display()))?;
+    let artifact_uid = uploaded.artifact.artifact_uid;
+
+    if let Err(err) = upload_video_thumbnail(uploader, task_id, &args.path, &artifact_uid).await {
+        log::warn!("Video {artifact_uid} was reported without a thumbnail: {err:#}");
+    }
+
+    Ok(ReportArtifactResponse { artifact_uid })
+}
+
+async fn upload_video_thumbnail(
+    uploader: &FileArtifactUploader,
+    task_id: AmbientAgentTaskId,
+    video_path: &Path,
+    video_artifact_uid: &str,
+) -> Result<()> {
+    let thumbnail_path =
+        computer_use::generate_video_thumbnail(video_path, video_artifact_uid).await?;
+    let upload_result = async {
+        let request = FileArtifactUploadRequest {
+            path: thumbnail_path.clone(),
+            run_id: Some(task_id),
+            conversation_id: None,
+            title: None,
+            description: None,
+        };
+        let association = uploader.resolve_upload_association(&request).await?;
+        uploader.upload_with_association(request, association).await
+    }
+    .await;
+    // The thumbnail file is ephemeral regardless of upload outcome.
+    let _ = std::fs::remove_file(&thumbnail_path);
+    upload_result?;
+    Ok(())
+}
+
+/// Clone `target` with a `Content-Type` header matching `mime_type` unless the server already
+/// set one, so the stored object carries the type the artifact is reported with.
+fn with_content_type(target: &UploadTarget, mime_type: &str) -> UploadTarget {
+    let mut headers = target.headers.clone();
+    if !headers
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("content-type"))
+    {
+        headers.insert("Content-Type".to_string(), mime_type.to_string());
+    }
+    UploadTarget {
+        url: target.url.clone(),
+        method: target.method.clone(),
+        headers,
+        fields: target.fields.clone(),
+    }
+}
+
+/// Print the links and managed media blocks the pull request description should carry.
+fn pr_media_markdown(
+    ctx: &mut AppContext,
+    runner: ModelHandle<HarnessSupportRunner>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    runner.update(ctx, |_, ctx| {
+        let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+
+        ctx.spawn(
+            async move { client.pull_request_media_markdown().await },
+            move |_, result, ctx| match result {
+                Ok(media) => {
+                    match output_format {
+                        OutputFormat::Json | OutputFormat::Ndjson => {
+                            let json = serde_json::to_string(&media).unwrap_or_else(|e| {
+                                serde_json::json!({"error": e.to_string()}).to_string()
+                            });
+                            println!("{json}");
+                        }
+                        OutputFormat::Pretty | OutputFormat::Text => {
+                            print!("{}", render_pr_media_markdown(&media));
+                        }
+                    }
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                }
+            },
+        );
+    });
+
+    Ok(())
+}
+
+/// Lay out the media blocks for pasting into a pull request body: videos above screenshots,
+/// then regression context, plan links, and the session links.
+fn render_pr_media_markdown(media: &PullRequestMediaMarkdown) -> String {
+    let mut out = String::new();
+    for block in [
+        &media.video_markdown,
+        &media.screenshot_markdown,
+        &media.regressions_markdown,
+    ] {
+        if !block.trim().is_empty() {
+            out.push_str(block.trim_end());
+            out.push_str("\n\n");
+        }
+    }
+    for plan in &media.plan_artifacts {
+        out.push_str(&format!("- Plan: [{}]({})\n", plan.title, plan.link));
+    }
+    if !media.plan_artifacts.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&format!("Conversation: {}\n", media.conversation_link));
+    if !media.run_link.is_empty() {
+        out.push_str(&format!("Run: {}\n", media.run_link));
+    }
+    out
 }
 
 /// Report a URL-addressable external reference back to the Oz platform.

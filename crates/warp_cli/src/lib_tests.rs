@@ -4073,6 +4073,112 @@ fn report_external_reference_required_args_parse() {
 }
 
 #[test]
+fn report_artifact_screenshot_args_parse() {
+    use crate::harness_support::ReportArtifactCommand;
+
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-artifact",
+        "screenshot",
+        "--path",
+        "/tmp/ui-verification/01-initial.png",
+        "--description",
+        "Login page before submit",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::ReportArtifact(report_args) = &hs_args.command else {
+        panic!("Expected report-artifact subcommand");
+    };
+    let ReportArtifactCommand::Screenshot(screenshot) = &report_args.command else {
+        panic!("Expected screenshot artifact");
+    };
+    assert_eq!(
+        screenshot.path,
+        std::path::PathBuf::from("/tmp/ui-verification/01-initial.png")
+    );
+    assert_eq!(
+        screenshot.description.as_deref(),
+        Some("Login page before submit")
+    );
+}
+
+#[test]
+fn report_artifact_video_args_parse() {
+    use crate::harness_support::ReportArtifactCommand;
+
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "report-artifact",
+        "video",
+        "--path",
+        "/tmp/ui-verification/checkout-flow.webm",
+        "--title",
+        "Checkout flow",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    let HarnessSupportCommand::ReportArtifact(report_args) = &hs_args.command else {
+        panic!("Expected report-artifact subcommand");
+    };
+    let ReportArtifactCommand::Video(video) = &report_args.command else {
+        panic!("Expected video artifact");
+    };
+    assert_eq!(
+        video.path,
+        std::path::PathBuf::from("/tmp/ui-verification/checkout-flow.webm")
+    );
+    assert_eq!(video.title.as_deref(), Some("Checkout flow"));
+    assert!(video.description.is_none());
+}
+
+#[test]
+fn pr_media_markdown_parses_with_run_id_from_env_or_flag() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "pr-media-markdown",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    assert_eq!(hs_args.run_id, "run-1");
+    assert!(matches!(
+        hs_args.command,
+        HarnessSupportCommand::PrMediaMarkdown
+    ));
+    assert_eq!(
+        hs_args.command.as_str_for_tracing(),
+        "harness-support pr-media-markdown"
+    );
+}
+
+#[test]
 fn report_external_reference_optional_title_parses() {
     let args = Args::try_parse_from([
         "warp",
