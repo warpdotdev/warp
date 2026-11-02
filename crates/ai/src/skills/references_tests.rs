@@ -251,7 +251,10 @@ fn invalid_files_report_their_error_kind() {
             "source: acme/skills@bad..ref\ninclude: [x]\n",
             SkillReferenceParseError::MalformedRef,
         ),
-        (sha256_source.as_str(), SkillReferenceParseError::MalformedRef),
+        (
+            sha256_source.as_str(),
+            SkillReferenceParseError::MalformedRef,
+        ),
         (
             "source: acme/skills@feature:x\ninclude: [x]\n",
             SkillReferenceParseError::MalformedRef,

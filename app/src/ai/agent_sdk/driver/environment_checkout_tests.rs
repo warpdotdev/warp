@@ -1186,7 +1186,10 @@ fn branch_heads_for_existing_branches_are_unchanged() {
                     );
                     assert_eq!(git(&target, &["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
                     assert_eq!(
-                        &git(&target, &["rev-parse", &format!("refs/remotes/origin/{name}")]),
+                        &git(
+                            &target,
+                            &["rev-parse", &format!("refs/remotes/origin/{name}")]
+                        ),
                         expected,
                         "{prefix} {name}"
                     );

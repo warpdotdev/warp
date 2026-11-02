@@ -326,7 +326,12 @@ struct SourceKey {
 
 /// Source identity for deduplication: the repository identity (owners and repos are
 /// case-insensitive on every forge) plus the requested ref.
-type SourceIdentity = (Option<RepositoryForge>, String, String, Option<SkillSourceRef>);
+type SourceIdentity = (
+    Option<RepositoryForge>,
+    String,
+    String,
+    Option<SkillSourceRef>,
+);
 
 impl SourceKey {
     fn identity(&self) -> SourceIdentity {
@@ -422,7 +427,11 @@ pub(super) fn discover(
                     .and_then(|contents| parse_skill_reference_file(&contents))
                     .map(|file| {
                         let source = SourceKey {
-                            forge: file.source.code_forge.map(repository_forge).or(factory_forge),
+                            forge: file
+                                .source
+                                .code_forge
+                                .map(repository_forge)
+                                .or(factory_forge),
                             owner: file.source.owner.clone(),
                             repo: file.source.repo.clone(),
                             reference: file.source.reference.clone(),

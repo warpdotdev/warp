@@ -666,7 +666,10 @@ fn sources_without_a_known_forge_are_not_cloned() {
     );
     let source = no_forge.source.as_ref().unwrap();
     assert_eq!(source.code_forge, None);
-    assert_eq!((source.owner.as_str(), source.repo.as_str()), ("acme", "shared-skills"));
+    assert_eq!(
+        (source.owner.as_str(), source.repo.as_str()),
+        ("acme", "shared-skills")
+    );
     assert_eq!(source.requested_ref.as_deref(), Some("v1"));
     assert_eq!(source.resolved_sha, None);
     assert_eq!(loaded_names(host), ["one"]);
