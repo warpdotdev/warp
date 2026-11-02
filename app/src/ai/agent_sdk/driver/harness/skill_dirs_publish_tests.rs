@@ -32,6 +32,38 @@ fn bundled_child_coordination_is_published_to_harness_skill_roots() {
 }
 
 #[test]
+fn bundled_environment_skills_are_published_on_every_transport() {
+    let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources");
+    let name_of = |dir: &PathBuf| dir.file_name().map(|name| name.to_owned());
+    for mode in [HarnessSupportSkills::Plugin, HarnessSupportSkills::Bundled] {
+        let dirs = bundled_skill_dirs_for(Some(resources.clone()), mode);
+        assert!(
+            dirs.iter()
+                .any(|dir| name_of(dir).as_deref() == Some(OsStr::new("oz-browser-verification"))),
+            "{mode:?} transports must receive the environment skills"
+        );
+        // Harness-support skills still come only from the bundled copies when the
+        // transport has no plugin install step to supply them.
+        let has_harness_support = dirs
+            .iter()
+            .any(|dir| name_of(dir).as_deref() == Some(OsStr::new("oz-finish-task")));
+        assert_eq!(
+            has_harness_support,
+            mode == HarnessSupportSkills::Bundled,
+            "{mode:?}"
+        );
+    }
+
+    let workspace = TempDir::new().unwrap();
+    let skill_root = workspace.path().join(".claude/skills");
+    let bundled = bundled_skill_dirs_for(Some(resources), HarnessSupportSkills::Plugin);
+    let published = publish_skill_sources(&skill_root, &[], &bundled, None, false).unwrap();
+    let skill = skill_root.join("oz-browser-verification");
+    assert!(published.contains(&skill));
+    assert!(skill.join("SKILL.md").is_file());
+}
+
+#[test]
 fn required_deferred_skill_reserves_canonical_name_for_claude_codex_and_gemini() {
     let root = TempDir::new().unwrap();
     let configured_root = root.path().join("configured");
