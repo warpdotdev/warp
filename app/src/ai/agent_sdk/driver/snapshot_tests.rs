@@ -16,8 +16,8 @@ use crate::ai::agent_sdk::retry::MAX_ATTEMPTS;
 use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
-    CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest, ResolvedHarnessPrompt,
-    SnapshotUploadMode,
+    CommitSnapshotResponse, PullRequestMediaMarkdown, ReportArtifactResponse, ResolvePromptRequest,
+    ResolvedHarnessPrompt, ScreenshotUploadTargetResponse, SnapshotUploadMode,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -161,6 +161,18 @@ impl HarnessSupportClient for TestClient {
     }
 
     async fn report_artifact(&self, _artifact: &Artifact) -> Result<ReportArtifactResponse> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn get_screenshot_upload_target(
+        &self,
+        _mime_type: &str,
+        _size_bytes: u64,
+    ) -> Result<ScreenshotUploadTargetResponse> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
+
+    async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 

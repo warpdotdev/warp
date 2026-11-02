@@ -19,8 +19,9 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
-    CommitSnapshotRequest, CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest,
-    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget,
+    CommitSnapshotRequest, CommitSnapshotResponse, PullRequestMediaMarkdown,
+    ReportArtifactResponse, ResolvePromptRequest, ResolvedHarnessPrompt,
+    ScreenshotUploadTargetResponse, SnapshotUploadRequest, UploadTarget,
 };
 
 fn fresh_task_id() -> AmbientAgentTaskId {
@@ -126,6 +127,16 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
         unimplemented!("not used by the coordinator")
     }
     async fn report_artifact(&self, _artifact: &Artifact) -> Result<ReportArtifactResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn get_screenshot_upload_target(
+        &self,
+        _mime_type: &str,
+        _size_bytes: u64,
+    ) -> Result<ScreenshotUploadTargetResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown> {
         unimplemented!("not used by the coordinator")
     }
     async fn notify_user(&self, _message: &str) -> Result<()> {
@@ -239,6 +250,16 @@ impl HarnessSupportClient for RecordingClient {
         unimplemented!("not used by the coordinator")
     }
     async fn report_artifact(&self, _artifact: &Artifact) -> Result<ReportArtifactResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn get_screenshot_upload_target(
+        &self,
+        _mime_type: &str,
+        _size_bytes: u64,
+    ) -> Result<ScreenshotUploadTargetResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+    async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown> {
         unimplemented!("not used by the coordinator")
     }
     async fn notify_user(&self, _message: &str) -> Result<()> {

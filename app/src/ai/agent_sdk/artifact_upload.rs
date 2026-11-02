@@ -241,7 +241,12 @@ fn normalize_artifact_filepath(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn file_size_and_prefix_for_path(path: &Path, max_bytes: usize) -> Result<(u64, Vec<u8>)> {
+/// Returns the file's size and its leading `max_bytes` bytes, enough for MIME sniffing without
+/// buffering the whole file.
+pub(crate) fn file_size_and_prefix_for_path(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<(u64, Vec<u8>)> {
     let mut file = File::open(path)
         .with_context(|| format!("Failed to open artifact file '{}'", path.display()))?;
     let file_size = file

@@ -281,6 +281,44 @@ pub struct ReportArtifactResponse {
     pub artifact_uid: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ScreenshotUploadTargetRequest {
+    pub mime_type: String,
+    pub size_bytes: u64,
+}
+
+/// A presigned upload target for a harness-captured screenshot, plus the artifact UID to
+/// report through `report_artifact` once the upload completes.
+#[derive(Debug, serde::Deserialize)]
+pub struct ScreenshotUploadTargetResponse {
+    pub artifact_uid: String,
+    pub upload_target: UploadTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct PlanArtifactLink {
+    pub title: String,
+    pub link: String,
+}
+
+/// The links and managed markdown blocks a pull request description should carry for the
+/// current run, as the native `get_artifacts_for_pull_request_description` tool renders them
+/// for Oz runs. Markdown fields are empty when there is nothing to render.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct PullRequestMediaMarkdown {
+    pub conversation_link: String,
+    #[serde(default)]
+    pub run_link: String,
+    #[serde(default)]
+    pub plan_artifacts: Vec<PlanArtifactLink>,
+    #[serde(default)]
+    pub screenshot_markdown: String,
+    #[serde(default)]
+    pub video_markdown: String,
+    #[serde(default)]
+    pub regressions_markdown: String,
+}
+
 #[derive(serde::Serialize)]
 struct NotifyUserRequest {
     message: String,
@@ -362,6 +400,18 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
 
     /// Report an artifact created by a third-party harness back to the Oz platform.
     async fn report_artifact(&self, artifact: &Artifact) -> Result<ReportArtifactResponse>;
+
+    /// Get a presigned upload target for a screenshot captured by a third-party harness. The
+    /// returned artifact UID is reported with [`Artifact::Screenshot`] once the upload completes.
+    async fn get_screenshot_upload_target(
+        &self,
+        mime_type: &str,
+        size_bytes: u64,
+    ) -> Result<ScreenshotUploadTargetResponse>;
+
+    /// Render the links and managed media blocks the current run's pull request description
+    /// should carry.
+    async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown>;
 
     /// Send a progress notification to the task's originating platform.
     async fn notify_user(&self, message: &str) -> Result<()>;
@@ -604,6 +654,29 @@ impl HarnessSupportClient for ServerApi {
     async fn report_artifact(&self, artifact: &Artifact) -> Result<ReportArtifactResponse> {
         self.post_public_api("harness-support/report-artifact", artifact)
             .await
+    }
+
+    async fn get_screenshot_upload_target(
+        &self,
+        mime_type: &str,
+        size_bytes: u64,
+    ) -> Result<ScreenshotUploadTargetResponse> {
+        self.post_public_api(
+            "harness-support/screenshot-upload-target",
+            &ScreenshotUploadTargetRequest {
+                mime_type: mime_type.to_string(),
+                size_bytes,
+            },
+        )
+        .await
+    }
+
+    async fn pull_request_media_markdown(&self) -> Result<PullRequestMediaMarkdown> {
+        self.post_public_api(
+            "harness-support/pr-media-markdown",
+            &serde_json::Map::<String, serde_json::Value>::new(),
+        )
+        .await
     }
 
     async fn notify_user(&self, message: &str) -> Result<()> {
