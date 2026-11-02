@@ -1706,8 +1706,6 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
     });
 }
 
-/// Once skill references add generated folders, a skill name in an earlier folder hides the same
-/// name in later folders, so Oz loads the same skill a third-party harness would publish.
 #[test]
 #[serial_test::serial]
 fn skill_dirs_first_name_wins_hides_later_duplicates() {

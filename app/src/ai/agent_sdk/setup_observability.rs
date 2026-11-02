@@ -96,19 +96,8 @@ impl SetupClientEventReporter {
         step: SetupStep,
         future: impl Future<Output = T>,
     ) -> T {
-        let (step_name, span) = self.start_step(step);
-
-        let start_timestamp = Utc::now();
-        let value = future.instrument(span).await;
-        let finish_timestamp = Utc::now();
-
-        self.post_setup_metric_event_best_effort(
-            step_name,
-            start_timestamp,
-            finish_timestamp,
-            false,
-        );
-        value
+        self.record_value_with_error_flag(step, future, |_| false)
+            .await
     }
 
     /// Like [`Self::record_value`], with the metric's error flag derived from the value.
@@ -118,7 +107,7 @@ impl SetupClientEventReporter {
         future: impl Future<Output = T>,
         is_error: impl FnOnce(&T) -> bool,
     ) -> T {
-        let (step_name, span) = step.to_event_name_and_span();
+        let (step_name, span) = self.start_step(step);
 
         let start_timestamp = Utc::now();
         let value = future.instrument(span).await;
@@ -320,7 +309,7 @@ impl SetupStep {
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
-            // Skill references resolve only for a claimed task, with its checkout credentials.
+            // Skill references are checked out with the claimed task's credentials.
             | Self::SkillReferenceResolution
             // Pre-warming is Oz-only, so these are unreachable from a standby.
             | Self::ThirdPartyHarnessPreparation

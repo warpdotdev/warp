@@ -83,16 +83,48 @@ fn shared_cases_parse_to_their_expected_results() {
 #[test]
 fn globs_match_with_literal_braces_commas_and_backslashes() {
     for (entry, candidate, expected) in [
-        (SkillReferenceEntry::PathGlob("frontend/*".to_owned()), "frontend/forms", true),
-        (SkillReferenceEntry::PathGlob("frontend/*".to_owned()), "frontend/forms/inner", false),
-        (SkillReferenceEntry::PathGlob("frontend/**".to_owned()), "frontend/forms/inner", true),
-        (SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()), "docs-{draft,final}-v2", true),
-        (SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()), "docs-draft", false),
-        (SkillReferenceEntry::NameGlob(r"tool-*\".to_owned()), r"tool-a\", true),
-        (SkillReferenceEntry::NameGlob("[{,]*".to_owned()), "{x", true),
+        (
+            SkillReferenceEntry::PathGlob("frontend/*".to_owned()),
+            "frontend/forms",
+            true,
+        ),
+        (
+            SkillReferenceEntry::PathGlob("frontend/*".to_owned()),
+            "frontend/forms/inner",
+            false,
+        ),
+        (
+            SkillReferenceEntry::PathGlob("frontend/**".to_owned()),
+            "frontend/forms/inner",
+            true,
+        ),
+        (
+            SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()),
+            "docs-{draft,final}-v2",
+            true,
+        ),
+        (
+            SkillReferenceEntry::NameGlob("docs-{draft,final}*".to_owned()),
+            "docs-draft",
+            false,
+        ),
+        (
+            SkillReferenceEntry::NameGlob(r"tool-*\".to_owned()),
+            r"tool-a\",
+            true,
+        ),
+        (
+            SkillReferenceEntry::NameGlob("[{,]*".to_owned()),
+            "{x",
+            true,
+        ),
     ] {
         let matcher = entry.glob_matcher().unwrap();
-        assert_eq!(matcher.is_match(candidate), expected, "{entry:?} vs {candidate}");
+        assert_eq!(
+            matcher.is_match(candidate),
+            expected,
+            "{entry:?} vs {candidate}"
+        );
     }
 }
 
@@ -105,6 +137,10 @@ fn reference_file_names_need_a_yaml_extension() {
         ("SKILL.md", false),
         ("shared.yaml.bak", false),
     ] {
-        assert_eq!(is_skill_reference_file_name(file_name), expected, "{file_name}");
+        assert_eq!(
+            is_skill_reference_file_name(file_name),
+            expected,
+            "{file_name}"
+        );
     }
 }
