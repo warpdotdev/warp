@@ -568,9 +568,10 @@ impl AIRequestUsageModel {
         {
             return true;
         }
+        // `custom_endpoints()` is the resolved list request payloads already use, including
+        // current-format definitions whose secrets are stored apart from `keys.custom_endpoints`.
         let has_custom_endpoint_key = api_keys
-            .keys()
-            .custom_endpoints
+            .custom_endpoints()
             .iter()
             .any(|endpoint| !endpoint.api_key.trim().is_empty());
         if user_workspaces.is_byo_endpoint_enabled(ctx)
