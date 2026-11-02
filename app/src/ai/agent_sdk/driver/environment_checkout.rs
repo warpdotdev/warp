@@ -102,7 +102,6 @@ fn head_kind(head: Option<&RepositoryHeadRef>) -> &'static str {
     match head {
         Some(RepositoryHeadRef::Branch(_)) => "branch",
         Some(RepositoryHeadRef::CommitSha(_)) => "commit",
-        Some(RepositoryHeadRef::NamedRef(_)) => "named",
         None => "default",
     }
 }
@@ -1132,7 +1131,7 @@ async fn checkout_cached(
         (Some(RepositoryHeadRef::Branch(branch)), true) => {
             fetch_branch_from_mirror(branch, url, target, mirror, default, git).await
         }
-        (Some(RepositoryHeadRef::CommitSha(_) | RepositoryHeadRef::NamedRef(_)) | None, true) => {
+        (Some(RepositoryHeadRef::CommitSha(_)) | None, true) => {
             git.record("branch-only checkout requires a branch");
             Err(CheckoutFailureKind::Checkout)
         }
@@ -1195,18 +1194,18 @@ async fn clone_from_mirror(
         .map_err(|_| clone_error)?;
         let result = match head {
             Some(RepositoryHeadRef::Branch(branch)) => {
-                git.run(
-                    "requested head checkout",
-                    target,
-                    &[
-                        "-c",
-                        "checkout.workers=0",
-                        "checkout",
-                        "--detach",
-                        &format!("refs/remotes/origin/{branch}"),
-                    ],
-                )
-                .await
+                let branch_ref = format!("refs/remotes/origin/{branch}");
+                match git
+                    .run(
+                        "requested head checkout",
+                        target,
+                        &["-c", "checkout.workers=0", "checkout", "--detach", &branch_ref],
+                    )
+                    .await
+                {
+                    Ok(output) => Ok(output),
+                    Err(()) => checkout_tag_without_branch(branch, &branch_ref, target, git).await,
+                }
             }
             Some(RepositoryHeadRef::CommitSha(sha)) => {
                 // No branch or tag necessarily reaches a pinned commit, so the mirror may lack it.
@@ -1221,28 +1220,6 @@ async fn clone_from_mirror(
                     "requested head checkout",
                     target,
                     &["-c", "checkout.workers=0", "checkout", "--detach", sha],
-                )
-                .await
-            }
-            Some(RepositoryHeadRef::NamedRef(name)) => {
-                let branch = format!("refs/remotes/origin/{name}");
-                let branches = git
-                    .run(
-                        "requested branch lookup",
-                        target,
-                        &["for-each-ref", "--format=%(refname)", &branch],
-                    )
-                    .await
-                    .map_err(|_| checkout_error)?;
-                let head = if branches.lines().any(|line| line == branch) {
-                    branch
-                } else {
-                    format!("refs/tags/{name}")
-                };
-                git.run(
-                    "requested head checkout",
-                    target,
-                    &["-c", "checkout.workers=0", "checkout", "--detach", &head],
                 )
                 .await
             }
@@ -1262,6 +1239,34 @@ async fn clone_from_mirror(
     .await;
     tracing::Span::current().record("result_ok", result.is_ok());
     result
+}
+
+/// Checks out the tag `name` in a clone of the mirror after its branch checkout failed. Tags ride
+/// branch heads, so a name with no branch falls back to the tag of that name; a branch that
+/// exists keeps its checkout failure, so the branch wins when both exist.
+async fn checkout_tag_without_branch(
+    name: &str,
+    branch_ref: &str,
+    target: &Path,
+    git: &mut Git,
+) -> Result<String, ()> {
+    let tag_ref = format!("refs/tags/{name}");
+    let refs = git
+        .run(
+            "requested tag lookup",
+            target,
+            &["for-each-ref", "--format=%(refname)", branch_ref, &tag_ref],
+        )
+        .await?;
+    if refs.lines().any(|line| line == branch_ref) || !refs.lines().any(|line| line == tag_ref) {
+        return Err(());
+    }
+    git.run(
+        "requested tag checkout",
+        target,
+        &["-c", "checkout.workers=0", "checkout", "--detach", &tag_ref],
+    )
+    .await
 }
 
 /// Builds the checkout for a branch-only request by fetching just that branch from the remote
@@ -1409,9 +1414,10 @@ async fn clone_repository(
 ///
 /// A branch-only request fetches just the requested branch and stores it under the default
 /// branch's tracking ref, so the repository holds a single remote-tracking branch that
-/// `origin/HEAD` resolves to. A named ref is fetched as a branch, falling back to a tag of the
-/// same name. Any other head is fetched by name, which also reaches commits that no branch points
-/// to. Fetches are blobless so file contents are downloaded only for what gets checked out.
+/// `origin/HEAD` resolves to. Any other head is fetched by name, which also reaches commits that
+/// no branch points to, except that a branch head is first fetched as `refs/heads/<name>`, because
+/// fetching a bare name prefers a tag of the same name. Fetches are blobless so file contents are
+/// downloaded only for what gets checked out.
 #[tracing::instrument(skip_all, fields(
     tags.cloud_agent = true,
     head_kind = head_kind(request.head.as_ref()),
@@ -1469,42 +1475,32 @@ async fn checkout_requested_head(
             )
             .await
             .map_err(|_| checkout_error)?;
-        } else if let RepositoryHeadRef::NamedRef(name) = head {
-            // Fetching a bare name would prefer a tag over a branch of the same name.
-            let branch = format!("refs/heads/{name}");
-            if git
-                .run(
-                    "requested branch fetch",
-                    target,
-                    &["fetch", "--filter=blob:none", "origin", &branch],
-                )
-                .await
-                .is_err()
-            {
-                let tag = format!("refs/tags/{name}");
+        } else {
+            let fetched_branch = match head {
+                RepositoryHeadRef::Branch(branch) => git
+                    .run(
+                        "requested branch fetch",
+                        target,
+                        &[
+                            "fetch",
+                            "--filter=blob:none",
+                            "origin",
+                            &format!("refs/heads/{branch}"),
+                        ],
+                    )
+                    .await
+                    .is_ok(),
+                RepositoryHeadRef::CommitSha(_) => false,
+            };
+            if !fetched_branch {
                 git.run(
-                    "requested tag fetch",
+                    "requested head fetch",
                     target,
-                    &["fetch", "--filter=blob:none", "origin", &tag],
+                    &["fetch", "--filter=blob:none", "origin", head.value()],
                 )
                 .await
                 .map_err(|_| checkout_error)?;
             }
-            git.run(
-                "requested head checkout",
-                target,
-                &["checkout", "--detach", "FETCH_HEAD"],
-            )
-            .await
-            .map_err(|_| checkout_error)?;
-        } else {
-            git.run(
-                "requested head fetch",
-                target,
-                &["fetch", "--filter=blob:none", "origin", head.value()],
-            )
-            .await
-            .map_err(|_| checkout_error)?;
             git.run(
                 "requested head checkout",
                 target,

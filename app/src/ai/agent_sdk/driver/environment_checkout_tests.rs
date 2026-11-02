@@ -920,16 +920,13 @@ fn failed_cached_attempt_cleans_only_its_new_checkout() {
     fixture_test(
         "failed_cached_attempt_cleans_only_its_new_checkout",
         |fixture| {
-            git(
-                &fixture.origin(),
-                &["update-ref", "refs/tags/v1", &fixture.pinned()],
-            );
-            // Only the network path resolves a branch head that names a tag, so the cached attempt
-            // fails after it has created and populated its checkout.
+            // Only the network path resolves a branch head that names a ref that is neither a
+            // branch nor a tag, so the cached attempt fails after it has created and populated its
+            // checkout.
             fixture.prepare(
                 fixture.request(
                     "recovered",
-                    Some(RepositoryHeadRef::Branch("v1".to_owned())),
+                    Some(RepositoryHeadRef::Branch("refs/pinned/base".to_owned())),
                 ),
                 true,
             );
@@ -1071,10 +1068,20 @@ fn parallel_substituted_branches_preserve_alias_and_attribute_failure() {
     );
 }
 
+/// Checkout modes to exercise: the network path everywhere, and the mirror path where the
+/// Namespace cache is supported.
+fn checkout_modes() -> Vec<bool> {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        vec![false, true]
+    } else {
+        vec![false]
+    }
+}
+
 #[test]
-fn named_refs_prefer_branches_and_fall_back_to_tags() {
+fn branch_heads_fall_back_to_tags_and_prefer_branches_on_both_paths() {
     fixture_test(
-        "named_refs_prefer_branches_and_fall_back_to_tags",
+        "branch_heads_fall_back_to_tags_and_prefer_branches_on_both_paths",
         |fixture| {
             let (base, pinned) = (fixture.base(), fixture.pinned());
             let origin = fixture.origin();
@@ -1096,26 +1103,21 @@ fn named_refs_prefer_branches_and_fall_back_to_tags() {
             );
             git(&origin, &["update-ref", "refs/heads/same", &base]);
             git(&origin, &["update-ref", "refs/tags/same", &pinned]);
-            let modes = if cfg!(any(target_os = "linux", target_os = "macos")) {
-                vec![false, true]
-            } else {
-                vec![false]
-            };
-            for cached in modes {
+            for cached in checkout_modes() {
                 let prefix = if cached { "cached" } else { "direct" };
-                let named = |name: &str| {
+                let branch = |name: &str| {
                     fixture.request(
                         &format!("{prefix}-{name}"),
-                        Some(RepositoryHeadRef::NamedRef(name.to_owned())),
+                        Some(RepositoryHeadRef::Branch(name.to_owned())),
                     )
                 };
                 let root = cached.then(optional_mirror_root).flatten();
                 let results = checkout_batch(
                     &fixture.batch(vec![
-                        named("v1"),
-                        named("annotated"),
-                        named("same"),
-                        named("missing"),
+                        branch("v1"),
+                        branch("annotated"),
+                        branch("same"),
+                        branch("missing"),
                     ]),
                     root.as_deref(),
                 )
@@ -1129,6 +1131,67 @@ fn named_refs_prefer_branches_and_fall_back_to_tags() {
                         expected,
                         "{prefix} {name}"
                     );
+                    // The mirror path resolves tags itself instead of falling back to the network.
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    assert_eq!(is_partial_clone(&target), !cached, "{prefix} {name}");
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn branch_heads_for_existing_branches_are_unchanged() {
+    fixture_test(
+        "branch_heads_for_existing_branches_are_unchanged",
+        |fixture| {
+            let (base, pinned) = (fixture.base(), fixture.pinned());
+            git(
+                &fixture.origin(),
+                &["update-ref", "refs/heads/feature", &pinned],
+            );
+            for cached in checkout_modes() {
+                let prefix = if cached { "cached" } else { "direct" };
+                let branch = |name: &str| {
+                    fixture.request(
+                        &format!("{prefix}-{name}"),
+                        Some(RepositoryHeadRef::Branch(name.to_owned())),
+                    )
+                };
+                let root = cached.then(optional_mirror_root).flatten();
+                let results = checkout_batch(
+                    &fixture.batch(vec![branch("main"), branch("feature")]),
+                    root.as_deref(),
+                )
+                .unwrap();
+                assert_succeeded(&results);
+                for (outcome, (name, expected)) in
+                    results.iter().zip([("main", &base), ("feature", &pinned)])
+                {
+                    // The branch resolves on the first attempt, without a tag fallback.
+                    for operation in ["requested head checkout", "requested branch fetch"] {
+                        assert!(
+                            !outcome
+                                .diagnostics
+                                .contains(&format!("Git {operation} failed")),
+                            "{prefix} {name}: {}",
+                            outcome.diagnostics
+                        );
+                    }
+                    let target = fixture.work().join(format!("{prefix}-{name}"));
+                    assert_eq!(
+                        &git(&target, &["rev-parse", "HEAD"]),
+                        expected,
+                        "{prefix} {name}"
+                    );
+                    assert_eq!(git(&target, &["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
+                    assert_eq!(
+                        &git(&target, &["rev-parse", &format!("refs/remotes/origin/{name}")]),
+                        expected,
+                        "{prefix} {name}"
+                    );
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    assert_eq!(is_partial_clone(&target), !cached, "{prefix} {name}");
                 }
             }
         },
