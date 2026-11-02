@@ -14,6 +14,7 @@ use crate::ai::attachment_utils::{
     build_file_attachment_map, download_task_file_attachments, resolve_agent_attachments,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryId, QueuedQueryModel,
 };
@@ -62,18 +63,31 @@ impl BlocklistAIController {
     /// behind an active CLI subagent could go out) and releasing the native setup barrier if it
     /// was still held -- otherwise this conversation would stay permanently dispatch-blocked for
     /// any future local queueing against it, since nothing else would ever release that barrier.
+    ///
+    /// For a conversation whose turns an external harness authored, any orchestration events
+    /// still held behind that barrier are dropped first: releasing the barrier re-checks them,
+    /// and injecting them would open a native request the server cannot serve.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(id) = self.native_prompt_conversation_id.take() else {
             return;
         };
         self.external_harness_prompt_sink = None;
+        self.external_harness_cancel_sink = None;
         let unsent_count = QueuedQueryModel::as_ref(ctx).queue(id).len();
         log::info!(
             "event=native_queue_stopped task_id={:?} terminal_id={:?} conversation_id={id} unsent_count={unsent_count}",
             self.ambient_agent_task_id,
             self.terminal_surface_id,
         );
+        let owns_turn_lifecycle = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&id)
+            .is_none_or(|conversation| conversation.driver().owns_turn_lifecycle());
+        if !owns_turn_lifecycle {
+            OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                service.drop_pending_events_for_external_harness_conversation(id);
+            });
+        }
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
             queue.clear_queue(id, ctx);
             queue.finish_native_setup(id, ctx);
@@ -214,9 +228,6 @@ impl BlocklistAIController {
         );
         if row.shared_session_prompt().is_some() {
             self.send_native_startup_injection(conversation_id, row, ctx);
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.remove_fired_row(conversation_id, row_id, ctx);
-            });
         } else {
             // The send path resolves this row's attachments by id, so it must still be in the
             // queue when this is called; remove it only afterward.
@@ -227,10 +238,10 @@ impl BlocklistAIController {
                 row_id,
                 ctx,
             );
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.remove_fired_row(conversation_id, row_id, ctx);
-            });
         }
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.remove_fired_row(conversation_id, row_id, ctx);
+        });
     }
 
     /// Sends a prepared shared-session prompt with its attributed context.

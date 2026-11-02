@@ -926,8 +926,7 @@ pub struct PaneGroup {
     /// Entries are removed as each task's data arrives and the pane is replaced.
     pending_ambient_agent_conversation_restorations: HashMap<AmbientAgentTaskId, PaneId>,
 
-    /// Children waiting for a task state that can be materialized.
-    /// These remain passive and re-drive through the shared construction path.
+    /// Explicitly opened children whose existing panes are waiting for task data or a transcript.
     pending_child_hydrations: HashMap<AmbientAgentTaskId, AIConversationId>,
 
     /// Restored cloud agent parents whose `task.children` have not yet been
@@ -5025,10 +5024,7 @@ impl PaneGroup {
                 self.clean_up_pane(original_pane_id, ctx);
                 self.pane_contents.remove(&original_pane_id);
             }
-            self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(
-                replacement_pane_id,
-                ctx,
-            );
+            self.restore_child_agents_for_terminal_pane_if_needed(replacement_pane_id, ctx);
 
             // Focus the replacement pane to ensure proper user interaction
             self.focus_pane_by_id(replacement_pane_id, ctx);
@@ -5457,11 +5453,10 @@ impl PaneGroup {
             let new_pane_id = self
                 .find_pane_id_for_terminal_view(terminal_view_id, ctx)
                 .unwrap_or(loading_pane_id);
-            self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(new_pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(new_pane_id, ctx);
         }
 
-        // Seeded after the swap so the parent's pane is resolvable and any
-        // newly-created children can be materialized in the same pass.
+        // Seed after the swap so placeholders can be linked to the parent's terminal surface.
         if let Some(parent_conversation_id) = parent_conversation_id {
             self.seed_child_conversations_from_task(parent_conversation_id, task_id, ctx);
         }
@@ -5628,7 +5623,7 @@ impl PaneGroup {
                 self.cleanup_closed_pane(pane_id, ctx);
                 return false;
             }
-            self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
 
             self.focus_pane_and_record_in_history(pane_id, ctx);
 
@@ -6832,7 +6827,7 @@ impl PaneGroup {
             self.pane_contents.remove(&pane_id);
             return None;
         }
-        self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+        self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
 
         if options.focus_new_pane {
             self.focus_pane_and_record_in_history(pane_id, ctx);
@@ -7831,7 +7826,7 @@ impl PaneGroup {
                 continue;
             };
             self.attach_pane(pane.as_ref(), ctx);
-            self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+            self.restore_child_agents_for_terminal_pane_if_needed(pane_id, ctx);
         }
     }
 

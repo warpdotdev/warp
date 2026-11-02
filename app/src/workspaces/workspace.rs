@@ -643,8 +643,8 @@ pub struct BillingCycleUsageEntry {
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,
-    pub credits_used: i32,
-    pub cost_cents: i32,
+    pub credits_used: f64,
+    pub cost_cents: f64,
     /// Uid of the team this usage is attributed to. `billingCycleUsageHistory`
     /// is workspace-wide, so this is what scopes an entry to a single team.
     /// `None` for rows written before usage attribution shipped and for the

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_compat::CompatExt as _;
+use futures::channel::oneshot;
 use mcp::oauth::{
     self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
     FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
@@ -103,6 +104,36 @@ pub enum McpIntegration {
 }
 
 impl TemplatableMCPServerManager {
+    pub(crate) fn replace_runtime_environment(
+        &mut self,
+        environment: HashMap<String, String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> (
+        Vec<TemplatableMCPServerInstallation>,
+        Vec<oneshot::Receiver<()>>,
+    ) {
+        let uuids: HashSet<_> = self
+            .active_servers
+            .keys()
+            .chain(self.spawned_servers.keys())
+            .copied()
+            .collect();
+        let retained = uuids
+            .iter()
+            .filter(|uuid| {
+                !self.cli_spawned_server_uuids.contains(uuid)
+                    && !self.builtin_server_uuids.contains(uuid)
+            })
+            .filter_map(|uuid| self.reconnectable_installation(*uuid).cloned())
+            .collect();
+        self.runtime_environment = environment;
+        let stopped = uuids
+            .into_iter()
+            .map(|uuid| self.shutdown_server_and_wait(uuid, ctx))
+            .collect();
+        (retained, stopped)
+    }
+
     /// Returns `true` if the given MCP integration is currently running.
     pub fn is_mcp_server_running(&self, integration: McpIntegration) -> bool {
         match integration {
@@ -396,6 +427,7 @@ impl TemplatableMCPServerManager {
             cloud_templatable_mcp_servers: Default::default(),
             server_states: Default::default(),
             active_servers: Default::default(),
+            runtime_environment: Default::default(),
             spawned_servers: Default::default(),
             reconnectable_ephemeral_installations: Default::default(),
             server_credentials: Default::default(),
@@ -917,6 +949,7 @@ impl TemplatableMCPServerManager {
             }
         };
 
+        self.apply_runtime_environment(&mut server.transport_type);
         // If we're executing a CLI MCP server, ensure that the environment variables includes
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {
@@ -1223,6 +1256,15 @@ impl TemplatableMCPServerManager {
 
     /// Shuts down a running MCP server.
     pub fn shutdown_server(&mut self, installation_uuid: Uuid, ctx: &mut ModelContext<'_, Self>) {
+        drop(self.shutdown_server_and_wait(installation_uuid, ctx));
+    }
+
+    fn shutdown_server_and_wait(
+        &mut self,
+        installation_uuid: Uuid,
+        ctx: &mut ModelContext<Self>,
+    ) -> oneshot::Receiver<()> {
+        let (complete, receiver) = oneshot::channel();
         log::debug!("Trying to shut down a MCP server with installation uuid {installation_uuid}");
 
         Self::persist_is_mcp_running(installation_uuid, false, ctx);
@@ -1253,14 +1295,17 @@ impl TemplatableMCPServerManager {
                 ctx.spawn(server_info.shutdown(), move |me, _, ctx| {
                     me.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
                     ctx.dispatch_global_action("workspace:save_app", ());
+                    let _ = complete.send(());
                 });
             }
             _ => {
                 self.change_server_state(installation_uuid, MCPServerState::NotRunning, ctx);
+                let _ = complete.send(());
             }
         }
 
         log::debug!("Successfully shut down server with installation uuid {installation_uuid}");
+        receiver
     }
 
     pub fn get_installation_by_template_uuid(

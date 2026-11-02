@@ -209,8 +209,7 @@ pub fn failed_output_presentation(
     })
 }
 
-/// Appends each `OpenUrl` recovery action of a ChatGPT subscription error to its message as a
-/// `label: url` line, for surfaces that cannot render the actions as buttons.
+/// Appends recovery links and copyable text for surfaces that cannot render action buttons.
 pub fn chatgpt_subscription_message_with_links(
     message: &str,
     actions: &[ChatGPTSubscriptionErrorAction],
@@ -220,6 +219,9 @@ pub fn chatgpt_subscription_message_with_links(
         .filter_map(|action| match &action.kind {
             ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
                 Some(format!("{}: {url}", action.label))
+            }
+            ChatGPTSubscriptionErrorActionKind::CopyText { text } => {
+                Some(format!("{}:\n{text}", action.label))
             }
             ChatGPTSubscriptionErrorActionKind::Retry
             | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => None,

@@ -20,7 +20,7 @@ use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::appearance::Appearance;
 use crate::pane_group::pane::DetachType;
 use crate::settings::{BlockVisibilitySettings, DebugSettings, InputModeSettings};
-use crate::terminal::shell_recovery::CloudShellRecoveryRequest;
+use crate::terminal::shell_recovery::{CloudShellRecoveryRequest, ShellReplacementRequest};
 
 pub trait TerminalManager: Any {
     /// Returns the backing terminal model.
@@ -39,6 +39,14 @@ pub trait TerminalManager: Any {
         _ctx: &mut ModelContext<Box<dyn TerminalManager>>,
     ) -> bool {
         false
+    }
+
+    fn replace_shell(
+        &mut self,
+        _request: ShellReplacementRequest,
+        _ctx: &mut ModelContext<Box<dyn TerminalManager>>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this terminal does not support shell replacement")
     }
 
     fn on_session_bootstrapped(

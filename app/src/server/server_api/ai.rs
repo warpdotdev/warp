@@ -798,8 +798,8 @@ pub struct CreateFileArtifactUploadResponse {
     pub upload_target: FileArtifactUploadTargetInfo,
 }
 
-/// A single git credential entry returned by `taskGitCredentials`.
-#[derive(Clone)]
+/// Credentials for one managed Git host.
+#[derive(Clone, serde::Deserialize)]
 pub struct GitCredential {
     /// The provider's OAuth or installation access token.
     pub token: String,
@@ -1003,13 +1003,24 @@ struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ListRunPreviewsResponse {
+    pub execution_id: Option<i64>,
+    pub previews: Vec<RunPreview>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RunPreview {}
+
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
+        #[serde_with::serde_as]
         #[derive(serde::Deserialize)]
         struct RawResponse {
+            #[serde_as(deserialize_as = "serde_with::DefaultOnNull")]
             runs: Vec<serde_json::Value>,
         }
 
@@ -1266,6 +1277,10 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse>;
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,
@@ -1763,10 +1778,11 @@ impl ServerApi {
         task_id: &str,
         execution_id: &str,
         workload_token: String,
+        supports_deferred_repositories: bool,
     ) -> anyhow::Result<ExecutionBootstrapData> {
-        let operation = ExecutionBootstrap::build(ExecutionBootstrapVariables {
+        let operation = ExecutionBootstrap::build_with_capabilities(ExecutionBootstrapVariables {
             execution_id: execution_id.to_string().into(),
-            supports_deferred_repositories: false,
+            supports_deferred_repositories,
             secrets_input: TaskSecretsInput {
                 task_id: task_id.to_string().into(),
                 workload_token,
@@ -1775,7 +1791,7 @@ impl ServerApi {
                 task_id: task_id.to_string().into(),
             },
             request_context: get_request_context(),
-        });
+        })?;
         let response = self.send_graphql_request(operation, None).await?;
         let (config, attachments) = match response.task {
             BootstrapTaskResult::TaskOutput(output) => (
@@ -1957,7 +1973,7 @@ impl ServerApi {
     }
 }
 
-fn into_git_credential(
+pub(super) fn into_git_credential(
     credential: warp_graphql::queries::task_git_credentials::TaskGitCredential,
 ) -> GitCredential {
     GitCredential {
@@ -2012,6 +2028,16 @@ fn convert_upload_field(
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse> {
+        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/previews"))
+            .await?
+            .json::<ListRunPreviewsResponse>()
+            .await
+            .map_err(Into::into)
+    }
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,

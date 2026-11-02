@@ -616,24 +616,20 @@ fn cold_and_warm_mirrors_refresh_default_and_remain_independent() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs() {
+fn mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs() {
     fixture_test(
-        "mirror_tracks_all_refs_and_cached_checkout_survives_commit_graphs",
+        "mirror_tracks_branches_and_tags_and_cached_checkout_survives_commit_graphs",
         |fixture| {
             fixture.prepare(fixture.request("cold", None), true);
             let mirror = fixture.mirror();
             assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.fetch"]),
-                "+refs/*:refs/*"
+                git(
+                    &mirror,
+                    &["config", "--local", "--get-all", "remote.origin.fetch"]
+                ),
+                "+refs/heads/*:refs/heads/*\n+refs/tags/*:refs/tags/*"
             );
-            assert_eq!(
-                git(&mirror, &["config", "--local", "remote.origin.mirror"]),
-                "true"
-            );
-            assert_eq!(
-                git(&mirror, &["rev-parse", "refs/pinned/base"]),
-                fixture.pinned()
-            );
+            assert!(git(&mirror, &["for-each-ref", "refs/pinned"]).is_empty());
             git(
                 &mirror,
                 &["commit-graph", "write", "--reachable", "--split"],
@@ -812,6 +808,43 @@ fn partial_mirrors_are_rebuilt_and_full_mirror_config_is_normalized() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn partial_mirrors_with_missing_blobs_are_rebuilt() {
+    fixture_test(
+        "partial_mirrors_with_missing_blobs_are_rebuilt",
+        |fixture| {
+            let root = optional_mirror_root().unwrap();
+            git(
+                &root,
+                &[
+                    "clone",
+                    "--bare",
+                    "--filter=blob:none",
+                    CANONICAL_URL,
+                    fixture.mirror().to_str().unwrap(),
+                ],
+            );
+            assert!(
+                git(
+                    &fixture.mirror(),
+                    &["rev-list", "--objects", "--all", "--missing=print"]
+                )
+                .lines()
+                .any(|line| line.starts_with('?'))
+            );
+            fs::write(fixture.mirror().join("KEEP"), "partial mirror").unwrap();
+
+            fixture.prepare(fixture.request("rebuilt", None), true);
+
+            assert!(!fixture.mirror().join("KEEP").exists());
+            let target = fixture.work().join("rebuilt");
+            assert!(!is_partial_clone(&target));
+            fixture.full_objects(&target);
+        },
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history() {
     fixture_test(
         "failed_refresh_rebuilds_the_mirror_instead_of_serving_stale_history",
@@ -854,6 +887,31 @@ fn failed_rebuild_keeps_the_existing_mirror() {
         let entries = fs::read_dir(mirror.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1, "no staging directory should be left behind");
     });
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail() {
+    fixture_test(
+        "mirror_sync_returns_cache_state_when_refresh_and_rebuild_fail",
+        |fixture| {
+            fixture.prepare(fixture.request("initial", None), true);
+            fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+            let mirror = fixture.mirror();
+
+            let outcome = block_on(Compat::new(super::sync_mirror(
+                &mirror,
+                mirror.parent().unwrap(),
+                CANONICAL_URL,
+                "fixture",
+                &mut Git::default(),
+            )));
+
+            assert!(outcome.result.is_err());
+            assert!(outcome.cache_hit);
+            assert!(!outcome.rebuilt);
+        },
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1508,6 +1566,266 @@ fn helper_with_expired_handoff_keeps_checkout_working() {
 // Fixtures and helpers shared by the tests above.
 
 const CANONICAL_URL: &str = "https://github.com/fixtures/source.git";
+#[test]
+fn execution_policy_helper_subprocess() {
+    let Some(requests_file) = std::env::var_os("WARP_TEST_POLICY_REQUESTS") else {
+        return;
+    };
+    let report_file = PathBuf::from(std::env::var_os("WARP_TEST_POLICY_REPORT").unwrap());
+    let cleanup = std::env::var_os("WARP_TEST_POLICY_CLEANUP").is_some();
+    let strict = std::env::var_os("WARP_TEST_POLICY_STRICT").is_some();
+    let args = EnvironmentCheckoutArgs {
+        requests_file: requests_file.into(),
+        report_file: report_file.clone(),
+        remove_origins_only: cleanup,
+        fail_if_target_exists: strict,
+    };
+    let result = run(&args);
+    match std::env::var("WARP_TEST_POLICY_EXPECT").unwrap().as_str() {
+        "success" => result.unwrap(),
+        "partial" => {
+            assert!(result.is_err());
+            assert!(report_file.exists());
+        }
+        "blocked" => {
+            assert!(result.is_err());
+            assert!(!report_file.exists());
+        }
+        value => panic!("unknown expectation {value}"),
+    }
+}
+
+#[test]
+fn execution_policy_checkout_enforces_binding_and_preparation() {
+    fixture_test(
+        "execution_policy_checkout_enforces_binding_and_preparation",
+        |fixture| {
+            use super::super::environment_preparation::{
+                FILE_ENV, MODE_ENV, PreparationPolicy, PreparationRepository, launch_environment,
+            };
+            let sha = fixture.pinned();
+            let branch = format!("benchmark-base/{sha}");
+            git(
+                &fixture.origin(),
+                &["update-ref", &format!("refs/heads/{branch}"), &sha],
+            );
+            let root = dunce::canonicalize(fixture.work()).unwrap();
+            let mut selected = fixture.request("original", None);
+            selected.source.repo_owner = "configured".into();
+            selected.source.repo_name = "original".into();
+            let mut frozen = fixture.request("original", Some(RepositoryHeadRef::Branch(branch)));
+            frozen.expected_sha = Some(sha.clone());
+            frozen.fetch_branch_only = true;
+            let mut mismatch = frozen.clone();
+            mismatch.checkout_name = "mismatch".into();
+            mismatch.expected_sha = Some(fixture.base());
+            let mut mismatch_selection = selected.clone();
+            mismatch_selection.source.repo_name = "mismatch".into();
+            mismatch_selection.checkout_name = "mismatch".into();
+            let mut policy = PreparationPolicy {
+                task_id: "task".into(),
+                execution_id: "execution".into(),
+                working_dir: root.clone(),
+                supports_deferred_repositories: true,
+                eager: Vec::new(),
+                deferred: vec![
+                    PreparationRepository {
+                        source: selected.source.clone(),
+                        request: frozen,
+                    },
+                    PreparationRepository {
+                        source: mismatch_selection.source.clone(),
+                        request: mismatch,
+                    },
+                ],
+            };
+            let mut eager = fixture.request("eager", None);
+            eager.remove_origin = true;
+            policy.eager.push(PreparationRepository {
+                source: RepositoryIdentity {
+                    repo_name: "eager".into(),
+                    ..eager.source.clone()
+                },
+                request: eager.clone(),
+            });
+            let mut env = std::collections::HashMap::new();
+            let owner = launch_environment(Some(&policy), Some("task"), &root, &mut env).unwrap();
+            let scratch = TempDir::new().unwrap();
+            let requests = scratch.path().join("requests.json");
+            let invoke =
+                |batch: &CheckoutBatch,
+                 env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+                 strict: bool,
+                 cleanup: bool,
+                 expected: &str,
+                 name: &str| {
+                    let report = scratch.path().join(format!("{name}.json"));
+                    fs::write(&requests, serde_json::to_vec(batch).unwrap()).unwrap();
+                    let mut command =
+                        isolated_test_command(fixture, "execution_policy_helper_subprocess");
+                    command
+                        .envs(env)
+                        .env("WARP_TEST_POLICY_REQUESTS", &requests)
+                        .env("WARP_TEST_POLICY_REPORT", &report)
+                        .env("WARP_TEST_POLICY_EXPECT", expected);
+                    if strict {
+                        command.env("WARP_TEST_POLICY_STRICT", "1");
+                    }
+                    if cleanup {
+                        command.env("WARP_TEST_POLICY_CLEANUP", "1");
+                    }
+                    let output = command.output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{name}: {}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    report
+                };
+            let mut batch = CheckoutBatch {
+                working_dir: root.clone(),
+                repositories: vec![selected.clone()],
+            };
+            for (name, key, value) in [
+                ("missing-mode", MODE_ENV, ""),
+                ("legacy-bypass", MODE_ENV, "legacy"),
+                ("missing-file", FILE_ENV, ""),
+                ("unreadable-file", FILE_ENV, "/absent/preparation.json"),
+                ("stale-task", "OZ_RUN_ID", "other-task"),
+                ("stale-execution", "WARP_EXECUTION_ID", "other-execution"),
+                ("stale-root", "WARP_WORKSPACE_ROOT", "/other-root"),
+            ] {
+                let mut invalid = env.clone();
+                invalid.insert(key.into(), value.into());
+                invoke(&batch, &invalid, true, false, "blocked", name);
+                assert!(!root.join("original").exists());
+            }
+            let malformed = scratch.path().join("malformed-policy.json");
+            fs::write(&malformed, "{}").unwrap();
+            let mut invalid = env.clone();
+            invalid.insert(FILE_ENV.into(), malformed.into_os_string());
+            invoke(&batch, &invalid, true, false, "blocked", "malformed");
+            invoke(&batch, &env, false, false, "blocked", "strict-flag-dropped");
+            batch.repositories[0] = fixture.request("substitute-identity", None);
+            invoke(
+                &batch,
+                &env,
+                true,
+                false,
+                "blocked",
+                "substitute-not-original",
+            );
+            batch.repositories = vec![selected, mismatch_selection];
+            let report = invoke(&batch, &env, true, false, "partial", "substituted");
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+            assert_eq!(report.requests[0].source.repo_owner, "fixtures");
+            assert_eq!(report.requests[0].source.repo_name, "source");
+            assert_eq!(report.requests[0].checkout_name, "original");
+            assert!(report.requests[0].fetch_branch_only);
+            assert_eq!(
+                report.requests[0].expected_sha.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(report.outcomes[0].failure, None);
+            assert_eq!(
+                report.outcomes[0].resolved_head.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(
+                report.outcomes[1].failure,
+                Some(CheckoutFailureKind::VerifyHead)
+            );
+            assert_eq!(git(&root.join("original"), &["rev-parse", "HEAD"]), sha);
+            eager.remove_origin = false;
+            batch.repositories = vec![eager];
+            invoke(&batch, &env, false, false, "success", "eager-clone");
+            assert_eq!(git(&root.join("eager"), &["remote"]), "origin");
+            invoke(&batch, &env, false, true, "success", "eager-cleanup");
+            assert_eq!(git(&root.join("eager"), &["remote"]), "");
+            drop(owner);
+            invoke(&batch, &env, false, false, "blocked", "expired-owner");
+        },
+    );
+}
+
+#[test]
+fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
+    fixture_test(
+        "lazy_pins_verify_sha_origin_policy_and_never_fall_back",
+        |fixture| {
+            let sha = fixture.pinned();
+            let branch = format!("benchmark-base/{sha}");
+            git(
+                &fixture.origin(),
+                &["update-ref", &format!("refs/heads/{branch}"), &sha],
+            );
+            let mut frozen = fixture.request(
+                "source-name",
+                Some(RepositoryHeadRef::Branch(branch.clone())),
+            );
+            frozen.fetch_branch_only = true;
+            frozen.expected_sha = Some(sha.clone());
+            let mut mismatch = frozen.clone();
+            mismatch.checkout_name = "mismatch".into();
+            mismatch.expected_sha = Some(fixture.base());
+            let mut missing = frozen.clone();
+            missing.checkout_name = "missing".into();
+            missing.head = Some(RepositoryHeadRef::Branch("benchmark-base/absent".into()));
+            let mut source = fixture.request(
+                "source-pin",
+                Some(RepositoryHeadRef::CommitSha(sha.clone())),
+            );
+            source.expected_sha = Some(sha.clone());
+            source.remove_origin = true;
+            let batch = fixture.batch(vec![frozen, mismatch, missing, source]);
+            let directory = TempDir::new().unwrap();
+            let args = EnvironmentCheckoutArgs {
+                requests_file: directory.path().join("requests.json"),
+                report_file: directory.path().join("report.json"),
+                remove_origins_only: false,
+                fail_if_target_exists: true,
+            };
+            fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
+            assert!(run(&args).is_err());
+            let report: CheckoutReport =
+                serde_json::from_slice(&fs::read(&args.report_file).unwrap()).unwrap();
+            assert_eq!(report.requests.len(), 4);
+            assert_eq!(report.requests[0].checkout_name, "source-name");
+            assert_eq!(report.outcomes[0].failure, None);
+            assert_eq!(
+                report.outcomes[0].resolved_head.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(
+                report.outcomes[1].failure,
+                Some(CheckoutFailureKind::VerifyHead)
+            );
+            assert_eq!(
+                report.outcomes[1].resolved_head.as_deref(),
+                Some(sha.as_str())
+            );
+            assert_eq!(
+                report.outcomes[2].failure,
+                Some(CheckoutFailureKind::Checkout)
+            );
+            assert_eq!(report.outcomes[3].failure, None);
+            assert_eq!(
+                report.outcomes[3].resolved_head.as_deref(),
+                Some(sha.as_str())
+            );
+            let target = fixture.work().join("source-name");
+            assert_eq!(
+                git(&target, &["config", "--get", "remote.origin.fetch"]),
+                format!("+refs/heads/{branch}:refs/remotes/origin/main")
+            );
+            assert_eq!(git(&target, &["rev-parse", "origin/HEAD"]), sha);
+            assert_eq!(git(&fixture.work().join("source-pin"), &["remote"]), "");
+            assert!(!fixture.mirror().exists());
+        },
+    );
+}
 
 struct Fixture {
     root: PathBuf,
@@ -1531,6 +1849,9 @@ impl Fixture {
     }
     fn request(&self, name: &str, head: Option<RepositoryHeadRef>) -> CheckoutRequest {
         CheckoutRequest {
+            expected_sha: None,
+            remove_origin: false,
+
             source: RepositoryIdentity {
                 code_forge: RepositoryForge::GitHub,
                 repo_owner: "fixtures".to_owned(),
@@ -1674,6 +1995,9 @@ fn isolated_test_command(fixture: &Fixture, name: &str) -> Command {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("WARP_ISOLATION_PLATFORM", "namespace")
         .env("WARP_BUILD_CACHE_ROOT", fixture.root.join("cache"))
+        .env(super::super::environment_preparation::MODE_ENV, "legacy")
+        .env(super::super::environment_preparation::FILE_ENV, "")
+        .env("WARP_EXECUTION_ID", "")
         .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE");

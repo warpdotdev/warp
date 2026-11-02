@@ -15,7 +15,7 @@ use warp_errors::report_error;
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
-use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::ai::attachment_utils::{DownloadedAttachment, MAX_ATTACHMENT_SIZE_BYTES};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
@@ -24,9 +24,15 @@ use crate::util::image::MIN_IMAGE_HEADER_SIZE;
 /// Maximum number of file attachments for a cloud agent task.
 pub const MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY: usize = 25;
 
+#[derive(Default)]
+pub(crate) struct TaskAttachmentDownloads {
+    /// Legacy directory hint, retained even if every individual download fails.
+    pub directory: Option<String>,
+    pub files: Vec<DownloadedAttachment>,
+}
+
 /// Fetches task attachments via GraphQL and downloads them to the filesystem.
-/// Returns the attachments directory path if any attachments were downloaded,
-/// so the caller can pass it to the server via `StartFromAmbientRunPrompt`.
+/// Returns successful downloads alongside the directory hint for server-side prompts.
 ///
 /// `attachments_dir` is the per-session directory where files should be downloaded.
 ///
@@ -38,9 +44,9 @@ pub(crate) async fn fetch_and_download_attachments(
     http_client: Arc<ServerApi>,
     task_id: String,
     attachments_dir: PathBuf,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<TaskAttachmentDownloads> {
     if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-        return Ok(None);
+        return Ok(TaskAttachmentDownloads::default());
     }
 
     let attachments = ai_client
@@ -54,20 +60,28 @@ pub(crate) async fn download_attachments(
     attachments: Vec<TaskAttachment>,
     http_client: Arc<ServerApi>,
     attachments_dir: PathBuf,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<TaskAttachmentDownloads> {
     if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-        return Ok(None);
+        return Ok(TaskAttachmentDownloads::default());
     }
 
     log::info!("Fetched {} task attachments", attachments.len());
 
     if attachments.is_empty() {
-        return Ok(None);
+        return Ok(TaskAttachmentDownloads::default());
     }
 
-    download_and_write_attachments(attachments, &attachments_dir, &http_client).await?;
+    let files = download_and_write_attachments(
+        attachments,
+        &attachments_dir,
+        http_client.external_http_client(),
+    )
+    .await?;
 
-    Ok(Some(attachments_dir.to_string_lossy().into_owned()))
+    Ok(TaskAttachmentDownloads {
+        directory: Some(attachments_dir.to_string_lossy().into_owned()),
+        files,
+    })
 }
 
 /// Fetches handoff snapshot attachments for the active execution and downloads
@@ -154,8 +168,8 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
 async fn download_and_write_attachments(
     attachments: Vec<TaskAttachment>,
     attachment_dir: &Path,
-    http_client: &ServerApi,
-) -> anyhow::Result<()> {
+    http_client: &http_client::Client,
+) -> anyhow::Result<Vec<DownloadedAttachment>> {
     fs::create_dir_all(attachment_dir)
         .await
         .context("Failed to create attachments directory")?;
@@ -164,24 +178,26 @@ async fn download_and_write_attachments(
         attachment_dir.display()
     );
 
-    let http = http_client.external_http_client();
     let download_futures = attachments
         .into_iter()
-        .map(|attachment| download_task_attachment(attachment, attachment_dir, http));
+        .map(|attachment| download_task_attachment(attachment, attachment_dir, http_client));
     let results = join_all(download_futures).await;
 
-    let mut successful = 0;
+    let mut downloaded = Vec::new();
     let mut failed = 0;
     for result in results {
         match result {
-            Ok(()) => successful += 1,
+            Ok(file) => downloaded.push(file),
             Err(_) => failed += 1,
         }
     }
 
-    log::info!("Attachment download complete: {successful} successful, {failed} failed");
+    log::info!(
+        "Attachment download complete: {} successful, {failed} failed",
+        downloaded.len()
+    );
 
-    Ok(())
+    Ok(downloaded)
 }
 
 /// Download a single task attachment into `attachment_dir/<sanitized filename>`.
@@ -191,7 +207,7 @@ async fn download_task_attachment(
     attachment: TaskAttachment,
     attachment_dir: &Path,
     http_client: &http_client::Client,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<DownloadedAttachment> {
     let safe_filename = Path::new(&attachment.filename)
         .file_name()
         .and_then(|n| n.to_str())
@@ -208,7 +224,11 @@ async fn download_task_attachment(
     download_attachment(http_client, &attachment.download_url, &file_path).await?;
 
     log::info!("Successfully wrote attachment to: {}", file_path.display());
-    Ok(())
+    Ok(DownloadedAttachment {
+        file_id: attachment.file_id,
+        file_name: safe_filename,
+        file_path: file_path.to_string_lossy().into_owned(),
+    })
 }
 
 /// Download a single handoff attachment into `handoff_dir`, under the basename of its logical

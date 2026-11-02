@@ -3,8 +3,7 @@
 /// This module handles:
 /// - Writing provider credentials to `~/.git-credentials`, GitHub credentials
 ///   to the `gh` config directory, and refresh-safe Azure CLI authentication.
-/// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
-///   rewrites).
+/// - One-time git configuration (read-only credentials, SSH→HTTPS URL rewrites).
 /// - Configuring the git user identity from the server-returned username/email.
 /// - An async refresh loop that periodically fetches a fresh token from the
 ///   server and overwrites the credential files, keeping long-running agents
@@ -45,6 +44,8 @@ const GIT_CREDENTIALS_REFRESH_BACKOFF: [Duration; 3] = [
 
 const DEFAULT_GIT_NAME: &str = "Warp";
 const DEFAULT_GIT_EMAIL: &str = "agent@warp.dev";
+const READ_ONLY_CREDENTIAL_HELPER: &str =
+    r#"!f() { test "$1" = get && exec git credential-store get; }; f"#;
 const GITHUB_HOST: &str = "github.com";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 const GLAB_HOST: &str = "gitlab.com";
@@ -619,6 +620,53 @@ pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result
     write_git_credentials(&credentials)
 }
 
+/// Clears git and GitHub CLI authentication before a standby sandbox changes principals.
+pub(crate) fn clear_standby_credentials() -> Result<()> {
+    let home = home_dir()?;
+    for path in [
+        home.join(".git-credentials"),
+        gh_config_dir(&home).join(GH_HOSTS_FILENAME),
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to remove standby credentials at {}", path.display())
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Installs run credentials without overwriting setup-customized author identities.
+pub(crate) fn configure_assignment_git_credentials(
+    credentials: &[GitCredential],
+    repositories: &[(PathBuf, &str)],
+) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
+    let managed_repositories = repositories
+        .iter()
+        .filter(|(path, host)| repository_git_identity(path) == recorded_identity_for_host(host))
+        .collect::<Vec<_>>();
+    if global_git_identity() == recorded_identity_for_host(GITHUB_HOST) {
+        configure_git_identity(&credentials);
+    }
+    for (path, host) in managed_repositories {
+        let credential = credentials
+            .iter()
+            .find(|credential| credential.host == *host)
+            .or_else(|| credentials.first());
+        let (name, email) = identity_of(credential);
+        run_repository_git_config(path, "user.name", &name);
+        run_repository_git_config(path, "user.email", &email);
+    }
+    setup_git_config(&credentials);
+    record_host_identities(&credentials);
+    write_git_credentials(&credentials)
+}
+
 /// Run a git config command, logging a warning on failure rather than
 /// propagating the error (git may not be installed in all sandboxes).
 fn run_git_config(key: &str, value: &str) {
@@ -661,13 +709,14 @@ fn run_git_config_add(key: &str, value: &str) {
 
 /// Run one-time git configuration that is set at startup and never needs to
 /// be refreshed:
-/// - `credential.helper store` so git reads `~/.git-credentials`
+/// - Read-only access to `~/.git-credentials` so one authentication failure cannot erase a host's
+///   shared credential.
 /// - SSH→HTTPS URL rewrites for each credential host, covering both the
 ///   scp-style (`git@{host}:`) and explicit-protocol (`ssh://git@{host}/`)
 ///   URL forms, so operations on either form use HTTPS credentials instead
 ///   of looking for an SSH key.
 pub(crate) fn setup_git_config(credentials: &[GitCredential]) {
-    run_git_config("credential.helper", "store");
+    run_git_config("credential.helper", READ_ONLY_CREDENTIAL_HELPER);
     // Use --add for both forms per host so all values coexist as a
     // multi-value key rather than each entry overwriting the previous one.
     for cred in credentials {

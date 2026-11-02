@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use cynic::{GraphQlResponse, QueryFragment, QueryVariables};
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
 use instant::Duration;
 use reqwest::header::CONTENT_TYPE;
 use serde::Serialize;
@@ -118,7 +118,14 @@ where
         req = req.timeout(timeout);
     }
     for (header, value) in options.headers {
-        req = req.header(header, value);
+        if header.eq_ignore_ascii_case("X-Warp-Ambient-Workload-Token")
+            && let Ok(mut sensitive_value) = HeaderValue::from_str(&value)
+        {
+            sensitive_value.set_sensitive(true);
+            req = req.header(header, sensitive_value);
+        } else {
+            req = req.header(header, value);
+        }
     }
 
     Ok(Request {

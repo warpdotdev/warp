@@ -405,10 +405,19 @@ impl UserWorkspaces {
         team_uid: ServerId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.team_uid_for_window(window_id) == Some(team_uid) {
+        self.set_window_team_uid(window_id, Some(team_uid), ctx);
+    }
+
+    pub(crate) fn set_window_team_uid(
+        &mut self,
+        window_id: WindowId,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == team_uid {
             return;
         }
-        self.window_team_uids.insert(window_id, Some(team_uid));
+        self.window_team_uids.insert(window_id, team_uid);
         ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
         ctx.notify();
     }

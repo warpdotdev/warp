@@ -18,8 +18,9 @@ use super::super::environment_checkout_protocol::{
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command, environment_snapshot,
-    merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    WorkspaceConfiguration, await_checkout_helper, await_setup_phase,
+    build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
+    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
@@ -34,12 +35,16 @@ fn resolved_repositories_apply_origin_policy_per_checkout() {
     let workspace = WorkspaceConfiguration::from_resolved(
         vec![
             ResolvedRepository {
+                expected_sha: None,
+
                 source: first,
                 checkout: None,
                 clone_from: None,
                 preserve_origin: true,
             },
             ResolvedRepository {
+                expected_sha: None,
+
                 source: second,
                 checkout: Some(RepositoryHeadRef::Branch("feature".into())),
                 clone_from: Some(SourceRepo::new(
@@ -50,6 +55,7 @@ fn resolved_repositories_apply_origin_policy_per_checkout() {
                 preserve_origin: false,
             },
         ],
+        Vec::new(),
         vec!["make setup".into()],
     )
     .unwrap();
@@ -62,16 +68,100 @@ fn resolved_repositories_apply_origin_policy_per_checkout() {
 }
 
 #[test]
+fn deferred_policy_keeps_same_name_identities_for_unused_target_selection() {
+    let root = tempfile::TempDir::new().unwrap();
+    let mut workspace = WorkspaceConfiguration::from_resolved(
+        Vec::new(),
+        vec![
+            resolved_repo(CodeForge::GitHub, "first", "api"),
+            resolved_repo(CodeForge::GitLab, "second", "api"),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    workspace
+        .bind_execution(
+            "task".into(),
+            "execution".into(),
+            root.path().to_owned(),
+            true,
+        )
+        .unwrap();
+    let policy = workspace.preparation_policy.unwrap();
+    let mut requests = policy
+        .deferred
+        .iter()
+        .map(|record| record.request.clone())
+        .collect::<Vec<_>>();
+    requests[1].checkout_name = "api-second".into();
+    let mut batch = CheckoutBatch {
+        working_dir: root.path().to_owned(),
+        repositories: requests,
+    };
+    policy.resolve(&mut batch, true, false).unwrap();
+    assert_eq!(batch.repositories[0].checkout_name, "api");
+    assert_eq!(batch.repositories[1].checkout_name, "api-second");
+    assert!(workspace.source_repos.is_empty());
+}
+
+#[test]
 fn duplicate_resolved_repositories_fail_before_clone() {
     let repositories = (0..2)
         .map(|_| ResolvedRepository {
+            expected_sha: None,
+
             source: SourceRepo::new(CodeForge::GitHub, "owner".into(), "repo".into()),
             checkout: None,
             clone_from: None,
             preserve_origin: true,
         })
         .collect::<Vec<_>>();
-    assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new()).is_err());
+    assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new(), Vec::new()).is_err());
+}
+
+#[test]
+fn checkout_helper_timeout_covers_command_start_and_exit() {
+    for command_started in [false, true] {
+        block_on(async {
+            let (start_tx, start_rx) = oneshot::channel::<()>();
+            let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
+            let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+            let operation = async {
+                start_rx.await.unwrap();
+                Ok(exit_rx.await.unwrap())
+            };
+            let mut wait = Box::pin(await_checkout_helper(operation, deadline_rx));
+            assert!(poll!(wait.as_mut()).is_pending());
+            if command_started {
+                start_tx.send(()).unwrap();
+                assert!(poll!(wait.as_mut()).is_pending());
+            }
+            deadline_tx.send(()).unwrap();
+
+            assert!(matches!(
+                wait.await,
+                Err(PrepareEnvironmentError::CheckoutHelperTimedOut {
+                    timeout_seconds: 1800
+                })
+            ));
+            assert!(exit_tx.is_canceled());
+        });
+    }
+}
+
+#[test]
+fn checkout_helper_completion_preserves_command_result() {
+    assert_eq!(
+        block_on(await_checkout_helper(ready(Ok(17)), pending::<()>())).unwrap(),
+        17
+    );
+    assert!(matches!(
+        block_on(await_checkout_helper(
+            ready(Err::<(), _>(PrepareEnvironmentError::InvalidRuntimeState)),
+            pending::<()>()
+        )),
+        Err(PrepareEnvironmentError::InvalidRuntimeState)
+    ));
 }
 
 #[test]
@@ -140,6 +230,27 @@ fn reported_heads_are_keyed_by_checkout_name_and_omit_unresolved_heads() {
 #[cfg(unix)]
 #[test]
 fn head_probe_timeout_preserves_later_snapshot_repositories() {
+    if std::env::var_os("WARP_TEST_HEAD_PROBE").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::environment::tests::head_probe_timeout_preserves_later_snapshot_repositories",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_HEAD_PROBE", "1")
+            .env(super::super::environment_preparation::MODE_ENV, "legacy")
+            .env(super::super::environment_preparation::FILE_ENV, "")
+            .env("WARP_EXECUTION_ID", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     use std::io::Write as _;
 
     use nix::sys::stat::Mode;
@@ -261,6 +372,9 @@ fn checkout_batch<const COUNT: usize>(checkout_names: [&str; COUNT]) -> Checkout
         repositories: checkout_names
             .into_iter()
             .map(|checkout_name| CheckoutRequest {
+                expected_sha: None,
+                remove_origin: false,
+
                 source: RepositoryIdentity {
                     code_forge: RepositoryForge::GitHub,
                     repo_owner: "warpdotdev".to_owned(),
@@ -589,6 +703,8 @@ fn substitution_override(
 fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> RepositoryCloneRequest {
     let checkout_name = repo.repo.clone();
     RepositoryCloneRequest {
+        expected_sha: None,
+
         remote: repo,
         checkout_name,
         checkout,
@@ -696,6 +812,45 @@ fn legacy_workspace_merges_environment_and_task_additions_without_deferred_inven
             repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
         ]
     );
+    assert!(workspace.deferred_repos.is_empty());
+}
+
+#[test]
+fn resolved_empty_eager_membership_skips_preparation_with_deferred_inventory() {
+    let deferred = vec![resolved_repo(CodeForge::GitLab, "platform/backend", "api")];
+    let workspace =
+        WorkspaceConfiguration::from_resolved(Vec::new(), deferred.clone(), Vec::new()).unwrap();
+    assert!(workspace.source_repos.is_empty());
+    assert!(workspace.clone_requests.is_empty());
+    assert_eq!(workspace.deferred_repos, deferred);
+    assert_eq!(single_repo_name(&workspace.source_repos), None);
+}
+
+#[test]
+fn resolved_workspace_keeps_deferred_inventory_out_of_preparation() {
+    let eager = repo(CodeForge::GitHub, "acme", "billing");
+    let deferred = vec![resolved_repo(CodeForge::GitLab, "other", "billing")];
+    let workspace = WorkspaceConfiguration::from_resolved(
+        vec![ResolvedRepository {
+            expected_sha: None,
+
+            source: eager.clone(),
+            checkout: None,
+            clone_from: None,
+            preserve_origin: true,
+        }],
+        deferred.clone(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(workspace.source_repos, vec![eager.clone()]);
+    assert_eq!(workspace.deferred_repos, deferred);
+    assert_eq!(workspace.clone_requests.len(), 1);
+    assert_eq!(workspace.clone_requests[0].remote, eager);
+    assert_eq!(
+        single_repo_name(&workspace.source_repos),
+        Some("billing".to_owned())
+    );
 }
 
 #[test]
@@ -703,18 +858,23 @@ fn resolved_repositories_reject_clone_directory_collisions() {
     let result = WorkspaceConfiguration::from_resolved(
         vec![
             ResolvedRepository {
+                expected_sha: None,
+
                 source: repo(CodeForge::GitHub, "a", "widget"),
                 checkout: None,
                 clone_from: None,
                 preserve_origin: true,
             },
             ResolvedRepository {
+                expected_sha: None,
+
                 source: repo(CodeForge::GitLab, "b", "widget"),
                 checkout: None,
                 clone_from: None,
                 preserve_origin: true,
             },
         ],
+        Vec::new(),
         Vec::new(),
     );
 
@@ -1357,4 +1517,53 @@ fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
         &mut setup_commands,
     );
     assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
+}
+
+fn resolved_repo(forge: CodeForge, owner: &str, name: &str) -> ResolvedRepository {
+    ResolvedRepository {
+        source: repo(forge, owner, name),
+        checkout: None,
+        clone_from: None,
+        preserve_origin: true,
+        expected_sha: None,
+    }
+}
+
+#[test]
+fn deferred_inventory_keeps_source_path_and_all_frozen_preparation() {
+    let root = tempfile::TempDir::new().unwrap();
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    let deferred = ResolvedRepository {
+        source: repo(CodeForge::GitHub, "source", "source-name"),
+        clone_from: Some(repo(CodeForge::GitHub, "benchmarks", "substitute")),
+        checkout: Some(RepositoryHeadRef::Branch(format!("benchmark-base/{sha}"))),
+        expected_sha: Some(sha.into()),
+        preserve_origin: true,
+    };
+    let mut workspace =
+        WorkspaceConfiguration::from_resolved(Vec::new(), vec![deferred], Vec::new()).unwrap();
+    workspace
+        .bind_execution(
+            "task".into(),
+            "execution".into(),
+            root.path().to_owned(),
+            true,
+        )
+        .unwrap();
+    let policy = workspace.preparation_policy.unwrap();
+    assert!(policy.eager.is_empty());
+    assert_eq!(policy.deferred[0].source.repo_owner, "source");
+    assert_eq!(policy.deferred[0].source.repo_name, "source-name");
+    let request = &policy.deferred[0].request;
+    request.validate().unwrap();
+    assert_eq!(request.source.repo_owner, "benchmarks");
+    assert_eq!(request.source.repo_name, "substitute");
+    assert_eq!(request.checkout_name, "source-name");
+    assert_eq!(
+        request.head,
+        Some(RepositoryHeadRef::Branch(format!("benchmark-base/{sha}")))
+    );
+    assert_eq!(request.expected_sha.as_deref(), Some(sha));
+    assert!(request.fetch_branch_only);
+    assert!(!request.remove_origin);
 }

@@ -37,6 +37,7 @@ pub mod leave_object;
 pub mod mint_custom_token;
 pub mod move_object;
 pub mod populate_merkle_tree_cache;
+pub mod prewarmed_sandbox_config;
 pub mod purchase_addon_credits;
 pub mod record_object_action;
 pub mod remove_object_guest;

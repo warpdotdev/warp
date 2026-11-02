@@ -31,6 +31,15 @@ pub(super) fn team_scope(team_id: Option<&cynic::Id>) -> anyhow::Result<Headless
     }
 }
 
+pub(super) fn validate_prewarmed_harness(harness: Harness) -> anyhow::Result<()> {
+    match harness {
+        Harness::Oz | Harness::Claude | Harness::Codex => Ok(()),
+        Harness::Gemini | Harness::OpenCode | Harness::Pi | Harness::Unknown => {
+            bail!("Pre-warmed sandboxes do not support the {harness} harness")
+        }
+    }
+}
+
 pub(super) fn harness(value: &AgentHarness) -> anyhow::Result<Harness> {
     match value {
         AgentHarness::Oz => Ok(Harness::Oz),
@@ -93,9 +102,16 @@ pub(super) fn repositories(
                 checkout,
                 clone_from,
                 preserve_origin: repo.preserve_origin,
+                expected_sha: repo.expected_sha,
             })
         })
         .collect()
+}
+
+pub(super) fn deferred_repositories(
+    repositories: Vec<ConfigSourceRepo>,
+) -> anyhow::Result<Vec<SourceRepo>> {
+    repositories.into_iter().map(source_repo).collect()
 }
 
 pub(super) fn sharing_acls(acls: Vec<SessionSharingAclSpec>) -> anyhow::Result<Vec<ShareRequest>> {

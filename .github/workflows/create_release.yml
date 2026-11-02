@@ -57,6 +57,10 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: write # script/create_release_tag_and_branch pushes the release branch and tag; softprops/action-gh-release creates the GitHub release; each build job runs `gh release upload` to attach its artifacts
+  id-token: write # google-github-actions/auth federates the job's OIDC token to GCP for release uploads; octo-sts/action exchanges it for scoped GitHub tokens
+
 env:
   CARGO_TERM_COLOR: always
   CONFIG_FILE: ".github/workflows/release_configurations.json"
@@ -160,7 +164,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Ensure rust target is installed
         run: rustup target add ${{ matrix.arch }}-apple-darwin
@@ -217,7 +221,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -288,7 +293,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
@@ -411,7 +416,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -454,7 +460,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Ensure rust target is installed
         run: rustup target add ${{ matrix.arch }}-apple-darwin
@@ -537,7 +543,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -591,7 +597,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -647,7 +654,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Ensure rust target is installed
         run: rustup target add ${{ matrix.arch }}-apple-darwin
@@ -730,7 +737,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -811,7 +818,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -853,7 +861,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -940,7 +948,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1024,7 +1032,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1063,7 +1072,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1084,7 +1093,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Install linuxdeploy
         run: script/linux/install_linuxdeploy
@@ -1225,7 +1235,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1306,7 +1316,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1327,7 +1337,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Load PGP signing key and passphrase
         run: |
@@ -1503,7 +1514,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1535,7 +1546,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Install linuxdeploy
         run: script/linux/install_linuxdeploy
@@ -1594,7 +1606,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
       # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
@@ -1615,7 +1627,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
@@ -1688,7 +1701,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
       
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1944,7 +1958,7 @@ jobs:
           target_os: wasm
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2000,7 +2014,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2070,7 +2085,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2146,7 +2161,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2232,7 +2247,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload TUI installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2293,7 +2309,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2375,7 +2391,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2484,7 +2500,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2558,7 +2575,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2632,7 +2649,7 @@ jobs:
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
-          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+          install_channel_config: true
 
       - name: Get channel configuration
         id: get-config
@@ -2747,7 +2764,8 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2927,7 +2945,7 @@ jobs:
       # daily dev cuts and preview RCs.
       - name: Generate changelog via Oz (stable only)
         if: inputs.channel == 'stable'
-        uses: warpdotdev/oz-agent-action@d5c5a5c9eddb2abd3f7e9e171c6118ca401dd0b5 # main
+        uses: warpdotdev/oz-agent-action@ccb5247d8faee3d0a4b70b8a776727c8f52e2355 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
@@ -2960,13 +2978,13 @@ jobs:
             --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
             --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
 
-      - name: Obtain a GitHub App Installation Access Token (non-stable only)
+      - name: Mint release-changelog token (non-stable only)
         if: inputs.channel != 'stable'
         id: github_app_auth
-        run: |
-          TOKEN="$(npx obtain-github-app-installation-access-token ci ${{ secrets.GH_APP_CREDENTIALS_TOKEN }})"
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: warpdotdev/warp-internal
+          identity: release-changelog
 
       - name: Generate changelog via legacy action (non-stable only)
         if: inputs.channel != 'stable'
@@ -3087,7 +3105,8 @@ jobs:
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
+          service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload changelog.json to Google Cloud Storage
         uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0

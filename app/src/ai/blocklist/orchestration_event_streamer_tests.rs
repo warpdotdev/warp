@@ -1,10 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use mockall::predicate::eq;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
 use crate::ai::agent::{
     AIAgentExchange, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
     FinishedAIAgentOutput, MessageId, ReceivedMessageDisplay, Shared,
@@ -3100,6 +3102,129 @@ fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
                     .and_then(|c| c.last_event_sequence()),
                 Some(13),
                 "Primary cursor must advance to the batch max sequence"
+            );
+        });
+    });
+}
+
+#[test]
+fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_owner() {
+    // The owner's turns are authored by an external harness (e.g. an ACP agent), so nothing
+    // may be queued for native injection into it; the server wakes such runs itself. Child
+    // tracking, watched-run status fan-out, and the Primary cursor all still advance.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+
+        let parent_task_id = make_parent_task_id_for_test(0xf6);
+        let parent_run_id = parent_task_id.to_string();
+        let child = make_parent_task_id_for_test(0xf7).to_string();
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(parent_run_id.clone());
+        conversation.set_driver(ConversationDriver::ExternalHarness);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        // Child discovery kicks off placeholder / tracker metadata fetches in the background;
+        // they are not under test here.
+        mock.expect_get_ambient_agent_task()
+            .returning(|_| Err(anyhow::anyhow!("not under test")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let watched_statuses = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let watched_statuses = Rc::clone(&watched_statuses);
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
+                    run_id,
+                    status,
+                    ..
+                } = event
+                {
+                    watched_statuses
+                        .borrow_mut()
+                        .push((run_id.clone(), status.clone()));
+                }
+            });
+        });
+
+        // Non-terminal child lifecycle events only: a terminal one would also evict the child's
+        // cached task through `AgentConversationsModel`, which this fixture does not register.
+        let events = vec![
+            make_seq_event(EVENT_CHILD_AGENT_STARTED, &parent_run_id, Some(&child), 20),
+            make_seq_event("run_in_progress", &child, None, 21),
+            make_seq_event("new_message", &parent_run_id, Some("msg-1"), 22),
+            make_seq_event("run_blocked", &child, None, 23),
+        ];
+        let messages = vec![ReceivedMessageInput {
+            message_id: "msg-1".to_string(),
+            sender_agent_id: child.clone(),
+            addresses: vec![parent_run_id.clone()],
+            subject: "done".to_string(),
+            message_body: "body".to_string(),
+        }];
+
+        streamer.update(&mut app, |me, ctx| {
+            let tracker = OrchestrationChildTracker::new(parent_task_id);
+            let tracker = me.drain_family_events(
+                conversation_id,
+                &parent_run_id,
+                FamilyDrainMode::Primary,
+                tracker,
+                0,
+                events,
+                messages,
+                ctx,
+            );
+            assert!(
+                tracker.is_awaiting_metadata(&child),
+                "child discovery must still route into the tracker"
+            );
+        });
+
+        event_service.read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "neither the inbox message nor the child lifecycle may be queued for injection"
+            );
+        });
+        assert_eq!(
+            *watched_statuses.borrow(),
+            vec![
+                (child.clone(), ConversationStatus::InProgress),
+                (
+                    child.clone(),
+                    ConversationStatus::Blocked {
+                        blocked_action: String::new(),
+                    },
+                ),
+            ],
+            "watched-run status updates still reach the pill bar"
+        );
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|c| c.last_event_sequence()),
+                Some(23),
+                "the Primary cursor must still advance past the dropped events"
             );
         });
     });

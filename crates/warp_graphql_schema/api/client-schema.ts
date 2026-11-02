@@ -41,6 +41,7 @@ const clientMutations = [
   'mintCustomToken',
   'moveObject',
   'populateMerkleTreeCache',
+  'prewarmedSandboxConfig',
   'provideNegativeFeedbackResponseForAiConversation',
   'purchaseAddonCredits',
   'recordObjectAction',

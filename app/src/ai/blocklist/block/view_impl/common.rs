@@ -3417,7 +3417,7 @@ fn render_invalid_api_key_error(
 
 /// Renders a ChatGPT subscription error: alert icon + title, the server's message, and one
 /// button per action in server order, with the first action styled as the primary CTA. Without
-/// `action_props`, URL actions are listed as plain text so the link is still reachable.
+/// `action_props`, recovery links and copyable text are listed as plain text.
 fn render_chatgpt_subscription_error(
     title: &str,
     message: &str,

@@ -15,6 +15,24 @@ fn batch() -> serde_json::Value {
 }
 
 #[test]
+fn expected_sha_requires_a_valid_matching_pin() {
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    for (head, expected) in [
+        (json!(null), sha),
+        (json!({"type":"BRANCH", "value":"frozen"}), "not-a-sha"),
+        (
+            json!({"type":"COMMIT_SHA", "value":sha}),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+    ] {
+        let mut value = batch();
+        value["repositories"][0]["head"] = head;
+        value["repositories"][0]["expected_sha"] = json!(expected);
+        assert!(CheckoutBatch::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn batch_rejects_malformed_and_untrusted_payloads() {
     assert!(CheckoutBatch::parse(b"{").is_err());
     for (pointer, value) in [

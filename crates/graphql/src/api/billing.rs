@@ -409,8 +409,8 @@ pub struct UsageEntry {
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,
-    pub credits_used: i32,
-    pub cost_cents: i32,
+    pub credits_used_exact: f64,
+    pub cost_cents_exact: f64,
     pub attributed_team_uid: Option<String>,
 }
 

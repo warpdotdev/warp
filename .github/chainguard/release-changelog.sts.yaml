@@ -1,0 +1,7 @@
+issuer: https://token.actions.githubusercontent.com
+subject_pattern: repo:warpdotdev/warp-internal:.*
+claim_pattern:
+  job_workflow_ref: warpdotdev/warp-internal/\.github/workflows/create_release\.yml@.+
+permissions:
+  contents: read
+  pull_requests: read

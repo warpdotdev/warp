@@ -35,7 +35,7 @@ pub(super) fn sanitize_git_credential_username(value: &str) -> Option<String> {
     .then(|| value.to_owned())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutRequest {
     pub source: RepositoryIdentity,
@@ -43,6 +43,10 @@ pub struct CheckoutRequest {
     #[serde(deserialize_with = "deserialize_head")]
     pub head: Option<RepositoryHeadRef>,
     pub fetch_branch_only: bool,
+    #[serde(default)]
+    pub expected_sha: Option<String>,
+    #[serde(default)]
+    pub remove_origin: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +54,7 @@ pub enum CheckoutFailureKind {
     Clone,
     Checkout,
     RemoveOrigin,
+    VerifyHead,
 }
 
 /// What became of a single checkout request.
@@ -72,6 +77,8 @@ pub struct CheckoutOutcome {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutReport {
+    #[serde(default)]
+    pub requests: Vec<CheckoutRequest>,
     pub outcomes: Vec<CheckoutOutcome>,
     pub identity_diagnostics: Option<CloneFailureIdentityDiagnostics>,
 }
@@ -166,6 +173,9 @@ impl CheckoutBatch {
         if !self.working_dir.is_absolute() {
             return Err("checkout working directory must be absolute");
         }
+        if self.repositories.len() > 128 {
+            return Err("checkout batch exceeds repository limit");
+        }
         let mut targets = HashSet::new();
         for request in &self.repositories {
             request.validate()?;
@@ -193,7 +203,9 @@ impl CheckoutRequest {
                         || (azure && character == ' ')
                 })
         };
-        if !owner.split('/').all(valid_segment)
+        if owner.len() > 1024
+            || repo.len() > 256
+            || !owner.split('/').all(valid_segment)
             || !valid_segment(repo)
             || (self.source.code_forge == RepositoryForge::GitHub && owner.contains('/'))
             || (azure && owner.split('/').count() != 2)
@@ -206,7 +218,8 @@ impl CheckoutRequest {
             .next()
             .unwrap_or_default()
             .to_ascii_uppercase();
-        if name.is_empty()
+        if name.len() > 256
+            || name.is_empty()
             || name == "."
             || name == ".."
             || name.ends_with(['.', ' '])
@@ -235,7 +248,8 @@ impl CheckoutRequest {
                 }
             }
             Some(RepositoryHeadRef::Branch(value)) => {
-                if value.is_empty()
+                if value.len() > 1024
+                    || value.is_empty()
                     || value.starts_with('-')
                     || value.starts_with('/')
                     || value == "@"
@@ -258,6 +272,16 @@ impl CheckoutRequest {
         }
         if self.fetch_branch_only && !matches!(self.head, Some(RepositoryHeadRef::Branch(_))) {
             return Err("branch-only checkout requires a branch");
+        }
+        if let Some(expected) = &self.expected_sha {
+            if !is_valid_git_object_id(expected) || self.head.is_none() {
+                return Err("invalid expected checkout SHA");
+            }
+            if let Some(RepositoryHeadRef::CommitSha(sha)) = &self.head
+                && sha != expected
+            {
+                return Err("checkout commit does not match expected SHA");
+            }
         }
         Ok(())
     }

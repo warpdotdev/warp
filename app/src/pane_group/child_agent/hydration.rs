@@ -22,32 +22,6 @@ use crate::terminal::view::{
 };
 
 impl PaneGroup {
-    /// Applies the unified viewer materialization decision to a task snapshot
-    /// supplied by the parent shared-session viewer.
-    pub(in crate::pane_group) fn materialize_viewer_child_pane_from_task(
-        &mut self,
-        child_id: AIConversationId,
-        task: AmbientAgentTask,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Skip when this child already has a live tracked pane.
-        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied()
-            && self.has_pane_id(existing_pane_id)
-        {
-            return;
-        }
-        let Some(child_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_id)
-            .cloned()
-        else {
-            log::warn!(
-                "materialize_viewer_child_pane_from_task: no child conversation {child_id:?}"
-            );
-            return;
-        };
-        self.apply_child_pane_materialization(child_conversation, task, ctx);
-    }
-
     /// Materializes the pane for a placeholder child conversation from its
     /// [`AmbientAgentTask`](crate::ai::ambient_agents::AmbientAgentTask),
     /// leaving a loading pane in place while the task is still being fetched.
@@ -162,12 +136,15 @@ impl PaneGroup {
                     .child_agent_panes
                     .get(&child_id)
                     .is_some_and(|pane_id| self.has_pane_id(*pane_id))
+                    && self
+                        .create_child_loading_placeholder(
+                            child_conversation,
+                            AgentViewEntryOrigin::CloudAgent,
+                            ctx,
+                        )
+                        .is_none()
                 {
-                    let _ = self.create_child_loading_placeholder(
-                        child_conversation,
-                        AgentViewEntryOrigin::CloudAgent,
-                        ctx,
-                    );
+                    return;
                 }
                 self.pending_child_hydrations.insert(task_id, child_id);
                 self.ensure_pending_ambient_restoration_subscription(ctx);
@@ -373,6 +350,26 @@ impl PaneGroup {
                 }
                 CompletedChildPresentation::PassiveTranscript => {
                     group.restore_child_passive_transcript(pane_id, child_id, task_id, merged, ctx);
+                }
+            }
+
+            // Restoring the transcript derives status from its last exchange, which can
+            // disagree with the run state (e.g. a run blocked on user input). The run state
+            // is what the badge showed before hydration, so keep it authoritative.
+            if let Some(task) = task.as_ref() {
+                let history_handle = BlocklistAIHistoryModel::handle(ctx);
+                let terminal_surface_id = history_handle
+                    .as_ref(ctx)
+                    .terminal_surface_id_for_conversation(&child_id);
+                if let Some(terminal_surface_id) = terminal_surface_id {
+                    history_handle.update(ctx, |history, ctx| {
+                        history.apply_remote_child_task_snapshot(
+                            terminal_surface_id,
+                            child_id,
+                            task,
+                            ctx,
+                        );
+                    });
                 }
             }
         });

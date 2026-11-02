@@ -663,6 +663,42 @@ fn test_warp_tui_does_not_match_other_commands() {
 }
 
 #[test]
+fn test_warp_tui_does_not_match_acp_bridge() {
+    assert!(
+        !CLIAgent::WarpTui.matches_command("warp acp-bridge --launch-file /tmp/launch.json", None)
+    );
+    assert!(!CLIAgent::WarpTui.matches_command(
+        "/Applications/WarpLocal.app/Contents/MacOS/warp acp-bridge --launch-file /tmp/launch.json",
+        Some(EscapeChar::Backslash),
+    ));
+    assert!(
+        !CLIAgent::WarpTui
+            .matches_command("warp-dev acp-bridge --launch-file /tmp/launch.json", None,)
+    );
+}
+
+#[test]
+fn test_warp_tui_does_not_match_acp_bridge_with_shell_syntax() {
+    assert!(!CLIAgent::WarpTui.matches_command(
+        "FOO=bar '/Applications/Warp Local.app/Contents/MacOS/warp' 'acp-bridge' --launch-file /tmp/launch.json",
+        Some(EscapeChar::Backslash),
+    ));
+    assert!(!CLIAgent::WarpTui.matches_command(
+        r#""C:\Program Files\Warp\warp" acp-bridge --launch-file launch.json"#,
+        Some(EscapeChar::Backtick),
+    ));
+}
+
+#[test]
+fn test_warp_tui_matches_acp_bridge_as_an_argument() {
+    assert!(CLIAgent::WarpTui.matches_command("warp --prompt acp-bridge", None));
+    assert!(CLIAgent::WarpTui.matches_command(
+        "FOO=bar warp --prompt 'acp-bridge'",
+        Some(EscapeChar::Backslash),
+    ));
+}
+
+#[test]
 fn test_warp_tui_variant_properties() {
     assert!(CLIAgent::Claude.supports_cli_agent_footer());
     assert_eq!(CLIAgent::WarpTui.command_prefix(), "warp");

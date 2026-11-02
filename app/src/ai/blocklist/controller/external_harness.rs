@@ -5,21 +5,21 @@
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use uuid::Uuid;
 use warp_errors::report_error;
-use warp_multi_agent_api::response_event::StreamInit;
+use warp_multi_agent_api::response_event::{StreamFinished, StreamInit, stream_finished};
 use warp_multi_agent_api::{ResponseEvent, response_event};
 use warpui::{ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput};
-use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver, ConversationStatus};
-use crate::ai::blocklist::QueuedQueryModel;
+use crate::ai::agent::{BaseUserQuery, CancellationReason};
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryModel, UpdateHistoryError};
+use crate::ai::blocklist::{QueuedQuery, QueuedQueryId, QueuedQueryModel};
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 /// Identifiers for one harness-driven turn.
 #[derive(Clone, Debug)]
-pub(in crate::ai) struct ExternalHarnessTurn {
+pub(crate) struct ExternalHarnessTurn {
     pub stream_id: ResponseStreamId,
     pub request_id: String,
 }
@@ -39,6 +39,10 @@ pub(in crate::ai) struct ExternalHarnessPrompt {
     pub base: Option<BaseUserQuery>,
 }
 
+/// A request to interrupt the turn an external harness is running, relayed to that harness.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalHarnessCancel;
+
 impl BlocklistAIController {
     /// Diverts prompts injected into the bound native conversation to an external harness.
     /// Shared-session prompts that were queued for the conversation before the sink existed
@@ -55,6 +59,153 @@ impl BlocklistAIController {
             self.relay_queued_shared_session_prompts(conversation_id, &sink, ctx);
         }
         self.external_harness_prompt_sink = Some(sink);
+    }
+
+    /// Diverts cancellations of the bound native conversation to the external harness driving
+    /// it, which interrupts its agent's turn over its own protocol instead of the terminal.
+    pub(crate) fn set_external_harness_cancel_sink(
+        &mut self,
+        sink: async_channel::Sender<ExternalHarnessCancel>,
+    ) {
+        self.external_harness_cancel_sink = Some(sink);
+    }
+
+    /// Drops both harness sinks. Prompts and cancellations for the bound conversation then take
+    /// the native paths again (queueing, or the terminal interrupt), which is what remains once
+    /// the harness's turn driver has stopped.
+    pub(in crate::ai) fn release_external_harness_sinks(&mut self) {
+        self.external_harness_prompt_sink = None;
+        self.external_harness_cancel_sink = None;
+    }
+
+    /// Whether a running external harness owns `conversation_id`'s turns, so a cancellation
+    /// must go to it rather than to the terminal.
+    fn is_cancelled_via_external_harness(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &ModelContext<Self>,
+    ) -> bool {
+        self.native_prompt_conversation_id == Some(conversation_id)
+            && self
+                .external_harness_cancel_sink
+                .as_ref()
+                .is_some_and(|sink| !sink.is_closed())
+            && BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| {
+                    conversation.driver() == ConversationDriver::ExternalHarness
+                })
+    }
+
+    /// Hands a cancellation of `conversation_id` to the external harness driving it. Returns
+    /// `false` when no running harness owns the conversation (including a harness whose turn
+    /// driver has already stopped), in which case the caller cancels it itself.
+    pub(crate) fn cancel_via_external_harness(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if !self.is_cancelled_via_external_harness(conversation_id, ctx) {
+            return false;
+        }
+        let Some(sink) = &self.external_harness_cancel_sink else {
+            return false;
+        };
+        log::info!(
+            "event=cancel_routed_to_external_harness task_id={:?} terminal_id={:?} conversation_id={conversation_id}",
+            self.ambient_agent_task_id,
+            self.terminal_surface_id,
+        );
+        if sink.try_send(ExternalHarnessCancel).is_err() {
+            log::info!(
+                "event=cancel_fell_back_to_native task_id={:?} terminal_id={:?} conversation_id={conversation_id} reason=harness_stopped",
+                self.ambient_agent_task_id,
+                self.terminal_surface_id,
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Ends the harness-driven turn open on `stream_id` as a cancellation, the way an
+    /// interrupted native request ends: its exchanges finish as cancelled and the conversation
+    /// status follows `reason` (a follow-up that cut the turn short keeps it `InProgress`; an
+    /// interrupt marks it `Cancelled`). Viewers see the stream finish.
+    pub(in crate::ai) fn cancel_external_harness_turn(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_for_response_stream(stream_id)
+        else {
+            log::warn!("No conversation for external harness response stream {stream_id:?}");
+            return;
+        };
+        let finished = ResponseEvent {
+            r#type: Some(response_event::Type::Finished(StreamFinished {
+                reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                ..Default::default()
+            })),
+        };
+        self.tee_response_event_to_viewers(&finished, conversation_id, ctx);
+        let terminal_surface_id = self.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.mark_response_stream_cancelled(
+                stream_id,
+                conversation_id,
+                terminal_surface_id,
+                reason,
+                ctx,
+            );
+        });
+    }
+
+    /// Marks `conversation_id` cancelled when an interrupt arrives with no turn to cut short.
+    pub(in crate::ai) fn mark_external_harness_conversation_cancelled(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_surface_id = self.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.update_conversation_status(
+                terminal_surface_id,
+                conversation_id,
+                ConversationStatus::Cancelled,
+                ctx,
+            );
+        });
+    }
+
+    /// Shows `prompt` as queued on `conversation_id` while the harness waits to send it, so
+    /// viewers see it is pending. Returns the row to remove once it is sent.
+    pub(in crate::ai) fn show_external_harness_prompt_queued(
+        &self,
+        conversation_id: AIConversationId,
+        prompt: &ExternalHarnessPrompt,
+        ctx: &mut ModelContext<Self>,
+    ) -> QueuedQueryId {
+        let row = QueuedQuery::new_shared_session_prompt(
+            prompt.text.clone(),
+            prompt.participant_id.clone(),
+            prompt.attachments.clone(),
+            prompt.base.clone(),
+        );
+        QueuedQueryModel::handle(ctx)
+            .update(ctx, |queue, ctx| queue.append(conversation_id, row, ctx))
+    }
+
+    pub(in crate::ai) fn hide_external_harness_prompt_queued(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.remove_fired_row(conversation_id, query_id, ctx);
+        });
     }
 
     fn relay_queued_shared_session_prompts(
@@ -105,7 +256,7 @@ impl BlocklistAIController {
     /// for a fresh response stream, marks the conversation in progress, and applies the locally
     /// minted `StreamInit`. The harness must add the user query and task messages through
     /// [`Self::apply_external_harness_event`], as the MAA server does.
-    pub(in crate::ai) fn begin_external_harness_turn(
+    pub(crate) fn begin_external_harness_turn(
         &mut self,
         conversation_id: AIConversationId,
         run_id: Option<String>,

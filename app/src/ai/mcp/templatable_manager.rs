@@ -28,6 +28,8 @@ use warpui::{Entity, SingletonEntity};
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 use crate::ai::mcp::{FileBasedMCPManager, MCPServerState};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::{StaticEnvVar, TransportType};
 
 #[cfg(not(target_family = "wasm"))]
 type ReconnectResultSender =
@@ -48,6 +50,8 @@ pub struct TemplatableMCPServerManager {
     locally_installed_servers: HashMap<Uuid, TemplatableMCPServerInstallation>,
     server_states: HashMap<Uuid, MCPServerState>,
     active_servers: HashMap<Uuid, TemplatableMCPServerInfo>,
+    #[cfg(not(target_family = "wasm"))]
+    runtime_environment: HashMap<String, String>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
@@ -136,6 +140,25 @@ pub enum FigmaMcpStatus {
 }
 
 impl TemplatableMCPServerManager {
+    #[cfg(not(target_family = "wasm"))]
+    fn apply_runtime_environment(&self, transport: &mut TransportType) {
+        if let TransportType::CLIServer(server) = transport {
+            server
+                .static_env_vars
+                .retain(|variable| !self.runtime_environment.contains_key(&variable.name));
+            server
+                .static_env_vars
+                .extend(
+                    self.runtime_environment
+                        .iter()
+                        .map(|(name, value)| StaticEnvVar {
+                            name: name.clone(),
+                            value: value.clone(),
+                        }),
+                );
+        }
+    }
+
     pub fn get_installed_templatable_servers(
         &self,
     ) -> &HashMap<Uuid, TemplatableMCPServerInstallation> {

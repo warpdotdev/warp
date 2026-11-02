@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use async_channel::Sender;
+use uuid::Uuid;
 use warp_completer::meta::Span;
 #[cfg(unix)]
 use warpui::AppContext;
@@ -56,6 +57,15 @@ pub trait TerminalSurface: Entity + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
 {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn on_shell_replaced(
+        &mut self,
+        _request_id: Uuid,
+        _result: anyhow::Result<()>,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
     /// Whether the local manager should start polling termios for a password prompt
     /// after the given block starts.
     #[cfg(unix)]

@@ -1,5 +1,45 @@
 use crate::secret_value::ManagedSecretValue;
 
+#[test]
+fn llm_provider_task_secret_wire_value_converts_without_exposing_credentials() {
+    let wire = serde_json::json!({
+        "__typename": "ManagedSecretLlmProviderApiKeyValue",
+        "providerId": "openai",
+        "apiKey": "private-key",
+        "baseUrl": "https://example.test/v1"
+    });
+    let value: warp_graphql::queries::task_secrets::ManagedSecretValue =
+        serde_json::from_value(wire).unwrap();
+    assert!(!format!("{value:?}").contains("private-key"));
+
+    let secrets = crate::convert_task_secrets(std::collections::HashMap::from([(
+        "OPENAI".to_owned(),
+        value,
+    )]))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&secrets["OPENAI"]).unwrap(),
+        serde_json::json!({
+            "provider_id": "openai",
+            "api_key": "private-key",
+            "base_url": "https://example.test/v1"
+        })
+    );
+}
+
+#[test]
+fn llm_provider_payload_omits_absent_endpoint_and_redacts_debug() {
+    let secret = ManagedSecretValue::llm_provider_api_key("google", "private-key", None);
+    assert_eq!(
+        serde_json::to_string(&secret).unwrap(),
+        r#"{"provider_id":"google","api_key":"private-key"}"#
+    );
+    assert_eq!(
+        format!("{secret:?}"),
+        "ManagedSecret::LlmProviderApiKey { .. }"
+    );
+}
+
 /// Test to ensure that `raw_value` secrets are serialized in the format that the server expects.
 #[test]
 fn test_serialize_raw_value() {

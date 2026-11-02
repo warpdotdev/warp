@@ -45,7 +45,7 @@ fn minimum_version() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
     assert_eq!(
         CodexPluginManager::new(None, None, None).minimum_plugin_version(),
-        "0.4.2"
+        MINIMUM_PLUGIN_VERSION
     );
 }
 
@@ -225,7 +225,7 @@ fn platform_plugin_version_is_not_current_when_cache_outdated() {
 fn needs_update_true_when_enabled_and_version_outdated() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
-    write_cache_manifest(dir.path(), super::PLUGIN_NAME, "0.4.1");
+    write_cache_manifest(dir.path(), super::PLUGIN_NAME, "0.4.2");
 
     assert!(super::plugin_needs_update(
         dir.path(),

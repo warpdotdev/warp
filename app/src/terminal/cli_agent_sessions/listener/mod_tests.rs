@@ -363,3 +363,62 @@ fn oh_my_pi_end_to_end_parsing_and_handling() {
     assert_eq!(handled_stop.agent, CLIAgent::OhMyPi);
     assert_eq!(handled_stop.event, CLIAgentEventType::Stop);
 }
+
+#[test]
+fn antigravity_notifications_are_supported() {
+    assert!(is_agent_supported(&CLIAgent::Antigravity));
+    let mut handler = create_handler(&CLIAgent::Antigravity).expect("should create handler");
+
+    let start_body = r#"{"v":1,"agent":"agy","event":"session_start"}"#;
+    let parsed_start = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), start_body, false)
+        .expect("should successfully parse session_start payload");
+    assert_eq!(parsed_start.agent, CLIAgent::Antigravity);
+    assert_eq!(parsed_start.event, CLIAgentEventType::SessionStart);
+    assert!(handler.handle_event(parsed_start).is_none());
+
+    let task_started_body = r#"{"v":1,"agent":"antigravity","event":"task_started"}"#;
+    let parsed_task_started = handler
+        .try_parse(
+            Some(CLI_AGENT_NOTIFICATION_SENTINEL),
+            task_started_body,
+            false,
+        )
+        .expect("should successfully parse task_started payload");
+    assert_eq!(parsed_task_started.agent, CLIAgent::Antigravity);
+    assert_eq!(parsed_task_started.event, CLIAgentEventType::SessionStart);
+    assert!(handler.handle_event(parsed_task_started).is_none());
+
+    let stop_body = r#"{"v":1,"agent":"agy","event":"stop","session_id":"agy-123"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should successfully parse stop payload");
+    assert_eq!(parsed_stop.agent, CLIAgent::Antigravity);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert!(handler.handle_event(parsed_stop).is_some());
+
+    let task_complete_body =
+        r#"{"v":1,"agent":"antigravity","event":"task_complete","session_id":"agy-456"}"#;
+    let parsed_task_complete = handler
+        .try_parse(
+            Some(CLI_AGENT_NOTIFICATION_SENTINEL),
+            task_complete_body,
+            false,
+        )
+        .expect("should successfully parse task_complete payload");
+    assert_eq!(parsed_task_complete.agent, CLIAgent::Antigravity);
+    assert_eq!(parsed_task_complete.event, CLIAgentEventType::Stop);
+    assert!(handler.handle_event(parsed_task_complete).is_some());
+
+    let prompt_req_body = r#"{"v":1,"agent":"agy","event":"prompt_required"}"#;
+    let parsed_prompt_req = handler
+        .try_parse(
+            Some(CLI_AGENT_NOTIFICATION_SENTINEL),
+            prompt_req_body,
+            false,
+        )
+        .expect("should successfully parse prompt_required payload");
+    assert_eq!(parsed_prompt_req.agent, CLIAgent::Antigravity);
+    assert_eq!(parsed_prompt_req.event, CLIAgentEventType::NeedsInput);
+    assert!(handler.handle_event(parsed_prompt_req).is_some());
+}

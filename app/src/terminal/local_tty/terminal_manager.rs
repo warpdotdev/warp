@@ -12,11 +12,13 @@ use std::time::Duration;
 use ai::api_keys::ApiKeyManager;
 use anyhow::Context as _;
 use async_broadcast::InactiveReceiver;
+use instant::Instant;
 #[cfg(unix)]
 use nix::sys::termios::LocalFlags;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
+use uuid::Uuid;
 use warp_core::SessionId;
 use warp_errors::report_error;
 use warpui::r#async::Timer;
@@ -60,7 +62,7 @@ use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
-use crate::terminal::shell_recovery::CloudShellRecoveryRequest;
+use crate::terminal::shell_recovery::{CloudShellRecoveryRequest, ShellReplacementRequest};
 use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
@@ -212,15 +214,60 @@ struct ShellRecoveryResources {
     model_events: ModelHandle<ModelEventDispatcher>,
 }
 
-/// A replacement shell that has been spawned but has not bootstrapped yet.
+impl ShellRecoveryResources {
+    /// Makes `env` the baseline for later recoveries and returns it for the replacement shell.
+    fn adopt_environment(
+        &mut self,
+        env: HashMap<OsString, OsString>,
+    ) -> HashMap<OsString, OsString> {
+        self.original_env = env.clone();
+        env
+    }
+
+    /// Returns the baseline environment overlaid with a session's cached variables.
+    fn recovery_environment(
+        &self,
+        session_env: Option<HashMap<String, String>>,
+    ) -> HashMap<OsString, OsString> {
+        let mut env = self.original_env.clone();
+        env.extend(
+            session_env
+                .into_iter()
+                .flatten()
+                .map(|(key, value)| (key.into(), value.into())),
+        );
+        env
+    }
+}
+
+/// A shell replacement that has not finished bootstrapping.
 struct PendingShellRecovery {
     restored_working_directory: String,
     used_fallback_directory: bool,
     replacement_session_id: SessionId,
+    planned_request_id: Option<Uuid>,
 }
 
 /// Matches the deadline the cloud agent driver gives the initial shell to bootstrap.
 const REPLACEMENT_SHELL_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
+const REPLACEMENT_SHELL_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn join_event_loop(
+    handle: JoinHandle<mio_channel::Receiver<Message>>,
+    timeout: Duration,
+) -> anyhow::Result<mio_channel::Receiver<Message>> {
+    let deadline = Instant::now() + timeout;
+    while !handle.is_finished() {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "PTY event loop did not stop before timeout"
+        );
+        Timer::after(Duration::from_millis(10)).await;
+    }
+    handle
+        .join()
+        .map_err(|error| anyhow::anyhow!("PTY event loop panicked: {error:?}"))
+}
 
 /// Handles created for a local terminal manager and its surface.
 pub struct TerminalManagerInit<S> {
@@ -623,10 +670,71 @@ impl<S> TerminalManager<S> {
         S: TerminalSurface,
         <S as Entity>::Event: PtyIntentEvent,
     {
-        self.pending_shell_recovery = None;
+        let pending = self.pending_shell_recovery.take();
         self.view.update(ctx, |surface, ctx| {
-            surface.on_cloud_shell_recovery_failed(failure_class, error, ctx);
+            if let Some(request_id) = pending.and_then(|pending| pending.planned_request_id) {
+                surface.on_shell_replaced(request_id, Err(error), ctx);
+            } else {
+                surface.on_cloud_shell_recovery_failed(failure_class, error, ctx);
+            }
         });
+    }
+
+    pub(super) fn replace_shell(
+        &mut self,
+        request: ShellReplacementRequest,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) -> anyhow::Result<()>
+    where
+        S: TerminalSurface,
+        <S as Entity>::Event: PtyIntentEvent,
+    {
+        // Windows would also need its child exit watcher to wait for an in-flight exit callback.
+        anyhow::ensure!(
+            !cfg!(windows),
+            "shell replacement is not supported on Windows"
+        );
+        anyhow::ensure!(
+            self.pending_shell_recovery.is_none(),
+            "shell replacement is already pending"
+        );
+        let mut resources = self
+            .recovery_resources
+            .clone()
+            .context("shell has not started")?;
+        let starter = resources
+            .starter
+            .replacement()
+            .context("this shell cannot be replaced")?;
+        anyhow::ensure!(
+            request.working_directory.is_absolute() && request.working_directory.is_dir(),
+            "shell replacement requires an accessible absolute working directory"
+        );
+        anyhow::ensure!(
+            self.event_loop_handle.is_some(),
+            "no PTY event loop to replace"
+        );
+        self.model.lock().prepare_shell_replacement();
+        self.event_loop_tx
+            .send(Message::ShutdownForReplacement)
+            .map_err(|_| anyhow::anyhow!("PTY event loop is disconnected"))?;
+        let pending = PendingShellRecovery {
+            restored_working_directory: request.working_directory.to_string_lossy().into_owned(),
+            used_fallback_directory: false,
+            replacement_session_id: starter.session_id(),
+            planned_request_id: Some(request.id),
+        };
+        let env_vars = resources.adopt_environment(request.env_vars);
+        self.recovery_resources = Some(resources.clone());
+        self.begin_shell_replacement(
+            resources,
+            starter,
+            request.working_directory,
+            env_vars,
+            pending,
+            ctx,
+        );
+        Ok(())
     }
 
     /// Spawns a replacement shell on the exited PTY's channel. Returns `false` if this shell
@@ -648,28 +756,6 @@ impl<S> TerminalManager<S> {
             return false;
         };
 
-        // The exited loop has already broken out of its poll, so this only waits for it to
-        // deregister and hand back the channel receiver.
-        let event_loop_rx = match self
-            .event_loop_handle
-            .take()
-            .context("no PTY event loop to recover")
-            .and_then(|handle| {
-                handle
-                    .join()
-                    .map_err(|error| anyhow::anyhow!("PTY event loop panicked: {error:?}"))
-            }) {
-            Ok(event_loop_rx) => event_loop_rx,
-            Err(error) => {
-                self.fail_pending_shell_recovery(
-                    CloudAgentShellRecoveryFailureClass::EventLoopJoin,
-                    error,
-                    ctx,
-                );
-                return true;
-            }
-        };
-
         let session = request
             .session_id
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id));
@@ -688,18 +774,116 @@ impl<S> TerminalManager<S> {
                     return true;
                 }
             };
-        let mut restored_env = resources.original_env;
-        if let Some(session_env) = request.session_id.and_then(|session_id| {
+        let session_env = request.session_id.and_then(|session_id| {
             self.sessions
                 .as_ref(ctx)
                 .get_env_vars_for_session(session_id)
-        }) {
-            restored_env.extend(
-                session_env
-                    .into_iter()
-                    .map(|(key, value)| (key.into(), value.into())),
+        });
+        let restored_env = resources.recovery_environment(session_env);
+        let Some(startup_directory) = replacement_starter
+            .launch_data()
+            .maybe_convert_absolute_path(&restored_working_directory)
+        else {
+            self.fail_pending_shell_recovery(
+                CloudAgentShellRecoveryFailureClass::PtySpawn,
+                anyhow::anyhow!("failed to convert shell recovery directory"),
+                ctx,
             );
+            return true;
+        };
+        let pending = PendingShellRecovery {
+            restored_working_directory,
+            used_fallback_directory,
+            replacement_session_id: replacement_starter.session_id(),
+            planned_request_id: None,
+        };
+        self.begin_shell_replacement(
+            resources,
+            replacement_starter,
+            startup_directory,
+            restored_env,
+            pending,
+            ctx,
+        );
+        true
+    }
+
+    fn begin_shell_replacement(
+        &mut self,
+        resources: ShellRecoveryResources,
+        starter: ShellStarter,
+        working_directory: PathBuf,
+        env_vars: HashMap<OsString, OsString>,
+        pending: PendingShellRecovery,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) where
+        S: TerminalSurface,
+        <S as Entity>::Event: PtyIntentEvent,
+    {
+        let replacement_session_id = starter.session_id();
+        self.pending_shell_recovery = Some(pending);
+        let Some(handle) = self.event_loop_handle.take() else {
+            self.fail_pending_shell_recovery(
+                CloudAgentShellRecoveryFailureClass::EventLoopJoin,
+                anyhow::anyhow!("no PTY event loop to replace"),
+                ctx,
+            );
+            return;
+        };
+        #[cfg(unix)]
+        {
+            self.terminal_attributes_poller = None;
         }
+        ctx.spawn(
+            join_event_loop(handle, REPLACEMENT_SHELL_STOP_TIMEOUT),
+            move |manager, result, ctx| {
+                let Some(manager) = manager.as_any_mut().downcast_mut::<Self>() else {
+                    return;
+                };
+                if manager
+                    .pending_shell_recovery
+                    .as_ref()
+                    .is_none_or(|pending| pending.replacement_session_id != replacement_session_id)
+                {
+                    return;
+                }
+                let event_loop_rx = match result {
+                    Ok(receiver) => receiver,
+                    Err(error) => {
+                        manager.fail_pending_shell_recovery(
+                            CloudAgentShellRecoveryFailureClass::EventLoopJoin,
+                            error,
+                            ctx,
+                        );
+                        return;
+                    }
+                };
+                // Old input and Windows child-exit notifications must not reach the new shell.
+                while event_loop_rx.try_recv().is_ok() {}
+                manager.spawn_replacement_shell(
+                    resources,
+                    starter,
+                    working_directory,
+                    env_vars,
+                    event_loop_rx,
+                    ctx,
+                );
+            },
+        );
+    }
+
+    fn spawn_replacement_shell(
+        &mut self,
+        resources: ShellRecoveryResources,
+        replacement_starter: ShellStarter,
+        working_directory: PathBuf,
+        env_vars: HashMap<OsString, OsString>,
+        event_loop_rx: mio_channel::Receiver<Message>,
+        ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) where
+        S: TerminalSurface,
+        <S as Entity>::Event: PtyIntentEvent,
+    {
         let replacement_session_id = replacement_starter.session_id();
         let model = self.model();
 
@@ -713,13 +897,10 @@ impl<S> TerminalManager<S> {
             .enqueue_init_script(&replacement_starter, replacement_session_id)
             .context("failed to initialize replacement shell")
             .and_then(|_| {
-                let startup_directory = shell_launch_data
-                    .maybe_convert_absolute_path(&restored_working_directory)
-                    .context("failed to convert shell recovery directory")?;
                 Self::create_pty(
-                    Some(startup_directory),
+                    Some(working_directory),
                     replacement_starter,
-                    restored_env,
+                    env_vars,
                     model.clone(),
                     #[cfg(windows)]
                     self.event_loop_tx.clone(),
@@ -733,7 +914,7 @@ impl<S> TerminalManager<S> {
                     error,
                     ctx,
                 );
-                return true;
+                return;
             }
         };
 
@@ -751,11 +932,10 @@ impl<S> TerminalManager<S> {
             model.clone(),
             resources.channel_event_proxy,
         ));
-        self.pending_shell_recovery = Some(PendingShellRecovery {
-            restored_working_directory,
-            used_fallback_directory,
-            replacement_session_id,
-        });
+        #[cfg(feature = "integration_tests")]
+        {
+            self.pid = Some(pid);
+        }
 
         self.view.update(ctx, |surface, ctx| {
             surface.on_active_shell_launch_data_updated(Some(shell_launch_data), ctx);
@@ -784,22 +964,20 @@ impl<S> TerminalManager<S> {
                 };
                 if manager
                     .pending_shell_recovery
-                    .take_if(|pending| pending.replacement_session_id == replacement_session_id)
-                    .is_none()
+                    .as_ref()
+                    .is_none_or(|pending| pending.replacement_session_id != replacement_session_id)
                 {
                     return;
                 }
-                let _ = manager.event_loop_tx.send(Message::Shutdown);
-                manager.view.update(ctx, |surface, ctx| {
-                    surface.on_cloud_shell_recovery_failed(
-                        CloudAgentShellRecoveryFailureClass::BootstrapTimeout,
-                        anyhow::anyhow!("replacement shell did not bootstrap before timeout"),
-                        ctx,
-                    );
-                });
+                let _ = manager.event_loop_tx.send(Message::ShutdownForReplacement);
+                manager.event_loop_handle.take();
+                manager.fail_pending_shell_recovery(
+                    CloudAgentShellRecoveryFailureClass::BootstrapTimeout,
+                    anyhow::anyhow!("replacement shell did not bootstrap before timeout"),
+                    ctx,
+                );
             },
         );
-        true
     }
 
     pub(super) fn on_session_bootstrapped(
@@ -817,11 +995,15 @@ impl<S> TerminalManager<S> {
             return;
         };
         self.view.update(ctx, |surface, ctx| {
-            surface.on_cloud_shell_recovered(
-                pending.restored_working_directory,
-                pending.used_fallback_directory,
-                ctx,
-            );
+            if let Some(request_id) = pending.planned_request_id {
+                surface.on_shell_replaced(request_id, Ok(()), ctx);
+            } else {
+                surface.on_cloud_shell_recovered(
+                    pending.restored_working_directory,
+                    pending.used_fallback_directory,
+                    ctx,
+                );
+            }
         });
     }
 }
@@ -1305,3 +1487,7 @@ impl EventLoopSender for mio_channel::Sender<Message> {
             .map_err(|_| EventLoopSendError::Disconnected)
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_manager_tests.rs"]
+mod tests;

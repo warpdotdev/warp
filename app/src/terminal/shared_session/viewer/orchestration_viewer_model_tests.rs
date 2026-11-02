@@ -7,6 +7,7 @@ use warpui::{App, ModelHandle, ViewHandle};
 use super::*;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::ambient_agents::task::AgentConfigSnapshot;
+use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -21,7 +22,7 @@ fn working_states_map_to_in_progress() {
         AmbientAgentTaskState::InProgress,
     ] {
         assert_eq!(
-            conversation_status_from_state(&state),
+            state.conversation_status(),
             ConversationStatus::InProgress,
             "state={state:?}",
         );
@@ -52,11 +53,7 @@ fn settled_states_map_to_matching_conversation_status() {
         ),
     ];
     for (state, expected) in cases {
-        assert_eq!(
-            conversation_status_from_state(&state),
-            expected,
-            "state={state:?}",
-        );
+        assert_eq!(state.conversation_status(), expected, "state={state:?}",);
     }
 }
 
@@ -80,7 +77,7 @@ fn registers_child_as_remote_child_conversation() {
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
 
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
-            assert!(!entry.pane_materialization_requested);
+            assert!(!entry.materialization_metadata_ready);
             assert_eq!(entry.last_state, AmbientAgentTaskState::Queued);
         });
         fixture.model.read(&app, |model, _| {
@@ -222,13 +219,13 @@ fn child_display_name_prefers_snapshot_name_over_title() {
 // ---- Pane materialization ---------------------------------------------------
 
 #[test]
-fn requests_materialization_once_when_the_child_becomes_attachable() {
+fn stops_metadata_polling_when_the_child_becomes_attachable() {
     App::test((), |mut app| async move {
         let fixture = setup(&mut app);
         register_child(&mut app, &fixture, queued_task(CHILD_A_TASK_ID, "Worker"));
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
             assert!(
-                !entry.pane_materialization_requested,
+                !entry.materialization_metadata_ready,
                 "a child with no attachable session is not materializable yet",
             );
         });
@@ -239,10 +236,10 @@ fn requests_materialization_once_when_the_child_becomes_attachable() {
             live_task(CHILD_A_TASK_ID, "Worker", SESSION_A),
         );
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
-            assert!(entry.pane_materialization_requested);
+            assert!(entry.materialization_metadata_ready);
         });
 
-        // Re-registration must not re-request materialization.
+        // Re-registration must not restart metadata polling.
         register_child(
             &mut app,
             &fixture,
@@ -255,7 +252,7 @@ fn requests_materialization_once_when_the_child_becomes_attachable() {
 }
 
 #[test]
-fn requests_materialization_for_a_completed_child_with_a_stale_session() {
+fn stops_metadata_polling_for_a_completed_child_with_a_stale_session() {
     App::test((), |mut app| async move {
         // A completed run can still carry the session id of its finished
         // execution; the transcript decides materialization, not that id.
@@ -266,12 +263,12 @@ fn requests_materialization_for_a_completed_child_with_a_stale_session() {
         register_child(&mut app, &fixture, completed);
 
         read_child(&app, &fixture, CHILD_A_TASK_ID, |entry| {
-            assert!(entry.pane_materialization_requested);
+            assert!(entry.materialization_metadata_ready);
         });
         fixture.model.read(&app, |model, _| {
             assert!(
                 !model.has_pending_session_id_children(),
-                "a materialized child must not keep polling for metadata",
+                "a child with transcript metadata must not keep polling for metadata",
             );
         });
     });
@@ -581,9 +578,8 @@ fn registers_streamer_consumer_when_the_parent_placeholder_becomes_active() {
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();
         let parent = task_id(PARENT_TASK_ID);
-        let _model = app.add_model(|ctx| {
-            OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
-        });
+        let _model =
+            app.add_model(|ctx| OrchestrationViewerModel::new(parent, terminal_view_id, ctx));
 
         let streamer = OrchestrationEventStreamer::handle(&app);
         streamer.read(&app, |streamer, _| {
@@ -613,9 +609,8 @@ fn does_not_register_streamer_consumer_for_a_child_placeholder() {
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();
         let parent = task_id(PARENT_TASK_ID);
-        let _model = app.add_model(|ctx| {
-            OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
-        });
+        let _model =
+            app.add_model(|ctx| OrchestrationViewerModel::new(parent, terminal_view_id, ctx));
 
         BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
             let parent_conv_id =
@@ -675,7 +670,6 @@ fn test_model(
     OrchestrationViewerModel {
         parent_task_id,
         terminal_view_id: terminal_view.id(),
-        terminal_view: terminal_view.downgrade(),
         children: HashMap::new(),
         children_by_run_id: HashMap::new(),
         pending_task_ids_for_discovery: HashSet::new(),

@@ -15,8 +15,8 @@ pub(super) struct TuiUsageCreditBar {
 
 /// Pay-as-you-go spend for the current billing cycle.
 pub(super) struct TuiUsagePayAsYouGo {
-    pub(super) credits_used: i64,
-    pub(super) cost_cents: i64,
+    pub(super) credits_used: f64,
+    pub(super) cost_cents: f64,
     pub(super) has_kicked_in: bool,
 }
 
@@ -128,16 +128,13 @@ impl TuiUsageSnapshot {
                         entry.attributed_team_uid.as_deref() == Some(team_uid)
                     })
                 })
-                .fold((0i64, 0i64), |(credits, cost), entry| {
-                    (
-                        credits + i64::from(entry.credits_used),
-                        cost + i64::from(entry.cost_cents),
-                    )
+                .fold((0.0, 0.0), |(credits, cost), entry| {
+                    (credits + entry.credits_used, cost + entry.cost_cents)
                 });
             Some(TuiUsagePayAsYouGo {
                 credits_used,
                 cost_cents,
-                has_kicked_in: credits_used > 0,
+                has_kicked_in: credits_used > 0.0,
             })
         });
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::json;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message as MessageKind;
@@ -5,8 +7,8 @@ use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::update_todos::Operation;
 use warp_multi_agent_api::{
-    self as api, ExternalMessage, ExternalUser, QueryAuthor, UserQueryOrigin,
-    apply_file_diffs_result, query_author, read_files_result, user_query_origin,
+    self as api, ExternalMessage, ExternalUser, McpIntegration, McpServerIdentity, QueryAuthor,
+    UserQueryOrigin, apply_file_diffs_result, query_author, read_files_result, user_query_origin,
 };
 
 use super::super::protocol::SessionUpdate;
@@ -18,7 +20,7 @@ fn update(value: serde_json::Value) -> SessionUpdate {
 }
 
 fn mapper() -> AcpTurnMapper {
-    AcpTurnMapper::new("task-1".to_owned(), "req-1".to_owned())
+    AcpTurnMapper::new("task-1".to_owned(), "req-1".to_owned(), HashMap::new())
 }
 
 fn added_messages(action: &warp_multi_agent_api::ClientAction) -> &[warp_multi_agent_api::Message] {
@@ -381,6 +383,158 @@ fn generic_tool_calls_always_carry_args() {
     assert!(
         mcp.args
             .is_some_and(|args| args.fields.contains_key("input"))
+    );
+}
+
+/// The message an `UpdateTaskMessage` in `event` rewrites, with its mask paths.
+fn updated_message(event: &TurnEvent) -> (&warp_multi_agent_api::Message, &[String]) {
+    match &only_actions(event)[0].action {
+        Some(Action::UpdateTaskMessage(update)) => (
+            update.message.as_ref().expect("message"),
+            &update.mask.as_ref().expect("mask").paths,
+        ),
+        other => panic!("expected UpdateTaskMessage, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_calls_name_their_tool_and_server_and_take_input_that_arrives_late() {
+    let slack = McpServerIdentity {
+        display_name: "slack".to_owned(),
+        integration: McpIntegration::Slack as i32,
+        ..Default::default()
+    };
+    let mut mapper = AcpTurnMapper::new(
+        "task-1".to_owned(),
+        "req-1".to_owned(),
+        HashMap::from([("slack".to_owned(), slack.clone())]),
+    );
+    let announced = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "slack-1",
+        "title": "mcp__slack__send_message_to_thread",
+        "kind": "other",
+        "status": "pending",
+        "rawInput": {}
+    })));
+    let message_id = added_messages(&only_actions(&announced[0])[0])[0]
+        .id
+        .clone();
+    let (action_id, tool) = announced_tool(&announced[0]);
+    let Tool::CallMcpTool(mcp) = tool else {
+        panic!("expected CallMcpTool, got {tool:?}");
+    };
+    assert_eq!(mcp.name, "send_message_to_thread");
+    assert_eq!(mcp.server_identity, Some(slack.clone()));
+
+    let input = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "slack-1",
+        "rawInput": { "channel_id": "C1", "message": "Done" }
+    })));
+    assert_eq!(input.len(), 1, "{input:?}");
+    let (message, paths) = updated_message(&input[0]);
+    assert_eq!(message.id, message_id);
+    assert_eq!(paths, ["tool_call"]);
+    let Some(MessageKind::ToolCall(call)) = &message.message else {
+        panic!("expected ToolCall, got {:?}", message.message);
+    };
+    assert_eq!(call.tool_call_id, action_id);
+    let Some(Tool::CallMcpTool(mcp)) = &call.tool else {
+        panic!("expected CallMcpTool, got {:?}", call.tool);
+    };
+    assert_eq!(mcp.name, "send_message_to_thread");
+    assert_eq!(mcp.server_identity, Some(slack));
+    assert!(mcp.args.as_ref().unwrap().fields.contains_key("message"));
+
+    let unchanged = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "slack-1",
+        "status": "in_progress",
+        "rawInput": { "channel_id": "C1", "message": "Done" }
+    })));
+    assert!(unchanged.is_empty(), "{unchanged:?}");
+}
+
+#[test]
+fn a_shell_command_that_arrives_late_rewrites_the_announced_call() {
+    let mut mapper = mapper();
+    let announced = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "shell-1",
+        "title": "Terminal",
+        "kind": "execute",
+        "status": "pending",
+        "rawInput": {}
+    })));
+    let (_, tool) = announced_tool(&announced[0]);
+    assert!(matches!(tool, Tool::RunShellCommand(run) if run.command == "Terminal"));
+
+    let completed = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "shell-1",
+        "status": "completed",
+        "rawInput": { "command": "gh pr view" }
+    })));
+    // The rewritten call, boundary, its result.
+    assert_eq!(completed.len(), 3, "{completed:?}");
+    let Some(MessageKind::ToolCall(call)) = &updated_message(&completed[0]).0.message else {
+        panic!("expected ToolCall");
+    };
+    assert!(matches!(
+        &call.tool,
+        Some(Tool::RunShellCommand(run)) if run.command == "gh pr view"
+    ));
+    assert!(matches!(completed[1], TurnEvent::SegmentBoundary));
+    assert!(matches!(
+        reported_result(&completed[2]).1,
+        ToolResult::RunShellCommand(result) if result.command == "gh pr view"
+    ));
+}
+
+#[test]
+fn mcp_tool_names_match_servers_by_their_normalized_names() {
+    let factory = McpServerIdentity {
+        display_name: "warp factory".to_owned(),
+        ..Default::default()
+    };
+    let nested = McpServerIdentity {
+        display_name: "warp factory__beta".to_owned(),
+        ..Default::default()
+    };
+    let mut mapper = AcpTurnMapper::new(
+        "task-1".to_owned(),
+        "req-1".to_owned(),
+        HashMap::from([
+            ("warp factory".to_owned(), factory.clone()),
+            ("warp factory__beta".to_owned(), nested.clone()),
+        ]),
+    );
+    let mut announce = |id: &str, title: &str| {
+        let events = mapper.map_update(update(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": title,
+            "kind": "other",
+            "status": "pending"
+        })));
+        match announced_tool(&events[0]).1 {
+            Tool::CallMcpTool(mcp) => (mcp.name, mcp.server_identity),
+            other => panic!("expected CallMcpTool, got {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        announce("a", "mcp__warp_factory__send_task"),
+        ("send_task".to_owned(), Some(factory))
+    );
+    assert_eq!(
+        announce("b", "mcp__warp_factory__beta__send_task"),
+        ("send_task".to_owned(), Some(nested))
+    );
+    assert_eq!(
+        announce("c", "mcp__github__create_issue"),
+        ("tool: mcp__github__create_issue".to_owned(), None)
     );
 }
 

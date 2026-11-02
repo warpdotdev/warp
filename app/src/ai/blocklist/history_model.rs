@@ -39,6 +39,7 @@ use crate::ai::agent::{
     AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
     RequestCost, Suggestions,
 };
+use crate::ai::ambient_agents::AmbientAgentTask;
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
@@ -647,6 +648,26 @@ impl BlocklistAIHistoryModel {
             ctx,
         );
         conversation_id
+    }
+
+    /// Applies a remote child's server task snapshot to its placeholder conversation: the run's
+    /// update time (pill ordering) and its state (pill status badge).
+    pub fn apply_remote_child_task_snapshot(
+        &mut self,
+        terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
+        task: &AmbientAgentTask,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
+        }
+        self.update_conversation_status(
+            terminal_surface_id,
+            conversation_id,
+            task.state.conversation_status(),
+            ctx,
+        );
     }
 
     /// Sets the parent conversation ID on a child conversation and updates
@@ -2983,6 +3004,9 @@ impl BlocklistAIHistoryModel {
             Some(merged_conversation_data),
         )?;
         merged.reassign_exchange_ids();
+        if let Some(updated_at) = placeholder.remote_run_updated_at() {
+            merged.set_remote_run_updated_at(updated_at);
+        }
 
         if let Some(metadata) = cloud_conversation.server_metadata() {
             merged.set_server_metadata(metadata.clone());

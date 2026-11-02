@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use ai::diff_validation::{DiffDelta, ParsedDiff, V4AHunk};
 use async_io::block_on;
+use serde_json::json;
 use tempfile::NamedTempFile;
 use vec1::vec1;
+use warp_core::telemetry::TelemetryEvent;
 use warpui::App;
 
 use super::*;
@@ -17,6 +19,58 @@ fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
         DiffType::Update { deltas, .. } => deltas,
         other => panic!("Expected Update diff_type, got {other:?}"),
     }
+}
+
+#[test]
+fn v4a_mixed_hunk_match_outcomes() {
+    block_on(async {
+        let hunk = |old: &str, new: &str| V4AHunk {
+            change_context: vec![],
+            pre_context: String::new(),
+            old: old.into(),
+            new: new.into(),
+            post_context: String::new(),
+            line_data: None,
+        };
+        let requested = vec![
+            FileEdit::Edit(ParsedDiff::V4AEdit {
+                file: Some("mixed.txt".into()),
+                move_to: None,
+                hunks: vec![hunk("same", "same"), hunk("\n\n", ""), hunk("old", "new")],
+            }),
+            FileEdit::Edit(ParsedDiff::V4AEdit {
+                file: Some("success.txt".into()),
+                move_to: None,
+                hunks: vec![hunk("same", "same"), hunk("old", "new")],
+            }),
+        ];
+        let result = apply_edits_internal(requested, &SessionContext::new_for_test(), &|_| async {
+            FileReadResult::Found("same\nold\n".into())
+        })
+        .await;
+        let outcomes = result.v4a_outcomes.unwrap();
+        let event = RequestFileEditsTelemetryEvent::V4AMatchFinished(V4AMatchFinishedEvent {
+            identifiers: AIIdentifiers {
+                server_conversation_id: Some("conversation".into()),
+                ..Default::default()
+            },
+            outcomes,
+        });
+        assert_eq!(
+            event.payload(),
+            Some(json!({
+                "server_conversation_id": "conversation", "total_hunks": 5,
+                "noop_hunks": 2, "unmatched_hunks": 1,
+            }))
+        );
+        assert_eq!(result.errors.len(), 1);
+        for diff in result.diffs {
+            assert_eq!(update_deltas(&diff).len(), 1);
+            assert_eq!(update_deltas(&diff)[0].insertion, "new");
+            assert_eq!(diff.failures.as_ref().unwrap().noop_deltas, 1);
+            assert_eq!(diff.warrants_failure(), diff.file_name == "mixed.txt");
+        }
+    });
 }
 
 #[test]
@@ -871,6 +925,7 @@ fn test_apply_v4a_edits_simple_match() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "function foo() {".to_string(),
                 old: "    console.log('hello');".to_string(),
@@ -922,6 +977,7 @@ fn test_apply_v4a_edits_with_jump_context() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec!["class Foo".to_string()],
                 pre_context: "    def bar():".to_string(),
                 old: "        pass".to_string(),
@@ -967,6 +1023,7 @@ fn test_apply_v4a_edits_no_match() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "Non-existent pre context".to_string(),
                 old: "Non-existent old content".to_string(),
@@ -1016,6 +1073,7 @@ fn test_apply_v4a_edits_noop() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "Line One".to_string(),
                 old: "Line Two".to_string(),
@@ -1071,6 +1129,7 @@ fn test_apply_v4a_edits_multiline_change() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "def calculate():".to_string(),
                 old: "    x = 1\n    y = 2".to_string(),
@@ -1121,6 +1180,7 @@ fn test_apply_v4a_edits_nested_jump_context() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec!["class Outer".to_string(), "class Inner".to_string()],
                 pre_context: "        def method():".to_string(),
                 old: "            pass".to_string(),
@@ -1163,6 +1223,7 @@ fn test_apply_v4a_edits_missing_file() {
             file: Some(non_existent_file.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "pre".to_string(),
                 old: "old content".to_string(),
@@ -1208,6 +1269,7 @@ fn test_apply_v4a_edits_empty_context() {
             file: Some(file_path.clone()),
             move_to: None,
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "".to_string(),
                 old: "second".to_string(),
@@ -1258,6 +1320,7 @@ fn test_apply_v4a_rename_to_nonexistent_file() {
             file: Some(source_path.clone()),
             move_to: Some(target_path.clone()),
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "line one".to_string(),
                 old: "line two".to_string(),
@@ -1321,6 +1384,7 @@ fn test_apply_v4a_rename_to_existing_file() {
             file: Some(source_path.clone()),
             move_to: Some(target_path.clone()),
             hunks: vec![V4AHunk {
+                line_data: None,
                 change_context: vec![],
                 pre_context: "source line one".to_string(),
                 old: "source line two".to_string(),

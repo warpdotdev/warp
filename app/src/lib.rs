@@ -446,6 +446,24 @@ enum AuthInitialization {
 }
 
 impl LaunchMode {
+    /// Sets command-line launch flags so standby uses sandbox initialization without a run prompt.
+    fn command_line(command: CliCommand, global_options: GlobalOptions, debug: bool) -> Self {
+        let (is_sandboxed, computer_use_override) = match &command {
+            CliCommand::Agent(AgentCommand::Run(args)) => {
+                (args.sandboxed, args.computer_use.computer_use_override())
+            }
+            CliCommand::Agent(AgentCommand::RunCloudStandby(_)) => (true, None),
+            _ => (false, None),
+        };
+        Self::CommandLine {
+            command,
+            global_options,
+            debug,
+            is_sandboxed,
+            computer_use_override,
+        }
+    }
+
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
         match self {
             LaunchMode::App { args, .. } => Cow::Borrowed(args),
@@ -609,7 +627,14 @@ impl LaunchMode {
     fn supports_indexing(&self) -> bool {
         match self {
             LaunchMode::CommandLine { command, .. } => {
-                matches!(command, CliCommand::Agent(AgentCommand::Run { .. }))
+                // A pre-warmed sandbox indexes its repositories during preparation, so the
+                // claimed run inherits a warm index instead of rebuilding one.
+                matches!(
+                    command,
+                    CliCommand::Agent(
+                        AgentCommand::Run { .. } | AgentCommand::RunCloudStandby { .. }
+                    )
+                )
             }
             LaunchMode::RemoteServerDaemon { .. } => {
                 FeatureFlag::RemoteCodebaseIndexing.is_enabled()
@@ -816,24 +841,11 @@ pub fn run() -> Result<()> {
                     tracing_initialization.log_initialization_warning();
                     return ai::agent_sdk::run_environment_checkout(args);
                 }
-                let (is_sandboxed, computer_use_override) = match cmd.as_ref() {
-                    warp_cli::CliCommand::Agent(warp_cli::agent::AgentCommand::Run(run_args)) => (
-                        run_args.sandboxed,
-                        run_args.computer_use.computer_use_override(),
-                    ),
-                    _ => (false, None),
-                };
-
-                return run_internal(LaunchMode::CommandLine {
-                    command: cmd.as_ref().clone(),
-                    global_options: GlobalOptions {
-                        output_format: args.output_format(),
-                        api_key: args.api_key().cloned(),
-                    },
-                    debug: args.debug(),
-                    is_sandboxed,
-                    computer_use_override,
-                });
+                return run_internal(LaunchMode::command_line(
+                    cmd.as_ref().clone(),
+                    args.global_options().clone(),
+                    args.debug(),
+                ));
             }
             warp_cli::Command::DumpDebugInfo => {
                 return debug_dump::run();
@@ -1585,6 +1597,19 @@ pub(crate) fn initialize_app(
     }
     #[cfg(not(target_family = "wasm"))]
     server_api.set_ambient_agent_task_id(ambient_agent_task_id);
+    #[cfg(not(target_family = "wasm"))]
+    if let LaunchMode::CommandLine {
+        command: CliCommand::Agent(AgentCommand::RunCloudStandby(args)),
+        ..
+    } = launch_mode
+    {
+        server_api.set_prewarmed_sandbox_id(args.standby_id.clone());
+        if let Some(url) = &args.prewarmed_sandbox_control_url
+            && let Err(e) = ChannelState::override_prewarmed_sandbox_control_url(url.clone())
+        {
+            eprintln!("Error: Invalid pre-warmed sandbox control URL: {e:#}");
+        }
+    }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]
     // Refresh starts only after the authenticated server client exists; tracing initialization

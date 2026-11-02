@@ -138,6 +138,7 @@ impl Writing {
 enum ChannelResult {
     Continue,
     TerminateLoop { child_exited: bool },
+    ReplaceShell,
 }
 
 impl<P, M> EventLoop<P, M>
@@ -174,6 +175,7 @@ where
                     };
                 }
                 Message::Resize(size) => self.pty.on_resize(&size),
+                Message::ShutdownForReplacement => return ChannelResult::ReplaceShell,
                 Message::ChildExited => return ChannelResult::TerminateLoop { child_exited: true },
             }
         }
@@ -366,6 +368,7 @@ where
                 // True if the child exiting caused the event loop to wind down
                 // (e.g. CTRL D or `exit`) rather than the inverse.
                 let mut child_exited = false;
+                let mut replacing_shell = false;
 
                 'event_loop: loop {
                     // Clear the events so that we can reliably equate the absence of events
@@ -401,6 +404,10 @@ where
                             token if token == CHANNEL_TOKEN => {
                                 match self.channel_event(&mut state) {
                                     ChannelResult::Continue => {}
+                                    ChannelResult::ReplaceShell => {
+                                        replacing_shell = true;
+                                        break 'event_loop;
+                                    }
                                     ChannelResult::TerminateLoop {
                                         child_exited: exited,
                                     } => {
@@ -498,7 +505,7 @@ where
                         log::warn!("Failed to kill PTY process: {err:#}");
                     }
                 }
-                if !child_exited {
+                if !child_exited && !replacing_shell {
                     self.terminal.lock().exit(ExitReason::PtyDisconnected);
                 }
                 self.rx

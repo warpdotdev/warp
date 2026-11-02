@@ -17,7 +17,7 @@ use warp_util::path::{
 
 use crate::bootstrap::{generate_session_id, init_shell_script_for_shell};
 use crate::local_tty::docker_sandbox::DockerSandboxShellStarter;
-use crate::shell::{ShellLaunchData, ShellName, ShellType};
+use crate::shell::{ShellLaunchData, ShellName, ShellType, shell_escape_single_quotes};
 
 pub const ZSH_SHELL_PATH: &str = "/bin/zsh";
 pub const BASH_SHELL_PATH: &str = "/bin/bash";
@@ -735,15 +735,28 @@ fn arguments_for_session_spawning_command(
              * in order to show nothing to the user when we input characters. We later
              * restore the echo'ing in the bootstrap script.
              *
+             * 7. Because argv[0] is `bash` (no slash) and this isn't a login shell,
+             * bash derives `$BASH` by searching the PATH inherited from Warp. When Warp
+             * is launched from the Dock that PATH is launchd's, so `$BASH` can name a
+             * different bash than the one running (e.g. `/bin/bash` for Homebrew's
+             * bash). The rcfile therefore pins `$BASH` to the binary we exec.
+             *
              * TODO(zheng) Add error handling
              */
+            let escaped_shell_path =
+                shell_escape_single_quotes(resolved_shell_path, ShellType::Bash);
+            let set_bash_var = shell_escape_single_quotes(
+                &format!("BASH='{escaped_shell_path}'"),
+                ShellType::Bash,
+            );
             vec![
                 "-c".to_owned().into(),
                 // Keep this command up-to-date with the one in the bootstrap script
                 // Notice the first level of escaping is the double-brackets in the macro string {{}}
                 format!(
-                    r#"exec -a bash '{}' --rcfile <(echo '{}')"#,
-                    resolved_shell_path,
+                    r#"exec -a bash '{}' --rcfile <(echo '{};{}')"#,
+                    escaped_shell_path,
+                    set_bash_var,
                     init_shell_script_for_shell(ShellType::Bash, &crate::ASSETS, session_id)
                 )
                 .into(),

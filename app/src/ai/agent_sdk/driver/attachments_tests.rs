@@ -78,6 +78,55 @@ fn fake_task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
 
+#[tokio::test]
+async fn task_downloads_only_retain_successful_files_in_input_order() {
+    let dir = TempDir::new().unwrap();
+    let http = build_test_http_client();
+    let mut server = Server::new_async().await;
+    let image = server
+        .mock("GET", "/download/image-id")
+        .with_body("image bytes")
+        .create_async()
+        .await;
+    let missing = server
+        .mock("GET", "/download/missing-id")
+        .with_status(404)
+        .create_async()
+        .await;
+    let notes = server
+        .mock("GET", "/download/notes-id")
+        .with_body("notes bytes")
+        .create_async()
+        .await;
+
+    let downloaded = download_and_write_attachments(
+        vec![
+            make_attachment(&server.url(), "image-id", "../image-id_image #雪%.png"),
+            make_attachment(&server.url(), "missing-id", "missing-id_missing.pdf"),
+            make_attachment(&server.url(), "notes-id", "notes-id_notes.txt"),
+        ],
+        dir.path(),
+        &http,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(downloaded.len(), 2);
+    assert_eq!(downloaded[0].file_id, "image-id");
+    assert_eq!(downloaded[0].file_name, "image-id_image #雪%.png");
+    assert_eq!(
+        Path::new(&downloaded[0].file_path),
+        dir.path().join("image-id_image #雪%.png")
+    );
+    assert_eq!(fs::read(&downloaded[0].file_path).unwrap(), b"image bytes");
+    assert_eq!(downloaded[1].file_id, "notes-id");
+    assert_eq!(downloaded[1].file_name, "notes-id_notes.txt");
+    assert_eq!(fs::read(&downloaded[1].file_path).unwrap(), b"notes bytes");
+    image.assert_async().await;
+    missing.assert_async().await;
+    notes.assert_async().await;
+}
+
 /// Build a `MockAIClient` whose `get_handoff_snapshot_attachments` returns `attachments`.
 fn mock_client_returning(attachments: Vec<TaskAttachment>) -> Arc<MockAIClient> {
     let mut mock = MockAIClient::new();
