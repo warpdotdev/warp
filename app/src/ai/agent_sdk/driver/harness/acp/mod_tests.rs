@@ -231,8 +231,10 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                 }
             };
             async {
-                let (started, ()) =
-                    futures::join!(runner.start(&foreground, &setup_events), observe_prompt);
+                let (started, ()) = futures::join!(
+                    runner.start(None, &foreground, &setup_events),
+                    observe_prompt
+                );
                 started.unwrap();
             }
             .with_timeout(Duration::from_secs(10))
