@@ -2,7 +2,6 @@
 //! `skills/` or `agents/<name>/skills/` folder and select skills from another repository.
 
 use std::collections::HashSet;
-use std::fmt;
 
 use globset::{Glob, GlobBuilder, GlobMatcher};
 use thiserror::Error;
@@ -10,8 +9,7 @@ use yaml_rust::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust::scanner::Marker;
 use yaml_rust::{Yaml, YamlLoader};
 
-/// Extensions that mark a file directly inside a skills folder as a reference file.
-pub const SKILL_REFERENCE_FILE_EXTENSIONS: [&str; 2] = ["yaml", "yml"];
+const SKILL_REFERENCE_FILE_EXTENSIONS: [&str; 2] = ["yaml", "yml"];
 
 const SOURCE_KEY: &str = "source";
 const INCLUDE_KEY: &str = "include";
@@ -81,12 +79,6 @@ impl SkillSourceForge {
     }
 }
 
-impl fmt::Display for SkillSourceForge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.token())
-    }
-}
-
 /// The revision of a skill source to load.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SkillSourceRef {
@@ -127,8 +119,7 @@ impl SkillReferenceEntry {
         }
     }
 
-    /// The compiled matcher for glob entries; `None` for names and paths. `*` matches within one
-    /// path segment and `**` across segments.
+    /// The compiled matcher for glob entries; `None` for names and paths.
     pub fn glob_matcher(&self) -> Option<GlobMatcher> {
         match self {
             Self::NameGlob(pattern) | Self::PathGlob(pattern) => compile_glob(pattern)
@@ -159,12 +150,6 @@ impl SkillReferenceEntry {
             (false, true) => Self::Path(value),
             (false, false) => Self::Name(value),
         })
-    }
-}
-
-impl fmt::Display for SkillReferenceEntry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.value())
     }
 }
 

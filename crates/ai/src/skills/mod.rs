@@ -19,9 +19,8 @@ pub use read_skills::{
     read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 pub use references::{
-    SKILL_REFERENCE_FILE_EXTENSIONS, SkillReferenceEntry, SkillReferenceFile,
-    SkillReferenceParseError, SkillSource, SkillSourceForge, SkillSourceRef,
-    is_skill_reference_file_name, parse_skill_reference_file,
+    SkillReferenceEntry, SkillReferenceFile, SkillReferenceParseError, SkillSource,
+    SkillSourceForge, SkillSourceRef, is_skill_reference_file_name, parse_skill_reference_file,
 };
 pub use skill_provider::{
     SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillProviderDefinition, SkillScope,
