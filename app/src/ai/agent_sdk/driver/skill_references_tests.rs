@@ -384,23 +384,55 @@ fn every_failure_is_recorded_and_the_rest_still_loads() {
 
 #[cfg(unix)]
 #[test]
-fn skills_that_symlink_outside_their_checkout_are_rejected() {
+fn skills_that_reach_outside_their_checkout_are_rejected() {
+    use std::os::unix::fs::symlink;
     let fixture = Fixture::new(&[(
         "skills/shared.yaml",
-        "source: acme/shared\ninclude: [skills/inside, skills/escape]\n",
+        "source: acme/shared\ninclude: [skills/inside, skills/escape, absolute/SKILL.md, \
+         relative/SKILL.md, nested/SKILL.md, outside]\n",
     )]);
-    write_skill(&fixture.root.join("outside"));
+    let outside = fixture.root.join("outside");
+    write_skill(&outside);
     let checkout = fixture.root.join("out/sources/0-shared");
-    fs::create_dir_all(checkout.join("skills")).unwrap();
-    std::os::unix::fs::symlink(fixture.root.join("outside"), checkout.join("skills/escape"))
-        .unwrap();
-    let (_, report) = fixture.resolve(GITHUB, &[("shared", Source::Skills(&["skills/inside"]))]);
-    assert!(checkout.join("skills/inside/SKILL.md").is_file());
+    for folder in ["skills/inside", "nested"] {
+        write_skill(&checkout.join(folder));
+    }
+    for folder in [
+        "absolute",
+        "relative",
+        "nested/docs",
+        ".agents/skills/outside",
+    ] {
+        fs::create_dir_all(checkout.join(folder)).unwrap();
+    }
+    let outside_skill = outside.join(SKILL_FILE);
+    for (target, link) in [
+        // A link that stays inside the skill is fine.
+        (Path::new(SKILL_FILE), "skills/inside/alias.md"),
+        (&outside, "skills/escape"),
+        (&outside_skill, "absolute/SKILL.md"),
+        (
+            Path::new("../../../../outside/SKILL.md"),
+            "relative/SKILL.md",
+        ),
+        (&outside_skill, "nested/docs/secret.md"),
+        // Name lookup never reads a `SKILL.md` from outside.
+        (&outside_skill, ".agents/skills/outside/SKILL.md"),
+    ] {
+        symlink(target, checkout.join(link)).unwrap();
+    }
+    assert!(checkout.join("relative/SKILL.md").is_file());
+    let (_, report) = fixture.resolve(GITHUB, &[("shared", Source::Skills(&[]))]);
     assert_eq!(loaded(&report.references[0]), ["skills/inside"]);
-    assert_eq!(
-        unresolved(&report.references[0]),
-        [("skills/escape", UnresolvedReason::NoMatch)]
-    );
+    let escaped = [
+        "skills/escape",
+        "absolute/SKILL.md",
+        "relative/SKILL.md",
+        "nested/SKILL.md",
+        "outside",
+    ]
+    .map(|entry| (entry, UnresolvedReason::NoMatch));
+    assert_eq!(unresolved(&report.references[0]), escaped);
 }
 
 #[test]

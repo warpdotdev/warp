@@ -518,8 +518,6 @@ fn materialize(
                     Some(UnresolvedReason::Collision)
                 } else if claimed.contains(&candidate.name) {
                     continue;
-                } else if !is_within(&checkout_dir, &skill_dir) {
-                    Some(UnresolvedReason::NoMatch)
                 } else if !is_valid_link_name(&candidate.name)
                     || fs::create_dir_all(&generated)
                         .and_then(|()| create_symlink(&skill_dir, &generated.join(&candidate.name)))
@@ -634,6 +632,7 @@ fn standard_skills(root: &Path) -> Vec<(String, String)> {
             .collect::<Vec<_>>();
         dirs.sort();
         skills.extend(dirs.into_iter().filter_map(|dir| {
+            is_contained(root, &dir).then_some(())?;
             let name = parse_skill(&dir.join(SKILL_FILE)).ok()?.name;
             names.insert(name.clone()).then_some(())?;
             Some((name, relative(root, &dir)?))
@@ -645,7 +644,7 @@ fn standard_skills(root: &Path) -> Vec<(String, String)> {
 /// The skill in `rel_dir`, as `(name, folder)`.
 fn skill_at(root: &Path, rel_dir: String) -> Result<(String, String), UnresolvedReason> {
     let skill_file = root.join(&rel_dir).join(SKILL_FILE);
-    if !skill_file.is_file() {
+    if !skill_file.is_file() || !is_contained(root, &root.join(&rel_dir)) {
         return Err(UnresolvedReason::NoMatch);
     }
     let skill = parse_skill(&skill_file).map_err(|_| UnresolvedReason::InvalidSkill)?;
@@ -703,12 +702,27 @@ fn relative(root: &Path, path: &Path) -> Option<String> {
     Some(path.strip_prefix(root).ok()?.to_str()?.replace('\\', "/"))
 }
 
-/// Whether `dir` resolves inside `root`, so a symlinked folder can't select files from elsewhere.
-fn is_within(root: &Path, dir: &Path) -> bool {
-    match (root.canonicalize(), dir.canonicalize()) {
-        (Ok(root), Ok(dir)) => dir.starts_with(root),
-        _ => false,
-    }
+/// Whether the skill folder `dir` and every symlink reachable in it resolve inside `root`, so a
+/// source can't expose files from elsewhere on the machine. A folder too large to check, or with
+/// a dangling or looping link, doesn't count.
+fn is_contained(root: &Path, dir: &Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let inside = |path: &Path| {
+        path.canonicalize()
+            .is_ok_and(|path| path.starts_with(&root))
+    };
+    let mut entries = WalkDir::new(dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != ".git");
+    inside(dir)
+        && entries
+            .by_ref()
+            .take(MAX_WALKED_ENTRIES)
+            .all(|entry| entry.is_ok_and(|entry| !entry.path_is_symlink() || inside(entry.path())))
+        && entries.next().is_none()
 }
 
 /// Whether a skill name can name a folder; names come from untrusted frontmatter.
