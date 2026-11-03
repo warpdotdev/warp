@@ -1168,17 +1168,31 @@ fn uncached_sha_fetch_avoids_later_default_history_and_preserves_failures() {
             assert_eq!(results[0].failure, Some(CheckoutFailureKind::Checkout));
             assert_eq!(git(&target, &["rev-parse", "HEAD"]), base);
 
-            // A commit the remote lacks fails the checkout; a remote that can't be reached fails
-            // the clone.
+            // On either path, a commit the remote lacks fails the checkout and a remote that can't
+            // be reached fails the clone.
             let absent = "0123456789abcdef".repeat(3)[..40].to_owned();
-            let pinned = |name: &str| {
-                fixture.request(name, Some(RepositoryHeadRef::CommitSha(absent.clone())))
+            let modes = if cfg!(any(target_os = "linux", target_os = "macos")) {
+                vec![false, true]
+            } else {
+                vec![false]
             };
-            let results = checkout_batch(&fixture.batch(vec![pinned("absent")]), None).unwrap();
-            assert_eq!(results[0].failure, Some(CheckoutFailureKind::Checkout));
+            let pinned_failure = |name: &str, cached: bool| {
+                let request = fixture.request(
+                    &format!("{name}-{cached}"),
+                    Some(RepositoryHeadRef::CommitSha(absent.clone())),
+                );
+                let root = cached.then(optional_mirror_root).flatten();
+                checkout_batch(&fixture.batch(vec![request]), root.as_deref()).unwrap()[0].failure
+            };
+            for &cached in &modes {
+                let failure = pinned_failure("absent", cached);
+                assert_eq!(failure, Some(CheckoutFailureKind::Checkout), "{cached}");
+            }
             fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
-            let results = checkout_batch(&fixture.batch(vec![pinned("offline")]), None).unwrap();
-            assert_eq!(results[0].failure, Some(CheckoutFailureKind::Clone));
+            for &cached in &modes {
+                let failure = pinned_failure("offline", cached);
+                assert_eq!(failure, Some(CheckoutFailureKind::Clone), "{cached}");
+            }
         },
     );
 }
