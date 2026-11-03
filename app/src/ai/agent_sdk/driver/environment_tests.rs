@@ -1273,6 +1273,7 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
             Path::new("/private/a path/requests.json"),
             Path::new("/private/a path/report.json"),
             true,
+            false,
             shell,
         );
         assert!(command.contains("environment-checkout --requests-file"));
@@ -1280,6 +1281,32 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
         assert!(!command.contains("github.com") && !command.contains("sh -c"));
         assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
         assert!(command.ends_with(" --remove-origins-only"));
+    }
+}
+
+#[test]
+fn only_skill_source_checkouts_run_under_legacy_preparation() {
+    let legacy = "env OZ_REPOSITORY_PREPARATION_MODE=legacy OZ_REPOSITORY_PREPARATION_FILE= \
+                  WARP_EXECUTION_ID= '/oz' environment-checkout";
+    for shell in [
+        ShellType::Bash,
+        ShellType::Zsh,
+        ShellType::Fish,
+        ShellType::PowerShell,
+    ] {
+        for skill_sources in [false, true] {
+            let command = build_checkout_helper_command(
+                Path::new("/oz"),
+                Path::new("/requests.json"),
+                Path::new("/report.json"),
+                false,
+                skill_sources,
+                shell,
+            );
+            let expected = skill_sources && shell != ShellType::PowerShell;
+            assert_eq!(command.starts_with(legacy), expected, "{command}");
+            assert_eq!(command.contains("PREPARATION"), expected, "{command}");
+        }
     }
 }
 

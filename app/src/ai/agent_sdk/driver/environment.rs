@@ -30,7 +30,9 @@ use super::environment_checkout_protocol::{
     CloneFailureIdentityDiagnostics, ResolvedHeads, parse_resolved_head_sha,
     sanitize_git_author_name, sanitize_git_credential_username,
 };
-use super::environment_preparation::{PreparationPolicy, PreparationRepository};
+use super::environment_preparation::{
+    FILE_ENV, MODE_ENV, PreparationPolicy, PreparationRepository,
+};
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, failure_output, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -1025,7 +1027,7 @@ async fn remove_repository_origins_from_repos(
         .cloned()
         .collect::<Vec<_>>();
     let batch = checkout_requests_batch(&selected, working_dir)?;
-    let result = execute_checkout_helper(&batch, true, spawner)
+    let result = execute_checkout_helper(&batch, true, false, spawner)
         .await
         .map_err(|error| match error {
             error @ PrepareEnvironmentError::CheckoutHelperTimedOut { .. } => error,
@@ -1060,6 +1062,7 @@ fn build_checkout_helper_command(
     requests_file: &Path,
     report_file: &Path,
     remove_origins_only: bool,
+    legacy_preparation: bool,
     shell_type: ShellType,
 ) -> String {
     let quote = |path: &Path| {
@@ -1068,10 +1071,13 @@ fn build_checkout_helper_command(
             shell_escape_single_quotes(&path.to_string_lossy(), shell_type)
         )
     };
-    let prefix = if shell_type == ShellType::PowerShell {
-        "& "
-    } else {
-        ""
+    let prefix = match shell_type {
+        // PowerShell can't scope variables to one command, so it keeps the session's preparation.
+        ShellType::PowerShell => "& ".to_owned(),
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish if legacy_preparation => {
+            format!("env {MODE_ENV}=legacy {FILE_ENV}= WARP_EXECUTION_ID= ")
+        }
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish => String::new(),
     };
     let operation = if remove_origins_only {
         " --remove-origins-only"
@@ -1229,6 +1235,7 @@ async fn await_checkout_helper<T>(
 async fn execute_checkout_helper(
     batch: &CheckoutBatch,
     remove_origins_only: bool,
+    legacy_preparation: bool,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<CheckoutHelperResult, PrepareEnvironmentError> {
     #[cfg(unix)]
@@ -1262,6 +1269,7 @@ async fn execute_checkout_helper(
         &requests_file,
         &report_file,
         remove_origins_only,
+        legacy_preparation,
         active_shell_type(spawner).await,
     );
     let result = await_checkout_helper(
@@ -1288,8 +1296,11 @@ pub(super) fn checkout_skill_sources(
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Option<CheckoutReport>> + use<> {
     let spawner = ctx.spawner();
+    // The execution preparation policy covers only the run's own repositories, so skill sources
+    // check out under legacy preparation instead. Credentials are unchanged.
+    let legacy_preparation = true;
     async move {
-        match execute_checkout_helper(&batch, false, &spawner).await {
+        match execute_checkout_helper(&batch, false, legacy_preparation, &spawner).await {
             Ok(result) => result.report,
             Err(error) => {
                 log::warn!("Skill source checkout did not run: {error}");
@@ -1312,7 +1323,7 @@ async fn clone_checkout_requests(
     let CheckoutHelperResult {
         command_result,
         mut report,
-    } = execute_checkout_helper(&batch, false, spawner).await?;
+    } = execute_checkout_helper(&batch, false, false, spawner).await?;
     let identity_diagnostics = report
         .as_mut()
         .and_then(|report| report.identity_diagnostics.take())
