@@ -48,12 +48,32 @@
       include: [{kind: "name_glob", value: "*"}, {kind: "name_glob", value: "tool-?"}, {kind: "name_glob", value: "[a-c]*"}, {kind: "path_glob", value: "**/review-*"}]
       exclude: [{kind: "path_glob", value: "experimental/**"}]
 
+- name: mapping_ref_with_at
+  input: "source: {owner: acme, repo: shared-skills, ref: feature@2026}\ninclude: [deploy]\n"
+  expected:
+    reference:
+      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "feature@2026"}}
+      include: [{kind: "name", value: "deploy"}]
+      exclude: []
+
+- name: path_root_skill
+  input: "source: acme/shared-skills\ninclude: [./SKILL.md]\n"
+  expected:
+    reference:
+      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: null}
+      include: [{kind: "path", value: "./SKILL.md"}]
+      exclude: []
+
 - name: invalid_yaml_duplicate_key
   input: "source: acme/one\nsource: acme/two\ninclude: [safe-secrets]\n"
   expected: {error: invalid_yaml}
 
 - name: yaml_alias_unquoted_star
   input: "source: acme/shared-skills\ninclude:\n  - *-review\n"
+  expected: {error: yaml_alias}
+
+- name: yaml_alias_anchor
+  input: "source: &repo acme/shared-skills\ninclude: [safe-secrets]\nexclude:\n  - *repo\n"
   expected: {error: yaml_alias}
 
 - name: unknown_key_source_name
@@ -94,6 +114,10 @@
 
 - name: invalid_glob_unclosed_class
   input: "source: acme/shared-skills\ninclude: [\"[review\"]\n"
+  expected: {error: invalid_glob}
+
+- name: invalid_glob_reversed_range
+  input: "source: acme/shared-skills\ninclude: [\"[z-a]*\"]\n"
   expected: {error: invalid_glob}
 
 - name: absolute_path
