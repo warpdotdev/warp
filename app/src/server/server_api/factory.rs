@@ -27,7 +27,7 @@ pub struct UpsertedRunner {
     pub is_update: bool,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 #[derive(serde::Deserialize)]
 struct FactoryGitTokenResponse {
     token: String,
@@ -61,7 +61,7 @@ pub trait FactoryClient: 'static + Send + Sync {
     async fn delete_runner(&self, uid: String) -> Result<String>;
 
     /// Mint a git access jwt token for the definition of a factory
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     async fn get_factory_git_token(&self, uid: String) -> Result<String>;
 }
 
