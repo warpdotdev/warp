@@ -5738,7 +5738,9 @@ impl CodeReviewView {
             }
             CodeEditorEvent::DiffUpdated => {
                 if Self::effective_diff_layout(ctx).is_side_by_side() {
-                    self.sync_split_pane(&file_path, ctx);
+                    if self.sync_split_pane(&file_path, ctx) {
+                        self.refresh_after_baseline_created(ctx);
+                    }
                     self.invalidate_file_height(&file_path, ctx);
                 }
             }

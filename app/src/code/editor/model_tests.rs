@@ -1458,3 +1458,24 @@ fn test_split_baseline_fills_survive_selection_changes() {
         assert_rows_aligned(&app, &modified, &baseline, &alignment);
     })
 }
+
+#[test]
+fn test_split_alignment_counts_lines_with_and_without_a_trailing_newline() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        for (base_text, current_text) in [("a\nb\nc\n", "a\nB\nc\n"), ("a\nb\nc", "a\nB\nc")] {
+            let modified =
+                mock_model_with_diff(&mut app, base_text, current_text, ContentVersion::new());
+            layout_model(&mut app, &modified).await;
+            compute_diff_and_expand(&mut app, &modified).await;
+            let alignment = app.read(|ctx| modified.as_ref(ctx).split_diff_alignment(ctx));
+            assert_eq!(
+                alignment.rows().len(),
+                current_text.lines().count(),
+                "{current_text:?}"
+            );
+            assert!(alignment.base_gaps().is_empty(), "{current_text:?}");
+            assert!(alignment.modified_gaps().is_empty(), "{current_text:?}");
+        }
+    })
+}

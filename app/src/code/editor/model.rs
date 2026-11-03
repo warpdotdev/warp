@@ -1358,10 +1358,14 @@ impl CodeEditorModel {
     /// Aligns this editor's base and current text into the rows of a split diff.
     pub fn split_diff_alignment(&self, ctx: &AppContext) -> DiffAlignment {
         let diff = self.diff.as_ref(ctx);
+        // Both counts follow `str::lines`, where a trailing newline ends the last line rather than
+        // starting an empty one. `base_line_count` counts that empty line, which would leave a
+        // phantom removed row at the end of the base pane.
+        let base_line_count = diff.base().map_or(0, |base| base.as_str().lines().count());
         let modified_line_count = self.content.as_ref(ctx).text().as_str().lines().count();
         DiffAlignment::new(
             diff.diff_status().change_spans(),
-            diff.base_line_count(),
+            base_line_count,
             modified_line_count,
         )
     }

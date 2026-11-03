@@ -5,11 +5,12 @@ use warp_editor::render::model::{
     BlockItem, HitTestOptions, LineCount, Location, RenderLineLocation,
 };
 use warpui::units::Pixels;
-use warpui::{AppContext, ViewContext};
+use warpui::{AppContext, ModelHandle, ViewContext};
 
 use super::{CodeReviewView, CodeReviewViewState, FILE_HEADER_HEIGHT};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::model::CodeEditorModel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeReviewVisibleAnchorForTest {
@@ -415,16 +416,14 @@ impl CodeReviewView {
             .clone();
         let alignment = modified_model.as_ref(ctx).split_diff_alignment(ctx);
 
-        let line_top =
-            |model: &warpui::ModelHandle<crate::code::editor::model::CodeEditorModel>,
-             line: usize| {
-                let render_state = model.as_ref(ctx).render_state().as_ref(ctx);
-                render_state
-                    .vertical_offset_at_render_location(RenderLineLocation::Current(
-                        LineCount::from(line),
-                    ))
-                    .map(|offset| offset + render_state.viewport().scroll_top())
-            };
+        let line_top = |model: &ModelHandle<CodeEditorModel>, line: usize| {
+            let render_state = model.as_ref(ctx).render_state().as_ref(ctx);
+            render_state
+                .vertical_offset_at_render_location(RenderLineLocation::Current(LineCount::from(
+                    line,
+                )))
+                .map(|offset| offset + render_state.viewport().scroll_top())
+        };
 
         let mut compared = 0;
         let mut misaligned = Vec::new();

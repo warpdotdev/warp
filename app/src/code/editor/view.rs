@@ -33,6 +33,7 @@ use warp_editor::render::model::{
 use warp_editor::search::{MATCH_FILL, SELECTED_MATCH_FILL, SearchEvent, Searcher};
 use warp_util::content_version::ContentVersion;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::new_scrollable::{
     AxisConfiguration, DualAxisConfig, NewScrollableElement, ScrollableAppearance,
 };
@@ -1640,7 +1641,7 @@ impl CodeEditorView {
     /// `removed_lines`, or clears that with `None`.
     pub fn set_split_baseline_removed_lines(
         &mut self,
-        removed_lines: Option<&[std::ops::Range<usize>]>,
+        removed_lines: Option<&[Range<usize>]>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.split_baseline_diff_status = removed_lines.map(DiffStatus::for_split_baseline);
@@ -2251,10 +2252,7 @@ impl View for CodeEditorView {
         "CodeEditorView"
     }
 
-    fn accessibility_contents(
-        &self,
-        app: &AppContext,
-    ) -> Option<warpui::accessibility::AccessibilityContent> {
+    fn accessibility_contents(&self, app: &AppContext) -> Option<AccessibilityContent> {
         let (label, help) = match self.model.as_ref(app).diff_decoration_mode() {
             DiffDecorationMode::Unified => return None,
             DiffDecorationMode::SplitBaseline { .. } => (
@@ -2266,10 +2264,10 @@ impl View for CodeEditorView {
                 "Modified file in a split diff. Blank rows stand for lines that exist only in the original file.",
             ),
         };
-        Some(warpui::accessibility::AccessibilityContent::new(
+        Some(AccessibilityContent::new(
             label,
             help,
-            warpui::accessibility::WarpA11yRole::TextareaRole,
+            WarpA11yRole::TextareaRole,
         ))
     }
 

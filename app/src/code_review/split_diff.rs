@@ -13,6 +13,7 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::content::text::LineCount;
 use warp_editor::multiline::{LF, MultilineString};
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::LineCount as RenderLineCount;
 use warp_util::content_version::ContentVersion;
 use warpui::{AppContext, SingletonEntity as _, ViewContext, ViewHandle};
 
@@ -21,7 +22,7 @@ use super::{
     CodeReviewViewEvent, CodeReviewViewState, ShowCommentEditor,
 };
 use crate::code::diff_layout::DiffLayout;
-use crate::code::editor::diff_alignment::DiffAlignment;
+use crate::code::editor::diff_alignment::{ChangeSpan, DiffAlignment};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::DiffDecorationMode;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
@@ -29,6 +30,7 @@ use crate::code::editor::{EditorReviewComment, GutterHoverTarget};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::comments::AttachedReviewCommentTarget;
 use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
 use crate::pane_group::PaneEvent;
 use crate::settings::CodeSettings;
 
@@ -50,22 +52,43 @@ impl CodeReviewView {
             CodeReviewViewState::Loaded(loaded) => {
                 loaded.file_states.keys().cloned().collect::<Vec<_>>()
             }
-            _ => return,
+            CodeReviewViewState::None
+            | CodeReviewViewState::NoRepoFound
+            | CodeReviewViewState::Error(_) => return,
         };
+        let mut created_pane = false;
         for (index, file_path) in file_paths.iter().enumerate() {
-            self.sync_split_pane(file_path, ctx);
+            created_pane |= self.sync_split_pane(file_path, ctx);
             self.viewported_list_state
                 .invalidate_height_for_index(index);
+        }
+        if created_pane {
+            self.refresh_after_baseline_created(ctx);
+        }
+        // Panes were added or dropped, so an open query's matches belong to stale editors.
+        if self.find_model.as_ref(ctx).is_find_bar_open()
+            && FeatureFlag::CodeReviewFind.is_enabled()
+        {
+            let editors = self.editor_handles();
+            self.find_model.update(ctx, |model, ctx| {
+                model.run_search(editors, ctx);
+            });
         }
         ctx.notify();
     }
 
+    /// A new base pane starts without the comments already attached to its removed lines.
+    pub(super) fn refresh_after_baseline_created(&mut self, ctx: &mut ViewContext<Self>) {
+        self.update_editor_comment_markers(ctx);
+    }
+
     /// Brings one file's panes in line with the current layout and the modified pane's latest
-    /// diff: creates, refills or drops the base pane, and re-aligns both panes.
-    pub(super) fn sync_split_pane(&mut self, file_path: &str, ctx: &mut ViewContext<Self>) {
+    /// diff: creates, refills or drops the base pane, and re-aligns both panes. Returns whether a
+    /// new base pane was created.
+    pub(super) fn sync_split_pane(&mut self, file_path: &str, ctx: &mut ViewContext<Self>) -> bool {
         let split = Self::effective_diff_layout(ctx).is_side_by_side();
         let Some(editor_state) = self.editor_state_mut(file_path) else {
-            return;
+            return false;
         };
         let modified = editor_state.editor.as_ref(ctx).editor().clone();
 
@@ -75,7 +98,7 @@ impl CodeReviewView {
                     editor.set_diff_decoration_mode(DiffDecorationMode::Unified, ctx);
                 });
             }
-            return;
+            return false;
         }
 
         let Some(base) = modified
@@ -87,10 +110,10 @@ impl CodeReviewView {
             .base()
         else {
             // The diff base arrives with the first diff, which triggers another sync.
-            return;
+            return false;
         };
 
-        let baseline = match self
+        let (baseline, created) = match self
             .editor_state_mut(file_path)
             .and_then(|s| s.baseline.take())
         {
@@ -99,9 +122,9 @@ impl CodeReviewView {
                     fill_baseline(&pane.editor, &base, ctx);
                     pane.base = base;
                 }
-                pane
+                (pane, false)
             }
-            None => self.create_baseline_pane(file_path, base, ctx),
+            None => (self.create_baseline_pane(file_path, base, ctx), true),
         };
 
         modified.update(ctx, |editor, ctx| {
@@ -119,6 +142,7 @@ impl CodeReviewView {
         if let Some(editor_state) = self.editor_state_mut(file_path) {
             editor_state.baseline = Some(baseline);
         }
+        created
     }
 
     fn create_baseline_pane(
@@ -203,12 +227,17 @@ impl CodeReviewView {
                 };
                 let local_editor = editor_state.editor.clone();
                 let model = local_editor.as_ref(ctx).editor().as_ref(ctx).model.clone();
-                let Some(line) = comment.line.line_number().and_then(|base_line| {
-                    model
-                        .as_ref(ctx)
-                        .diff()
-                        .as_ref(ctx)
-                        .base_line_index_to_line_location(base_line.as_usize())
+                let Some(base_line) = comment.line.line_number().map(RenderLineCount::as_usize)
+                else {
+                    return;
+                };
+                let removed_line = model
+                    .as_ref(ctx)
+                    .diff()
+                    .as_ref(ctx)
+                    .base_line_index_to_line_location(base_line);
+                let Some(line) = removed_line.or_else(|| {
+                    unchanged_line_location(&model.as_ref(ctx).split_diff_alignment(ctx), base_line)
                 }) else {
                     return;
                 };
@@ -273,7 +302,27 @@ impl CodeReviewView {
             CodeEditorEvent::Focused => {
                 ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::FocusSelf));
             }
-            _ => {}
+            // The base pane is read-only and has no diff of its own, so these need no routing.
+            CodeEditorEvent::ContentChanged { .. }
+            | CodeEditorEvent::UnifiedDiffComputed
+            | CodeEditorEvent::SelectionChanged
+            | CodeEditorEvent::SelectionStart
+            | CodeEditorEvent::SelectionEnd
+            | CodeEditorEvent::CopiedEmptyText
+            | CodeEditorEvent::VimEscapeInNormalMode
+            | CodeEditorEvent::EscapePressed
+            | CodeEditorEvent::DiffUpdated
+            | CodeEditorEvent::DiffReverted
+            | CodeEditorEvent::CommentEditorOpened
+            | CodeEditorEvent::ViewportUpdated
+            | CodeEditorEvent::DelayedRenderingFlushed
+            | CodeEditorEvent::LayoutInvalidated
+            | CodeEditorEvent::MouseHovered { .. }
+            | CodeEditorEvent::VimGotoDefinition
+            | CodeEditorEvent::VimFindReferences
+            | CodeEditorEvent::VimShowHover => {}
+            #[cfg(windows)]
+            CodeEditorEvent::WindowsCtrlC { .. } => {}
         }
     }
 
@@ -281,26 +330,20 @@ impl CodeReviewView {
     fn modified_hunk_for_base_lines(
         &mut self,
         file_path: &str,
-        base_lines: &Range<warp_editor::render::model::LineCount>,
+        base_lines: &Range<RenderLineCount>,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<Range<warp_editor::render::model::LineCount>> {
+    ) -> Option<Range<RenderLineCount>> {
         let editor_state = self.editor_state_mut(file_path)?;
         let modified = editor_state.editor.as_ref(ctx).editor().clone();
-        let base_line = base_lines.start.as_usize();
-        modified
+        let spans = modified
             .as_ref(ctx)
             .model
             .as_ref(ctx)
             .diff()
             .as_ref(ctx)
             .diff_status()
-            .change_spans()
-            .into_iter()
-            .find(|span| span.base.contains(&base_line))
-            .map(|span| {
-                warp_editor::render::model::LineCount::from(span.modified.start)
-                    ..warp_editor::render::model::LineCount::from(span.modified.end)
-            })
+            .change_spans();
+        modified_range_for_base_line(&spans, base_lines.start.as_usize())
     }
 
     /// Shows the comments on removed lines in the base pane, where those lines are drawn.
@@ -357,9 +400,42 @@ impl CodeReviewView {
             CodeReviewViewState::Loaded(loaded) => {
                 loaded.file_states.get_mut(file_path)?.editor_state.as_mut()
             }
-            _ => None,
+            CodeReviewViewState::None
+            | CodeReviewViewState::NoRepoFound
+            | CodeReviewViewState::Error(_) => None,
         }
     }
+}
+
+/// The modified-pane lines of the change that removed or replaced `base_line`.
+fn modified_range_for_base_line(
+    spans: &[ChangeSpan],
+    base_line: usize,
+) -> Option<Range<RenderLineCount>> {
+    spans
+        .iter()
+        .find(|span| span.base.contains(&base_line))
+        .map(|span| {
+            RenderLineCount::from(span.modified.start)..RenderLineCount::from(span.modified.end)
+        })
+}
+
+/// The modified-pane location of an unchanged base line, which is the line on the same row.
+fn unchanged_line_location(
+    alignment: &DiffAlignment,
+    base_line: usize,
+) -> Option<EditorLineLocation> {
+    let row = alignment
+        .rows()
+        .get(alignment.row_for_base_line(base_line)?)?;
+    if row.is_change {
+        return None;
+    }
+    let line = row.modified?;
+    Some(EditorLineLocation::Current {
+        line_number: RenderLineCount::from(line),
+        line_range: RenderLineCount::from(line)..RenderLineCount::from(line + 1),
+    })
 }
 
 fn fill_baseline(
@@ -395,9 +471,8 @@ fn baseline_line_for_removed(
         .find(|span| span.base.contains(&base_line))
         .map_or(base_line..base_line + 1, |span| span.base);
     Some(EditorLineLocation::Current {
-        line_number: warp_editor::render::model::LineCount::from(base_line),
-        line_range: warp_editor::render::model::LineCount::from(line_range.start)
-            ..warp_editor::render::model::LineCount::from(line_range.end),
+        line_number: RenderLineCount::from(base_line),
+        line_range: RenderLineCount::from(line_range.start)..RenderLineCount::from(line_range.end),
     })
 }
 
@@ -406,12 +481,12 @@ fn apply_alignment_to_baseline(
     alignment: &DiffAlignment,
     ctx: &mut ViewContext<CodeReviewView>,
 ) {
-    let mode = DiffDecorationMode::SplitBaseline {
-        removed_lines: alignment.changed_base_lines(),
-        gaps: alignment.base_gaps(),
-    };
     let removed_lines = alignment.changed_base_lines();
     let code_editor = editor.as_ref(ctx).editor().clone();
+    let mode = DiffDecorationMode::SplitBaseline {
+        removed_lines: removed_lines.clone(),
+        gaps: alignment.base_gaps(),
+    };
     code_editor.update(ctx, |editor, ctx| {
         editor.set_split_baseline_removed_lines(Some(&removed_lines), ctx);
         editor.set_diff_decoration_mode(mode, ctx);
@@ -465,3 +540,7 @@ fn mirror_hidden_lines(
         });
     });
 }
+
+#[cfg(test)]
+#[path = "split_diff_tests.rs"]
+mod tests;

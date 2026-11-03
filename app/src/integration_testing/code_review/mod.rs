@@ -2,7 +2,9 @@ use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
 use warpui::{App, ViewHandle, WindowId, async_assert};
 
 pub use crate::code::diff_layout::DiffLayout;
+use crate::code::diff_layout::switch_diff_layout;
 use crate::code_review::code_review_view::{CodeReviewView, CodeReviewVisibleAnchorForTest};
+use crate::code_review::telemetry_event::DiffLayoutChangeSource;
 
 /// Expected scroll region type for assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,16 +291,12 @@ pub fn expand_first_hidden_section_and_assert_full_reveal(
     })
 }
 
-/// Switches the diff layout the way the header menu does (without the maximize request).
+/// Switches the diff layout through `switch_diff_layout`, like the command palette toggle.
 pub fn switch_code_review_diff_layout(layout: DiffLayout) -> TestStep {
     TestStep::new(&format!("Switch the code review diff layout to {layout:?}")).with_action(
         move |app, _, _| {
             app.update(|ctx| {
-                crate::code::diff_layout::switch_diff_layout(
-                    layout,
-                    crate::code_review::telemetry_event::DiffLayoutChangeSource::CommandPalette,
-                    ctx,
-                );
+                switch_diff_layout(layout, DiffLayoutChangeSource::CommandPalette, ctx);
             });
         },
     )

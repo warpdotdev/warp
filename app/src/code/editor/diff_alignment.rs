@@ -6,12 +6,12 @@
 
 use std::ops::Range;
 
-/// One contiguous change between the base and the modified text. Either range may be empty: an
-/// empty `base` range is a pure addition and an empty `modified` range is a pure deletion. Both
-/// ranges are 0-based line indices.
+/// One contiguous change between the base and the modified text, in 0-based line indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSpan {
+    /// The base lines removed or replaced. Empty for a pure addition.
     pub base: Range<usize>,
+    /// The modified lines added. Empty for a pure deletion.
     pub modified: Range<usize>,
 }
 
@@ -23,11 +23,11 @@ pub struct AlignedRow {
     pub is_change: bool,
 }
 
-/// A run of consecutive gap rows in one pane, placed directly before the 0-based line
-/// `insert_before` of that pane. `insert_before` equals the pane's line count for a run at the end
-/// of the file.
+/// A run of consecutive gap rows in one pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GapRun {
+    /// The 0-based pane line the run sits directly above; the pane's line count for a run at the
+    /// end of the file.
     pub insert_before: usize,
     pub count: usize,
 }
