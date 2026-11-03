@@ -172,6 +172,14 @@ impl HarnessSupportClient for TestClient {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }

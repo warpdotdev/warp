@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(test)]
 use mockall::automock;
 use warp_cli::agent::Harness;
+use warp_cli::agent::HarnessTransport;
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::PresignedDownloadResponse;
 
@@ -300,6 +301,27 @@ struct ShutdownError {
     exit_code: Option<u8>,
 }
 
+/// Body of `POST harness-support/report-transport`: the transport the harness is actually
+/// driven over, and why it differs from the requested one when it does.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ReportTransportRequest {
+    transport: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<String>,
+}
+
+impl ReportTransportRequest {
+    pub fn new(transport: HarnessTransport, fallback_reason: Option<&str>) -> Self {
+        Self {
+            transport: match transport {
+                HarnessTransport::Acp => "acp",
+                HarnessTransport::Pty => "pty",
+            },
+            fallback_reason: fallback_reason.map(str::to_owned),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ReportShutdownRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -369,6 +391,14 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Report task completion or failure. The server derives PR links/branches from
     /// artifacts already reported via `report_artifact`.
     async fn finish_task(&self, success: bool, summary: &str) -> Result<()>;
+
+    /// Report the transport the run's harness is actually driven over, with the reason when
+    /// the client fell back from the transport the server requested.
+    async fn report_transport(
+        &self,
+        transport: HarnessTransport,
+        fallback_reason: Option<&'static str>,
+    ) -> Result<()>;
 
     /// Report a clean shutdown of the agent process.
     async fn report_clean_shutdown(&self) -> Result<()>;
@@ -623,6 +653,18 @@ impl HarnessSupportClient for ServerApi {
                 success,
                 summary: summary.to_string(),
             },
+        )
+        .await
+    }
+
+    async fn report_transport(
+        &self,
+        transport: HarnessTransport,
+        fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        self.post_public_api_unit(
+            "harness-support/report-transport",
+            &ReportTransportRequest::new(transport, fallback_reason),
         )
         .await
     }

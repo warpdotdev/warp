@@ -290,6 +290,19 @@ impl ThirdPartyHarness for AcpHarness {
         Ok(())
     }
 
+    fn acp_adapter_available(&self) -> Option<bool> {
+        // A sidecar's program was verified when its manifest was read. Without one, any of the
+        // default adapter's names will do, the same lookup `validate` makes.
+        let Some(adapter) = &self.manifest.default else {
+            return Some(true);
+        };
+        Some(
+            adapter
+                .programs()
+                .any(|program| resolve_executable(program).is_some()),
+        )
+    }
+
     fn auth_check_command(&self) -> Option<String> {
         self.manifest.auth_check_command.clone()
     }

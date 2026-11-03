@@ -204,6 +204,13 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         false
     }
 
+    /// Whether the ACP adapter this harness would launch is present in the sandbox: a sidecar
+    /// manifest, or any of the default adapter's names on the oz process PATH. `None` for a
+    /// harness that is not driven over ACP, which never falls back.
+    fn acp_adapter_available(&self) -> Option<bool> {
+        None
+    }
+
     /// Whether the harness runs as an interactive CLI agent in the terminal whose progress is
     /// observed through CLI agent session events and hook plugins. Harnesses that drive a native
     /// conversation directly return `false`.
@@ -361,6 +368,48 @@ pub(crate) fn harness_kind(
         },
         HarnessTransport::Acp => acp_harness_kind(harness),
     }
+}
+
+/// Why a run the server requested over ACP is driven over a PTY instead. Reported to the
+/// server as a bounded reason, so keep the set small.
+pub(crate) const TRANSPORT_FALLBACK_NO_ADAPTER: &str = "no_adapter";
+
+/// Decides whether a run of `harness` over `transport` falls back to a PTY given whether the
+/// ACP adapter is present. Only Claude Code and Codex have a PTY to fall back to: Pi has no
+/// interactive CLI, and Gemini over ACP is not driven in the cloud.
+pub(crate) fn transport_fallback_reason(
+    harness: Harness,
+    transport: HarnessTransport,
+    adapter_available: bool,
+) -> Option<&'static str> {
+    match (transport, harness) {
+        (HarnessTransport::Acp, Harness::Claude | Harness::Codex) if !adapter_available => {
+            Some(TRANSPORT_FALLBACK_NO_ADAPTER)
+        }
+        _ => None,
+    }
+}
+
+/// Replaces an ACP harness whose adapter is absent with the PTY harness for the same CLI, and
+/// records the PTY transport in `transport` so everything that reads it afterwards (the native
+/// prompt queue, the harness environment, the terminal launch, the resume path) follows the
+/// fallback. Returns the reason when a fallback happened.
+pub(crate) fn apply_transport_fallback(
+    kind: &mut HarnessKind,
+    transport: &mut HarnessTransport,
+) -> Result<Option<&'static str>, AgentDriverError> {
+    let HarnessKind::ThirdParty(harness) = &*kind else {
+        return Ok(None);
+    };
+    let Some(adapter_available) = harness.acp_adapter_available() else {
+        return Ok(None);
+    };
+    let reason = transport_fallback_reason(harness.harness(), *transport, adapter_available);
+    if reason.is_some() {
+        *kind = harness_kind(harness.harness(), HarnessTransport::Pty)?;
+        *transport = HarnessTransport::Pty;
+    }
+    Ok(reason)
 }
 
 fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
