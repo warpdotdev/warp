@@ -24,7 +24,7 @@ fn routing_opt_in_updates_requests_without_replacing_application_auth() {
     let provider = Arc::new(OptInProvider(AtomicBool::new(false)));
     let mut client = Client::new();
     client.set_iap_token_provider(provider.clone());
-    let url = "https://staging.warp.dev/graphql/v2";
+    let url = "https://rtc.staging.warp.dev/api/v1/agent/events";
 
     let request = client.post(url).bearer_auth("app-token").build().unwrap();
     assert!(

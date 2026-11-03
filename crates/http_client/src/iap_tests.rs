@@ -9,6 +9,9 @@ fn only_staging_application_destinations_allow_opt_in() {
         "https://staging.warp.dev/graphql/v2",
         "https://oz.staging.warp.dev/api/v1/agent",
         "wss://platform.staging.warp.dev/graphql/v2",
+        "https://rtc.staging.warp.dev/api/v1/agent/events",
+        "wss://rtc.staging.warp.dev/graphql/v2",
+        "https://staging.warp.dev/_iap/graphql/v2",
     ] {
         assert!(
             is_opt_in_destination(&reqwest::Url::parse(url).unwrap()),
@@ -21,7 +24,11 @@ fn only_staging_application_destinations_allow_opt_in() {
         "https://user@staging.warp.dev/graphql/v2",
         "https://staging.warp.dev.evil.example/graphql/v2",
         "https://app.warp.dev/graphql/v2",
-        "https://rtc.staging.warp.dev/graphql/v2",
+        "http://rtc.staging.warp.dev/graphql/v2",
+        "ws://rtc.staging.warp.dev/graphql/v2",
+        "https://rtc.staging.warp.dev:8080/graphql/v2",
+        "https://rtc.staging.warp.dev.evil.example/graphql/v2",
+        "https://rtc.app.warp.dev/graphql/v2",
         "https://sessions.staging.warp.dev/api/v1/session",
         "https://admin.staging.warp.dev/",
         "https://staging.warp.dev/shared_sessions/test",

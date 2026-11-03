@@ -86,7 +86,7 @@ fn native_handshake_reads_current_routing_preference() {
     let mut client = client();
     client.iap_token_provider = Some(state.clone());
 
-    let url = "wss://staging.warp.dev/graphql/v2";
+    let url = "wss://rtc.staging.warp.dev/graphql/v2";
     assert!(client.iap_handshake_headers(url).is_empty());
     state.set_routing_opt_in(true);
     assert_eq!(
@@ -95,7 +95,7 @@ fn native_handshake_reads_current_routing_preference() {
     );
     assert!(
         client
-            .iap_handshake_headers("wss://rtc.staging.warp.dev/graphql/v2")
+            .iap_handshake_headers("wss://sessions.staging.warp.dev/graphql/v2")
             .is_empty()
     );
     state.set_routing_opt_in(false);

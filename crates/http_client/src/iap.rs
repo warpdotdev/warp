@@ -20,6 +20,7 @@ pub fn is_opt_in_destination(url: &reqwest::Url) -> bool {
     }
 
     match url.host_str() {
+        Some("rtc.staging.warp.dev") => true,
         Some("oz.staging.warp.dev" | "platform.staging.warp.dev") => {
             !path.starts_with("/static/js/")
         }
@@ -32,7 +33,6 @@ pub fn is_opt_in_destination(url: &reqwest::Url) -> bool {
                 "/assets/client/wasm/",
                 "/_rs/cdn/",
                 "/_rs/api/",
-                "/_iap/",
                 "/agent/otlp/",
                 "/namespace/webhook/v2/",
                 "/block/",
