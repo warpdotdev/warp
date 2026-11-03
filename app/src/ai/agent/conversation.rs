@@ -797,6 +797,7 @@ impl AIConversation {
         let mut conversation = Self::new(false, false);
         conversation.id = id;
         conversation.status = ConversationStatus::Success;
+        conversation.autoexecute_override = AIConversationAutoexecuteMode::RunToCompletion;
         conversation.local_child_restoration_status = Some(LocalChildRestorationStatus::Pending);
         conversation.local_subtree_startup_pending = true;
         conversation

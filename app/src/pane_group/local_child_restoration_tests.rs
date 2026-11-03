@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
-use crate::ai::agent::conversation::LocalChildRestorationStatus;
+use crate::ai::agent::conversation::{AIConversationAutoexecuteMode, LocalChildRestorationStatus};
 use crate::ai::blocklist::orchestration_event_streamer::LocalChildHistoryInstallation;
 use crate::ai::blocklist::orchestration_events::{PendingEvent, PendingEventDetail};
 use crate::server::server_api::ai::MockAIClient;
@@ -20,23 +20,41 @@ struct LocalChildFixture {
 }
 
 fn prepare_local_child(app: &mut App) -> LocalChildFixture {
+    prepare_local_child_with_fetch_failures(app, 0)
+}
+
+fn prepare_local_child_with_fetch_failures(
+    app: &mut App,
+    transient_failures: usize,
+) -> LocalChildFixture {
+    let attempts = Arc::new(AtomicUsize::new(0));
     let mut client = MockAIClient::new();
     client
         .expect_get_ai_conversation()
-        .times(1)
-        .returning(|token| {
-            let mut metadata = test_server_conversation_metadata(None);
-            metadata.server_conversation_token = token;
-            Ok((
-                warp_multi_agent_api::ConversationData {
-                    tasks: vec![warp_multi_agent_api::Task {
-                        id: "existing-root".into(),
+        .times(transient_failures + 1)
+        .returning({
+            let attempts = attempts.clone();
+            move |token| {
+                if attempts.fetch_add(1, Ordering::SeqCst) < transient_failures {
+                    return Err(crate::server::graphql::GraphQLError::HttpError {
+                        status: http::StatusCode::SERVICE_UNAVAILABLE,
+                        body: "temporary failure".into(),
+                    }
+                    .into());
+                }
+                let mut metadata = test_server_conversation_metadata(None);
+                metadata.server_conversation_token = token;
+                Ok((
+                    warp_multi_agent_api::ConversationData {
+                        tasks: vec![warp_multi_agent_api::Task {
+                            id: "existing-root".into(),
+                            ..Default::default()
+                        }],
                         ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-                metadata,
-            ))
+                    },
+                    metadata,
+                ))
+            }
         });
     let reported_errors = Arc::new(AtomicUsize::new(0));
     client.expect_update_agent_task().returning({
@@ -180,6 +198,54 @@ fn restored_local_child_installation_acknowledgement_and_duplicate_delivery() {
             assert_eq!(
                 history.terminal_surface_id_for_conversation(&fixture.child_id),
                 Some(fixture.terminal.id())
+            );
+        });
+        assert_eq!(fixture.reported_errors.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn restored_local_child_transient_transcript_fetch_retries_before_installation() {
+    App::test((), |mut app| async move {
+        let fixture = prepare_local_child_with_fetch_failures(&mut app, 1);
+        assert_restoring(&fixture, &app);
+        assert_eventually!(
+            2000 => fixture.prepared.borrow().is_some(),
+            "history was not prepared after transient retry"
+        );
+        let (installation, prepared) = fixture.prepared.borrow().as_ref().unwrap().clone();
+        fixture.panes.update(&mut app, |panes, ctx| {
+            panes.install_local_child_history(&fixture.streamer, installation, &prepared, ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let child = history.conversation(&fixture.child_id).unwrap();
+            assert_eq!(
+                child.local_child_restoration_status(),
+                Some(LocalChildRestorationStatus::Restored)
+            );
+            assert!(!child.is_local_child_execution_ready());
+        });
+        fixture.streamer.update(&mut app, |streamer, ctx| {
+            streamer.release_local_subtree_startup(&[fixture.child_id], ctx);
+        });
+        assert_eventually!(
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                history
+                    .conversation(&fixture.child_id)
+                    .is_some_and(|child| {
+                        child.local_child_restoration_status()
+                            == Some(LocalChildRestorationStatus::Restored)
+                            && child.is_local_child_execution_ready()
+                    })
+            }),
+            "transient retry did not reach restored execution state"
+        );
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let child = history.conversation(&fixture.child_id).unwrap();
+            assert_eq!(child.last_event_sequence(), Some(23));
+            assert_eq!(
+                child.autoexecute_override(),
+                AIConversationAutoexecuteMode::RunToCompletion
             );
         });
         assert_eq!(fixture.reported_errors.load(Ordering::SeqCst), 0);

@@ -17,7 +17,11 @@ use crate::ai::agent::api::convert_conversation::{
     RestorationMode, convert_conversation_data_to_ai_conversation,
 };
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, LocalChildRestorationStatus,
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    LocalChildRestorationStatus,
+};
+use crate::server::retry_strategies::{
+    MAX_ATTEMPTS, is_transient_graphql_or_http_error, with_bounded_retry_using,
 };
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -219,16 +223,24 @@ impl OrchestrationEventStreamer {
             .local_child_restoration_generation = Some(generation);
         ctx.spawn(
             async move {
-                let (data, metadata) = client
-                    .get_ai_conversation(token.clone())
-                    .await
-                    .context("fetch/decode transcript")?;
+                let (data, metadata) = with_bounded_retry_using(
+                    "restore local child transcript",
+                    MAX_ATTEMPTS,
+                    is_transient_graphql_or_http_error,
+                    || {
+                        let client = client.clone();
+                        let token = token.clone();
+                        async move { client.get_ai_conversation(token).await }
+                    },
+                )
+                .await
+                .context("fetch/decode transcript")?;
                 anyhow::ensure!(
                     metadata.server_conversation_token == token,
                     "transcript token mismatch"
                 );
                 anyhow::ensure!(
-                    metadata.harness == crate::ai::agent::conversation::AIAgentHarness::Oz,
+                    metadata.harness == AIAgentHarness::Oz,
                     "transcript harness is not Oz"
                 );
                 let mut hydrated = convert_conversation_data_to_ai_conversation(

@@ -151,7 +151,6 @@ impl PaneGroup {
             child.set_fallback_display_title(task.title.clone());
             child.set_orchestration_harness(Harness::Oz);
             child.set_last_event_sequence(task.last_event_sequence.unwrap_or(0));
-            child.toggle_autoexecute_override();
             if let Some(token) = task
                 .conversation_id()
                 .filter(|token| !token.trim().is_empty())

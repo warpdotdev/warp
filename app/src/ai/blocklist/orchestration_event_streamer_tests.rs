@@ -2,11 +2,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use http::StatusCode;
 use mockall::predicate::eq;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
+use crate::ai::agent::conversation::{
+    AIAgentHarness, AIConversation, AIConversationAutoexecuteMode, ConversationDriver,
+    ConversationStatus,
+};
 use crate::ai::agent::{
     AIAgentExchange, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
     FinishedAIAgentOutput, MessageId, ReceivedMessageDisplay, Shared,
@@ -118,7 +122,13 @@ fn restored_local_child_observer_seed_generation() {
 #[test]
 fn restored_local_child_transcript_error() {
     use crate::ai::agent::conversation::LocalChildRestorationStatus;
-    for failure in ["fetch/decode", "token", "harness", "conversion"] {
+    for failure in [
+        "fetch/decode",
+        "permanent-fetch",
+        "token",
+        "harness",
+        "conversion",
+    ] {
         App::test((), |mut app| async move {
             initialize_settings_for_tests(&mut app);
             let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
@@ -145,6 +155,13 @@ fn restored_local_child_transcript_error() {
                 .returning(move |_| {
                     if failure == "fetch/decode" {
                         return Err(anyhow::anyhow!("invalid transcript"));
+                    }
+                    if failure == "permanent-fetch" {
+                        return Err(crate::server::graphql::GraphQLError::HttpError {
+                            status: StatusCode::NOT_FOUND,
+                            body: "missing transcript".into(),
+                        }
+                        .into());
                     }
                     let mut metadata = make_server_metadata_with_harness(AIAgentHarness::Oz);
                     if failure == "token" {
@@ -191,6 +208,13 @@ fn restored_local_child_transcript_error() {
                     streamer.local_child_restoration_status(child_id, ctx),
                     Some(LocalChildRestorationStatus::Restoring)
                 );
+                assert_eq!(
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&child_id)
+                        .unwrap()
+                        .autoexecute_override(),
+                    AIConversationAutoexecuteMode::RunToCompletion
+                );
                 assert!(!streamer.is_eligible(child_id, ctx));
             });
             crate::test_util::assert_eventually!(
@@ -230,6 +254,81 @@ fn restored_local_child_transcript_error() {
             });
         });
     }
+}
+
+#[test]
+fn restored_local_child_exhausted_transcript_fetch_retries() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+        let history =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let child_id = AIConversationId::new();
+        let task_id = make_parent_task_id_for_test(0xf4);
+        let mut child = AIConversation::new_local_child_for_restoration(child_id);
+        child.set_task_id(task_id);
+        child.set_parent_agent_id(make_parent_task_id_for_test(0xf5).to_string());
+        child.set_parent_conversation_id(AIConversationId::new());
+        child.set_server_conversation_token("server-token".into());
+        child.set_last_event_sequence(17);
+        history.update(&mut app, |history, ctx| {
+            history.restore_conversations(warpui::EntityId::new(), vec![child], ctx);
+        });
+
+        let mut client = MockAIClient::new();
+        client.expect_get_ai_conversation().times(3).returning(|_| {
+            Err(crate::server::graphql::GraphQLError::HttpError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                body: "persistent failure".into(),
+            }
+            .into())
+        });
+        client
+            .expect_update_agent_task()
+            .times(1)
+            .returning(|_, _, _, _, _, _, _| Ok(()));
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(Arc::new(client), server_api, ctx)
+        });
+
+        streamer.update(&mut app, |streamer, ctx| {
+            assert!(streamer.restore_local_child(child_id, ctx));
+            assert!(streamer.restore_local_child(child_id, ctx));
+            assert_eq!(
+                streamer.local_child_restoration_status(child_id, ctx),
+                Some(LocalChildRestorationStatus::Restoring)
+            );
+        });
+        crate::test_util::assert_eventually!(
+            2000 => history.read(&app, |history, _| history
+                .conversation(&child_id)
+                .unwrap()
+                .status()
+                == &ConversationStatus::Error),
+            "exhausted transcript retries did not fail restoration"
+        );
+        assert_eq!(
+            history.read(&app, |history, _| history
+                .conversation(&child_id)
+                .unwrap()
+                .last_event_sequence()),
+            Some(17)
+        );
+        streamer.update(&mut app, |streamer, ctx| {
+            assert!(streamer.restore_local_child(child_id, ctx));
+            assert!(!streamer.is_eligible(child_id, ctx));
+            assert!(
+                streamer
+                    .streams
+                    .get(&child_id)
+                    .is_none_or(|stream| stream.sse_connection.is_none())
+            );
+        });
+    });
 }
 
 #[test]
