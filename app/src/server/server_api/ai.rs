@@ -526,17 +526,6 @@ impl AgentRunClientEventRequest {
         }
     }
 
-    pub fn timeline_event_with_payload(
-        event_name: impl Into<String>,
-        timestamp: DateTime<Utc>,
-        payload: serde_json::Value,
-    ) -> Self {
-        Self {
-            payload: Some(AgentRunClientEventPayload::Timeline(payload)),
-            ..Self::timeline_event(event_name, timestamp)
-        }
-    }
-
     pub fn setup_metric_event(
         event_name: impl Into<String>,
         start_timestamp: DateTime<Utc>,

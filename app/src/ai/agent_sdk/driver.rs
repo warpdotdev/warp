@@ -2402,7 +2402,7 @@ impl AgentDriver {
                         |report| report.warning_count() > 0,
                     )
                     .await;
-                Self::report_skill_sources(&report, &setup_events, &foreground).await;
+                skill_references::report_skill_sources(&report, &setup_events).await;
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

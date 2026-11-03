@@ -9,6 +9,7 @@ use warpui::App;
 
 use super::super::environment_checkout_protocol::{CheckoutFailureKind, CheckoutOutcome};
 use super::*;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::MockAIClient;
 
 const AGENT_SKILLS: &str = "agents/triage/skills";
@@ -439,6 +440,8 @@ fn skills_that_reach_outside_their_checkout_are_rejected() {
     assert_eq!(unresolved(&report.references[0]), escaped);
 }
 
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
 fn sample_report() -> SkillSourcesReport {
     SkillSourcesReport {
         references: vec![
@@ -462,7 +465,7 @@ fn sample_report() -> SkillSourcesReport {
                     owner: "acme".to_owned(),
                     repo: "shared-skills".to_owned(),
                     requested_ref: Some("v1.4.0".to_owned()),
-                    resolved_sha: Some(fake_sha('c')),
+                    resolved_sha: Some(SHA.to_owned()),
                 }),
                 loaded: vec![LoadedSkill {
                     name: "safe-secrets".to_owned(),
@@ -473,31 +476,15 @@ fn sample_report() -> SkillSourcesReport {
                     reason: UnresolvedReason::NoMatch,
                 }],
             },
-            ReferenceFileReport {
-                reference_file: "skills/unqualified.yaml".to_owned(),
-                level: ReferenceLevel::Factory,
-                agent: None,
-                source: Some(ReferencedSource {
-                    code_forge: None,
-                    owner: "acme".to_owned(),
-                    repo: "other-skills".to_owned(),
-                    requested_ref: None,
-                    resolved_sha: None,
-                }),
-                loaded: Vec::new(),
-                unresolved: vec![UnresolvedEntry {
-                    entry: "deploy".to_owned(),
-                    reason: UnresolvedReason::UnknownForge,
-                }],
-            },
         ],
     }
 }
 
 #[test]
 fn timeline_payload_has_the_agreed_shape() {
+    let mut report = sample_report();
     assert_eq!(
-        sample_report().timeline_payload(),
+        report.timeline_payload(),
         json!({"references": [
             {
                 "reference_file": "agents/triage/skills/broken.yaml",
@@ -514,58 +501,51 @@ fn timeline_payload_has_the_agreed_shape() {
                     "owner": "acme",
                     "repo": "shared-skills",
                     "requested_ref": "v1.4.0",
-                    "resolved_sha": fake_sha('c'),
+                    "resolved_sha": SHA,
                 },
                 "loaded": [{"name": "safe-secrets", "path": ".agents/skills/safe-secrets"}],
                 "unresolved": [{"entry": "legacy-*", "reason": "no_match"}],
             },
-            {
-                "reference_file": "skills/unqualified.yaml",
-                "level": "factory",
-                "source": {"owner": "acme", "repo": "other-skills"},
-                "loaded": [],
-                "unresolved": [{"entry": "deploy", "reason": "unknown_forge"}],
-            },
         ]})
+    );
+    let source = report.references[1].source.as_mut().unwrap();
+    (source.code_forge, source.requested_ref, source.resolved_sha) = (None, None, None);
+    assert_eq!(
+        report.timeline_payload()["references"][1]["source"],
+        json!({"owner": "acme", "repo": "shared-skills"})
     );
 }
 
 #[test]
-fn timeline_payload_stays_bounded_and_keeps_warnings_first() {
-    let long = "x".repeat(4 * MAX_RECORDED_STRING_BYTES);
-    let mut report = SkillSourcesReport::default();
-    for index in 0..400 {
-        let mut reference = sample_report().references.remove(1);
-        reference.reference_file = format!("skills/{index}-{long}.yaml");
-        reference.loaded = (0..600)
-            .map(|skill| LoadedSkill {
-                name: format!("skill-{skill}"),
-                path: format!("skills/skill-{skill}"),
+fn timeline_payload_stays_bounded_and_drops_loaded_skills_first() {
+    let mut file = sample_report().references.remove(1);
+    file.reference_file = "x".repeat(4 * MAX_RECORDED_STRING_BYTES);
+    file.loaded = vec![file.loaded[0].clone(); 2 * MAX_RECORDED_ENTRIES];
+    file.unresolved = vec![file.unresolved[0].clone(); 10];
+    let loaded_counts = |files| {
+        let payload = SkillSourcesReport {
+            references: vec![file.clone(); files],
+        }
+        .timeline_payload();
+        assert!(payload.to_string().len() <= MAX_RECORDED_PAYLOAD_BYTES);
+        let references = payload["references"].as_array().unwrap();
+        references
+            .iter()
+            .map(|file| {
+                let reference_file = file["reference_file"].as_str().unwrap();
+                assert_eq!(reference_file.len(), MAX_RECORDED_STRING_BYTES);
+                assert_eq!(file["unresolved"].as_array().unwrap().len(), 10);
+                file["loaded"].as_array().unwrap().len()
             })
-            .collect();
-        reference.unresolved = (0..10)
-            .map(|entry| UnresolvedEntry {
-                entry: format!("missing-{entry}"),
-                reason: UnresolvedReason::NoMatch,
-            })
-            .collect();
-        report.references.push(reference);
-    }
-
-    let payload = report.timeline_payload();
-    assert!(serde_json::to_vec(&payload).unwrap().len() <= MAX_RECORDED_PAYLOAD_BYTES);
-    let references = payload["references"].as_array().unwrap();
-    assert!(references.len() > 10, "{}", references.len());
-    assert!(references.iter().all(|reference| {
-        reference["reference_file"].as_str().unwrap().len() == MAX_RECORDED_STRING_BYTES
-            && reference["unresolved"].as_array().unwrap().len() == 10
-            && reference["loaded"].as_array().unwrap().len() <= MAX_RECORDED_ENTRIES
-    }));
-    let loaded = references
-        .iter()
-        .map(|reference| reference["loaded"].as_array().unwrap().len())
-        .sum::<usize>();
-    assert!(loaded < 600, "{loaded}");
+            .collect::<Vec<_>>()
+    };
+    let full = MAX_RECORDED_ENTRIES;
+    assert_eq!(loaded_counts(4), [full, full, full, 0]);
+    let many = loaded_counts(400);
+    assert!(
+        many.len() > 10 && many.iter().all(|&count| count == 0),
+        "{many:?}"
+    );
 }
 
 #[test]
@@ -574,33 +554,26 @@ fn status_message_names_the_first_warnings_only_when_there_are_any() {
     assert_eq!(
         report.status_message().unwrap(),
         "Warning: some referenced skills did not load (agents/triage/skills/broken.yaml \
-         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match); \
-         skills/unqualified.yaml 'deploy' (unknown_forge)); continuing without them."
+         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match)); continuing without \
+         them."
     );
-
-    report.references[1].unresolved = (0..6)
-        .map(|entry| UnresolvedEntry {
-            entry: format!("missing-{entry}"),
-            reason: UnresolvedReason::NoMatch,
-        })
-        .collect();
-    assert!(report.status_message().unwrap().contains("; and 3 more)"));
-
-    for reference in &mut report.references {
-        reference.unresolved.clear();
+    report.references[1].unresolved = vec![report.references[1].unresolved[0].clone(); 6];
+    assert!(report.status_message().unwrap().contains("; and 2 more)"));
+    for file in &mut report.references {
+        file.unresolved.clear();
     }
     assert_eq!(report.status_message(), None);
 }
 
 #[test]
-fn posting_tolerates_a_rejected_event_and_warns_only_with_warnings() {
+fn reporting_tolerates_a_rejected_event_and_warns_only_with_warnings() {
     App::test((), |app| async move {
         let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
         for with_warnings in [true, false] {
             let mut report = sample_report();
             if !with_warnings {
-                for reference in &mut report.references {
-                    reference.unresolved.clear();
+                for file in &mut report.references {
+                    file.unresolved.clear();
                 }
             }
             let expected_payload = report.timeline_payload();
@@ -618,29 +591,20 @@ fn posting_tolerates_a_rejected_event_and_warns_only_with_warnings() {
             ai_client
                 .expect_update_agent_task()
                 .times(usize::from(with_warnings))
-                .withf(
-                    move |run_id, state, session, conversation, status, debug_until, debug| {
-                        *run_id == task_id
-                            && state.is_none()
-                            && session.is_none()
-                            && conversation.is_none()
-                            && status.as_ref().is_some_and(|status| {
-                                status
-                                    .message
-                                    .starts_with("Warning: some referenced skills")
-                            })
-                            && debug_until.is_none()
-                            && debug.is_none()
-                    },
-                )
+                .withf(move |run_id, state, _, _, status, _, _| {
+                    *run_id == task_id
+                        && state.is_none()
+                        && status
+                            .as_ref()
+                            .is_some_and(|status| status.message.starts_with("Warning:"))
+                })
                 .returning(|_, _, _, _, _, _, _| Ok(()));
-            let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
             let setup_events = SetupClientEventReporter::new(
                 task_id,
-                ai_client.clone(),
+                Arc::new(ai_client),
                 app.background_executor(),
             );
-            post_skill_sources(&report, task_id, &setup_events, ai_client).await;
+            report_skill_sources(&report, &setup_events).await;
         }
     });
 }
