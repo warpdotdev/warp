@@ -1,16 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
-use warpui::App;
 
 use super::super::environment_checkout_protocol::{CheckoutFailureKind, CheckoutOutcome};
 use super::*;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::MockAIClient;
 
 const AGENT_SKILLS: &str = "agents/triage/skills";
 const FACTORY_SKILLS: &str = "skills";
@@ -468,7 +464,8 @@ fn sample_report() -> SkillSourcesReport {
                     resolved_sha: Some(SHA.to_owned()),
                 }),
                 loaded: vec![LoadedSkill {
-                    name: "safe-secrets".to_owned(),
+                    // The payload drops control characters.
+                    name: "safe-\u{0}secrets\n".to_owned(),
                     path: ".agents/skills/safe-secrets".to_owned(),
                 }],
                 unresolved: vec![UnresolvedEntry {
@@ -546,67 +543,6 @@ fn timeline_payload_stays_bounded_and_drops_loaded_skills_first() {
         many.len() > 10 && many.iter().all(|&count| count == 0),
         "{many:?}"
     );
-}
-
-#[test]
-fn status_message_names_the_first_warnings_only_when_there_are_any() {
-    let mut report = sample_report();
-    assert_eq!(
-        report.status_message().unwrap(),
-        "Warning: some referenced skills did not load (agents/triage/skills/broken.yaml \
-         (invalid_reference_file); skills/shared.yaml 'legacy-*' (no_match)); continuing without \
-         them."
-    );
-    report.references[1].unresolved = vec![report.references[1].unresolved[0].clone(); 6];
-    assert!(report.status_message().unwrap().contains("; and 2 more)"));
-    for file in &mut report.references {
-        file.unresolved.clear();
-    }
-    assert_eq!(report.status_message(), None);
-}
-
-#[test]
-fn reporting_tolerates_a_rejected_event_and_warns_only_with_warnings() {
-    App::test((), |app| async move {
-        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
-        for with_warnings in [true, false] {
-            let mut report = sample_report();
-            if !with_warnings {
-                for file in &mut report.references {
-                    file.unresolved.clear();
-                }
-            }
-            let expected_payload = report.timeline_payload();
-            let mut ai_client = MockAIClient::new();
-            ai_client
-                .expect_post_agent_run_client_event()
-                .times(1)
-                .withf(move |run_id, request| {
-                    let request = serde_json::to_value(request).unwrap();
-                    *run_id == task_id
-                        && request["event_name"] == "skill_sources_resolved"
-                        && request["payload"] == expected_payload
-                })
-                .returning(|_, _| Err(anyhow::anyhow!("400 Bad Request: unknown event")));
-            ai_client
-                .expect_update_agent_task()
-                .times(usize::from(with_warnings))
-                .withf(move |run_id, state, _, _, status, _, _| {
-                    *run_id == task_id
-                        && state.is_none()
-                        && status
-                            .as_ref()
-                            .is_some_and(|status| status.message.starts_with("Warning:"))
-                })
-                .returning(|_, _, _, _, _, _, _| Ok(()));
-            let setup_events = SetupClientEventReporter::new(
-                task_id,
-                Arc::new(ai_client),
-                app.background_executor(),
-            );
-            report_skill_sources(&report, &setup_events).await;
-        }
-    });
 }
 
 #[test]

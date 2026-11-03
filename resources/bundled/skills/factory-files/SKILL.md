@@ -208,7 +208,8 @@ exclude:
   rejected. Any other ref is a branch or tag, and the branch wins. Without a
   `ref`, each run uses the latest commit on the default branch.
 - Quote entries that start with `*`. Paths can't start with `/` or contain
-  `..`. The same literal skill name twice at one level is an error.
+  `..`; `./SKILL.md` selects a skill at the repository root. The same literal
+  skill name twice at one level is an error.
 - Public source repositories work as they are. A private one must be attached
   in `repositories`; `deferred: true` attaches it without preparing it for
   every run.

@@ -9,7 +9,7 @@ use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{
-    AIClient, AgentRunClientEventPayload, AgentRunClientEventRequest, TaskStatusUpdate,
+    AIClient, AgentRunClientEventPayload, AgentRunClientEventRequest,
 };
 
 /// Records setup spans and optional run events, with an agent-only scope for standby.
@@ -160,8 +160,9 @@ impl SetupClientEventReporter {
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
     }
 
-    /// Like [`Self::post_timeline_event`], with an event-specific JSON payload.
-    pub(crate) async fn post_timeline_event_with_payload(
+    /// Like [`Self::post_timeline_event`], with an event-specific JSON payload, posted in the
+    /// background so it never delays the run.
+    pub(crate) fn post_timeline_event_with_payload(
         &self,
         event: OzRunTimelineEvent,
         payload: serde_json::Value,
@@ -174,22 +175,8 @@ impl SetupClientEventReporter {
             payload: Some(AgentRunClientEventPayload::Timeline(payload)),
             ..AgentRunClientEventRequest::timeline_event(event_name, Utc::now())
         };
-        Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
-    }
-
-    /// Sets the run's status message without changing its state; failures are only logged.
-    pub(crate) async fn post_status_message(&self, message: String) {
-        let Some(run_id) = self.run_id else {
-            return;
-        };
-        let status = Some(TaskStatusUpdate::message(message));
-        let result = self
-            .ai_client
-            .update_agent_task(run_id, None, None, None, status, None, None)
-            .await;
-        if let Err(err) = result {
-            log::warn!("Failed to post status message for run {run_id}: {err:#}");
-        }
+        let post = Self::post_client_event(run_id, self.ai_client.clone(), event_name, request);
+        self.background.spawn(post).detach();
     }
 
     fn post_setup_metric_event_best_effort(
