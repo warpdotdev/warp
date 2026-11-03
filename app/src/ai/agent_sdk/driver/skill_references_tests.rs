@@ -142,22 +142,19 @@ fn unresolved(report: &ReferenceFileReport) -> Vec<(&str, UnresolvedReason)> {
 }
 
 #[test]
-fn folders_without_reference_files_are_left_alone() {
-    // YAML nested inside a skill folder is part of that skill, not a reference file.
-    let fixture = Fixture::new(&[(
-        "skills/deploy/config.yaml",
-        "source: acme/skills\ninclude: [x]\n",
-    )]);
-    assert!(fixture.discovery(None).levels.is_empty());
-}
-
-#[test]
 fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
-    let fixture = Fixture::new(&[(
-        "skills/shared.yaml",
-        "source: acme/shared@v1.4.0\ninclude: [safe, tools/notes/SKILL.md, \"web/*\", \"old-*\"]\n\
-         exclude: [old-b, web/forms]\n",
-    )]);
+    let fixture = Fixture::new(&[
+        (
+            "skills/shared.yaml",
+            "source: acme/shared@v1.4.0\ninclude: [safe, tools/notes/SKILL.md, \"web/*\", \"old-*\"]\n\
+             exclude: [old-b, web/forms]\n",
+        ),
+        // YAML nested inside a skill folder is part of that skill, not a reference file.
+        (
+            "skills/deploy/config.yaml",
+            "source: acme/other\ninclude: [x]\n",
+        ),
+    ]);
     let (skill_dirs, report) = fixture.resolve(
         GITHUB,
         &[(
