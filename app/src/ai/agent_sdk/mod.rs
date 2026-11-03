@@ -711,6 +711,7 @@ fn build_execution_task_and_options(
     }
     let providers = execution_config::providers(config.providers);
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
         prompt: AgentRunPrompt::ServerSide {
@@ -749,6 +750,7 @@ fn build_execution_task_and_options(
                 supports_deferred_repositories,
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
+            workspace.definition_skill_dirs = Some(definition_skill_dirs);
             workspace
         },
         computer_use_config: (selected_harness == Harness::Oz).then(|| {

@@ -16,6 +16,9 @@ enum Source {
     /// Succeeds with a skill in each folder, named after the folder; a trailing `!` writes an
     /// invalid `SKILL.md` instead.
     Skills(&'static [&'static str]),
+    /// Like `Skills`, but the helper reports no outcome, as when it was interrupted; `true`
+    /// leaves HEAD detached.
+    Unreported(&'static [&'static str], bool),
     Fails(CheckoutFailureKind),
 }
 
@@ -31,6 +34,7 @@ impl Fixture {
             root: temp.path().canonicalize().unwrap(),
             _temp: temp,
         };
+        fs::write(fixture.root.join(FACTORY_FILE), "").unwrap();
         for (path, contents) in files {
             let path = fixture.root.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -44,7 +48,7 @@ impl Fixture {
         let resolved_dirs = resolve_skills_dirs(&self.root, configured_dirs.clone());
         SkillReferenceDiscovery {
             root: self.root.join("out"),
-            levels: discover(&resolved_dirs, forge),
+            levels: discover(&resolved_dirs, &resolved_dirs, forge),
             configured_dirs,
             resolved_dirs,
         }
@@ -69,7 +73,7 @@ impl Fixture {
                     .iter()
                     .find(|(name, _)| *name == request.source.repo_name)?;
                 let failure = match source {
-                    Source::Skills(folders) => {
+                    Source::Skills(folders) | Source::Unreported(folders, _) => {
                         let checkout = batch.working_dir.join(&request.checkout_name);
                         for folder in *folders {
                             write_skill(&checkout.join(folder));
@@ -79,9 +83,15 @@ impl Fixture {
                             git2::Signature::now("Fixture", "fixture@example.com").unwrap();
                         let tree = repository.index().unwrap().write_tree().unwrap();
                         let tree = repository.find_tree(tree).unwrap();
-                        repository
+                        let commit = repository
                             .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
                             .unwrap();
+                        if let Source::Unreported(_, detached) = source {
+                            if *detached {
+                                repository.set_head_detached(commit).unwrap();
+                            }
+                            return None;
+                        }
                         None
                     }
                     Source::Fails(kind) => Some(*kind),
@@ -146,8 +156,8 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
     let fixture = Fixture::new(&[
         (
             "skills/shared.yaml",
-            "source: acme/shared@v1.4.0\ninclude: [safe, tools/notes/SKILL.md, \"web/*\", \"old-*\"]\n\
-             exclude: [old-b, web/forms]\n",
+            "source: acme/shared@v1.4.0\ninclude: [safe, tools/notes/SKILL.md, \"web/*\", \"old-*\", \
+             ./SKILL.md]\nexclude: [old-b, web/forms]\n",
         ),
         // YAML nested inside a skill folder is part of that skill, not a reference file.
         (
@@ -160,7 +170,9 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
         &[(
             "shared",
             // Names search the standard folders in provider order, not path order.
+            // `""` is the root skill, which only an explicit path selects.
             Source::Skills(&[
+                "",
                 ".claude/skills/safe",
                 ".warp/skills/safe",
                 "tools/notes",
@@ -185,7 +197,8 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
             ".warp/skills/safe",
             "tools/notes",
             "web/buttons",
-            ".claude/skills/old-a"
+            ".claude/skills/old-a",
+            "."
         ]
     );
     assert!(file.unresolved.is_empty());
@@ -201,6 +214,52 @@ fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
         ]
     );
     assert!(fixture.generated(1).join("notes/SKILL.md").is_file());
+    assert!(fixture.generated(1).join("0-shared/SKILL.md").is_file());
+}
+
+#[test]
+fn only_factory_definition_levels_hold_reference_files() {
+    let yaml = "source: acme/shared\ninclude: [x]\n";
+    let nested = "defs/agents/nested";
+    let fixture = Fixture::new(&[
+        ("skills/a.yaml", yaml),
+        ("self-improvement/skills/a.yaml", yaml),
+        ("configured/factory.yaml", ""),
+        ("configured/skills/a.yaml", yaml),
+        (&format!("{nested}/factory.yaml"), ""),
+        (&format!("{nested}/skills/a.yaml"), yaml),
+        (&format!("{nested}/agents/review/skills/a.yaml"), yaml),
+    ]);
+    let skill_dirs = [
+        "skills",
+        "self-improvement/skills",
+        &format!("{nested}/agents/review/skills"),
+        &format!("{nested}/skills"),
+        "configured/skills",
+    ]
+    .map(|dir| fixture.root.join(dir));
+    // `configured/skills` is a configured-skill folder, not one of the definition's.
+    let levels = discover(&skill_dirs, &skill_dirs[..4], GITHUB);
+    let found = levels
+        .iter()
+        .map(|level| {
+            (
+                level.index,
+                level.agent.as_deref(),
+                level.files[0].0.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        [
+            (0, None, "skills/a.yaml"),
+            (2, Some("review"), "agents/review/skills/a.yaml"),
+            (3, None, "skills/a.yaml"),
+        ]
+    );
+    fs::remove_file(fixture.root.join(FACTORY_FILE)).unwrap();
+    assert!(discover(&skill_dirs[..1], &skill_dirs[..1], GITHUB).is_empty());
 }
 
 #[test]
@@ -224,11 +283,19 @@ fn levels_and_files_apply_in_order_and_earlier_names_win() {
             ),
             (
                 "first",
-                Source::Skills(&[".agents/skills/shared", ".agents/skills/lint"]),
+                Source::Skills(&[
+                    ".agents/skills/shared",
+                    ".agents/skills/lint",
+                    ".agents/skills/docs",
+                ]),
             ),
             (
                 "second",
-                Source::Skills(&[".agents/skills/lint", ".agents/skills/extra"]),
+                Source::Skills(&[
+                    ".agents/skills/lint",
+                    ".agents/skills/docs",
+                    ".agents/skills/extra",
+                ]),
             ),
         ],
     );
@@ -240,12 +307,12 @@ fn levels_and_files_apply_in_order_and_earlier_names_win() {
         ("agents/triage/skills/agent.yaml", Some("triage"))
     );
     // The agent's own folder wins over its references, which win over the Factory's. Losing on
-    // name isn't a warning; two files at one level selecting the same name is.
+    // name isn't a warning; two files at one level selecting the same name is, once per entry.
     assert_eq!(loaded(agent), [".agents/skills/shared"]);
     assert_eq!(first.reference_file, "skills/a.yaml");
     assert_eq!(
         (loaded(first), unresolved(first)),
-        (vec![".agents/skills/lint"], vec![])
+        (vec![".agents/skills/docs", ".agents/skills/lint"], vec![])
     );
     assert_eq!(loaded(second), [".agents/skills/extra"]);
     assert_eq!(unresolved(second), [("*", UnresolvedReason::Collision)]);
@@ -334,6 +401,69 @@ fn skills_that_symlink_outside_their_checkout_are_rejected() {
         unresolved(&report.references[0]),
         [("skills/escape", UnresolvedReason::NoMatch)]
     );
+}
+
+#[test]
+fn unreported_checkouts_count_only_once_finished() {
+    let sha = "0123456789abcdef".repeat(3)[..40].to_owned();
+    let file = |source: &str| format!("source: github.com:acme/{source}\ninclude: [\"*\"]\n");
+    let fixture = Fixture::new(&[
+        ("skills/a.yaml", &file("detached@v1")),
+        ("skills/b.yaml", &file("attached@v1")),
+        ("skills/c.yaml", &file("default")),
+        ("skills/d.yaml", &file(&format!("pinned@{sha}"))),
+    ]);
+    let (_, report) = fixture.resolve(
+        None,
+        &[
+            ("detached", Source::Unreported(&[".agents/skills/a"], true)),
+            ("attached", Source::Unreported(&[".agents/skills/b"], false)),
+            ("default", Source::Unreported(&[".agents/skills/c"], false)),
+            ("pinned", Source::Unreported(&[".agents/skills/d"], true)),
+        ],
+    );
+    let outcomes = report
+        .references
+        .iter()
+        .map(|file| (loaded(file), unresolved(file)))
+        .collect::<Vec<_>>();
+    let failed = vec![("*", UnresolvedReason::CloneFailed)];
+    assert_eq!(
+        outcomes,
+        [
+            (vec![".agents/skills/a"], vec![]),
+            (vec![], failed.clone()),
+            (vec![".agents/skills/c"], vec![]),
+            (vec![], failed),
+        ]
+    );
+}
+
+#[test]
+fn checkouts_stop_at_the_helper_batch_limit() {
+    let files = (0..=MAX_CHECKOUT_REQUESTS)
+        .map(|index| {
+            (
+                format!("skills/{index:03}.yaml"),
+                format!("source: acme/repo-{index}\ninclude: [x]\n"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let files = files
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect::<Vec<_>>();
+    let discovery = Fixture::new(&files).discovery(GITHUB);
+    let (batch, planned) = plan_checkouts(&discovery.levels, &discovery.root.join("sources"));
+    assert_eq!(batch.repositories.len(), MAX_CHECKOUT_REQUESTS);
+    assert!(batch.validate().is_ok());
+    let last = (
+        GITHUB,
+        "acme".to_owned(),
+        format!("repo-{MAX_CHECKOUT_REQUESTS}"),
+        None,
+    );
+    assert_eq!(planned[&last], Err(UnresolvedReason::CloneFailed));
 }
 
 #[test]

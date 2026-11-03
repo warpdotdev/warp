@@ -4,6 +4,7 @@
 //! run: each problem is recorded as an unresolved entry and the rest still loads.
 
 use std::collections::{HashMap, HashSet, hash_map};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -21,13 +22,14 @@ use warpui::ModelSpawner;
 use super::AgentDriver;
 use super::environment;
 use super::environment_checkout_protocol::{
-    CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest,
+    CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest, MAX_CHECKOUT_REQUESTS,
 };
 use super::harness::create_symlink;
 
 /// Names the Factory's code forge; set only when the Factory has exactly one.
 const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
 const SKILL_FILE: &str = "SKILL.md";
+const FACTORY_FILE: &str = "factory.yaml";
 /// Bounds how much of a source repository a path glob walks.
 const MAX_WALKED_ENTRIES: usize = 200_000;
 
@@ -143,21 +145,29 @@ type Planned = HashMap<SourceIdentity, Result<usize, UnresolvedReason>>;
 type Checkout = Result<(PathBuf, Option<String>), UnresolvedReason>;
 
 impl AgentDriver {
-    /// Finds the reference files in this run's skill folders. `None` for runs without a task or
-    /// without reference files, which then behave as if references didn't exist.
+    /// Finds the reference files in this run's Factory definition skill folders. `None` for runs
+    /// without a task or without reference files, which then behave as if references didn't exist.
     pub(super) async fn discover_skill_references(
         foreground: &ModelSpawner<Self>,
     ) -> Option<SkillReferenceDiscovery> {
-        let (task_id, working_dir, configured_dirs) = foreground
-            .spawn(|me, _| (me.task_id, me.working_dir.clone(), me.skill_dirs.clone()))
+        let (task_id, working_dir, configured_dirs, reference_dirs) = foreground
+            .spawn(|me, _| {
+                (
+                    me.task_id,
+                    me.working_dir.clone(),
+                    me.skill_dirs.clone(),
+                    me.skill_reference_dirs.clone(),
+                )
+            })
             .await
             .ok()?;
         let task_id = task_id?;
         let resolved_dirs = resolve_skills_dirs(&working_dir, configured_dirs.clone());
+        let reference_dirs = resolve_skills_dirs(&working_dir, reference_dirs);
         let factory_forge = std::env::var(FACTORY_CODE_FORGE_ENV)
             .ok()
             .and_then(|value| value.trim().parse().ok());
-        let levels = discover(&resolved_dirs, factory_forge);
+        let levels = discover(&resolved_dirs, &reference_dirs, factory_forge);
         (!levels.is_empty()).then(|| SkillReferenceDiscovery {
             root: std::env::temp_dir()
                 .join("oz-skill-sources")
@@ -209,12 +219,22 @@ impl AgentDriver {
     }
 }
 
-/// Reads the reference files directly in each skill folder. `factory_forge` fills in the forge
-/// of sources that don't name one.
-fn discover(skill_dirs: &[PathBuf], factory_forge: Option<SkillSourceForge>) -> Vec<Level> {
+/// Reads the reference files directly in each of `skill_dirs` that is one of `reference_dirs` and
+/// a definition level. `factory_forge` fills in the forge of sources that don't name one.
+fn discover(
+    skill_dirs: &[PathBuf],
+    reference_dirs: &[PathBuf],
+    factory_forge: Option<SkillSourceForge>,
+) -> Vec<Level> {
     let mut seen = HashSet::new();
     let mut levels = Vec::new();
     for (index, skills_dir) in skill_dirs.iter().enumerate() {
+        if !reference_dirs.contains(skills_dir) {
+            continue;
+        }
+        let Some(agent) = definition_level(skills_dir) else {
+            continue;
+        };
         let Ok(entries) = fs::read_dir(skills_dir) else {
             continue;
         };
@@ -231,13 +251,6 @@ fn discover(skill_dirs: &[PathBuf], factory_forge: Option<SkillSourceForge>) -> 
             continue;
         }
         file_names.sort();
-        let mut components = skills_dir.components().rev().skip(1);
-        let agent = match (components.next(), components.next()) {
-            (Some(agent), Some(agents)) if agents.as_os_str() == "agents" => {
-                agent.as_os_str().to_str().map(str::to_owned)
-            }
-            _ => None,
-        };
         let files = file_names
             .into_iter()
             .map(|name| {
@@ -262,6 +275,25 @@ fn discover(skill_dirs: &[PathBuf], factory_forge: Option<SkillSourceForge>) -> 
         });
     }
     levels
+}
+
+/// `Some(None)` for `<root>/skills` and `Some(Some(name))` for `<root>/agents/<name>/skills`,
+/// where `<root>` holds `factory.yaml`. No other folder holds reference files.
+fn definition_level(skills_dir: &Path) -> Option<Option<String>> {
+    let is_root = |root: &Path| root.join(FACTORY_FILE).is_file();
+    if skills_dir.file_name()? != "skills" {
+        return None;
+    }
+    let parent = skills_dir.parent()?;
+    let agents = parent
+        .parent()
+        .filter(|agents| agents.file_name() == Some(OsStr::new("agents")));
+    if let Some(root) = agents.and_then(Path::parent)
+        && is_root(root)
+    {
+        return Some(Some(parent.file_name()?.to_str()?.to_owned()));
+    }
+    is_root(parent).then_some(None)
 }
 
 fn identity(source: &SkillSource) -> SourceIdentity {
@@ -318,10 +350,11 @@ fn plan_checkouts(levels: &[Level], sources_dir: &Path) -> (CheckoutBatch, Plann
         };
         // An invalid request would fail the helper's whole batch, so it's rejected here alone.
         slot.insert(match request.validate() {
-            Ok(()) => {
+            Ok(()) if repositories.len() < MAX_CHECKOUT_REQUESTS => {
                 repositories.push(request);
                 Ok(repositories.len() - 1)
             }
+            Ok(()) => Err(UnresolvedReason::CloneFailed),
             Err("invalid checkout ref" | "invalid checkout commit") => {
                 Err(UnresolvedReason::RefNotFound)
             }
@@ -335,8 +368,8 @@ fn plan_checkouts(levels: &[Level], sources_dir: &Path) -> (CheckoutBatch, Plann
     (batch, planned)
 }
 
-/// Pairs each planned source with its outcome in the helper's report. A missing report or outcome
-/// means the source couldn't be cloned.
+/// Pairs each planned source with its outcome in the helper's report. Without an outcome, as when
+/// the helper failed or was interrupted, a checkout counts only if it finished.
 fn checkouts(
     planned: Planned,
     batch: &CheckoutBatch,
@@ -344,18 +377,22 @@ fn checkouts(
 ) -> HashMap<SourceIdentity, Checkout> {
     let checkout = |index: usize| {
         let request = &batch.repositories[index];
+        let dir = batch.working_dir.join(&request.checkout_name);
         let outcomes = report.map_or(&[][..], |report| &report.outcomes);
         let Some(outcome) = outcomes
             .iter()
             .find(|outcome| outcome.request_index == index)
         else {
-            return Err(UnresolvedReason::CloneFailed);
+            let sha = finished_head(&dir, request.head.as_ref());
+            return sha
+                .map(|sha| (dir, Some(sha)))
+                .ok_or(UnresolvedReason::CloneFailed);
         };
         match outcome.failure {
+            // The helper reports heads only when the whole batch succeeds.
             None => {
-                let dir = batch.working_dir.join(&request.checkout_name);
-                // The helper reports heads only when the whole batch succeeds.
-                let sha = outcome.resolved_head.clone().or_else(|| read_head(&dir));
+                let sha = outcome.resolved_head.clone();
+                let sha = sha.or_else(|| read_head(&dir).map(|(sha, _)| sha));
                 Ok((dir, sha))
             }
             Some(CheckoutFailureKind::Checkout) if request.head.is_some() => {
@@ -375,10 +412,29 @@ fn checkouts(
         .collect()
 }
 
-fn read_head(dir: &Path) -> Option<String> {
+/// `dir`'s HEAD commit, and whether HEAD is detached.
+fn read_head(dir: &Path) -> Option<(String, bool)> {
     let repository = git2::Repository::open(dir).ok()?;
-    let commit = repository.head().ok()?.peel_to_commit().ok()?;
-    Some(commit.id().to_string())
+    let sha = repository
+        .head()
+        .ok()?
+        .peel_to_commit()
+        .ok()?
+        .id()
+        .to_string();
+    Some((sha, repository.head_detached().ok()?))
+}
+
+/// The commit of a finished checkout of `head` in `dir`. The helper ends every requested head with
+/// a detached checkout, and an interrupted clone removes its directory.
+fn finished_head(dir: &Path, head: Option<&RepositoryHeadRef>) -> Option<String> {
+    let (sha, detached) = read_head(dir)?;
+    let finished = match head {
+        None => !detached,
+        Some(RepositoryHeadRef::Branch(_)) => detached,
+        Some(RepositoryHeadRef::CommitSha(expected)) => detached && *expected == sha,
+    };
+    finished.then_some(sha)
 }
 
 /// Selects each reference file's skills, links them into a generated folder per level, and returns
@@ -491,6 +547,12 @@ fn materialize(
         }
         claimed.extend(level_names);
     }
+    for report in &mut references {
+        let mut seen = HashSet::new();
+        report
+            .unresolved
+            .retain(|entry| seen.insert((entry.entry.clone(), entry.reason)));
+    }
     (skill_dirs, SkillSourcesReport { references })
 }
 
@@ -516,10 +578,7 @@ fn select_skills(file: &SkillReferenceFile, root: &Path) -> (Vec<Candidate>, Vec
                 .filter(|(name, rel_dir)| selects(entry, matcher.as_ref(), name, rel_dir))
                 .map(|skill| Ok(skill.clone()))
                 .collect(),
-            SkillReferenceEntry::Path(path) => normalized_path(path)
-                .map(|rel_dir| skill_at(root, rel_dir))
-                .into_iter()
-                .collect(),
+            SkillReferenceEntry::Path(path) => vec![skill_at(root, normalized_path(path))],
             SkillReferenceEntry::PathGlob(_) => walked
                 .get_or_insert_with(|| skill_folders(root))
                 .iter()
@@ -616,7 +675,7 @@ fn selects(
 ) -> bool {
     match entry {
         SkillReferenceEntry::Name(entry_name) => entry_name == name,
-        SkillReferenceEntry::Path(path) => normalized_path(path).as_deref() == Some(rel_dir),
+        SkillReferenceEntry::Path(path) => normalized_path(path) == rel_dir,
         SkillReferenceEntry::NameGlob(_) => matcher.is_some_and(|matcher| matcher.is_match(name)),
         // A path glob selects a skill by its folder or its `SKILL.md`.
         SkillReferenceEntry::PathGlob(_) => matcher.is_some_and(|matcher| {
@@ -625,8 +684,8 @@ fn selects(
     }
 }
 
-/// A path entry as a skill folder relative to the repository root; `None` for the root itself.
-fn normalized_path(path: &str) -> Option<String> {
+/// A path entry as a skill folder relative to the repository root, which is `.`.
+fn normalized_path(path: &str) -> String {
     let mut segments = path
         .split('/')
         .filter(|segment| !segment.is_empty() && *segment != ".")
@@ -634,7 +693,10 @@ fn normalized_path(path: &str) -> Option<String> {
     if segments.last() == Some(&SKILL_FILE) {
         segments.pop();
     }
-    (!segments.is_empty()).then(|| segments.join("/"))
+    match segments.is_empty() {
+        true => ".".to_owned(),
+        false => segments.join("/"),
+    }
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {
