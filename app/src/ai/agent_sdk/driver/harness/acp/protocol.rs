@@ -7,6 +7,7 @@ pub(super) const PROTOCOL_VERSION: u16 = 1;
 
 pub(super) const METHOD_INITIALIZE: &str = "initialize";
 pub(super) const METHOD_SESSION_NEW: &str = "session/new";
+pub(super) const METHOD_SESSION_RESUME: &str = "session/resume";
 pub(super) const METHOD_SESSION_SET_CONFIG_OPTION: &str = "session/set_config_option";
 pub(super) const METHOD_SESSION_PROMPT: &str = "session/prompt";
 pub(super) const METHOD_SESSION_CANCEL: &str = "session/cancel";
@@ -14,6 +15,10 @@ pub(super) const METHOD_SESSION_UPDATE: &str = "session/update";
 pub(super) const METHOD_REQUEST_PERMISSION: &str = "session/request_permission";
 pub(super) const METHOD_FS_READ_TEXT_FILE: &str = "fs/read_text_file";
 pub(super) const METHOD_FS_WRITE_TEXT_FILE: &str = "fs/write_text_file";
+/// Extension shared by the Claude and Codex adapters that adds a prompt to the turn in flight
+/// instead of starting a new one. Not part of ACP v1; the agent advertises it in the `_meta` of
+/// its `initialize` response.
+pub(super) const METHOD_SESSION_STEERING: &str = "_session/steering";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +56,19 @@ pub(super) struct InitializeResponse {
     pub agent_info: Option<AgentInfo>,
     pub agent_capabilities: AgentCapabilities,
     pub auth_methods: Vec<Value>,
+    /// Extension capabilities, which adapters announce here rather than in `agentCapabilities`.
+    #[serde(rename = "_meta")]
+    pub meta: Value,
+}
+
+impl InitializeResponse {
+    /// Whether the agent accepts [`METHOD_SESSION_STEERING`].
+    pub(super) fn supports_steering(&self) -> bool {
+        self.meta
+            .pointer("/steering/supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
 }
 
 /// What the agent announced it supports at `initialize`. Every field defaults to "unsupported"
@@ -60,9 +78,26 @@ pub(super) struct InitializeResponse {
 pub(super) struct AgentCapabilities {
     pub load_session: bool,
     pub prompt_capabilities: PromptCapabilities,
+    pub session_capabilities: SessionCapabilities,
     /// Capabilities this client does not model (e.g. `mcpCapabilities`), kept for logging.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
+}
+
+/// The session methods beyond `session/new` that the agent supports. Each is announced by an
+/// object (currently always empty) under its name; this client only uses `resume`.
+#[derive(Deserialize, Default, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct SessionCapabilities {
+    resume: Option<Value>,
+}
+
+impl SessionCapabilities {
+    /// Whether the agent takes `session/resume`, which reopens a session it persisted without
+    /// replaying its history the way `session/load` does.
+    pub(super) fn supports_resume(&self) -> bool {
+        self.resume.is_some()
+    }
 }
 
 /// The prompt content kinds the agent accepts beyond text and resource links, which every ACP
@@ -85,6 +120,15 @@ pub(super) struct AgentInfo {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct NewSessionParams {
+    pub cwd: String,
+    pub mcp_servers: Vec<McpServer>,
+}
+
+/// Reopens a session the agent persisted, in place of `session/new`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ResumeSessionParams {
+    pub session_id: String,
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
 }
@@ -130,6 +174,26 @@ pub(super) struct NewSessionResponse {
     /// Adapter-specific extension data.
     #[serde(rename = "_meta", default)]
     pub meta: Value,
+}
+
+/// `session/resume`'s answer, which is `session/new`'s minus the session id the client already
+/// holds.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct ResumeSessionResponse {
+    pub config_options: Vec<AcpAdvertisedSetting>,
+    #[serde(rename = "_meta")]
+    pub meta: Value,
+}
+
+impl ResumeSessionResponse {
+    pub(super) fn into_session(self, session_id: String) -> NewSessionResponse {
+        NewSessionResponse {
+            session_id,
+            config_options: self.config_options,
+            meta: self.meta,
+        }
+    }
 }
 
 /// An adapter-advertised ACP setting. Model and thinking settings share this wire representation.
@@ -190,6 +254,54 @@ pub(super) struct AcpSetSettingResponse {
 pub(super) struct PromptParams {
     pub session_id: String,
     pub prompt: Vec<ContentBlock>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SteeringParams {
+    pub session_id: String,
+    pub prompt: Vec<ContentBlock>,
+    #[serde(rename = "_meta")]
+    pub meta: SteeringMeta,
+}
+
+/// Request options for [`METHOD_SESSION_STEERING`]; adapters that do not know them ignore them.
+#[derive(Serialize)]
+pub(super) struct SteeringMeta {
+    pub steering: SteeringOptions,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SteeringOptions {
+    /// What the agent does when no turn is running. `promptRequired` asks it to leave the
+    /// prompt unconsumed and say so, rather than start a turn no `session/prompt` owns.
+    pub idle_behavior: SteeringIdleBehavior,
+}
+
+#[derive(Serialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum SteeringIdleBehavior {
+    PromptRequired,
+}
+
+#[derive(Deserialize, Debug)]
+pub(super) struct SteeringResponse {
+    pub outcome: SteeringOutcome,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum SteeringOutcome {
+    /// The prompt joined the running turn, whose `session/prompt` keeps owning the output.
+    Injected,
+    /// No turn was running, so the agent started one that no `session/prompt` owns.
+    StartedNewTurn,
+    /// No turn was running and the prompt was left unconsumed for the client to send itself.
+    PromptRequired,
+    Failed,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
