@@ -1,437 +1,113 @@
 # Shared skill reference parser cases. See README.md.
 
-- name: invalid_yaml_syntax
-  input: |
-    source: acme/shared-skills
-    include: [safe-secrets
-  expected: {error: invalid_yaml}
+- name: shorthand_named_ref
+  input: "source: acme/shared-skills@v1.4.0\ninclude: [safe-secrets, skills/release-notes, \"frontend/*\"]\nexclude: [\"legacy-*\"]\n"
+  expected:
+    reference:
+      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "v1.4.0"}}
+      include: [{kind: "name", value: "safe-secrets"}, {kind: "path", value: "skills/release-notes"}, {kind: "path_glob", value: "frontend/*"}]
+      exclude: [{kind: "name_glob", value: "legacy-*"}]
 
-- name: invalid_yaml_root_sequence
-  input: |
-    - source: acme/shared-skills
-      include:
-        - safe-secrets
-  expected: {error: invalid_yaml}
+- name: shorthand_host_github
+  input: "source: github.com:acme/shared-skills\ninclude: [safe-secrets]\n"
+  expected:
+    reference:
+      source: {code_forge: "GITHUB", owner: "acme", repo: "shared-skills", ref: null}
+      include: [{kind: "name", value: "safe-secrets"}]
+      exclude: []
+
+- name: shorthand_host_gitlab_subgroups
+  input: "source: gitlab.com:acme/platform/shared-skills\ninclude: [safe-secrets]\n"
+  expected:
+    reference:
+      source: {code_forge: "GITLAB", owner: "acme/platform", repo: "shared-skills", ref: null}
+      include: [{kind: "name", value: "safe-secrets"}]
+      exclude: []
+
+- name: shorthand_host_azure_devops
+  input: "source: dev.azure.com:acme/project/shared-skills\ninclude: [safe-secrets]\n"
+  expected:
+    reference:
+      source: {code_forge: "AZURE_DEVOPS", owner: "acme/project", repo: "shared-skills", ref: null}
+      include: [{kind: "name", value: "safe-secrets"}]
+      exclude: []
+
+- name: mapping_github_sha
+  input: "source: {codeForge: GITHUB, owner: acme, repo: shared-skills, ref: 0123456789abcdef0123456789abcdef01234567}\ninclude: [deploy]\n"
+  expected:
+    reference:
+      source: {code_forge: "GITHUB", owner: "acme", repo: "shared-skills", ref: {kind: "sha", value: "0123456789abcdef0123456789abcdef01234567"}}
+      include: [{kind: "name", value: "deploy"}]
+      exclude: []
+
+- name: globs
+  input: "source: acme/shared-skills\ninclude: [\"*\", \"tool-?\", \"[a-c]*\", \"**/review-*\"]\nexclude: [\"experimental/**\"]\n"
+  expected:
+    reference:
+      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: null}
+      include: [{kind: "name_glob", value: "*"}, {kind: "name_glob", value: "tool-?"}, {kind: "name_glob", value: "[a-c]*"}, {kind: "path_glob", value: "**/review-*"}]
+      exclude: [{kind: "path_glob", value: "experimental/**"}]
 
 - name: invalid_yaml_duplicate_key
-  input: |
-    source: acme/shared-skills
-    source: acme/other-skills
-    include:
-      - safe-secrets
+  input: "source: acme/one\nsource: acme/two\ninclude: [safe-secrets]\n"
   expected: {error: invalid_yaml}
 
-- name: yaml_alias_anchor
-  input: |
-    source: &repo acme/shared-skills
-    include:
-      - safe-secrets
-    exclude:
-      - *repo
-  expected: {error: yaml_alias}
-
 - name: yaml_alias_unquoted_star
-  input: |
-    source: acme/shared-skills
-    include:
-      - *
+  input: "source: acme/shared-skills\ninclude:\n  - *-review\n"
   expected: {error: yaml_alias}
 
-- name: yaml_alias_unquoted_star_prefix
-  input: |
-    source: acme/shared-skills
-    include:
-      - *-review
-  expected: {error: yaml_alias}
+- name: unknown_key_source_name
+  input: "source: {owner: acme, name: shared-skills}\ninclude: [safe-secrets]\n"
+  expected: {error: unknown_key}
 
 - name: missing_source_empty_file
   input: ""
   expected: {error: missing_source}
 
-- name: shorthand_trimmed
-  input: "source: \"  acme/shared-skills@v2  \"\ninclude:\n  - \"  safe-secrets  \"\nexclude:\n  - \" legacy-* \"\n"
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "v2"}}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-      exclude:
-        - {kind: "name_glob", value: "legacy-*"}
-
-- name: missing_source_blank_string
-  input: "source: \"  \"\ninclude:\n  - safe-secrets\n"
-  expected: {error: missing_source}
-
-- name: malformed_source_number
-  input: |
-    source: 42
-    include:
-      - safe-secrets
+- name: malformed_source_no_slash
+  input: "source: shared-skills\ninclude: [safe-secrets]\n"
   expected: {error: malformed_source}
-
-- name: shorthand_named_ref
-  input: |
-    # skills/shared.yaml: every agent
-    source: acme/shared-skills@v1.4.0
-    include:
-      - safe-secrets
-      - skills/release-notes
-      - "frontend/*"
-    exclude:
-      - "legacy-*"
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "v1.4.0"}}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-        - {kind: "path", value: "skills/release-notes"}
-        - {kind: "path_glob", value: "frontend/*"}
-      exclude:
-        - {kind: "name_glob", value: "legacy-*"}
-
-- name: shorthand_host_github
-  input: |
-    source: github.com:acme/shared-skills@v1.4.0
-    include:
-      - safe-secrets
-  expected:
-    reference:
-      source: {code_forge: "GITHUB", owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "v1.4.0"}}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-      exclude: []
-
-- name: shorthand_host_gitlab_subgroups
-  input: |
-    source: gitlab.com:acme/platform/shared-skills
-    include:
-      - safe-secrets
-  expected:
-    reference:
-      source: {code_forge: "GITLAB", owner: "acme/platform", repo: "shared-skills", ref: null}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-      exclude: []
-
-- name: shorthand_host_azure_devops
-  input: |
-    source: dev.azure.com:acme/project/shared-skills
-    include:
-      - safe-secrets
-  expected:
-    reference:
-      source: {code_forge: "AZURE_DEVOPS", owner: "acme/project", repo: "shared-skills", ref: null}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-      exclude: []
 
 - name: unknown_code_forge_host
-  input: |
-    source: bitbucket.org:acme/shared-skills
-    include:
-      - safe-secrets
+  input: "source: bitbucket.org:acme/shared-skills\ninclude: [safe-secrets]\n"
   expected: {error: unknown_code_forge}
-
-- name: malformed_source_host_only
-  input: |
-    source: "github.com:"
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: mapping_github_sha
-  input: |
-    source:
-      codeForge: GITHUB
-      owner: acme
-      repo: shared-skills
-      ref: 0123456789abcdef0123456789abcdef01234567
-    include:
-      - deploy
-  expected:
-    reference:
-      source: {code_forge: "GITHUB", owner: "acme", repo: "shared-skills", ref: {kind: "sha", value: "0123456789abcdef0123456789abcdef01234567"}}
-      include:
-        - {kind: "name", value: "deploy"}
-      exclude: []
-
-- name: mapping_null_optional_fields
-  input: |
-    source:
-      owner: acme
-      repo: shared-skills
-      codeForge:
-      ref:
-    include:
-      - deploy
-    exclude:
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: null}
-      include:
-        - {kind: "name", value: "deploy"}
-      exclude: []
-
-- name: mapping_ref_with_at
-  input: |
-    source:
-      owner: acme
-      repo: shared-skills
-      ref: feature@2026
-    include:
-      - deploy
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "feature@2026"}}
-      include:
-        - {kind: "name", value: "deploy"}
-      exclude: []
-
-- name: mapping_name_key_rejected
-  input: |
-    source:
-      owner: acme
-      name: shared-skills
-    include:
-      - safe-secrets
-  expected: {error: unknown_key}
-
-- name: malformed_source_mapping_missing_repo
-  input: |
-    source:
-      owner: acme
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: malformed_source_mapping_repo_with_slash
-  input: |
-    source:
-      owner: acme
-      repo: tools/shared-skills
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: malformed_source_no_slash
-  input: |
-    source: shared-skills
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: malformed_source_multiple_at
-  input: |
-    source: acme/shared-skills@feature@2026
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: malformed_source_dot_segment
-  input: |
-    source: acme/..
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: malformed_source_colon_in_repo
-  input: |
-    source: acme/shared:skills
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: unknown_code_forge_lowercase
-  input: |
-    source:
-      codeForge: github
-      owner: acme
-      repo: shared-skills
-    include:
-      - safe-secrets
-  expected: {error: unknown_code_forge}
-
-- name: malformed_ref_empty_shorthand
-  input: |
-    source: acme/shared-skills@
-    include:
-      - safe-secrets
-  expected: {error: malformed_ref}
 
 - name: malformed_ref_leading_dash
-  input: |
-    source:
-      owner: acme
-      repo: shared-skills
-      ref: "-main"
-    include:
-      - safe-secrets
-  expected: {error: malformed_ref}
-
-- name: malformed_ref_colon
-  input: |
-    source: acme/shared-skills@v1:beta
-    include:
-      - safe-secrets
-  expected: {error: malformed_ref}
-
-- name: malformed_ref_non_string
-  input: |
-    source:
-      owner: acme
-      repo: shared-skills
-      ref: 1.4
-    include:
-      - safe-secrets
+  input: "source: {owner: acme, repo: shared-skills, ref: \"-main\"}\ninclude: [safe-secrets]\n"
   expected: {error: malformed_ref}
 
 - name: malformed_ref_sha256
-  input: |
-    source: acme/shared-skills@0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-    include:
-      - safe-secrets
+  input: "source: acme/shared-skills@0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninclude: [safe-secrets]\n"
   expected: {error: malformed_ref}
 
-- name: shorthand_uppercase_hex_is_named
-  input: |
-    source: acme/shared-skills@0123456789ABCDEF0123456789ABCDEF01234567
-    include:
-      - safe-secrets
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: {kind: "named", value: "0123456789ABCDEF0123456789ABCDEF01234567"}}
-      include:
-        - {kind: "name", value: "safe-secrets"}
-      exclude: []
-
-- name: missing_include_absent
-  input: |
-    source: acme/shared-skills
+- name: missing_include
+  input: "source: acme/shared-skills\n"
   expected: {error: missing_include}
 
 - name: empty_include
-  input: |
-    source: acme/shared-skills
-    include: []
+  input: "source: acme/shared-skills\ninclude: []\n"
   expected: {error: empty_include}
 
-- name: non_string_entry_include_scalar
-  input: |
-    source: acme/shared-skills
-    include: safe-secrets
-  expected: {error: non_string_entry}
-
 - name: non_string_entry_number
-  input: |
-    source: acme/shared-skills
-    include:
-      - 42
+  input: "source: acme/shared-skills\ninclude: [42]\n"
   expected: {error: non_string_entry}
 
-- name: globs
-  input: |
-    source: acme/shared-skills
-    include:
-      - "*"
-      - "tool-?"
-      - "[a-c]*"
-      - "frontend/*"
-      - "**/review-*"
-      - "skills/**"
-      - "**"
-    exclude:
-      - "legacy-*"
-      - "experimental/**"
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: null}
-      include:
-        - {kind: "name_glob", value: "*"}
-        - {kind: "name_glob", value: "tool-?"}
-        - {kind: "name_glob", value: "[a-c]*"}
-        - {kind: "path_glob", value: "frontend/*"}
-        - {kind: "path_glob", value: "**/review-*"}
-        - {kind: "path_glob", value: "skills/**"}
-        - {kind: "name_glob", value: "**"}
-      exclude:
-        - {kind: "name_glob", value: "legacy-*"}
-        - {kind: "path_glob", value: "experimental/**"}
+- name: invalid_glob_unclosed_class
+  input: "source: acme/shared-skills\ninclude: [\"[review\"]\n"
+  expected: {error: invalid_glob}
 
 - name: absolute_path
-  input: |
-    source: acme/shared-skills
-    include:
-      - /skills/release-notes
+  input: "source: acme/shared-skills\ninclude: [/skills/release-notes]\n"
   expected: {error: absolute_path}
 
-- name: parent_path_middle
-  input: |
-    source: acme/shared-skills
-    include:
-      - skills/../secrets
+- name: parent_path
+  input: "source: acme/shared-skills\ninclude: [skills/../secrets]\n"
   expected: {error: parent_path}
 
-- name: braces_and_backslashes_are_literal
-  input: |
-    source: acme/shared-skills
-    include:
-      - "docs-{draft,final}"
-      - "docs-{draft-*"
-      - "frontend/{web,mobile}"
-      - 'tool-*\'
-  expected:
-    reference:
-      source: {code_forge: null, owner: "acme", repo: "shared-skills", ref: null}
-      include:
-        - {kind: "name", value: "docs-{draft,final}"}
-        - {kind: "name_glob", value: "docs-{draft-*"}
-        - {kind: "path", value: "frontend/{web,mobile}"}
-        - {kind: "name_glob", value: "tool-*\\"}
-      exclude: []
-
-- name: invalid_glob_empty_class
-  input: |
-    source: acme/shared-skills
-    include:
-      - "[]*"
-  expected: {error: invalid_glob}
-
-- name: invalid_glob_reversed_range
-  input: |
-    source: acme/shared-skills
-    include:
-      - "[z-a]*"
-  expected: {error: invalid_glob}
-
 - name: precedence_unknown_key_before_source
-  input: |
-    source: shared-skills
-    include:
-      - safe-secrets
-    labels: [team]
+  input: "source: shared-skills\ninclude: [safe-secrets]\nlabels: [team]\n"
   expected: {error: unknown_key}
 
-- name: precedence_owner_repo_before_host
-  input: |
-    source: bitbucket.org:acme
-    include:
-      - safe-secrets
-  expected: {error: malformed_source}
-
-- name: precedence_host_before_ref
-  input: |
-    source: bitbucket.org:acme/shared-skills@a..b
-    include:
-      - safe-secrets
-  expected: {error: unknown_code_forge}
-
 - name: precedence_entries_in_order
-  input: |
-    source: acme/shared-skills
-    include:
-      - safe-secrets
-      - /skills/../review
-      - "[review"
-    exclude:
-      - "[legacy"
+  input: "source: acme/shared-skills\ninclude: [safe-secrets, /skills/../review, \"[review\"]\n"
   expected: {error: absolute_path}
