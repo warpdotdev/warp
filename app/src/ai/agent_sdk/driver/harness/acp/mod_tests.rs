@@ -12,6 +12,7 @@ use warpui::r#async::FutureExt as _;
 
 use super::attachments::ResolvedFile;
 use super::protocol::{ContentBlock, PromptCapabilities};
+use super::resume::ResumeMiss;
 use super::*;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::server::server_api::ServerApiProvider;
@@ -254,6 +255,7 @@ fn initial_prompt_links_files_after_server_composed_text() {
         Some("system"),
         Some("recovery"),
         Some("context"),
+        &SessionOrigin::New,
     );
     let files = [
         ResolvedFile {
@@ -303,7 +305,36 @@ fn initial_prompt_links_files_after_server_composed_text() {
 fn initial_prompt_without_files_keeps_the_existing_text() {
     let harness = AcpHarness::new(Harness::Codex).unwrap();
 
-    let text = harness.initial_prompt_text("hello", Some("staged in config"), Some(" "), None);
+    let text = harness.initial_prompt_text(
+        "hello",
+        Some("staged in config"),
+        Some(" "),
+        None,
+        &SessionOrigin::New,
+    );
 
     assert_eq!(text, "hello");
+}
+
+#[test]
+fn a_resumed_session_is_not_sent_the_system_prompt_again() {
+    let harness = AcpHarness::new(Harness::Claude).unwrap();
+
+    let resumed = harness.initial_prompt_text(
+        "inspect these",
+        Some("system"),
+        Some("recovery"),
+        Some("context"),
+        &SessionOrigin::Resumed,
+    );
+    let fresh = harness.initial_prompt_text(
+        "inspect these",
+        Some("system"),
+        Some("recovery"),
+        Some("context"),
+        &SessionOrigin::ResumeMissed(ResumeMiss::NoTranscript),
+    );
+
+    assert_eq!(resumed, "recovery\n\ncontext\n\ninspect these");
+    assert_eq!(fresh, "recovery\n\ncontext\n\nsystem\n\ninspect these");
 }

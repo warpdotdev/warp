@@ -177,6 +177,12 @@ impl FakeAgent {
         serde_json::from_str(&line).expect("client must write one JSON object per line")
     }
 
+    /// Closes the agent's end of both pipes, as an agent that exits does, while keeping the
+    /// connection's read loop running so it can observe the EOF.
+    pub(in super::super) fn hang_up(self) -> Arc<Background> {
+        self._executor.clone()
+    }
+
     pub(in super::super) async fn send(&mut self, message: Value) {
         let mut encoded = serde_json::to_string(&message).unwrap();
         encoded.push('\n');
