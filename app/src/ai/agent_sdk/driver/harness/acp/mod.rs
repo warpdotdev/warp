@@ -37,6 +37,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 pub(crate) use bridge::run_bridge;
+use futures::stream::FuturesUnordered;
 use futures::{FutureExt, future, pin_mut, select};
 use parking_lot::Mutex;
 use prost::Message as _;
@@ -1032,6 +1033,7 @@ impl HarnessRunner for AcpHarnessRunner {
             steering_supported,
             steering: None,
             awaiting_steer: VecDeque::new(),
+            late_steers: Mutex::new(FuturesUnordered::new()),
         };
         background
             .spawn(async move { turn_driver.run(&mut mapper).await })

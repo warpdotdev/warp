@@ -28,7 +28,7 @@ use warpui::r#async::executor::{Background, BackgroundTask};
 use super::protocol::{METHOD_REQUEST_PERMISSION, PermissionOutcome, RequestPermissionResponse};
 
 const JSON_RPC_VERSION: &str = "2.0";
-pub(super) const METHOD_NOT_FOUND: i64 = -32601;
+const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
 
 /// A JSON-RPC error returned to the agent for a request it made to us.
@@ -96,12 +96,23 @@ struct InboundRequestEntry {
     handler: AbortHandle,
 }
 
-type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<Result<Value>>>>>;
+type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<(Arrival, Result<Value>)>>>>;
 type InboundRequests = Arc<Mutex<HashMap<InboundRequestId, InboundRequestEntry>>>;
 type BoxedWriter = Pin<Box<dyn AsyncWrite + Send>>;
 /// `None` once the connection has been closed; dropping the writer is what signals EOF to the
 /// agent.
 type SharedWriter = Arc<AsyncMutex<Option<BufWriter<BoxedWriter>>>>;
+
+/// Where a response stood among the messages the agent wrote: of two answers, the one with the
+/// lower arrival was written first. Their futures resolve in no particular order, so this is
+/// what a caller compares when the order matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Arrival(u64);
+
+impl Arrival {
+    /// A request that never reached the agent; later than any answer.
+    pub(super) const NEVER: Self = Self(u64::MAX);
+}
 
 pub(super) struct AcpConnection {
     writer: SharedWriter,
@@ -172,6 +183,17 @@ impl AcpConnection {
         method: &str,
         params: P,
     ) -> Result<BoxFuture<'static, Result<R>>> {
+        let response = self.send_sequenced_request(method, params).await?;
+        Ok(Box::pin(async move { response.await.1 }))
+    }
+
+    /// Like [`Self::send_request`], with the response's [`Arrival`] alongside it. A request
+    /// the agent never answers (it closed its side first) is marked as arriving with the close.
+    pub(super) async fn send_sequenced_request<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<BoxFuture<'static, (Arrival, Result<R>)>> {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -187,11 +209,20 @@ impl AcpConnection {
         }
         let method = method.to_owned();
         Ok(Box::pin(async move {
-            let value = rx
-                .await
-                .map_err(|_| anyhow!("ACP agent closed before responding to {method}"))??;
-            serde_json::from_value(value)
-                .with_context(|| format!("Failed to parse ACP response to {method}"))
+            let (arrival, value) = match rx.await {
+                Ok(answer) => answer,
+                Err(_) => {
+                    return (
+                        Arrival::NEVER,
+                        Err(anyhow!("ACP agent closed before responding to {method}")),
+                    );
+                }
+            };
+            let response = value.and_then(|value| {
+                serde_json::from_value(value)
+                    .with_context(|| format!("Failed to parse ACP response to {method}"))
+            });
+            (arrival, response)
         }))
     }
 
@@ -377,6 +408,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     handler: AgentRequestHandler,
 ) {
     let mut line = String::new();
+    let mut arrivals = 0;
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -398,6 +430,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 continue;
             }
         };
+        arrivals += 1;
         let id = message.get("id").filter(|id| !id.is_null()).cloned();
         let method = message
             .get("method")
@@ -425,7 +458,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     (None, None) => Ok(Value::Null),
                 };
                 if let Some(tx) = pending.lock().await.remove(&id) {
-                    let _ = tx.send(result);
+                    let _ = tx.send((Arrival(arrivals), result));
                 }
             }
             (None, Some(method)) => {
@@ -444,7 +477,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
     // sees the notification stream closed.
     notifications.close();
     for (_, tx) in pending.lock().await.drain() {
-        let _ = tx.send(Err(anyhow!("ACP agent closed its stdout")));
+        let _ = tx.send((
+            Arrival(arrivals),
+            Err(anyhow!("ACP agent closed its stdout")),
+        ));
     }
     // Nothing is listening for answers any more; let the handlers stop where they are.
     for (_, entry) in inbound.lock().drain() {
