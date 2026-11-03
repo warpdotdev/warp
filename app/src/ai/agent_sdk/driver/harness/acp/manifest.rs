@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf, absolute};
 
@@ -6,7 +5,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde::Deserialize;
 use typed_path::{WindowsComponent, WindowsPath};
 use warp_cli::agent::Harness;
-use warp_util::path::{file_exists_and_is_executable, resolve_executable_in_path};
+use warp_util::path::file_exists_and_is_executable;
 
 use super::super::super::AgentDriverError;
 use super::super::ThirdPartyHarness;
@@ -17,13 +16,6 @@ use super::launch::AcpLaunchSpec;
 
 const SIDECAR_ENV: &str = "WARP_HARNESS_SIDECAR";
 const MANIFEST_FILE: &str = "warp-harness.json";
-
-/// Program names the no-sidecar Claude default accepts, in preference order: the bin the
-/// upstream npm package installs, then the launcher name the macOS and Windows agent packages
-/// put on `PATH`. (The Linux sidecar hides the difference behind its `warp-acp` wrapper.)
-pub(super) const CLAUDE_DEFAULT_PROGRAMS: [&str; 2] = ["claude-agent-acp", "claude-code-acp"];
-/// The npm package that provides [`CLAUDE_DEFAULT_PROGRAMS`]'s first entry.
-pub(super) const CLAUDE_ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
 
 /// Unknown top-level sections are ignored so a sidecar can add ones for other transports
 /// without breaking clients that only know about ACP; the sections consumed here are strict.
@@ -49,10 +41,79 @@ struct Auth {
 /// there is no sidecar and the adapter is expected on `PATH`. Anything that depends on the
 /// sidecar's own layout is the launched program's business, not the client's.
 pub(super) struct HarnessManifest {
+    /// The preferred program and its arguments. The bridge launches the first of
+    /// [`Self::program_candidates`] it finds on the terminal session's `PATH`, which may be a
+    /// different name; this one is for logs and messages.
     pub(super) launch: AcpLaunchSpec,
+    /// The built-in default this manifest came from; `None` for a sidecar, whose program was
+    /// verified when the manifest was read.
+    pub(super) default: Option<DefaultAdapter>,
     pub(super) auth_check_command: Option<String>,
     pub(super) runtime_error_patterns: Vec<String>,
-    pub(super) is_sidecar: bool,
+}
+
+impl HarnessManifest {
+    /// Program names in preference order. A sidecar has exactly one, already absolute.
+    pub(super) fn program_candidates(&self) -> Vec<String> {
+        match &self.default {
+            Some(adapter) => adapter.programs().map(str::to_owned).collect(),
+            None => vec![self.launch.program.clone()],
+        }
+    }
+}
+
+/// The built-in launch for a harness with no sidecar. The adapter is expected on `PATH` under
+/// one of its names, which differ between where it came from: the bin an npm package installs
+/// versus the launcher an agent package ships.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DefaultAdapter {
+    /// The name tried first.
+    pub(super) preferred: &'static str,
+    /// Other names the adapter may be installed under, in preference order.
+    pub(super) alternates: &'static [&'static str],
+    args: &'static [&'static str],
+    /// The npm package that provides the adapter, for install guidance.
+    pub(super) package: Option<&'static str>,
+    /// A CLI the adapter drives, which has to be installed as well.
+    pub(super) wraps_cli: Option<&'static str>,
+}
+
+impl DefaultAdapter {
+    /// Every name the adapter may be installed under, preferred first.
+    pub(super) fn programs(&self) -> impl Iterator<Item = &'static str> + '_ {
+        std::iter::once(self.preferred).chain(self.alternates.iter().copied())
+    }
+
+    /// Why the harness cannot start when none of [`Self::programs`] is installed. The adapter
+    /// is launched through the terminal session's shell, so it has to be visible to that shell
+    /// as well as to this process.
+    pub(super) fn missing_reason(&self, install_docs_url: Option<&str>) -> String {
+        let mut reason = if self.alternates.is_empty() {
+            format!("ACP adapter '{}' is not on PATH.", self.preferred)
+        } else {
+            let names = self
+                .programs()
+                .map(|program| format!("'{program}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("No ACP adapter found: none of {names} is on PATH.")
+        };
+        if let Some(package) = self.package {
+            reason.push_str(&format!(" Install it with `npm install -g {package}`."));
+        }
+        reason.push_str(
+            " Make sure it is on PATH for both the oz process and the terminal session's \
+             shell, which launches it.",
+        );
+        match (self.wraps_cli, install_docs_url) {
+            (Some(cli), Some(url)) => {
+                reason.push_str(&format!(" The '{cli}' CLI must be installed too: {url}"));
+            }
+            (None, Some(url)) => reason.push_str(&format!(" Install docs: {url}")),
+            (_, None) => {}
+        }
+        reason
+    }
 }
 
 pub(super) fn resolve(harness: Harness) -> Result<HarnessManifest, AgentDriverError> {
@@ -95,84 +156,79 @@ fn discover(
     log::info!("Selected ACP manifest for {harness}: {}", path.display());
     Ok(HarnessManifest {
         launch: manifest.acp,
+        default: None,
         auth_check_command: manifest.auth.check_command,
         runtime_error_patterns: manifest.auth.runtime_error_patterns,
-        is_sidecar: true,
     })
 }
 
 /// Launch and auth details for a harness with no sidecar: the ACP adapter is resolved on
 /// `PATH`, and the auth knowledge comes from the terminal transport for the same harness.
 fn default_manifest(harness: Harness) -> Option<HarnessManifest> {
-    let path_env = std::env::var_os("PATH").unwrap_or_default();
-    let (program, args, pty): (String, &[&str], Option<&dyn ThirdPartyHarness>) = match harness {
-        Harness::Claude => (
-            select_default_program(&CLAUDE_DEFAULT_PROGRAMS, &path_env).to_owned(),
-            &[],
-            Some(&ClaudeHarness),
-        ),
-        Harness::Codex => ("codex-acp".to_owned(), &[], Some(&CodexHarness)),
-        Harness::Gemini => (
-            "gemini".to_owned(),
-            &["--experimental-acp"],
-            Some(&GeminiHarness),
-        ),
-        Harness::Pi => ("pi-acp".to_owned(), &[], None),
-        Harness::Oz | Harness::OpenCode | Harness::Unknown => return None,
-    };
+    let (adapter, pty) = default_adapter(harness)?;
     Some(HarnessManifest {
         launch: AcpLaunchSpec {
-            program,
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            program: adapter.preferred.to_owned(),
+            args: adapter.args.iter().map(|arg| (*arg).to_owned()).collect(),
         },
+        default: Some(adapter),
         auth_check_command: pty.and_then(ThirdPartyHarness::auth_check_command),
         runtime_error_patterns: pty
             .map(ThirdPartyHarness::runtime_error_patterns_for_run)
             .unwrap_or_default(),
-        is_sidecar: false,
     })
 }
 
-/// Picks the first of `candidates` that resolves on `path_env`, so the bridge launches the
-/// name that actually exists. When none does, the preferred name is kept: the install check
-/// then reports it as missing with [`missing_default_program_reason`].
-fn select_default_program<'a>(candidates: &[&'a str], path_env: &OsStr) -> &'a str {
-    candidates
-        .iter()
-        .copied()
-        .find(|candidate| resolve_executable_in_path(candidate, path_env).is_some())
-        .unwrap_or(candidates[0])
-}
-
-/// Why a harness with no sidecar cannot start: its ACP adapter is not on `PATH`. The
-/// adapter is launched through the terminal session's shell, so it has to be visible to
-/// that shell as well as to this process. `None` when the generic missing-CLI message is
-/// enough for `harness`.
-pub(super) fn missing_default_program_reason(
+/// The built-in adapter for `harness`, with the terminal transport it borrows auth checks
+/// from; `None` for a harness that cannot be driven over ACP.
+fn default_adapter(
     harness: Harness,
-    install_docs_url: Option<&str>,
-) -> Option<String> {
-    match harness {
-        Harness::Claude => {
-            let [preferred, fallback] = CLAUDE_DEFAULT_PROGRAMS;
-            let mut reason = format!(
-                "No Claude ACP adapter found: neither '{preferred}' nor '{fallback}' is on PATH. \
-                 Install it with `npm install -g {CLAUDE_ADAPTER_PACKAGE}` and make sure it is \
-                 on PATH for both the oz process and the terminal session's shell, which \
-                 launches it."
-            );
-            if let Some(url) = install_docs_url {
-                reason.push_str(&format!(" Claude Code itself must be installed too: {url}"));
-            }
-            Some(reason)
-        }
-        Harness::Codex
-        | Harness::Gemini
-        | Harness::Pi
-        | Harness::Oz
-        | Harness::OpenCode
-        | Harness::Unknown => None,
-    }
+) -> Option<(DefaultAdapter, Option<&'static dyn ThirdPartyHarness>)> {
+    const NONE: DefaultAdapter = DefaultAdapter {
+        preferred: "",
+        alternates: &[],
+        args: &[],
+        package: None,
+        wraps_cli: None,
+    };
+    Some(match harness {
+        // The launcher the macOS and Windows agent packages put on `PATH` pins the adapter
+        // version, so it wins over a globally installed copy of the upstream npm package. (The
+        // Linux sidecar hides the difference behind its `warp-acp` wrapper.)
+        Harness::Claude => (
+            DefaultAdapter {
+                preferred: "claude-code-acp",
+                alternates: &["claude-agent-acp"],
+                package: Some("@agentclientprotocol/claude-agent-acp"),
+                wraps_cli: Some("claude"),
+                ..NONE
+            },
+            Some(&ClaudeHarness),
+        ),
+        Harness::Codex => (
+            DefaultAdapter {
+                preferred: "codex-acp",
+                ..NONE
+            },
+            Some(&CodexHarness),
+        ),
+        Harness::Gemini => (
+            DefaultAdapter {
+                preferred: "gemini",
+                args: &["--experimental-acp"],
+                ..NONE
+            },
+            Some(&GeminiHarness),
+        ),
+        Harness::Pi => (
+            DefaultAdapter {
+                preferred: "pi-acp",
+                ..NONE
+            },
+            None,
+        ),
+        Harness::Oz | Harness::OpenCode | Harness::Unknown => return None,
+    })
 }
 
 fn read_manifest(path: &Path, harness: Harness) -> Result<Manifest> {

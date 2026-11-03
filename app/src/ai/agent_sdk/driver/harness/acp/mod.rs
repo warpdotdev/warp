@@ -51,7 +51,7 @@ use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::StreamFinished;
 use warp_multi_agent_api::{ClientAction, McpServerIdentity, ResponseEvent, response_event};
-use warp_util::path::{EscapeChar, ShellFamily};
+use warp_util::path::{EscapeChar, ShellFamily, resolve_executable};
 use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
 use warpui::{ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
@@ -266,21 +266,28 @@ impl ThirdPartyHarness for AcpHarness {
     }
 
     fn validate(&self) -> Result<(), AgentDriverError> {
-        if self.manifest.is_sidecar {
+        // A sidecar's program was verified when its manifest was read.
+        let Some(adapter) = &self.manifest.default else {
             return Ok(());
-        }
+        };
         let docs_url = self.install_docs_url();
-        validate_cli_installed(&self.manifest.launch.program, docs_url).map_err(|error| {
-            // The generic message names one program; a harness whose default accepts
-            // several names, or needs a separate adapter package, gets its own guidance.
-            match manifest::missing_default_program_reason(self.harness, docs_url) {
-                Some(reason) => AgentDriverError::HarnessSetupFailed {
-                    harness: self.harness.to_string(),
-                    reason,
-                },
-                None => error,
-            }
-        })
+        // Checked against this process's `PATH`, like the terminal transports do. The bridge
+        // picks the name again on the session shell's `PATH`, which is the one that counts.
+        if !adapter
+            .programs()
+            .any(|program| resolve_executable(program).is_some())
+        {
+            return Err(AgentDriverError::HarnessSetupFailed {
+                harness: self.harness.to_string(),
+                reason: adapter.missing_reason(docs_url),
+            });
+        }
+        // The adapter only drives the CLI; without it the run would fail at the auth
+        // preflight and read as a login problem.
+        if let Some(cli) = adapter.wraps_cli {
+            validate_cli_installed(cli, docs_url)?;
+        }
+        Ok(())
     }
 
     fn auth_check_command(&self) -> Option<String> {
@@ -377,6 +384,7 @@ impl ThirdPartyHarness for AcpHarness {
         Ok(Box::new(AcpHarnessRunner {
             harness: self.harness,
             launch: self.manifest.launch.clone(),
+            program_candidates: self.manifest.program_candidates(),
             user_prompt: prompt.to_owned(),
             prompt_text,
             resumed_prompt_text,
@@ -475,6 +483,8 @@ struct CliSession {
 pub(crate) struct AcpHarnessRunner {
     harness: Harness,
     launch: AcpLaunchSpec,
+    /// Names the bridge may launch `launch.program` under, preferred first.
+    program_candidates: Vec<String>,
     /// The prompt as the user wrote it, echoed into the conversation.
     user_prompt: String,
     /// The full text sent to the agent, including server-composed context.
@@ -725,7 +735,8 @@ impl AcpHarnessRunner {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for AcpHarnessRunner {
     fn harness_name(&self) -> &str {
-        &self.launch.program
+        // The harness, not the program: the same harness launches under several names.
+        self.harness.config_name()
     }
     #[cfg(test)]
     fn prompt_text_for_test(&self) -> Option<&str> {
@@ -791,7 +802,12 @@ impl HarnessRunner for AcpHarnessRunner {
             })
         });
 
-        let listener = BridgeListener::bind(&self.launch.program, &self.launch.args)
+        let programs = self
+            .program_candidates
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let listener = BridgeListener::bind(&programs, &self.launch.args)
             .map_err(|error| self.setup_failed(format!("{error:#}")))?;
         let command = bridge_command(listener.launch_file(), shell_family)
             .map_err(|error| self.setup_failed(format!("{error:#}")))?;
