@@ -4,20 +4,10 @@
 use std::collections::HashSet;
 
 use globset::{Glob, GlobBuilder, GlobMatcher};
-use thiserror::Error;
+use strum_macros::IntoStaticStr;
 use yaml_rust::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust::scanner::Marker;
 use yaml_rust::{Yaml, YamlLoader};
-
-const SKILL_REFERENCE_FILE_EXTENSIONS: [&str; 2] = ["yaml", "yml"];
-
-const SOURCE_KEY: &str = "source";
-const INCLUDE_KEY: &str = "include";
-const EXCLUDE_KEY: &str = "exclude";
-const SOURCE_OWNER_KEY: &str = "owner";
-const SOURCE_REPO_KEY: &str = "repo";
-const SOURCE_CODE_FORGE_KEY: &str = "codeForge";
-const SOURCE_REF_KEY: &str = "ref";
 
 /// A parsed reference file: one source repository and the skills to load from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,63 +143,31 @@ impl SkillReferenceEntry {
     }
 }
 
-/// Why a reference file is invalid. Each kind has a stable code shared with the server's parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+/// Why a reference file is invalid. Each kind's snake_case name is a code shared with the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum SkillReferenceParseError {
-    #[error("the file is not valid YAML")]
     InvalidYaml,
-    #[error("YAML anchors and aliases are not allowed; quote entries that start with `*`")]
+    /// Includes an unquoted entry that starts with `*`.
     YamlAlias,
-    #[error("the file has an unknown key")]
     UnknownKey,
-    #[error("`source` is missing or empty")]
     MissingSource,
-    #[error("`source` is malformed")]
     MalformedSource,
-    #[error("`ref` is empty or malformed")]
     MalformedRef,
-    #[error("`codeForge` or the shorthand host is not a supported code forge")]
     UnknownCodeForge,
-    #[error("`include` is missing")]
     MissingInclude,
-    #[error("`include` is empty")]
     EmptyInclude,
-    #[error("`include` and `exclude` entries must be strings")]
     NonStringEntry,
-    #[error("an entry is not a valid glob")]
     InvalidGlob,
-    #[error("paths must be relative")]
     AbsolutePath,
-    #[error("paths must not contain `..`")]
     ParentPath,
-}
-
-impl SkillReferenceParseError {
-    /// The stable code for this error kind.
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::InvalidYaml => "invalid_yaml",
-            Self::YamlAlias => "yaml_alias",
-            Self::UnknownKey => "unknown_key",
-            Self::MissingSource => "missing_source",
-            Self::MalformedSource => "malformed_source",
-            Self::MalformedRef => "malformed_ref",
-            Self::UnknownCodeForge => "unknown_code_forge",
-            Self::MissingInclude => "missing_include",
-            Self::EmptyInclude => "empty_include",
-            Self::NonStringEntry => "non_string_entry",
-            Self::InvalidGlob => "invalid_glob",
-            Self::AbsolutePath => "absolute_path",
-            Self::ParentPath => "parent_path",
-        }
-    }
 }
 
 /// Whether `file_name` names a reference file when it sits directly in a skills folder.
 pub fn is_skill_reference_file_name(file_name: &str) -> bool {
     file_name
         .rsplit_once('.')
-        .is_some_and(|(_, extension)| SKILL_REFERENCE_FILE_EXTENSIONS.contains(&extension))
+        .is_some_and(|(_, extension)| matches!(extension, "yaml" | "yml"))
 }
 
 /// Parses the contents of one reference file.
@@ -236,21 +194,19 @@ pub fn parse_skill_reference_file(
         | Yaml::Alias(_)
         | Yaml::BadValue => return Err(SkillReferenceParseError::InvalidYaml),
     };
-    for key in mapping.keys() {
-        match key.as_str() {
-            Some(SOURCE_KEY | INCLUDE_KEY | EXCLUDE_KEY) => {}
-            _ => return Err(SkillReferenceParseError::UnknownKey),
-        }
+    if !keys_are_known(mapping, &["source", "include", "exclude"]) {
+        return Err(SkillReferenceParseError::UnknownKey);
     }
-    let source = parse_source(mapping.get(&Yaml::String(SOURCE_KEY.to_owned())))?;
-    let include = match mapping.get(&Yaml::String(INCLUDE_KEY.to_owned())) {
+    let field = |key: &str| mapping.get(&Yaml::String(key.to_owned()));
+    let source = parse_source(field("source"))?;
+    let include = match field("include") {
         None | Some(Yaml::Null) => return Err(SkillReferenceParseError::MissingInclude),
         Some(value) => parse_entries(value)?,
     };
     if include.is_empty() {
         return Err(SkillReferenceParseError::EmptyInclude);
     }
-    let exclude = match mapping.get(&Yaml::String(EXCLUDE_KEY.to_owned())) {
+    let exclude = match field("exclude") {
         None | Some(Yaml::Null) => Vec::new(),
         Some(value) => parse_entries(value)?,
     };
@@ -261,29 +217,30 @@ pub fn parse_skill_reference_file(
     })
 }
 
+fn keys_are_known(mapping: &yaml_rust::yaml::Hash, known: &[&str]) -> bool {
+    mapping
+        .keys()
+        .all(|key| key.as_str().is_some_and(|key| known.contains(&key)))
+}
+
 fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParseError> {
     match value {
         None | Some(Yaml::Null) => Err(SkillReferenceParseError::MissingSource),
         Some(Yaml::String(shorthand)) => parse_source_shorthand(shorthand.trim()),
         Some(Yaml::Hash(mapping)) => {
-            for key in mapping.keys() {
-                match key.as_str() {
-                    Some(
-                        SOURCE_OWNER_KEY | SOURCE_REPO_KEY | SOURCE_CODE_FORGE_KEY | SOURCE_REF_KEY,
-                    ) => {}
-                    _ => return Err(SkillReferenceParseError::UnknownKey),
-                }
+            if !keys_are_known(mapping, &["owner", "repo", "codeForge", "ref"]) {
+                return Err(SkillReferenceParseError::UnknownKey);
             }
             let field = |key: &str| mapping.get(&Yaml::String(key.to_owned()));
-            let owner = match field(SOURCE_OWNER_KEY) {
+            let owner = match field("owner") {
                 Some(Yaml::String(owner)) if is_valid_owner(owner.trim()) => owner.trim(),
                 _ => return Err(SkillReferenceParseError::MalformedSource),
             };
-            let repo = match field(SOURCE_REPO_KEY) {
+            let repo = match field("repo") {
                 Some(Yaml::String(repo)) if is_valid_repository_segment(repo.trim()) => repo.trim(),
                 _ => return Err(SkillReferenceParseError::MalformedSource),
             };
-            let code_forge = match field(SOURCE_CODE_FORGE_KEY) {
+            let code_forge = match field("codeForge") {
                 None | Some(Yaml::Null) => None,
                 Some(Yaml::String(token)) => Some(
                     SkillSourceForge::from_token(token.trim())
@@ -291,7 +248,7 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
                 ),
                 Some(_) => return Err(SkillReferenceParseError::UnknownCodeForge),
             };
-            let reference = match field(SOURCE_REF_KEY) {
+            let reference = match field("ref") {
                 None | Some(Yaml::Null) => None,
                 Some(Yaml::String(reference)) => Some(parse_ref(reference.trim())?),
                 Some(_) => return Err(SkillReferenceParseError::MalformedRef),
@@ -374,20 +331,15 @@ fn is_valid_repository_segment(segment: &str) -> bool {
     !segment.is_empty() && segment != "." && segment != ".." && !segment.contains(['/', '@', ':'])
 }
 
-/// A subset of `git check-ref-format` that rejects anything git would refuse as a branch or tag.
+/// Rejects refs that could be read as a git option (`-`) or as range or reflog syntax. Other names
+/// git refuses fail when checked out, which a run tolerates.
 fn is_valid_ref(value: &str) -> bool {
     !value.is_empty()
-        && value != "@"
-        && !value.starts_with(['-', '/'])
-        && !value.ends_with(['/', '.'])
-        && !value.ends_with(".lock")
+        && !value.starts_with('-')
         && !value.contains("..")
-        && !value.contains("//")
         && !value.contains("@{")
         && !value.chars().any(|character| {
-            character.is_whitespace()
-                || character.is_ascii_control()
-                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+            character.is_whitespace() || character.is_control() || character == ':'
         })
 }
 
@@ -463,88 +415,52 @@ fn check_yaml_structure(contents: &str) -> Result<(), SkillReferenceParseError> 
 
 #[derive(Default)]
 struct YamlStructureChecker {
-    frames: Vec<YamlFrame>,
+    /// One entry per open collection: a mapping's keys so far and whether a key comes next, or
+    /// `None` for a sequence.
+    frames: Vec<Option<(HashSet<String>, bool)>>,
     error: Option<SkillReferenceParseError>,
-}
-
-enum YamlFrame {
-    Sequence,
-    Mapping {
-        keys: HashSet<String>,
-        expecting_key: bool,
-    },
-}
-
-impl YamlStructureChecker {
-    fn record(&mut self, error: SkillReferenceParseError) {
-        self.error.get_or_insert(error);
-    }
-
-    /// Accounts for one complete node in the enclosing collection, checking mapping keys for
-    /// duplicates.
-    fn on_node(&mut self, scalar_key: Option<&str>) {
-        let mut duplicate = false;
-        if let Some(YamlFrame::Mapping {
-            keys,
-            expecting_key,
-        }) = self.frames.last_mut()
-        {
-            if *expecting_key
-                && let Some(key) = scalar_key
-                && !keys.insert(key.to_owned())
-            {
-                duplicate = true;
-            }
-            *expecting_key = !*expecting_key;
-        }
-        if duplicate {
-            self.record(SkillReferenceParseError::InvalidYaml);
-        }
-    }
 }
 
 impl MarkedEventReceiver for YamlStructureChecker {
     fn on_event(&mut self, event: Event, _mark: Marker) {
-        match event {
-            Event::Alias(_) => {
-                self.record(SkillReferenceParseError::YamlAlias);
-                self.on_node(None);
-            }
+        // Whether the node is anchored or an alias, its scalar value, whether it has a tag, and the
+        // frame it opens.
+        let (anchored, key, tagged, opens) = match &event {
+            Event::Alias(_) => (true, None, false, None),
             Event::Scalar(value, _, anchor, tag) => {
-                if anchor != 0 {
-                    self.record(SkillReferenceParseError::YamlAlias);
-                }
-                if tag.is_some() {
-                    self.record(SkillReferenceParseError::InvalidYaml);
-                }
-                self.on_node(Some(&value));
+                (*anchor != 0, Some(value), tag.is_some(), None)
             }
-            Event::SequenceStart(anchor) => {
-                if anchor != 0 {
-                    self.record(SkillReferenceParseError::YamlAlias);
-                }
-                self.on_node(None);
-                self.frames.push(YamlFrame::Sequence);
-            }
-            Event::MappingStart(anchor) => {
-                if anchor != 0 {
-                    self.record(SkillReferenceParseError::YamlAlias);
-                }
-                self.on_node(None);
-                self.frames.push(YamlFrame::Mapping {
-                    keys: HashSet::new(),
-                    expecting_key: true,
-                });
-            }
+            Event::SequenceStart(anchor) => (*anchor != 0, None, false, Some(None)),
+            Event::MappingStart(anchor) => (
+                *anchor != 0,
+                None,
+                false,
+                Some(Some((HashSet::new(), true))),
+            ),
             Event::SequenceEnd | Event::MappingEnd => {
                 self.frames.pop();
+                return;
             }
             Event::Nothing
             | Event::StreamStart
             | Event::StreamEnd
             | Event::DocumentStart
-            | Event::DocumentEnd => {}
+            | Event::DocumentEnd => return,
+        };
+        let mut duplicate = false;
+        if let Some(Some((keys, expecting_key))) = self.frames.last_mut() {
+            duplicate = *expecting_key && key.is_some_and(|key| !keys.insert(key.clone()));
+            *expecting_key = !*expecting_key;
         }
+        let error = if anchored {
+            Some(SkillReferenceParseError::YamlAlias)
+        } else if tagged || duplicate {
+            Some(SkillReferenceParseError::InvalidYaml)
+        } else {
+            None
+        };
+        self.error = self.error.or(error);
+        self.frames.extend(opens);
     }
 }
 

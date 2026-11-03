@@ -26,7 +26,7 @@ fn entries_json(entries: &[SkillReferenceEntry]) -> Value {
 fn result_json(result: Result<SkillReferenceFile, SkillReferenceParseError>) -> Value {
     let file = match result {
         Ok(file) => file,
-        Err(error) => return json!({"error": error.code()}),
+        Err(error) => return json!({"error": <&str>::from(error)}),
     };
     let reference = file.source.reference.as_ref().map(|reference| {
         let kind = match reference {
