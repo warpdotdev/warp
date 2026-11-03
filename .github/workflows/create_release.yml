@@ -1124,11 +1124,12 @@ jobs:
           # Populate the passphrase for our signing key in the gpg-agent cache.
           # by signing an empty file.
           touch emptyfile
-          gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile << EOF
-          ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
-          EOF
+          printf '%s\n' "$LINUX_RELEASES_PGP_KEY_PASSPHRASE" | \
+            gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile
           rm emptyfile.sig
         shell: bash
+        env:
+          LINUX_RELEASES_PGP_KEY_PASSPHRASE: ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
 
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
@@ -1365,11 +1366,12 @@ jobs:
           # Populate the passphrase for our signing key in the gpg-agent cache.
           # by signing an empty file.
           touch emptyfile
-          gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile << EOF
-          ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
-          EOF
+          printf '%s\n' "$LINUX_RELEASES_PGP_KEY_PASSPHRASE" | \
+            gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile
           rm emptyfile.sig
         shell: bash
+        env:
+          LINUX_RELEASES_PGP_KEY_PASSPHRASE: ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
 
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
@@ -1758,12 +1760,13 @@ jobs:
           # Populate the passphrase for our signing key in the gpg-agent cache.
           # by signing an empty file.
           touch emptyfile
-          gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile << EOF
-          ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
-          EOF
+          printf '%s\n' "$LINUX_RELEASES_PGP_KEY_PASSPHRASE" | \
+            gpg --no-tty --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor --batch --yes --output emptyfile.sig emptyfile
           rm emptyfile.sig
           echo "Populated gpg-agent cache"
         shell: bash
+        env:
+          LINUX_RELEASES_PGP_KEY_PASSPHRASE: ${{ secrets.LINUX_RELEASES_PGP_KEY_PASSPHRASE }}
       
       # Bundle the app packages
 
@@ -2201,8 +2204,8 @@ jobs:
       - name: Sign Warp Agent CLI and PTY executables
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
@@ -2231,8 +2234,8 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
           SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
@@ -2426,8 +2429,8 @@ jobs:
       - name: Sign the oz CLI executable and sidecar DLLs with Azure Trusted Signing
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
@@ -2681,8 +2684,8 @@ jobs:
       - name: Sign the executables with Azure Trusted Signing
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
@@ -2719,8 +2722,8 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
           SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
