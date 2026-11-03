@@ -69,7 +69,7 @@ repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 url.workspace = true
-yaml-rust = "0.4.5"
+yaml-rust.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
