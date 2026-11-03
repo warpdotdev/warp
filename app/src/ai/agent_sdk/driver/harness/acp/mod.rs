@@ -267,10 +267,20 @@ impl ThirdPartyHarness for AcpHarness {
 
     fn validate(&self) -> Result<(), AgentDriverError> {
         if self.manifest.is_sidecar {
-            Ok(())
-        } else {
-            validate_cli_installed(&self.manifest.launch.program, self.install_docs_url())
+            return Ok(());
         }
+        let docs_url = self.install_docs_url();
+        validate_cli_installed(&self.manifest.launch.program, docs_url).map_err(|error| {
+            // The generic message names one program; a harness whose default accepts
+            // several names, or needs a separate adapter package, gets its own guidance.
+            match manifest::missing_default_program_reason(self.harness, docs_url) {
+                Some(reason) => AgentDriverError::HarnessSetupFailed {
+                    harness: self.harness.to_string(),
+                    reason,
+                },
+                None => error,
+            }
+        })
     }
 
     fn auth_check_command(&self) -> Option<String> {

@@ -7,12 +7,24 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use warp_cli::agent::Harness;
 
-use super::{MANIFEST_FILE, discover, read_manifest, resolve_sidecar_program};
+use super::{
+    CLAUDE_ADAPTER_PACKAGE, CLAUDE_DEFAULT_PROGRAMS, MANIFEST_FILE, discover,
+    missing_default_program_reason, read_manifest, resolve_sidecar_program, select_default_program,
+};
 
 #[cfg(windows)]
 const PROGRAM: &str = "adapter.exe";
 #[cfg(not(windows))]
 const PROGRAM: &str = "adapter";
+
+/// The file name a bare program resolves to on this platform's `PATH`.
+fn executable_name(program: &str) -> String {
+    if cfg!(windows) {
+        format!("{program}.exe")
+    } else {
+        program.to_owned()
+    }
+}
 
 fn write_manifest(path: &Path, args: &[&str]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -146,5 +158,57 @@ fn unsupported_versions_and_unknown_section_fields_are_rejected() {
             format!("{:#}", read_manifest(&path, Harness::Pi).unwrap_err())
                 .contains("unknown field")
         );
+    }
+}
+
+#[test]
+fn claude_default_prefers_the_npm_bin_and_falls_back_to_the_package_launcher() {
+    let root = tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let path_env = std::env::join_paths([&bin]).unwrap();
+    let [preferred, fallback] = CLAUDE_DEFAULT_PROGRAMS;
+
+    // Nothing installed: keep the preferred name so the install check names it.
+    assert_eq!(
+        select_default_program(&CLAUDE_DEFAULT_PROGRAMS, &path_env),
+        preferred
+    );
+    write_executable(&bin.join(executable_name(fallback)));
+    assert_eq!(
+        select_default_program(&CLAUDE_DEFAULT_PROGRAMS, &path_env),
+        fallback
+    );
+    write_executable(&bin.join(executable_name(preferred)));
+    assert_eq!(
+        select_default_program(&CLAUDE_DEFAULT_PROGRAMS, &path_env),
+        preferred
+    );
+    // The other defaults are single names and are returned as they are.
+    assert_eq!(
+        select_default_program(&["codex-acp"], &path_env),
+        "codex-acp"
+    );
+}
+
+#[test]
+fn missing_claude_adapter_reason_names_both_programs_and_the_package() {
+    let reason =
+        missing_default_program_reason(Harness::Claude, Some("https://docs.example")).unwrap();
+    for expected in CLAUDE_DEFAULT_PROGRAMS.iter().copied().chain([
+        CLAUDE_ADAPTER_PACKAGE,
+        "oz process",
+        "shell",
+        "https://docs.example",
+    ]) {
+        assert!(reason.contains(expected), "{reason:?} lacks {expected:?}");
+    }
+    assert!(
+        !missing_default_program_reason(Harness::Claude, None)
+            .unwrap()
+            .contains("https://")
+    );
+    for harness in [Harness::Codex, Harness::Gemini, Harness::Pi, Harness::Oz] {
+        assert!(missing_default_program_reason(harness, None).is_none());
     }
 }
