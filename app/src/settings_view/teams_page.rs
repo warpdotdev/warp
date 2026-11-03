@@ -1209,6 +1209,7 @@ impl TeamsPageView {
         ctx: &mut ViewContext<TeamsPageView>,
     ) {
         match event {
+            UserWorkspacesEvent::PurchaseUsageConfirmed { .. } => {}
             UserWorkspacesEvent::EmailInviteSent => {
                 self.email_invites_block_editor.update(ctx, |editor, ctx| {
                     editor.clear_list_of_words(ctx);

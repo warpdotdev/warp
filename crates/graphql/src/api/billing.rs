@@ -4,11 +4,20 @@ use crate::workspace::UgcCollectionEnablementSetting;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct BillingMetadata {
+    pub custom_usage_amounts: Option<CustomUsageAmounts>,
     pub customer_type: CustomerType,
     pub delinquency_status: DelinquencyStatus,
     pub tier: Tier,
     pub service_agreements: Vec<ServiceAgreement>,
     pub ai_overages: Option<AiOverages>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomUsageAmounts {
+    pub min_usage_cents: i32,
+    pub max_usage_cents: i32,
+    pub step_usage_cents: i32,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

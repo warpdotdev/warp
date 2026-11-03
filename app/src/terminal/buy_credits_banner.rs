@@ -417,7 +417,7 @@ impl BuyCreditsBanner {
             .addon_credits_options
             .first()
             .map_or(0., |option| option.rate());
-        let items = self
+        let mut items = self
             .addon_credits_options
             .iter()
             .enumerate()
@@ -467,6 +467,15 @@ impl BuyCreditsBanner {
                 }
             })
             .collect_vec();
+        if UserWorkspaces::as_ref(ctx).custom_usage_amounts().is_some() {
+            items.push(
+                MenuItemFields::new("Custom amount")
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        Action::CustomAmount,
+                    ))
+                    .into_item(),
+            );
+        }
         self.denomination_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_rich_items(items, ctx);
             dropdown.set_selected_by_index(0, ctx);
@@ -1035,6 +1044,7 @@ impl View for BuyCreditsBanner {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    CustomAmount,
     SelectDenomination(usize),
     Close,
     PurchaseAddonCredits { team_uid: Option<ServerId> },
@@ -1047,6 +1057,9 @@ impl warpui::TypedActionView for BuyCreditsBanner {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
+            Action::CustomAmount => {
+                ctx.dispatch_typed_action_deferred(crate::WorkspaceAction::OpenCustomUsagePurchase)
+            }
             Action::SelectDenomination(index) => {
                 self.selected_denomination_index = *index;
                 ctx.notify();

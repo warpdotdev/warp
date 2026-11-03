@@ -4,6 +4,7 @@ use warp_graphql::billing::{
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 pub mod addon_pack;
+pub mod custom_usage;
 
 /// A global model for maintaining pricing information from the server.
 #[derive(Debug)]

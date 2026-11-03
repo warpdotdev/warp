@@ -52,6 +52,7 @@ use crate::auth::{AuthManager, AuthStateProvider, UserUid};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::addon_pack::{PackAmount, addon_credits_description};
+use crate::pricing::custom_usage::{CustomUsageEditor, CustomUsageEvent};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
@@ -241,6 +242,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    custom_usage: ViewHandle<CustomUsageEditor>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -423,7 +425,23 @@ impl BillingAndUsagePageView {
         let chatgpt_manage_usage_button =
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
+        let custom_usage = ctx.add_typed_action_view(CustomUsageEditor::new);
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            match event {
+                CustomUsageEvent::Selected => {
+                    me.selected_addon_denomination = usize::MAX;
+                    me.update_denomination_buttons_focus(ctx);
+                }
+                CustomUsageEvent::EditLimit => me.show_addon_credit_modal(ctx),
+                CustomUsageEvent::Completed => {}
+                CustomUsageEvent::Confirmation(message) => {
+                    me.show_toast(message, ToastFlavor::Success, ctx)
+                }
+            }
+            ctx.notify();
+        });
         let mut me = Self {
+            custom_usage,
             self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
@@ -479,10 +497,23 @@ impl BillingAndUsagePageView {
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
             let addon_credits_settings = &workspace.settings.addon_credits_settings;
-            if addon_credits_settings.auto_reload_enabled {
+            if addon_credits_settings.auto_reload_enabled
+                || addon_credits_settings
+                    .selected_auto_reload_usage_cents
+                    .is_some()
+            {
                 self.selected_addon_denomination = addon_credits_settings
                     .selected_auto_reload_option_index(&self.addon_credits_options)
-                    .unwrap_or(0);
+                    .unwrap_or(
+                        if addon_credits_settings
+                            .selected_auto_reload_usage_cents
+                            .is_some()
+                        {
+                            usize::MAX
+                        } else {
+                            0
+                        },
+                    );
             }
         }
         self.update_denomination_buttons_focus(ctx);
@@ -746,9 +777,6 @@ impl BillingAndUsagePageView {
         {
             return;
         }
-        self.selected_addon_denomination = self
-            .selected_addon_denomination
-            .min(options.len().saturating_sub(1));
         self.addon_credits_options = options;
         self.addon_display_unit = unit;
         self.addon_credit_denomination_buttons =
@@ -1029,6 +1057,11 @@ impl TypedActionView for BillingAndUsagePageView {
                     .update(ctx, |m, ctx| m.load_more_usage_history_async(ctx));
             }
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
+                if self.custom_usage.as_ref(ctx).is_pending() {
+                    return;
+                }
+                self.custom_usage
+                    .update(ctx, |editor, ctx| editor.abandon(ctx));
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
@@ -1055,6 +1088,9 @@ impl TypedActionView for BillingAndUsagePageView {
                 ctx.notify();
             }
             BillingAndUsagePageAction::PurchaseAddonCredits { team_uid } => {
+                if self.custom_usage.as_ref(ctx).is_expanded() {
+                    return;
+                }
                 if let Some(option) = self
                     .addon_credits_options
                     .get(self.selected_addon_denomination)
@@ -1072,6 +1108,37 @@ impl TypedActionView for BillingAndUsagePageView {
                 self.show_addon_credit_modal(ctx);
             }
             BillingAndUsagePageAction::UpdateAutoReloadEnabled { team_uid, enabled } => {
+                if *enabled && self.custom_usage.as_ref(ctx).is_expanded() {
+                    self.custom_usage
+                        .update(ctx, |editor, ctx| editor.open(true, ctx));
+                    return;
+                }
+                if *enabled && self.selected_addon_denomination == usize::MAX {
+                    if let Some(cents) =
+                        UserWorkspaces::as_ref(ctx)
+                            .current_workspace()
+                            .and_then(|workspace| {
+                                workspace
+                                    .settings
+                                    .addon_credits_settings
+                                    .selected_auto_reload_usage_cents
+                            })
+                    {
+                        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                            workspaces.update_usage_reload_settings(
+                                *team_uid,
+                                Some(true),
+                                cents,
+                                ctx,
+                            )
+                        });
+                    } else {
+                        self.custom_usage
+                            .update(ctx, |editor, ctx| editor.open(true, ctx));
+                    }
+                    return;
+                }
+
                 send_telemetry_from_ctx!(
                     TelemetryEvent::AutoReloadToggledFromBillingSettings {
                         enabled: *enabled,
@@ -2157,7 +2224,7 @@ impl BillingAndUsagePageView {
         let auto_reload_switch = ui_builder
             .switch(self.auto_reload_switch.clone())
             .check(auto_reload_enabled);
-        let auto_reload_switch = if delinquent_due_to_payment_issue {
+        let auto_reload_switch = if delinquent_due_to_payment_issue && !auto_reload_enabled {
             auto_reload_switch.disable().build().finish()
         } else {
             auto_reload_switch
@@ -2197,6 +2264,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         let mut card_content_upper = Flex::column()
+            .with_child(ChildView::new(&self.custom_usage).finish())
             .with_children([card_header, paragraph])
             .with_spacing(8.);
 
@@ -2246,25 +2314,21 @@ impl BillingAndUsagePageView {
             "Buy".to_string()
         };
 
-        let would_exceed_limit =
-            workspace
-                .zip(selected_option)
-                .is_some_and(|(workspace, option)| {
-                    let purchase_cost_cents = option.price_usd_cents_with_premium(premium_bps);
-                    let monthly_limit_cents = workspace
-                        .settings
-                        .addon_credits_settings
-                        .max_monthly_spend_cents
-                        .unwrap_or(20000); // Default $200 limit
+        let selected_price = selected_option
+            .map(|option| option.price_usd_cents_with_premium(premium_bps))
+            .or_else(|| {
+                workspace.and_then(|workspace| {
+                    workspace.get_auto_reload_price_cents(addon_credits_options)
+                })
+            });
+        let would_exceed_limit = workspace
+            .zip(selected_price)
+            .is_some_and(|(workspace, cents)| workspace.would_addon_purchase_reach_limit(cents));
 
-                    let already_spent_cents =
-                        workspace.bonus_grants_purchased_this_month.cents_spent;
-
-                    (already_spent_cents + purchase_cost_cents) > monthly_limit_cents
-                });
-
-        let is_buy_button_disabled =
-            purchase_addon_credits_loading || would_exceed_limit || delinquent_due_to_payment_issue;
+        let is_buy_button_disabled = selected_option.is_none()
+            || purchase_addon_credits_loading
+            || would_exceed_limit
+            || delinquent_due_to_payment_issue;
 
         let button_font_color = is_buy_button_disabled.then_some(
             appearance

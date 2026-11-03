@@ -99,6 +99,10 @@ pub enum UserWorkspacesEvent {
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
     PurchaseAddonCreditsSuccess,
+    PurchaseUsageConfirmed {
+        usage_cents: i32,
+        price_usd_cents: i32,
+    },
     /// The purchase requires the user to complete checkout in the browser
     /// (no saved payment method). Credits arrive via webhook + polling after
     /// checkout completes.
@@ -1483,12 +1487,67 @@ impl UserWorkspaces {
         ctx.notify();
     }
 
+    pub fn custom_usage_amounts(&self) -> Option<warp_graphql::billing::CustomUsageAmounts> {
+        self.current_workspace()
+            .and_then(|workspace| workspace.billing_metadata.custom_usage_amounts)
+    }
+
+    pub fn purchase_usage(
+        &mut self,
+        team_uid: Option<ServerId>,
+        usage_cents: i32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move { client.purchase_usage(team_uid, usage_cents).await },
+            Self::on_purchase_addon_credits,
+        );
+    }
+
+    pub fn update_usage_reload_settings(
+        &mut self,
+        team_uid: ServerId,
+        enabled: Option<bool>,
+        usage_cents: i32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if enabled != Some(false)
+            && self
+                .current_workspace()
+                .is_some_and(|workspace| workspace.would_addon_purchase_reach_limit(usage_cents))
+        {
+            ctx.emit(UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(
+                anyhow::anyhow!(crate::pricing::custom_usage::LIMIT_WARNING),
+            ));
+            return;
+        }
+        let client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                client
+                    .update_usage_reload_settings(team_uid, enabled, usage_cents)
+                    .await
+            },
+            Self::on_update_workspace_metadata,
+        );
+    }
+
     pub fn purchase_addon_credits(
         &mut self,
         team_uid: Option<ServerId>,
         credits: i32,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.custom_usage_amounts().is_some()
+            && let Some(cents) = crate::pricing::PricingInfoModel::as_ref(ctx)
+                .addon_credits_options()
+                .and_then(|options| options.iter().find(|option| option.credits == credits))
+                .map(|option| option.usage_cents.unwrap_or(option.price_usd_cents))
+        {
+            self.purchase_usage(team_uid, cents, ctx);
+            return;
+        }
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
@@ -1513,6 +1572,24 @@ impl UserWorkspaces {
                 };
                 self.on_workspaces_updated(Ok(wrapped), ctx);
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsSuccess);
+            }
+            Ok(PurchaseAddonCreditsOutcome::CompletedUsage {
+                metadata,
+                usage_cents,
+                price_usd_cents,
+            }) => {
+                self.on_workspaces_updated(
+                    Ok(WorkspacesMetadataWithPricing {
+                        metadata: *metadata,
+                        pricing_info: None,
+                    }),
+                    ctx,
+                );
+                ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsSuccess);
+                ctx.emit(UserWorkspacesEvent::PurchaseUsageConfirmed {
+                    usage_cents,
+                    price_usd_cents,
+                });
             }
             Ok(PurchaseAddonCreditsOutcome::CheckoutRequired { checkout_url }) => {
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired {
@@ -1544,6 +1621,18 @@ impl UserWorkspaces {
         selected_auto_reload_credit_denomination: Option<i32>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.custom_usage_amounts().is_some()
+            && let Some(cents) = selected_auto_reload_credit_denomination.and_then(|credits| {
+                crate::pricing::PricingInfoModel::as_ref(ctx)
+                    .addon_credits_options()
+                    .and_then(|options| options.iter().find(|option| option.credits == credits))
+                    .map(|option| option.usage_cents.unwrap_or(option.price_usd_cents))
+            })
+            && max_monthly_spend_cents.is_none()
+        {
+            self.update_usage_reload_settings(team_uid, auto_reload_enabled, cents, ctx);
+            return;
+        }
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {

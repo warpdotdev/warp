@@ -4172,6 +4172,7 @@ fn gql_workspace(
         teams: vec![],
         open_teams: vec![],
         billing_metadata: GqlBillingMetadata {
+            custom_usage_amounts: None,
             customer_type: GqlCustomerType::Free,
             delinquency_status: GqlDelinquencyStatus::NoDelinquency,
             tier: gql_tier(purchase_policy),

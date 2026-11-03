@@ -96,8 +96,11 @@ pub struct UsageBasedPricingSettingsInput {
 
 #[derive(cynic::InputObject, Debug)]
 pub struct AddonCreditsSettingsInput {
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub selected_auto_reload_usage_cents: Option<i32>,
     pub auto_reload_enabled: Option<bool>,
     pub max_monthly_spend_cents: Option<i32>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
     pub selected_auto_reload_credit_denomination: Option<i32>,
 }
 

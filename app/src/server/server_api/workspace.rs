@@ -42,6 +42,11 @@ pub enum PurchaseAddonCreditsOutcome {
     /// The saved payment method was charged synchronously and credits were
     /// granted immediately. Carries refreshed workspace metadata.
     Completed(Box<WorkspacesMetadataResponse>),
+    CompletedUsage {
+        metadata: Box<WorkspacesMetadataResponse>,
+        usage_cents: i32,
+        price_usd_cents: i32,
+    },
     /// There was no saved payment method to charge. The user must complete
     /// the purchase in the browser at `checkout_url`; credits are granted
     /// via webhook shortly after checkout completes.
@@ -68,6 +73,18 @@ pub trait WorkspaceClient: 'static + Send + Sync {
     ) -> Result<WorkspacesMetadataResponse>;
 
     async fn refresh_ai_overages(&self) -> Result<AiOverages>;
+
+    async fn purchase_usage(
+        &self,
+        team_uid: Option<ServerId>,
+        usage_cents: i32,
+    ) -> Result<PurchaseAddonCreditsOutcome>;
+    async fn update_usage_reload_settings(
+        &self,
+        team_uid: ServerId,
+        enabled: Option<bool>,
+        usage_cents: i32,
+    ) -> Result<WorkspacesMetadataResponse>;
 
     async fn purchase_addon_credits(
         &self,
@@ -217,10 +234,52 @@ impl WorkspaceClient for ServerApi {
         team_uid: Option<ServerId>,
         credits: i32,
     ) -> Result<PurchaseAddonCreditsOutcome> {
+        self.purchase_addon_amount(team_uid, Some(credits), None)
+            .await
+    }
+
+    async fn purchase_usage(
+        &self,
+        team_uid: Option<ServerId>,
+        usage_cents: i32,
+    ) -> Result<PurchaseAddonCreditsOutcome> {
+        self.purchase_addon_amount(team_uid, None, Some(usage_cents))
+            .await
+    }
+
+    async fn update_addon_credits_settings(
+        &self,
+        team_uid: ServerId,
+        enabled: Option<bool>,
+        limit: Option<i32>,
+        credits: Option<i32>,
+    ) -> Result<WorkspacesMetadataResponse> {
+        self.update_addon_amount_settings(team_uid, enabled, limit, credits, None)
+            .await
+    }
+    async fn update_usage_reload_settings(
+        &self,
+        team_uid: ServerId,
+        enabled: Option<bool>,
+        usage_cents: i32,
+    ) -> Result<WorkspacesMetadataResponse> {
+        self.update_addon_amount_settings(team_uid, enabled, None, None, Some(usage_cents))
+            .await
+    }
+}
+
+impl ServerApi {
+    async fn purchase_addon_amount(
+        &self,
+        team_uid: Option<ServerId>,
+        credits: Option<i32>,
+        usage_cents: Option<i32>,
+    ) -> Result<PurchaseAddonCreditsOutcome> {
         let variables = PurchaseAddonCreditsVariables {
             input: PurchaseAddonCreditsInput {
                 team_uid: team_uid.map(Into::into),
                 credits,
+                usage_cents,
             },
             request_context: get_request_context(),
         };
@@ -230,10 +289,19 @@ impl WorkspaceClient for ServerApi {
         match response {
             Err(_) => Err(anyhow!("Failed to purchase add-on credits")),
             Ok(response) => match response.purchase_addon_credits {
-                PurchaseAddonCreditsResult::PurchaseAddonCreditsOutput(_) => {
-                    TeamClient::workspaces_metadata(self)
-                        .await
-                        .map(|w| PurchaseAddonCreditsOutcome::Completed(Box::new(w.metadata)))
+                PurchaseAddonCreditsResult::PurchaseAddonCreditsOutput(output) => {
+                    TeamClient::workspaces_metadata(self).await.map(|w| {
+                        match (output.usage_cents, output.price_usd_cents) {
+                            (Some(usage_cents), Some(price_usd_cents)) => {
+                                PurchaseAddonCreditsOutcome::CompletedUsage {
+                                    metadata: Box::new(w.metadata),
+                                    usage_cents,
+                                    price_usd_cents,
+                                }
+                            }
+                            _ => PurchaseAddonCreditsOutcome::Completed(Box::new(w.metadata)),
+                        }
+                    })
                 }
                 PurchaseAddonCreditsResult::PurchaseAddonCreditsCheckoutOutput(output) => {
                     Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
@@ -254,18 +322,20 @@ impl WorkspaceClient for ServerApi {
         }
     }
 
-    async fn update_addon_credits_settings(
+    async fn update_addon_amount_settings(
         &self,
         team_uid: ServerId,
         auto_reload_enabled: Option<bool>,
         max_monthly_spend_cents: Option<i32>,
         selected_auto_reload_credit_denomination: Option<i32>,
+        selected_auto_reload_usage_cents: Option<i32>,
     ) -> Result<WorkspacesMetadataResponse> {
         let variables = UpdateWorkspaceSettingsVariables {
             input: UpdateWorkspaceSettingsInput {
                 workspace_uid: team_uid.to_string(),
                 set_usage_based_pricing_settings: None,
                 set_addon_credits_settings: Some(AddonCreditsSettingsInput {
+                    selected_auto_reload_usage_cents,
                     auto_reload_enabled,
                     max_monthly_spend_cents,
                     selected_auto_reload_credit_denomination,

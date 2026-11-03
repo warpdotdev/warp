@@ -208,6 +208,14 @@ impl Workspace {
         &self,
         addon_credits_options: &[AddonCreditsOption],
     ) -> Option<i32> {
+        if self.billing_metadata.custom_usage_amounts.is_some()
+            && let Some(cents) = self
+                .settings
+                .addon_credits_settings
+                .selected_auto_reload_usage_cents
+        {
+            return Some(cents);
+        }
         self.settings
             .addon_credits_settings
             .selected_auto_reload_option(addon_credits_options)
@@ -580,6 +588,7 @@ pub struct Tier {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BillingMetadata {
+    pub custom_usage_amounts: Option<warp_graphql::billing::CustomUsageAmounts>,
     pub tier: Tier,
     pub customer_type: CustomerType,
     pub delinquency_status: DelinquencyStatus,

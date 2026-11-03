@@ -10,6 +10,45 @@ fn ftue_account_classes_have_stable_telemetry_labels() {
     assert_eq!(FtueAccountClass::FreeIcp.as_str(), "free_icp");
     assert_eq!(FtueAccountClass::FreeStandard.as_str(), "free_standard");
 }
+
+#[test]
+fn custom_reload_preserves_exact_price_without_catalog_match() {
+    let mut workspace = make_workspace(None);
+    workspace.billing_metadata.custom_usage_amounts =
+        Some(warp_graphql::billing::CustomUsageAmounts {
+            min_usage_cents: 1000,
+            max_usage_cents: 1_000_000,
+            step_usage_cents: 100,
+        });
+    workspace.settings.addon_credits_settings = auto_reload_settings(None, Some(25_000));
+    let options = [pack(555, 1000, Some(1000))];
+
+    assert_eq!(
+        workspace.get_auto_reload_price_cents(&options),
+        Some(25_000)
+    );
+    assert_eq!(workspace.get_auto_reload_price_cents(&[]), Some(25_000));
+    assert_eq!(
+        workspace
+            .settings
+            .addon_credits_settings
+            .selected_auto_reload_option_index(&options),
+        None
+    );
+}
+
+#[test]
+fn custom_reload_pauses_only_when_remaining_budget_is_insufficient() {
+    let mut workspace = make_workspace(None);
+    workspace
+        .settings
+        .addon_credits_settings
+        .max_monthly_spend_cents = Some(50_000);
+    workspace.bonus_grants_purchased_this_month.cents_spent = 25_000;
+
+    assert!(!workspace.would_addon_purchase_reach_limit(25_000));
+    assert!(workspace.would_addon_purchase_reach_limit(25_100));
+}
 fn make_workspace(policy: Option<UsageVisibilityPolicy>) -> Workspace {
     let mut workspace = Workspace::from_local_cache(
         ServerId::from_string_lossy(TEST_WORKSPACE_UID).into(),

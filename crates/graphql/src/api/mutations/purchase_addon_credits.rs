@@ -5,7 +5,10 @@ use crate::schema;
 
 #[derive(cynic::InputObject, Debug)]
 pub struct PurchaseAddonCreditsInput {
-    pub credits: i32,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub credits: Option<i32>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub usage_cents: Option<i32>,
     /// Optional server-side: omitting it lets the server auto-create a
     /// personal team for free plan purchasers.
     pub team_uid: Option<cynic::Id>,
@@ -42,6 +45,8 @@ pub enum PurchaseAddonCreditsResult {
 /// The purchase was charged synchronously and credits were granted.
 #[derive(cynic::QueryFragment, Debug)]
 pub struct PurchaseAddonCreditsOutput {
+    pub usage_cents: Option<i32>,
+    pub price_usd_cents: Option<i32>,
     pub success: bool,
     pub response_context: ResponseContext,
 }

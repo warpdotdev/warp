@@ -19,6 +19,7 @@ use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
 use crate::pricing::addon_pack::pack_menu_label;
+use crate::pricing::custom_usage::{CustomUsageEditor, CustomUsageEvent};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
@@ -38,6 +39,9 @@ struct MouseStates {
 
 /// The body content of the enable auto-reload modal
 pub struct EnableAutoReloadModalBody {
+    custom_usage: ViewHandle<CustomUsageEditor>,
+    custom_selected: bool,
+    purchase_mode: bool,
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
     addon_credits_options: Vec<AddonCreditsOption>,
@@ -144,7 +148,34 @@ impl EnableAutoReloadModalBody {
             dropdown
         });
 
+        let custom_usage = ctx.add_typed_action_view(CustomUsageEditor::new);
+        custom_usage.update(ctx, |editor, ctx| editor.set_reload_only(true, ctx));
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            match event {
+                CustomUsageEvent::Selected => me.custom_selected = true,
+                CustomUsageEvent::Completed => ctx.emit(EnableAutoReloadModalBodyEvent::Close),
+                CustomUsageEvent::Confirmation(message) => {
+                    ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
+                        message: message.clone(),
+                        flavor: ToastFlavor::Success,
+                    })
+                }
+                CustomUsageEvent::EditLimit => {
+                    ctx.dispatch_typed_action_deferred(
+                        crate::WorkspaceAction::ShowSettingsPageWithSearch {
+                            search_query: String::new(),
+                            section: Some(crate::settings_view::SettingsSection::BillingAndUsage),
+                        },
+                    );
+                    ctx.emit(EnableAutoReloadModalBodyEvent::Close);
+                }
+            }
+            ctx.notify();
+        });
         let mut me = Self {
+            custom_usage,
+            custom_selected: false,
+            purchase_mode: false,
             mouse_states: Default::default(),
             denomination_dropdown,
             addon_credits_options: Default::default(),
@@ -226,6 +257,9 @@ impl EnableAutoReloadModalBody {
     }
 
     fn render_content(&self, appearance: &Appearance) -> Box<dyn Element> {
+        if self.purchase_mode {
+            return ChildView::new(&self.custom_usage).finish();
+        }
         let theme = appearance.theme();
         let explanation_fragments = vec![
             FormattedTextFragment::plain_text("When enabled, "),
@@ -266,6 +300,7 @@ impl EnableAutoReloadModalBody {
             .with_main_axis_size(MainAxisSize::Min)
             .with_child(explanation_text)
             .with_child(denomination_dropdown)
+            .with_child(ChildView::new(&self.custom_usage).finish())
             .finish()
     }
 
@@ -321,7 +356,7 @@ impl EnableAutoReloadModalBody {
                 ctx.dispatch_typed_action(Action::Enable);
             });
 
-        if self.update_workspace_settings_loading {
+        if self.update_workspace_settings_loading || self.custom_selected || self.purchase_mode {
             enable_button = enable_button.disable();
         }
 
@@ -392,6 +427,12 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             Action::SelectDenomination(index) => {
+                if self.custom_usage.as_ref(ctx).is_pending() {
+                    return;
+                }
+                self.custom_selected = false;
+                self.custom_usage
+                    .update(ctx, |editor, ctx| editor.abandon(ctx));
                 self.selected_denomination_index = *index;
                 ctx.notify();
             }
@@ -400,6 +441,12 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
                 ctx.emit(EnableAutoReloadModalBodyEvent::Close);
             }
             Action::Enable => {
+                if self.custom_selected
+                    || self.purchase_mode
+                    || self.update_workspace_settings_loading
+                {
+                    return;
+                }
                 let workspaces = UserWorkspaces::as_ref(ctx);
                 let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
@@ -468,13 +515,31 @@ impl EnableAutoReloadModal {
         Self { modal }
     }
 
+    pub fn show_custom_purchase(&mut self, ctx: &mut ViewContext<Self>) {
+        self.modal.update(ctx, |modal, ctx| {
+            modal.set_title(Some("Custom usage amount".to_string()));
+            modal.body().update(ctx, |body, ctx| {
+                body.custom_selected = false;
+                body.purchase_mode = true;
+                body.custom_usage
+                    .update(ctx, |editor, ctx| editor.open(false, ctx));
+                ctx.notify();
+            });
+        });
+    }
+
     pub fn set_selected_denomination_by_credits(
         &mut self,
         credits: i32,
         ctx: &mut ViewContext<Self>,
     ) {
         self.modal.update(ctx, |modal, ctx| {
+            modal.set_title(Some("Enable auto reload?".to_string()));
             modal.body().update(ctx, |body, ctx| {
+                body.purchase_mode = false;
+                body.custom_selected = false;
+                body.custom_usage
+                    .update(ctx, |editor, ctx| editor.set_reload_only(true, ctx));
                 if let Some((index, _)) = body
                     .addon_credits_options
                     .iter()

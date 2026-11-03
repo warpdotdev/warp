@@ -127,6 +127,7 @@ pub enum AutoCloudHandoffTrigger {
 
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
+    OpenCustomUsagePurchase,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1018,6 +1019,7 @@ impl WorkspaceAction {
             | ConfigureKeybindingSettings { .. }
             | ExportAllWarpDriveObjects
             | ShowSettings
+            | OpenCustomUsagePurchase
             | ShowSettingsPage(_)
             | ShowSettingsPageWithSearch { .. }
             | ShowThemeChooser(_)

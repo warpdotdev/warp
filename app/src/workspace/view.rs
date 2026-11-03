@@ -24682,6 +24682,13 @@ impl TypedActionView for Workspace {
             }
             ShowSettings => self.show_settings(ctx),
             ShowSettingsPage(section) => self.show_settings_with_section(Some(*section), ctx),
+            OpenCustomUsagePurchase => {
+                self.current_workspace_state
+                    .is_enable_auto_reload_modal_open = true;
+                self.enable_auto_reload_modal
+                    .update(ctx, |modal, ctx| modal.show_custom_purchase(ctx));
+                ctx.notify();
+            }
             ShowSettingsPageWithSearch {
                 search_query,
                 section,
