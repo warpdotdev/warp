@@ -65,7 +65,8 @@ use crate::code::editor::find::view::{CodeEditorFind as Find, Event as FindViewE
 use crate::code::editor::goto_line::view::{Event as GoToLineEvent, GoToLineView};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::{
-    CodeEditorModel, CodeEditorModelEvent, HoverableLink, LineBound, StableEditorLine,
+    CodeEditorModel, CodeEditorModelEvent, DiffDecorationMode, HoverableLink, LineBound,
+    StableEditorLine,
 };
 use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
@@ -120,6 +121,11 @@ pub enum CodeEditorEvent {
     },
     /// Emitted when a diff hunk is reverted
     DiffReverted,
+    /// Emitted by the base pane of a split diff when the user asks to revert the hunk covering
+    /// `line_range` (base line numbers). The modified pane owns the diff, so it does the revert.
+    SplitBaselineRevertRequested {
+        line_range: Range<LineCount>,
+    },
     /// Emitted when the inline comment editor is opened.
     CommentEditorOpened,
     HiddenSectionExpanded,
@@ -283,6 +289,9 @@ pub struct CodeEditorView {
     /// The offset where find references card is anchored (if showing).
     find_references_anchor_offset: Option<CharOffset>,
     window_id: WindowId,
+    /// Set on the base pane of a split diff. Its removed lines come from the modified pane's diff
+    /// instead of its own, and its gutter actions are forwarded to the modified pane.
+    split_baseline_diff_status: Option<DiffStatus>,
 }
 
 impl CodeEditorView {
@@ -389,6 +398,7 @@ impl CodeEditorView {
             self_handle: ctx.handle(),
             nav_bar,
             comment_locations: Vec::new(),
+            split_baseline_diff_status: None,
             display_options: CodeEditorViewDisplayOptions {
                 vertical_expansion_behavior: render_options.vertical_expansion_behavior,
                 can_show_diff_ui: true,
@@ -1626,6 +1636,47 @@ impl CodeEditorView {
         self.model.as_ref(ctx).interaction_state()
     }
 
+    /// Marks this editor as the base pane of a split diff, whose removed lines are given by
+    /// `removed_lines`, or clears that with `None`.
+    pub fn set_split_baseline_removed_lines(
+        &mut self,
+        removed_lines: Option<&[std::ops::Range<usize>]>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.split_baseline_diff_status = removed_lines.map(DiffStatus::for_split_baseline);
+        ctx.notify();
+    }
+
+    pub fn is_split_baseline(&self) -> bool {
+        self.split_baseline_diff_status.is_some()
+    }
+
+    /// Reverts the diff hunk covering `line_range` and notifies listeners.
+    pub fn revert_diff_hunk(&mut self, line_range: &Range<LineCount>, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::RevertDiffHunk.is_enabled() {
+            return;
+        }
+        let hunk_index = self
+            .model
+            .as_ref(ctx)
+            .diff()
+            .as_ref(ctx)
+            .diff_hunk_count_before_line(line_range.start.as_usize());
+
+        self.model.update(ctx, |model, ctx| {
+            model.reverse_diff_by_index(hunk_index, ctx);
+        });
+
+        ctx.emit(CodeEditorEvent::DiffReverted);
+        ctx.notify();
+    }
+
+    pub fn set_diff_decoration_mode(&self, mode: DiffDecorationMode, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.set_diff_decoration_mode(mode, ctx);
+        });
+    }
+
     pub fn set_interaction_state(&self, state: InteractionState, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
             model.set_interaction_state(state, ctx);
@@ -2200,6 +2251,28 @@ impl View for CodeEditorView {
         "CodeEditorView"
     }
 
+    fn accessibility_contents(
+        &self,
+        app: &AppContext,
+    ) -> Option<warpui::accessibility::AccessibilityContent> {
+        let (label, help) = match self.model.as_ref(app).diff_decoration_mode() {
+            DiffDecorationMode::Unified => return None,
+            DiffDecorationMode::SplitBaseline { .. } => (
+                "Original",
+                "Original file in a split diff. Blank rows stand for lines that exist only in the modified file.",
+            ),
+            DiffDecorationMode::SplitModified => (
+                "Modified",
+                "Modified file in a split diff. Blank rows stand for lines that exist only in the original file.",
+            ),
+        };
+        Some(warpui::accessibility::AccessibilityContent::new(
+            label,
+            help,
+            warpui::accessibility::WarpA11yRole::TextareaRole,
+        ))
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -2219,7 +2292,9 @@ impl View for CodeEditorView {
 
         let line_number_config = self.line_number_config(app);
 
-        let diff_status = if self.display_options.can_show_diff_ui {
+        let diff_status = if let Some(status) = &self.split_baseline_diff_status {
+            status.clone()
+        } else if self.display_options.can_show_diff_ui {
             self.model.as_ref(app).diff_status(app)
         } else {
             DiffStatus::default()
@@ -2299,6 +2374,11 @@ impl View for CodeEditorView {
             self.comment_save_position_id.clone(),
             self.find_references_save_position_id.clone(),
         );
+
+        code_editor.set_temporary_blocks_are_gaps(!matches!(
+            self.model.as_ref(app).diff_decoration_mode(),
+            DiffDecorationMode::Unified
+        ));
 
         let pending_comment = &self
             .model

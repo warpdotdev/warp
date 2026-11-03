@@ -456,3 +456,39 @@ fn test_coalesce_replacements() {
         assert_eq!(diff_model.diff_by_index(4), Some((10..11, true)));
     });
 }
+
+#[test]
+fn change_spans_place_additions_in_base_coordinates() {
+    use warpui::App;
+
+    use super::DiffStatus;
+    use crate::code::editor::diff_alignment::ChangeSpan;
+
+    App::test((), |_| async move {
+        // Line "b" is removed and "x", "y" are added after "c", so the addition starts at base
+        // line 3 even though it is at modified line 2.
+        let (change_mapping, deletion_mapping) = DiffModel::compute_diff_internal(
+            MultilineStr::try_new("a\nb\nc\nd\n").unwrap(),
+            MultilineStr::try_new("a\nc\nx\ny\nd\n").unwrap(),
+        )
+        .await;
+        let status = DiffStatus {
+            change_mapping,
+            deletion_mapping,
+            marks_removed_lines: false,
+        };
+        assert_eq!(
+            status.change_spans(),
+            vec![
+                ChangeSpan {
+                    base: 1..2,
+                    modified: 1..1,
+                },
+                ChangeSpan {
+                    base: 3..3,
+                    modified: 2..4,
+                },
+            ]
+        );
+    });
+}

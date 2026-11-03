@@ -36,11 +36,12 @@ use warpui::elements::new_scrollable::{
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, DispatchEventResult,
-    DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List, ListState, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
-    Rect, Resizable, ResizableStateHandle, SavePosition, ScrollOffset, ScrollStateHandle,
-    ScrollbarWidth, Shrinkable, Stack, Text, resizable_state_handle,
+    DragBarSide, Element, Empty, EventHandler, Expanded, Flex, Hoverable, List, ListState,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
+    ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -50,7 +51,7 @@ use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlign
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
-    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle, WindowId,
 };
 
@@ -71,6 +72,7 @@ use crate::code::ShowCommentEditorProvider;
 #[cfg(not(target_family = "wasm"))]
 use crate::code::ShowFindReferencesCard;
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::diff_layout::switch_diff_layout;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
@@ -107,8 +109,8 @@ use crate::code_review::hidden_lines::calculate_hidden_lines;
 #[cfg(feature = "local_fs")]
 use crate::code_review::telemetry_event::DiffSetContextScope;
 use crate::code_review::telemetry_event::{
-    AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
-    PaneStateChange,
+    AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent,
+    DiffLayoutChangeSource, GitButtonKind, PaneStateChange,
 };
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::InteractionState;
@@ -120,7 +122,7 @@ use crate::quit_warning::UnsavedStateSummary;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
-use crate::settings::{AISettings, CodeSettings};
+use crate::settings::{AISettings, CodeSettings, CodeSettingsChangedEvent};
 use crate::settings_view::SettingsSection;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
@@ -339,6 +341,7 @@ pub enum CodeReviewAction {
     AddDiffSetAsContext(DiffSetScope),
     CopyFilePath(String),
     OpenCommentComposerFromHeader,
+    ToggleDiffLayout,
     ShowFindBar,
     FocusView,
     InitProjectForCurrentDirectory,
@@ -439,6 +442,9 @@ pub enum CodeReviewViewEvent {
         line_col: Option<LineAndColumnArg>,
     },
     ReviewSubmitted,
+    /// The user switched to the split layout from this view. The host maximizes the panel if it
+    /// is not already maximized; it never toggles a maximized panel back.
+    EnsureMaximized,
     /// Emitted when review comments are ready to be submitted.
     /// A higher-level view (RightPanelView) handles routing to an available terminal.
     SubmitReviewComments {
@@ -518,6 +524,8 @@ pub struct DiscardDialogState {
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 struct PendingPreciseScroll {
     editor_index: usize,
+    /// The pane holding the target range; `None` means the file's modified pane.
+    pane_editor_id: Option<EntityId>,
     /// Starting character offset of the target range to scroll to.
     start_offset: CharOffset,
     /// Ending character offset of the target range to scroll to.
@@ -1104,6 +1112,7 @@ impl CodeReviewView {
                 .cloned()
                 .unwrap_or_default();
 
+            self.set_split_baseline_comment_locations(&editor, &comments, ctx);
             editor.update(ctx, |local_editor, ctx| {
                 local_editor.editor().update(ctx, |code_editor, ctx| {
                     code_editor.set_comment_locations(comments.into_iter(), ctx);
@@ -1283,6 +1292,11 @@ impl CodeReviewView {
         });
         ctx.subscribe_to_model(&find_model, |me, _, event, ctx| {
             me.handle_find_model_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
+            if let CodeSettingsChangedEvent::DiffLayoutSetting { .. } = event {
+                me.sync_diff_layout(ctx);
+            }
         });
 
         let comment_list_view = ctx
@@ -1688,18 +1702,20 @@ impl CodeReviewView {
                 continue;
             };
 
-            let editor_id = editor_state.editor.id();
-            let ranges = matches_by_editor.remove(&editor_id).unwrap_or_default();
-            let selected_range_index = selected_match
-                .as_ref()
-                .filter(|info| info.editor_id == editor_id)
-                .map(|info| info.index_within_editor);
+            for pane in editor_state.panes() {
+                let editor_id = pane.id();
+                let ranges = matches_by_editor.remove(&editor_id).unwrap_or_default();
+                let selected_range_index = selected_match
+                    .as_ref()
+                    .filter(|info| info.editor_id == editor_id)
+                    .map(|info| info.index_within_editor);
 
-            editor_state.editor.update(ctx, |local_editor, ctx| {
-                local_editor.editor().update(ctx, |editor, ctx| {
-                    editor.set_find_highlights(ranges, selected_range_index, ctx);
+                pane.update(ctx, |local_editor, ctx| {
+                    local_editor.editor().update(ctx, |editor, ctx| {
+                        editor.set_find_highlights(ranges, selected_range_index, ctx);
+                    });
                 });
-            });
+            }
         }
     }
 
@@ -1947,7 +1963,7 @@ impl CodeReviewView {
                 code_editor_view.line_location_to_offsets(line, ctx)
             });
 
-        self.scroll_to_position(editor_index, start_offset, end_offset, buffer, ctx);
+        self.scroll_to_position(editor_index, None, start_offset, end_offset, buffer, ctx);
     }
 
     fn scroll_to_selected_match(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1963,8 +1979,7 @@ impl CodeReviewView {
             file_state
                 .editor_state
                 .as_ref()
-                .map(|es| es.editor.id() == selected_match_info.editor_id)
-                .unwrap_or(false)
+                .is_some_and(|es| es.pane(selected_match_info.editor_id).is_some())
         }) else {
             return;
         };
@@ -1976,6 +1991,7 @@ impl CodeReviewView {
 
         self.scroll_to_position(
             editor_index,
+            Some(selected_match_info.editor_id),
             selected_match_info.start_offset,
             selected_match_info.end_offset,
             buffer,
@@ -1986,17 +2002,28 @@ impl CodeReviewView {
     fn scroll_to_position(
         &mut self,
         editor_index: usize,
+        pane_editor_id: Option<EntityId>,
         start_offset: CharOffset,
         end_offset: CharOffset,
         buffer: f32,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some((start_top_y, end_bottom_y)) =
-            self.get_match_character_bounds(editor_index, start_offset, end_offset, ctx)
-        {
+        if let Some((start_top_y, end_bottom_y)) = self.get_match_character_bounds(
+            editor_index,
+            pane_editor_id,
+            start_offset,
+            end_offset,
+            ctx,
+        ) {
             // Bounds are available - apply scrolling immediately
             self.vertically_scroll_to_match(editor_index, start_top_y, end_bottom_y, buffer);
-            self.horizontally_scroll_to_match(editor_index, start_offset, end_offset, ctx);
+            self.horizontally_scroll_to_match(
+                editor_index,
+                pane_editor_id,
+                start_offset,
+                end_offset,
+                ctx,
+            );
         } else {
             // Character bounds aren't available, editor hasn't been laid out yet
             // Scroll conservatively to trigger layout without overshooting
@@ -2019,6 +2046,7 @@ impl CodeReviewView {
             // Scroll to the precise position once the editor is laid out
             self.pending_precise_scroll = Some(PendingPreciseScroll {
                 editor_index,
+                pane_editor_id,
                 start_offset,
                 end_offset,
                 buffer,
@@ -2063,6 +2091,7 @@ impl CodeReviewView {
                                 if let Some((start_top_y, end_bottom_y)) = view
                                     .get_match_character_bounds(
                                         pending.editor_index,
+                                        pending.pane_editor_id,
                                         pending.start_offset,
                                         pending.end_offset,
                                         ctx,
@@ -2076,6 +2105,7 @@ impl CodeReviewView {
                                     );
                                     view.horizontally_scroll_to_match(
                                         pending.editor_index,
+                                        pending.pane_editor_id,
                                         pending.start_offset,
                                         pending.end_offset,
                                         ctx,
@@ -2096,6 +2126,7 @@ impl CodeReviewView {
     fn get_match_character_bounds(
         &self,
         _editor_index: usize,
+        _pane_editor_id: Option<EntityId>,
         _start_offset: CharOffset,
         _end_offset: CharOffset,
         _ctx: &ViewContext<Self>,
@@ -2107,6 +2138,7 @@ impl CodeReviewView {
     fn get_match_character_bounds(
         &self,
         editor_index: usize,
+        pane_editor_id: Option<EntityId>,
         start_offset: CharOffset,
         end_offset: CharOffset,
         ctx: &ViewContext<Self>,
@@ -2120,10 +2152,9 @@ impl CodeReviewView {
             .get_index(editor_index)
             .map(|(_, fs)| fs)
             .and_then(|file_state| file_state.editor_state.as_ref())
-            .map(|editor_state| {
-                editor_state
-                    .editor
-                    .as_ref(ctx)
+            .and_then(|editor_state| editor_state.pane_or_modified(pane_editor_id))
+            .map(|pane| {
+                pane.as_ref(ctx)
                     .editor()
                     .as_ref(ctx)
                     .model
@@ -2181,6 +2212,7 @@ impl CodeReviewView {
     fn horizontally_scroll_to_match(
         &self,
         _editor_index: usize,
+        _pane_editor_id: Option<EntityId>,
         _start_offset: CharOffset,
         _end_offset: CharOffset,
         _ctx: &mut ViewContext<Self>,
@@ -2192,6 +2224,7 @@ impl CodeReviewView {
     fn horizontally_scroll_to_match(
         &self,
         editor_index: usize,
+        pane_editor_id: Option<EntityId>,
         start_offset: CharOffset,
         end_offset: CharOffset,
         ctx: &mut ViewContext<Self>,
@@ -2200,16 +2233,17 @@ impl CodeReviewView {
             return;
         };
 
-        let Some(editor_state) = state
+        let Some(pane) = state
             .file_states
             .get_index(editor_index)
             .map(|(_, fs)| fs)
             .and_then(|fs| fs.editor_state.as_ref())
+            .and_then(|editor_state| editor_state.pane_or_modified(pane_editor_id))
         else {
             return;
         };
 
-        editor_state.editor.update(ctx, |local_editor, ctx| {
+        pane.update(ctx, |local_editor, ctx| {
             local_editor.editor().update(ctx, |editor, ctx| {
                 editor
                     .model
@@ -3188,6 +3222,33 @@ impl CodeReviewView {
         }
     }
 
+    /// Attaches a comment saved in `editor` to the review.
+    fn save_editor_comment(
+        &mut self,
+        editor: &ViewHandle<LocalCodeEditorView>,
+        comment: EditorReviewComment,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Use `file_location()` to preserve host identity for
+        // remote editors. The comment batch is already host-scoped
+        // (keyed by the repo `LocalOrRemotePath` in
+        // `WorkingDirectoriesModel.comment_models`), but encoding
+        // the host on the comment target keeps later helpers
+        // honest.
+        let Some(file_location) = editor.as_ref(ctx).file_location().cloned() else {
+            report_error!(
+                "Attempted to attach code review comment to a LocalCodeEditorView without a file path"
+            );
+            return;
+        };
+        let base = self.get_diff_base(ctx).ok();
+        let head = self.get_current_head(ctx);
+        let comment_with_file_context =
+            AttachedReviewComment::from_editor_review_comment(comment, file_location, base, head);
+        self.update_review_comment(comment_with_file_context, ctx);
+        ctx.notify();
+    }
+
     fn handle_local_code_editor_events(
         &mut self,
         editor: ViewHandle<LocalCodeEditorView>,
@@ -3233,28 +3294,7 @@ impl CodeReviewView {
                 });
             }
             LocalCodeEditorEvent::CommentSaved { comment } => {
-                // Use `file_location()` to preserve host identity for
-                // remote editors. The comment batch is already host-scoped
-                // (keyed by the repo `LocalOrRemotePath` in
-                // `WorkingDirectoriesModel.comment_models`), but encoding
-                // the host on the comment target keeps later helpers
-                // honest.
-                let Some(file_location) = editor.as_ref(ctx).file_location().cloned() else {
-                    report_error!(
-                        "Attempted to attach code review comment to a LocalCodeEditorView without a file path"
-                    );
-                    return;
-                };
-                let base = self.get_diff_base(ctx).ok();
-                let head = self.get_current_head(ctx);
-                let comment_with_file_context = AttachedReviewComment::from_editor_review_comment(
-                    comment.clone(),
-                    file_location,
-                    base,
-                    head,
-                );
-                self.update_review_comment(comment_with_file_context, ctx);
-                ctx.notify();
+                self.save_editor_comment(&editor, comment.clone(), ctx);
             }
             LocalCodeEditorEvent::DeleteComment { id } => {
                 self.delete_comment_by_id(*id, ctx);
@@ -4182,8 +4222,9 @@ impl CodeReviewView {
             || FeatureFlag::DiffSetAsContext.is_enabled()
             || FeatureFlag::FileAndDiffSetComments.is_enabled();
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
-        let has_header_menu_items =
-            has_menu_flags && (!FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes);
+        let has_header_menu_items = FeatureFlag::SideBySideDiffLayout.is_enabled()
+            || (has_menu_flags
+                && (!FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes));
 
         let code_review_header_fields = CodeReviewHeaderFields {
             is_in_split_pane,
@@ -5264,8 +5305,26 @@ impl CodeReviewView {
                 theme,
             )
         } else if let Some(editor_state) = file.editor_state.as_ref() {
+            let modified = ChildView::new(&editor_state.editor).finish();
+            let panes = match editor_state.baseline.as_ref() {
+                Some(baseline) => Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(
+                        Expanded::new(1., ChildView::new(&baseline.editor).finish()).finish(),
+                    )
+                    .with_child(
+                        ConstrainedBox::new(
+                            Rect::new().with_background(theme.surface_3()).finish(),
+                        )
+                        .with_width(1.)
+                        .finish(),
+                    )
+                    .with_child(Expanded::new(1., modified).finish())
+                    .finish(),
+                None => modified,
+            };
             Hoverable::new(editor_state.editor_mouse_state.clone(), |_| {
-                Container::new(ChildView::new(&editor_state.editor).finish())
+                Container::new(panes)
                     .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
                     .with_background(theme.background())
                     .with_border(
@@ -5674,12 +5733,13 @@ impl CodeReviewView {
                 ctx.focus_self();
             }
             CodeEditorEvent::HiddenSectionExpanded => {
-                if let CodeReviewViewState::Loaded(LoadedState { file_states, .. }) = self.state()
-                    && let Some(index) = file_states.get_index_of(&file_path)
-                {
-                    self.viewported_list_state
-                        .invalidate_height_for_index(index);
-                    ctx.notify();
+                self.sync_split_pane(&file_path, ctx);
+                self.invalidate_file_height(&file_path, ctx);
+            }
+            CodeEditorEvent::DiffUpdated => {
+                if Self::effective_diff_layout(ctx).is_side_by_side() {
+                    self.sync_split_pane(&file_path, ctx);
+                    self.invalidate_file_height(&file_path, ctx);
                 }
             }
             CodeEditorEvent::Focused => {
@@ -6796,6 +6856,7 @@ impl CodeReviewView {
         let mut items = Vec::new();
 
         if !FeatureFlag::FileAndDiffSetComments.is_enabled() {
+            self.push_diff_layout_menu_item(&mut items, ctx);
             return items;
         }
 
@@ -6826,6 +6887,7 @@ impl CodeReviewView {
                 .into_item(),
         );
 
+        self.push_diff_layout_menu_item(&mut items, ctx);
         items
     }
 
@@ -6873,7 +6935,46 @@ impl CodeReviewView {
             );
         }
 
+        self.push_diff_layout_menu_item(&mut items, ctx);
         items
+    }
+
+    /// Split diff auto-expands to full width (Figma). Only maximizes; minimizing later keeps split.
+    fn ensure_maximized(&mut self, ctx: &mut ViewContext<Self>) {
+        match &self.focus_handle {
+            Some(handle) => {
+                if handle.split_pane_state(ctx).is_in_split_pane() && !handle.is_maximized(ctx) {
+                    ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::ToggleMaximized));
+                }
+            }
+            None => ctx.emit(CodeReviewViewEvent::EnsureMaximized),
+        }
+    }
+
+    /// Appends the split/unified switch, after a divider when other items precede it. Shown even
+    /// when there are no changes, because the layout applies to the next diff too.
+    fn push_diff_layout_menu_item(
+        &self,
+        items: &mut Vec<MenuItem<CodeReviewAction>>,
+        app: &AppContext,
+    ) {
+        if !FeatureFlag::SideBySideDiffLayout.is_enabled() {
+            return;
+        }
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        let label = if Self::effective_diff_layout(app).is_side_by_side() {
+            "Switch to unified diff"
+        } else {
+            "Switch to split diff"
+        };
+        items.push(
+            MenuItemFields::new(label)
+                .with_icon(Icon::SplitDiff)
+                .with_on_select_action(CodeReviewAction::ToggleDiffLayout)
+                .into_item(),
+        );
     }
 
     fn get_unsaved_file_paths(&self, app: &AppContext) -> Vec<String> {
@@ -7005,7 +7106,7 @@ impl CodeReviewView {
                     .values()
                     .filter(|file| file.is_expanded)
                     .filter_map(|file| file.editor_state.as_ref())
-                    .map(|state| state.editor.clone()),
+                    .flat_map(|state| state.panes().cloned().collect::<Vec<_>>()),
             ),
             _ => Box::new(std::iter::empty()),
         }
@@ -7365,6 +7466,13 @@ impl TypedActionView for CodeReviewView {
                 }
                 self.update_header_dropdown_active_state(ctx);
                 ctx.notify();
+            }
+            CodeReviewAction::ToggleDiffLayout => {
+                let next = Self::effective_diff_layout(ctx).toggled();
+                switch_diff_layout(next, DiffLayoutChangeSource::HeaderMenu, ctx);
+                if next.is_side_by_side() {
+                    self.ensure_maximized(ctx);
+                }
             }
             CodeReviewAction::OpenCommentComposerFromHeader => {
                 // Show the review comment composer overlay if it's not already open.
@@ -7740,6 +7848,10 @@ impl ShowCommentEditorProvider for ShowCommentEditor {
             || comment_list_view_position.contains_point(editor_line_location.lower_left())
     }
 }
+
+#[path = "split_diff.rs"]
+mod split_diff;
+pub(crate) use split_diff::SplitBaselinePane;
 
 #[path = "scroll_preservation.rs"]
 mod scroll_preservation;

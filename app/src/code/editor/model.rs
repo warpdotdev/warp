@@ -37,7 +37,7 @@ use warp_editor::content::buffer::{
     InitialBufferState, SelectionOffsets, ShouldAutoscroll, ToBufferCharOffset, ToBufferPoint,
     VimInsertPoint,
 };
-use warp_editor::content::edit::EditDelta;
+use warp_editor::content::edit::{EditDelta, TemporaryBlock};
 use warp_editor::content::find::{SearchConfig, SearchResults};
 use warp_editor::content::hidden_lines_model::HiddenLinesModel;
 use warp_editor::content::selection_model::BufferSelectionModel;
@@ -68,7 +68,9 @@ use super::super::DiffResult;
 use super::comments::{EditorCommentsModel, PendingComment, PendingCommentEvent};
 use super::diff::{
     DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk, add_inline_overlay_color,
+    gap_fill_color, remove_overlay_color,
 };
+use super::diff_alignment::{DiffAlignment, GapRun};
 use super::line::EditorLineLocation;
 use crate::appearance::Appearance;
 use crate::code::editor::line_iterator::LineIterator;
@@ -108,6 +110,23 @@ enum StableEditorLineInner {
 pub enum LineBound {
     Start,
     End,
+}
+
+/// How the editor draws its diff against the base.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum DiffDecorationMode {
+    /// Removed lines render inline above the lines that replaced them.
+    #[default]
+    Unified,
+    /// The modified side of a split diff: removed lines are not drawn, and a blank gap row stands
+    /// in for every removed line that has no added line beside it.
+    SplitModified,
+    /// The base side of a split diff. The editor holds the base text and has no diff of its own,
+    /// so its removed-line fills and gap rows are supplied from the modified side's alignment.
+    SplitBaseline {
+        removed_lines: Vec<Range<usize>>,
+        gaps: Vec<GapRun>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,6 +313,7 @@ pub struct CodeEditorModel {
     hidden_lines: ModelHandle<HiddenLinesModel>,
     /// The current state of diff navigation (collapsed, expanded, or focused on a specific hunk)
     diff_navigation_state: DiffNavigationState,
+    diff_decoration_mode: DiffDecorationMode,
     interaction_state: InteractionState,
     /// Only applies to scenarios where current line highlighting is possible.
     /// For example, current line highlighting will always be disabled during diff navigation.
@@ -461,6 +481,7 @@ impl CodeEditorModel {
             comments,
             hidden_lines,
             diff_navigation_state: DiffNavigationState::Collapsed,
+            diff_decoration_mode: DiffDecorationMode::Unified,
             interaction_state: InteractionState::Editable,
             show_current_line_highlights,
             delay_rendering: None,
@@ -727,6 +748,20 @@ impl CodeEditorModel {
 
     pub fn hidden_ranges(&self, ctx: &AppContext) -> RangeSet<CharOffset> {
         self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx)
+    }
+
+    /// The hidden ranges as 0-based line ranges, end exclusive.
+    pub fn hidden_line_ranges(&self, ctx: &AppContext) -> Vec<Range<usize>> {
+        let buffer = self.content.as_ref(ctx);
+        // Hidden ranges start at the first hidden line and end at the start of the first visible
+        // line after it. Buffer points are 1-based.
+        let line_at =
+            |offset: CharOffset| (offset.to_buffer_point(buffer).row as usize).saturating_sub(1);
+        self.hidden_ranges(ctx)
+            .iter()
+            .map(|range| line_at(range.start)..line_at(range.end))
+            .filter(|range| !range.is_empty())
+            .collect()
     }
 
     // Set the following hidden line ranges to be visible. This is no-op if the lines are already visible.
@@ -1141,6 +1176,15 @@ impl CodeEditorModel {
     /// decorations for the diffs in the editor. The [`super::element::EditorWrapper`] may still
     /// display indicators for collapsed diff hunks in its `GutterElement`.
     fn refresh_diff_state(&self, ctx: &mut ModelContext<Self>) {
+        if let DiffDecorationMode::SplitBaseline {
+            removed_lines,
+            gaps,
+        } = &self.diff_decoration_mode
+        {
+            self.apply_split_baseline_decorations(removed_lines, gaps, ctx);
+            return;
+        }
+
         let mut all_diffs_removed_lines = Vec::new();
         let mut all_diffs_line_decorations = Vec::new();
         let mut all_diffs_text_decorations = Vec::new();
@@ -1259,6 +1303,12 @@ impl CodeEditorModel {
             }
         }
 
+        if self.diff_decoration_mode == DiffDecorationMode::SplitModified
+            && self.diff_nav_is_active()
+        {
+            all_diffs_removed_lines = self.split_modified_gap_blocks(ctx);
+        }
+
         // If there is no diff navigation, we update the `RenderState` to have no temporary blocks
         // or decorations. Other events can add decorations, e.g. the active cursor line highlight.
         self.render_state.update(ctx, |render_state, _| {
@@ -1268,6 +1318,73 @@ impl CodeEditorModel {
                 text: all_diffs_text_decorations,
             });
         });
+    }
+
+    /// Gap rows for the modified side of a split diff, one per removed line that has no added
+    /// line beside it.
+    fn split_modified_gap_blocks(&self, ctx: &AppContext) -> Vec<TemporaryBlock> {
+        let alignment = self.split_diff_alignment(ctx);
+        gap_blocks(&alignment.modified_gaps(), Appearance::as_ref(ctx))
+    }
+
+    fn apply_split_baseline_decorations(
+        &self,
+        removed_lines: &[Range<usize>],
+        gaps: &[GapRun],
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let appearance = Appearance::as_ref(ctx);
+        let fill = remove_overlay_color(appearance);
+        let line_decorations = removed_lines
+            .iter()
+            .map(|range| {
+                LineDecoration::new(
+                    LineCount::from(range.start),
+                    LineCount::from(range.end),
+                    fill.into(),
+                )
+            })
+            .collect_vec();
+        let blocks = gap_blocks(gaps, appearance);
+        self.render_state.update(ctx, |render_state, _| {
+            render_state.add_temporary_blocks(blocks);
+            render_state.set_decorations_after_layout(UpdateDecorationAfterLayout::LineAndText {
+                line: line_decorations,
+                text: Vec::new(),
+            });
+        });
+    }
+
+    /// Aligns this editor's base and current text into the rows of a split diff.
+    pub fn split_diff_alignment(&self, ctx: &AppContext) -> DiffAlignment {
+        let diff = self.diff.as_ref(ctx);
+        let modified_line_count = self.content.as_ref(ctx).text().as_str().lines().count();
+        DiffAlignment::new(
+            diff.diff_status().change_spans(),
+            diff.base_line_count(),
+            modified_line_count,
+        )
+    }
+
+    pub fn diff_decoration_mode(&self) -> &DiffDecorationMode {
+        &self.diff_decoration_mode
+    }
+
+    /// Switches how the diff is drawn. The base side of a split diff keeps diff navigation
+    /// expanded so that cursor-line highlights never replace its removed-line fills.
+    pub fn set_diff_decoration_mode(
+        &mut self,
+        mode: DiffDecorationMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(mode, DiffDecorationMode::SplitBaseline { .. }) {
+            self.diff_navigation_state = DiffNavigationState::Expanded;
+        }
+        if self.diff_decoration_mode == mode {
+            return;
+        }
+        self.diff_decoration_mode = mode;
+        self.refresh_diff_state(ctx);
     }
 
     /// Returns `true` if the diff navigation was toggled on. Returns `false` if the diff navigation
@@ -4370,6 +4487,21 @@ impl PlainTextEditorModel for CodeEditorModel {
 
 impl Entity for CodeEditorModel {
     type Event = CodeEditorModelEvent;
+}
+
+/// One single-line, non-selectable blank block per gap row.
+fn gap_blocks(gaps: &[GapRun], appearance: &Appearance) -> Vec<TemporaryBlock> {
+    let fill = gap_fill_color(appearance);
+    gaps.iter()
+        .flat_map(|gap| {
+            (0..gap.count).map(move |_| TemporaryBlock {
+                content: "\n".to_string(),
+                insert_before: LineCount::from(gap.insert_before),
+                line_decoration: Some(fill.into()),
+                inline_text_decorations: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

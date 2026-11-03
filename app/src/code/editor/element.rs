@@ -418,6 +418,9 @@ pub struct EditorWrapper<V: EditorView> {
     find_references_save_position_id: String,
     /// The line where find references card is anchored (if active).
     find_references_anchor: Option<EditorLineLocation>,
+    /// Whether temporary blocks are blank gap rows of a split diff rather than removed lines.
+    /// Gap rows get no gutter content.
+    temporary_blocks_are_gaps: bool,
 }
 
 impl<V: EditorView> EditorWrapper<V> {
@@ -540,7 +543,12 @@ impl<V: EditorView> EditorWrapper<V> {
             comment_save_position_id,
             find_references_save_position_id,
             find_references_anchor: None,
+            temporary_blocks_are_gaps: false,
         }
+    }
+
+    pub fn set_temporary_blocks_are_gaps(&mut self, temporary_blocks_are_gaps: bool) {
+        self.temporary_blocks_are_gaps = temporary_blocks_are_gaps;
     }
 
     /// Set the comment box to be displayed at a specific line
@@ -629,6 +637,9 @@ impl<V: EditorView> EditorWrapper<V> {
             // If the block is temporary, don't render line number.
             // Currently, all temporary blocks are removal hunks, either from a deleted section,
             // or the old lines from a replacement hunk.
+            if block.is_temporary() && self.temporary_blocks_are_gaps {
+                continue;
+            }
             if block.is_temporary() {
                 let diff_range = self.diff_status.removed_diff_range(line_count);
                 let range_already_clicked = diff_range

@@ -108,11 +108,11 @@ impl CodeReviewView {
             });
 
         if let Some((start_top_y, _end_bottom_y)) =
-            self.get_match_character_bounds(editor_index, start_offset, end_offset, ctx)
+            self.get_match_character_bounds(editor_index, None, start_offset, end_offset, ctx)
         {
             self.viewported_list_state
                 .scroll_to_with_offset(editor_index, Pixels::new(FILE_HEADER_HEIGHT) + start_top_y);
-            self.horizontally_scroll_to_match(editor_index, start_offset, end_offset, ctx);
+            self.horizontally_scroll_to_match(editor_index, None, start_offset, end_offset, ctx);
 
             // Eagerly compute and store scroll context so it is available
             // before the next buffer edit (the debounce may not have fired yet).
@@ -124,7 +124,7 @@ impl CodeReviewView {
             ctx.notify();
             true
         } else {
-            self.scroll_to_position(editor_index, start_offset, end_offset, 0.0, ctx);
+            self.scroll_to_position(editor_index, None, start_offset, end_offset, 0.0, ctx);
             ctx.notify();
             false
         }
@@ -378,6 +378,72 @@ impl CodeReviewView {
             .into_string();
         let line_index = line_number.checked_sub(1)?;
         text.lines().nth(line_index).map(ToOwned::to_owned)
+    }
+
+    /// For a file shown as a split diff, checks that every paired row whose lines are laid out
+    /// in both panes sits at the same content offset. Returns the number of rows compared and
+    /// the (base line, modified line) pairs that are misaligned, or `None` when the file has no
+    /// base pane.
+    pub fn split_alignment_for_test(
+        &self,
+        path: &str,
+        ctx: &AppContext,
+    ) -> Option<(usize, Vec<(usize, usize)>)> {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return None;
+        };
+        let editor_state = state
+            .file_states
+            .values()
+            .find(|file_state| file_state.file_diff.file_path == path)?
+            .editor_state
+            .as_ref()?;
+        let baseline = editor_state.baseline.as_ref()?;
+        let modified_model = editor_state
+            .editor()
+            .as_ref(ctx)
+            .editor()
+            .as_ref(ctx)
+            .model
+            .clone();
+        let baseline_model = baseline
+            .editor
+            .as_ref(ctx)
+            .editor()
+            .as_ref(ctx)
+            .model
+            .clone();
+        let alignment = modified_model.as_ref(ctx).split_diff_alignment(ctx);
+
+        let line_top =
+            |model: &warpui::ModelHandle<crate::code::editor::model::CodeEditorModel>,
+             line: usize| {
+                let render_state = model.as_ref(ctx).render_state().as_ref(ctx);
+                render_state
+                    .vertical_offset_at_render_location(RenderLineLocation::Current(
+                        LineCount::from(line),
+                    ))
+                    .map(|offset| offset + render_state.viewport().scroll_top())
+            };
+
+        let mut compared = 0;
+        let mut misaligned = Vec::new();
+        for row in alignment.rows() {
+            let (Some(base), Some(modified)) = (row.base, row.modified) else {
+                continue;
+            };
+            let (Some(base_top), Some(modified_top)) = (
+                line_top(&baseline_model, base),
+                line_top(&modified_model, modified),
+            ) else {
+                continue;
+            };
+            compared += 1;
+            if base_top != modified_top {
+                misaligned.push((base, modified));
+            }
+        }
+        Some((compared, misaligned))
     }
 
     /// The number of collapsed hidden sections in the given file's diff editor.

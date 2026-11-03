@@ -257,6 +257,7 @@ use crate::cloud_object::{
     CloudObject, GenericStringObjectFormat, JsonObjectType, ObjectType, Owner, Space,
 };
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::diff_layout::DiffLayout;
 use crate::code::editor::{add_color, remove_color};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeManager;
@@ -23496,6 +23497,9 @@ impl Workspace {
         }
         if *tab_settings.show_code_review_diff_stats.value() {
             context.set.insert(flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG);
+        }
+        if DiffLayout::effective(*CodeSettings::as_ref(app).diff_layout.value()).is_side_by_side() {
+            context.set.insert(flags::SPLIT_DIFF_LAYOUT_FLAG);
         }
         if *general_settings
             .auto_open_code_review_pane_on_first_agent_change
