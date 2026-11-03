@@ -1078,20 +1078,10 @@ fn branch_heads_check_out_branches_then_tags_on_both_paths() {
             git(&origin, &["update-ref", "refs/heads/feature", &pinned]);
             git(&origin, &["update-ref", "refs/tags/v1", &pinned]);
             git(
-                &origin,
-                &[
-                    "-c",
-                    "user.name=Checkout Fixture",
-                    "-c",
-                    "user.email=checkout@example.com",
-                    "tag",
-                    "-a",
-                    "annotated",
-                    "-m",
-                    "release",
-                    &pinned,
-                ],
+                &fixture.seed(),
+                &["tag", "-a", "annotated", "-m", "release", &pinned],
             );
+            git(&fixture.seed(), &["push", "origin", "annotated"]);
             git(&origin, &["update-ref", "refs/heads/same", &base]);
             git(&origin, &["update-ref", "refs/tags/same", &pinned]);
             let expected = [

@@ -529,12 +529,10 @@ fn select_skills(file: &SkillReferenceFile, root: &Path) -> (Vec<Candidate>, Vec
                 .map(|rel_dir| skill_at(root, rel_dir.clone()))
                 .collect(),
         };
-        if results.is_empty() {
-            unresolved.push(UnresolvedEntry {
-                entry: entry.value().to_owned(),
-                reason: UnresolvedReason::NoMatch,
-            });
-        }
+        let results = match results.is_empty() {
+            true => vec![Err(UnresolvedReason::NoMatch)],
+            false => results,
+        };
         for result in results {
             match result {
                 Ok((name, rel_dir)) => candidates.push(Candidate {
