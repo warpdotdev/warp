@@ -312,3 +312,64 @@ fn cli_activity_refreshes_metadata_without_saving_until_turn_completion() {
         drop(driver);
     });
 }
+
+#[test]
+fn transport_fallback_only_when_an_acp_run_has_no_adapter() {
+    use super::{TRANSPORT_FALLBACK_NO_ADAPTER, transport_fallback_reason};
+
+    // A sidecar manifest, or an adapter on PATH, keeps the run on ACP.
+    assert_eq!(
+        transport_fallback_reason(Harness::Claude, HarnessTransport::Acp, true),
+        None
+    );
+    assert_eq!(
+        transport_fallback_reason(Harness::Codex, HarnessTransport::Acp, true),
+        None
+    );
+    // No adapter at all: the CLI harnesses fall back to their PTY transport.
+    assert_eq!(
+        transport_fallback_reason(Harness::Claude, HarnessTransport::Acp, false),
+        Some(TRANSPORT_FALLBACK_NO_ADAPTER)
+    );
+    assert_eq!(
+        transport_fallback_reason(Harness::Codex, HarnessTransport::Acp, false),
+        Some(TRANSPORT_FALLBACK_NO_ADAPTER)
+    );
+    // A PTY run never falls back, and harnesses without a PTY are left alone.
+    assert_eq!(
+        transport_fallback_reason(Harness::Claude, HarnessTransport::Pty, false),
+        None
+    );
+    assert_eq!(
+        transport_fallback_reason(Harness::Pi, HarnessTransport::Acp, false),
+        None
+    );
+    assert_eq!(
+        transport_fallback_reason(Harness::Gemini, HarnessTransport::Acp, false),
+        None
+    );
+}
+
+#[test]
+fn apply_transport_fallback_swaps_the_harness_and_the_transport() {
+    use super::{HarnessKind, apply_transport_fallback, harness_kind};
+
+    // Oz has no ACP adapter to look for, so nothing changes.
+    let mut kind = HarnessKind::Oz;
+    let mut transport = HarnessTransport::Acp;
+    assert_eq!(
+        apply_transport_fallback(&mut kind, &mut transport).unwrap(),
+        None
+    );
+    assert_eq!(transport, HarnessTransport::Acp);
+
+    // A PTY harness reports no adapter availability and is left as is.
+    let mut kind = harness_kind(Harness::Claude, HarnessTransport::Pty).unwrap();
+    let mut transport = HarnessTransport::Pty;
+    assert_eq!(
+        apply_transport_fallback(&mut kind, &mut transport).unwrap(),
+        None
+    );
+    assert!(matches!(kind, HarnessKind::ThirdParty(_)));
+    assert_eq!(transport, HarnessTransport::Pty);
+}

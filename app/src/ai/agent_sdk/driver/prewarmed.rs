@@ -258,8 +258,40 @@ impl AgentDriver {
             &mut task,
         )
         .await?;
+        // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
+        // instead, before the resume path and the run configuration read the transport.
+        let transport_fallback = super::harness::apply_transport_fallback(
+            &mut task.harness,
+            &mut options.harness_transport,
+        )?;
+        if let Some(reason) = transport_fallback {
+            let harness_name = task.harness.harness().to_string();
+            log::info!(
+                "No ACP adapter for the {harness_name} harness in this sandbox ({reason}); driving it over a PTY"
+            );
+            let _ = spawner
+                .spawn(move |_, ctx| {
+                    use warp_core::telemetry::TelemetryEvent as _;
+                    let event =
+                        super::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
+                            harness: harness_name,
+                            reason,
+                        };
+                    crate::send_telemetry_from_app_ctx!(event, ctx);
+                })
+                .await;
+        }
         if let HarnessKind::ThirdParty(harness) = &task.harness {
             harness.validate()?;
+            let client = spawner
+                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
+                .await?;
+            crate::ai::agent_sdk::harness_support::report_transport_used(
+                client,
+                options.harness_transport,
+                transport_fallback,
+            )
+            .await;
         }
         if let Some(conversation_id) = conversation_id {
             options.resume = setup_events

@@ -21,6 +21,7 @@ use super::common::set_ambient_task_context_from_run_id;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::harness_support::HarnessSupportClient;
 
 /// Run harness-support commands.
 pub fn run(
@@ -455,3 +456,17 @@ impl SingletonEntity for HarnessSupportRunner {}
 #[cfg(test)]
 #[path = "harness_support_tests.rs"]
 mod tests;
+
+/// Tells the server which transport a run's harness is actually driven over, with the
+/// fallback reason when it differs from what the server requested, so follow-up attachments
+/// and session links agree with the run. Reporting is best effort: an older server has no
+/// endpoint, which is logged and otherwise ignored.
+pub(crate) async fn report_transport_used(
+    client: std::sync::Arc<dyn HarnessSupportClient>,
+    transport: warp_cli::agent::HarnessTransport,
+    fallback_reason: Option<&'static str>,
+) {
+    if let Err(error) = client.report_transport(transport, fallback_reason).await {
+        log::warn!("Failed to report the harness transport to the server: {error:#}");
+    }
+}
