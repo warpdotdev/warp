@@ -156,7 +156,7 @@ impl AgentDriver {
         let resolved_dirs = resolve_skills_dirs(&working_dir, configured_dirs.clone());
         let factory_forge = std::env::var(FACTORY_CODE_FORGE_ENV)
             .ok()
-            .and_then(|value| SkillSourceForge::from_token(value.trim()));
+            .and_then(|value| value.trim().parse().ok());
         let levels = discover(&resolved_dirs, factory_forge);
         (!levels.is_empty()).then(|| SkillReferenceDiscovery {
             root: std::env::temp_dir()
@@ -177,23 +177,21 @@ impl AgentDriver {
         // Starts empty so nothing from an earlier attempt in the same sandbox is reused.
         let _ = fs::remove_dir_all(&discovery.root);
         let (batch, sources) = plan_checkouts(&discovery.levels, &discovery.root.join("sources"));
-        let report =
-            if fs::create_dir_all(&batch.working_dir).is_ok() && !batch.repositories.is_empty() {
+        let report = match fs::create_dir_all(&batch.working_dir) {
+            Ok(()) if !batch.repositories.is_empty() => {
                 let request = batch.clone();
-                match foreground
-                    .spawn(move |me, ctx| {
-                        me.terminal_driver.update(ctx, |_, ctx| {
-                            environment::checkout_skill_sources(request, ctx)
-                        })
+                let checkout = foreground.spawn(move |me, ctx| {
+                    me.terminal_driver.update(ctx, |_, ctx| {
+                        environment::checkout_skill_sources(request, ctx)
                     })
-                    .await
-                {
+                });
+                match checkout.await {
                     Ok(checkout) => checkout.await,
                     Err(_) => None,
                 }
-            } else {
-                None
-            };
+            }
+            Ok(()) | Err(_) => None,
+        };
         let checkouts = checkouts(sources, &batch, report.as_ref());
         let (skill_dirs, report) = materialize(&discovery, &checkouts);
         log::info!(

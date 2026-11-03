@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use globset::{Glob, GlobBuilder, GlobMatcher};
-use strum_macros::IntoStaticStr;
+use strum_macros::{EnumString, IntoStaticStr};
 use yaml_rust::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust::scanner::Marker;
 use yaml_rust::{Yaml, YamlLoader};
@@ -32,32 +32,17 @@ pub struct SkillSource {
 }
 
 /// Code forges a skill source can live on, spelled as in `factory.yaml` repository entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 pub enum SkillSourceForge {
+    #[strum(serialize = "GITHUB")]
     GitHub,
+    #[strum(serialize = "GITLAB")]
     GitLab,
+    #[strum(serialize = "AZURE_DEVOPS")]
     AzureDevOps,
 }
 
 impl SkillSourceForge {
-    /// Parses a forge token such as `GITHUB`.
-    pub fn from_token(token: &str) -> Option<Self> {
-        match token {
-            "GITHUB" => Some(Self::GitHub),
-            "GITLAB" => Some(Self::GitLab),
-            "AZURE_DEVOPS" => Some(Self::AzureDevOps),
-            _ => None,
-        }
-    }
-
-    pub fn token(self) -> &'static str {
-        match self {
-            Self::GitHub => "GITHUB",
-            Self::GitLab => "GITLAB",
-            Self::AzureDevOps => "AZURE_DEVOPS",
-        }
-    }
-
     /// Parses a shorthand host prefix such as `github.com`.
     fn from_host(host: &str) -> Option<Self> {
         match host {
@@ -182,17 +167,11 @@ pub fn parse_skill_reference_file(
         [root] => root,
         [_, _, ..] => return Err(SkillReferenceParseError::InvalidYaml),
     };
-    let mapping = match root {
-        Yaml::Hash(mapping) => mapping,
+    let mapping = match root.as_hash() {
+        Some(mapping) => mapping,
         // An empty or null document is an empty mapping.
-        Yaml::Null => return Err(SkillReferenceParseError::MissingSource),
-        Yaml::Real(_)
-        | Yaml::Integer(_)
-        | Yaml::String(_)
-        | Yaml::Boolean(_)
-        | Yaml::Array(_)
-        | Yaml::Alias(_)
-        | Yaml::BadValue => return Err(SkillReferenceParseError::InvalidYaml),
+        None if root.is_null() => return Err(SkillReferenceParseError::MissingSource),
+        None => return Err(SkillReferenceParseError::InvalidYaml),
     };
     if !keys_are_known(mapping, &["source", "include", "exclude"]) {
         return Err(SkillReferenceParseError::UnknownKey);
@@ -243,8 +222,10 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
             let code_forge = match field("codeForge") {
                 None | Some(Yaml::Null) => None,
                 Some(Yaml::String(token)) => Some(
-                    SkillSourceForge::from_token(token.trim())
-                        .ok_or(SkillReferenceParseError::UnknownCodeForge)?,
+                    token
+                        .trim()
+                        .parse()
+                        .map_err(|_| SkillReferenceParseError::UnknownCodeForge)?,
                 ),
                 Some(_) => return Err(SkillReferenceParseError::UnknownCodeForge),
             };

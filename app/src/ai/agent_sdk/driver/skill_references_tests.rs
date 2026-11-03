@@ -262,30 +262,22 @@ fn levels_and_files_apply_in_order_and_earlier_names_win() {
 
 #[test]
 fn every_failure_is_recorded_and_the_rest_still_loads() {
+    let file = |source: &str, include: &str| format!("source: {source}\ninclude: [{include}]\n");
     let fixture = Fixture::new(&[
         (
             "skills/a.yaml",
-            "source: github.com:acme/broken\ninclude: [x]\nbad: 1\n",
+            &format!("{}bad: 1\n", file("acme/broken", "x")),
         ),
-        (
-            "skills/b.yaml",
-            "source: github.com:acme/down\ninclude: [one, two]\n",
-        ),
-        (
-            "skills/c.yaml",
-            "source: github.com:acme/pinned@v9\ninclude: [one]\n",
-        ),
-        (
-            "skills/d.yaml",
-            "source: github.com:acme/silent\ninclude: [one]\n",
-        ),
-        (
-            "skills/e.yaml",
-            "source: acme/no-forge\ninclude: [one, two]\n",
-        ),
+        ("skills/b.yaml", &file("github.com:acme/down", "one, two")),
+        ("skills/c.yaml", &file("github.com:acme/pinned@v9", "one")),
+        ("skills/d.yaml", &file("github.com:acme/silent", "one")),
+        ("skills/e.yaml", &file("acme/no-forge", "one, two")),
         (
             "skills/f.yaml",
-            "source: github.com:acme/partial\ninclude: [good, gone, bad, skills/bad, \"none-*\"]\n",
+            &file(
+                "github.com:acme/partial",
+                "good, gone, bad, skills/bad, \"none-*\"",
+            ),
         ),
     ]);
     let (_, report) = fixture.resolve(

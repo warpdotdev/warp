@@ -121,7 +121,6 @@ impl SetupClientEventReporter {
         );
         value
     }
-
     /// Records setup work in the background without making startup wait for it.
     pub(crate) fn record_value_detached<T>(
         &self,
