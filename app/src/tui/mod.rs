@@ -5,10 +5,12 @@
 //! the TUI observes, mounts the TUI immediately (so it renders right away), and
 //! leaves device authorization behind an explicit welcome-screen action. The
 //! authentication gate remains visible until the browser flow completes.
+mod cli_command;
 mod mcp;
 mod telemetry;
 mod user_info;
 
+pub(crate) use cli_command::authenticate_then_execute;
 pub use mcp::{
     TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
     TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,

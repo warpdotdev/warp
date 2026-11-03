@@ -27,7 +27,15 @@ pub struct UpsertedRunner {
     pub is_update: bool,
 }
 
-/// Client for the Factory GraphQL surface (runner CRUD).
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+#[derive(serde::Deserialize)]
+struct FactoryGitTokenResponse {
+    token: String,
+}
+
+/// Client for the Factory CRUD API surface:
+/// - GraphQL for runners
+/// - REST for git tokens
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -51,6 +59,10 @@ pub trait FactoryClient: 'static + Send + Sync {
     /// Delete a runner by UID, returning the deleted UID on success.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     async fn delete_runner(&self, uid: String) -> Result<String>;
+
+    /// Mint a git access jwt token for the definition of a factory
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    async fn get_factory_git_token(&self, uid: String) -> Result<String>;
 }
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -124,5 +136,15 @@ impl FactoryClient for ServerApi {
             }
             DeleteRunnerResult::Unknown => Err(anyhow!("failed to delete runner")),
         }
+    }
+
+    async fn get_factory_git_token(&self, uid: String) -> Result<String> {
+        let response: FactoryGitTokenResponse = self
+            .post_public_api(
+                &format!("factory/{}/git-token", uid),
+                &serde_json::json!({}),
+            )
+            .await?;
+        Ok(response.token)
     }
 }
