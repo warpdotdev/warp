@@ -1167,6 +1167,18 @@ fn uncached_sha_fetch_avoids_later_default_history_and_preserves_failures() {
             .unwrap();
             assert_eq!(results[0].failure, Some(CheckoutFailureKind::Checkout));
             assert_eq!(git(&target, &["rev-parse", "HEAD"]), base);
+
+            // A commit the remote lacks fails the checkout; a remote that can't be reached fails
+            // the clone.
+            let absent = "0123456789abcdef".repeat(3)[..40].to_owned();
+            let pinned = |name: &str| {
+                fixture.request(name, Some(RepositoryHeadRef::CommitSha(absent.clone())))
+            };
+            let results = checkout_batch(&fixture.batch(vec![pinned("absent")]), None).unwrap();
+            assert_eq!(results[0].failure, Some(CheckoutFailureKind::Checkout));
+            fs::rename(fixture.origin(), fixture.root.join("origin-offline.git")).unwrap();
+            let results = checkout_batch(&fixture.batch(vec![pinned("offline")]), None).unwrap();
+            assert_eq!(results[0].failure, Some(CheckoutFailureKind::Clone));
         },
     );
 }

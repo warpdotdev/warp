@@ -1090,9 +1090,8 @@ async fn checkout_direct(
     let result = async {
         // Branch-only and pinned-commit requests start from an empty repository because a clone would
         // also download the default branch's history, which they do not want.
-        if request.fetch_branch_only
-            || matches!(request.head, Some(RepositoryHeadRef::CommitSha(_)))
-        {
+        let pinned = matches!(request.head, Some(RepositoryHeadRef::CommitSha(_)));
+        if request.fetch_branch_only || pinned {
             git.run("checkout initialization", target, &["init", "--quiet"])
                 .await
                 .map_err(|_| CheckoutFailureKind::Clone)?;
@@ -1106,7 +1105,19 @@ async fn checkout_direct(
         } else {
             clone_repository(request, url, target, git).await?;
         }
-        checkout_requested_head(request, target, git).await
+        let result = checkout_requested_head(request, target, git).await;
+        // A pinned commit's fetch is the first time the remote is contacted, so a failure only
+        // means the commit is missing if the remote answers.
+        if pinned
+            && result == Err(CheckoutFailureKind::Checkout)
+            && git
+                .run("remote probe", target, &["ls-remote", "origin", "HEAD"])
+                .await
+                .is_err()
+        {
+            return Err(CheckoutFailureKind::Clone);
+        }
+        result
     }
     .await;
     tracing::Span::current().record("result_ok", result.is_ok());
