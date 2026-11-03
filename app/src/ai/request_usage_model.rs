@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
+use warp_graphql::billing::IncludedUsagePool;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -159,6 +161,7 @@ pub struct CodebaseContextUsageLimit {
 pub struct RequestUsageInfo {
     pub request_limit_info: RequestLimitInfo,
     pub bonus_grants: Vec<BonusGrant>,
+    pub included_usage_pools: HashMap<WorkspaceUid, IncludedUsagePool>,
 }
 
 #[cfg(feature = "agent_mode_evals")]
@@ -232,6 +235,7 @@ pub struct AIRequestUsageModel {
     request_limit_info: RequestLimitInfo,
 
     bonus_grants: Vec<BonusGrant>,
+    included_usage_pools: HashMap<WorkspaceUid, IncludedUsagePool>,
 
     server_availability: ServerAvailabilityState,
 
@@ -271,6 +275,7 @@ impl AIRequestUsageModel {
             request_limit_info,
             last_update_time: None,
             bonus_grants: vec![],
+            included_usage_pools: HashMap::new(),
             server_availability: ServerAvailabilityState::default(),
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed,
@@ -284,6 +289,7 @@ impl AIRequestUsageModel {
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
+            included_usage_pools: HashMap::new(),
             server_availability: ServerAvailabilityState::default(),
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed: get_cached_ambient_credits_banner_dismissed(ctx),
@@ -292,6 +298,10 @@ impl AIRequestUsageModel {
 
     pub fn last_update_time(&self) -> Option<Instant> {
         self.last_update_time
+    }
+
+    pub fn included_usage_pool(&self, workspace_uid: WorkspaceUid) -> Option<&IncludedUsagePool> {
+        self.included_usage_pools.get(&workspace_uid)
     }
 
     /// Refreshes the latest AI request usage and bonus grants from the server.
@@ -318,6 +328,7 @@ impl AIRequestUsageModel {
                     Ok(usage_info) => {
                         let request_limit = usage_info.request_limit_info.limit;
                         model.bonus_grants = usage_info.bonus_grants;
+                        model.included_usage_pools = usage_info.included_usage_pools;
                         model.update_request_limit_info(usage_info.request_limit_info, ctx);
                         Some(request_limit)
                     }
@@ -404,6 +415,7 @@ impl AIRequestUsageModel {
     /// Clears the server-authoritative availability state, e.g. on logout.
     pub fn reset_server_availability(&mut self, ctx: &mut ModelContext<Self>) {
         self.server_availability = ServerAvailabilityState::default();
+        self.included_usage_pools.clear();
         ctx.emit(AIRequestUsageModelEvent::CreditAvailabilityUpdated);
         ctx.notify();
     }

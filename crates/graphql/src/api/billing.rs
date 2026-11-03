@@ -278,6 +278,7 @@ pub enum CustomerType {
     Lightspeed,
     Build,
     BuildMax,
+    Scale,
     #[cynic(fallback)]
     Other(String),
 }
@@ -297,6 +298,14 @@ pub struct AddonCreditsOption {
     pub credits: i32,
     pub price_usd_cents: i32,
     pub usage_cents: Option<i32>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct IncludedUsagePool {
+    pub monthly_cents: i32,
+    pub granted_cents: f64,
+    pub remaining_cents: f64,
+    pub expires_at: Option<Time>,
 }
 
 impl AddonCreditsOption {
@@ -367,6 +376,7 @@ pub enum StripeSubscriptionPlan {
     Build,
     BuildBusiness,
     BuildMax,
+    Scale,
     #[cynic(fallback)]
     Other(String),
 }

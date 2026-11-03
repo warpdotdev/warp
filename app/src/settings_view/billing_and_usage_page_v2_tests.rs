@@ -6,6 +6,36 @@ fn workspace_uid(id: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(id))
 }
 
+#[test]
+fn retains_fractional_purchased_usage_after_credit_count_truncates() {
+    let current = workspace_uid(1);
+    let classified = ClassifiedGrants::new(
+        &[grant_in_dollars(BonusGrantScope::Team(current), 0, 0.5)],
+        Some(current),
+    );
+
+    assert_eq!(
+        classified.team.balance(UsageDisplayUnit::Dollars),
+        BalanceAmount::Cents(0.5)
+    );
+}
+
+#[test]
+fn included_pool_stops_contributing_at_cycle_expiry() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut pool = IncludedUsagePool {
+        monthly_cents: 10000,
+        granted_cents: 10000.,
+        remaining_cents: 6250.,
+        expires_at: Some((now + Duration::days(1)).into()),
+    };
+    assert_eq!(included_pool_remaining_cents(&pool, now), 6250.);
+    pool.expires_at = Some(now.into());
+    assert_eq!(included_pool_remaining_cents(&pool, now), 0.);
+}
+
 fn grant(scope: BonusGrantScope, grant_type: BonusGrantType, remaining: i32) -> BonusGrant {
     BonusGrant {
         created_at: Utc::now(),

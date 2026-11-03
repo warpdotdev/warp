@@ -1,5 +1,5 @@
 use crate::ai::RequestLimitInfo;
-use crate::billing::{BonusGrant, BonusGrantsInfo};
+use crate::billing::{BonusGrant, BonusGrantsInfo, IncludedUsagePool};
 use crate::error::UserFacingError;
 use crate::request_context::RequestContext;
 use crate::schema;
@@ -74,6 +74,7 @@ pub struct UserOutput {
 pub struct WorkspaceInfo {
     pub uid: cynic::Id,
     pub bonus_grants_info: BonusGrantsInfo,
+    pub included_usage_pool: Option<IncludedUsagePool>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

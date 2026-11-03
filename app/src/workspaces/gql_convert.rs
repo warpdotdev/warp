@@ -774,6 +774,7 @@ impl From<GqlCustomerType> for CustomerType {
             GqlCustomerType::Lightspeed => CustomerType::Lightspeed,
             GqlCustomerType::Build => CustomerType::Build,
             GqlCustomerType::BuildMax => CustomerType::BuildMax,
+            GqlCustomerType::Scale => CustomerType::Scale,
             GqlCustomerType::ProTrial | GqlCustomerType::TeamTrial | GqlCustomerType::Other(_) => {
                 CustomerType::Unknown
             }
@@ -893,6 +894,7 @@ impl TryFrom<&BillingMetadata> for StripeSubscriptionPlan {
             CustomerType::Lightspeed => Ok(StripeSubscriptionPlan::Lightspeed),
             CustomerType::Build => Ok(StripeSubscriptionPlan::Build),
             CustomerType::BuildMax => Ok(StripeSubscriptionPlan::BuildMax),
+            CustomerType::Scale => Ok(StripeSubscriptionPlan::Scale),
             // legacy customer types we don't support anymore, or customer types that don't get billed via stripe
             CustomerType::Free
             | CustomerType::Legacy

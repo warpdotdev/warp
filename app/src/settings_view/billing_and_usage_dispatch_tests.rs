@@ -26,6 +26,18 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
 }
 
 #[test]
+fn scale_uses_shared_usage_billing_without_build_upgrade() {
+    let workspace = workspace_with_customer_type(CustomerType::Scale);
+
+    assert!(BillingAndUsageDispatchView::workspace_uses_v2(Some(
+        &workspace
+    )));
+    assert!(workspace.billing_metadata.is_on_stripe_paid_plan());
+    assert!(!workspace.billing_metadata.can_upgrade_to_build_max_plan());
+    assert!(!workspace.billing_metadata.is_on_legacy_paid_plan());
+}
+
+#[test]
 fn uses_v2_when_user_has_no_workspace() {
     assert!(BillingAndUsageDispatchView::workspace_uses_v2(None));
 }

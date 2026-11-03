@@ -23,7 +23,7 @@ use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::ChargeUnit;
+use crate::workspaces::workspace::{ChargeUnit, CustomerType};
 
 const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
@@ -376,10 +376,16 @@ pub fn format_dollars(cost_in_cents: f32) -> String {
     }
 }
 
-/// The unit the viewer's usage, balances and purchases display in. A tier that charges usage in
-/// cents (`Tier.chargeUnit`, via [`UserWorkspaces::charge_unit`]) follows the `usage_display_unit`
-/// setting; a tier that charges in credits is always credits, whatever the setting says.
+/// The unit the viewer's usage, balances and purchases display in. Scale uses dollars for its shared
+/// included pool. Other tiers that charge in cents follow the `usage_display_unit` setting; tiers
+/// that charge in credits always display credits.
 pub fn usage_display_unit(app: &AppContext) -> UsageDisplayUnit {
+    if UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| workspace.billing_metadata.customer_type == CustomerType::Scale)
+    {
+        return UsageDisplayUnit::Dollars;
+    }
     match UserWorkspaces::as_ref(app).charge_unit() {
         ChargeUnit::Cents => AISettings::as_ref(app).usage_display_unit,
         ChargeUnit::Credits => UsageDisplayUnit::Credits,

@@ -2173,6 +2173,7 @@ impl AIClient for ServerApi {
         Ok(RequestUsageInfo {
             request_limit_info: RequestLimitInfo::new_for_evals(),
             bonus_grants: vec![],
+            included_usage_pools: Default::default(),
         })
     }
 
@@ -2187,6 +2188,21 @@ impl AIClient for ServerApi {
         match response.user {
             warp_graphql::queries::get_request_limit_info::UserResult::UserOutput(user_output) => {
                 let request_limit_info = user_output.user.request_limit_info.into();
+                let included_usage_pools = user_output
+                    .user
+                    .workspaces
+                    .iter()
+                    .filter_map(|workspace| {
+                        workspace.included_usage_pool.clone().map(|pool| {
+                            (
+                                WorkspaceUid::from(ServerId::from_string_lossy(
+                                    workspace.uid.inner(),
+                                )),
+                                pool,
+                            )
+                        })
+                    })
+                    .collect();
 
                 let workspace_and_team_bonus_grants = user_output
                     .user
@@ -2219,6 +2235,7 @@ impl AIClient for ServerApi {
                 Ok(RequestUsageInfo {
                     request_limit_info,
                     bonus_grants,
+                    included_usage_pools,
                 })
             }
             warp_graphql::queries::get_request_limit_info::UserResult::UserFacingError(e) => {

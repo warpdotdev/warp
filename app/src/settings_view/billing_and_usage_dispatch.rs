@@ -23,7 +23,7 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{ChargeUnit, Workspace};
+use crate::workspaces::workspace::{ChargeUnit, CustomerType, Workspace};
 
 pub struct BillingAndUsageDispatchView {
     page: PageType<Self>,
@@ -126,6 +126,7 @@ impl BillingAndUsageDispatchView {
                 || bm.is_on_build_business_plan()
                 || bm.is_enterprise_plan()
                 || bm.is_free_plan()
+                || bm.customer_type == CustomerType::Scale
         })
     }
 
@@ -246,7 +247,13 @@ impl SettingsWidget for BillingAndUsageWidget {
             ChargeUnit::Cents => true,
             ChargeUnit::Credits => false,
         };
-        if offers_unit_choice {
+        if offers_unit_choice
+            && !UserWorkspaces::as_ref(app)
+                .current_workspace()
+                .is_some_and(|workspace| {
+                    workspace.billing_metadata.customer_type == CustomerType::Scale
+                })
+        {
             page.add_child(
                 Container::new(render_dropdown_item(
                     appearance,

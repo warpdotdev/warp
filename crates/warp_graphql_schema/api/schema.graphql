@@ -1184,6 +1184,7 @@ type CustomLlmPolicy {
 enum CustomerType {
   BUILD
   BUILD_MAX
+  SCALE
   BUSINESS
   ENTERPRISE
   FREE
@@ -3888,6 +3889,7 @@ enum StripeSubscriptionPlan {
   BUILD
   BUILD_BUSINESS
   BUILD_MAX
+  SCALE
   BUSINESS
   LIGHTSPEED
   PRO
@@ -5122,6 +5124,13 @@ type WorkflowUpdateRejected {
   revisionTs: Time!
 }
 
+type IncludedUsagePool {
+  monthlyCents: Int!
+  grantedCents: Float!
+  remainingCents: Float!
+  expiresAt: Time
+}
+
 """
 The Workspace type is our top-level type that contains all of our collaborative objects
 and features.
@@ -5158,6 +5167,7 @@ type Workspace {
   """
   hasBillingHistory: Boolean!
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
+  includedUsagePool: IncludedUsagePool
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!

@@ -11,7 +11,7 @@ use settings::Setting;
 use thousands::Separable;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warp_graphql::billing::AddonCreditsOption;
+use warp_graphql::billing::{AddonCreditsOption, IncludedUsagePool};
 use warpui::elements::{
     Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
@@ -301,7 +301,12 @@ impl ClassifiedGrants {
             if grant.expiration.is_some_and(|exp| now >= exp) {
                 continue;
             }
-            if grant.request_credits_remaining <= 0 {
+            if grant
+                .usage_cents_remaining
+                .map_or(grant.request_credits_remaining <= 0, |remaining| {
+                    remaining <= 0.
+                })
+            {
                 continue;
             }
             if grant.grant_type == BonusGrantType::AmbientOnly {
@@ -869,7 +874,14 @@ impl BillingAndUsagePageV2View {
 
         plan_header.add_child(right_side.finish());
 
-        Container::new(plan_header.finish())
+        let mut plan = Flex::column().with_child(plan_header.finish());
+        if billing_metadata.is_some_and(|metadata| metadata.customer_type == CustomerType::Scale) {
+            plan.add_child(Text::new_inline(
+                "$250/month flat for up to 50 members, including $100 in monthly shared team usage.",
+                appearance.ui_font_family(), 12.,
+            ).with_color(appearance.theme().active_ui_text_color().into()).finish());
+        }
+        Container::new(plan.finish())
             .with_margin_bottom(24.)
             .finish()
     }
@@ -903,15 +915,18 @@ impl BillingAndUsagePageV2View {
         let theme = appearance.theme();
         let ai_model = AIRequestUsageModel::as_ref(app);
 
-        let has_base_credits = ai_model.request_limit() > 0;
-
         let grants = ai_model.bonus_grants();
         let workspaces = UserWorkspaces::as_ref(app);
+        let is_scale = workspaces.current_workspace().is_some_and(|workspace| {
+            workspace.billing_metadata.customer_type == CustomerType::Scale
+        });
+        let has_base_credits = !is_scale && ai_model.request_limit() > 0;
         let workspace_uid = workspaces.current_workspace().map(|ws| ws.uid);
+        let included_pool = workspace_uid.and_then(|uid| ai_model.included_usage_pool(uid));
         let unit = usage_display_unit(app);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        if !has_base_credits && !classified.has_any() {
+        if !is_scale && !has_base_credits && !classified.has_any() {
             return None;
         }
 
@@ -920,6 +935,42 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_size(MainAxisSize::Max);
 
         let outline_color = theme.outline().into_solid();
+
+        if is_scale {
+            let included_card = if let Some(pool) = included_pool {
+                let used =
+                    format_dollars((pool.granted_cents - pool.remaining_cents).max(0.) as f32);
+                let date_label = pool
+                    .expires_at
+                    .as_ref()
+                    .map(|expiry| {
+                        format!(
+                            "{used} used · {}",
+                            expiry.utc().with_timezone(&Local).format("Expires %b %d")
+                        )
+                    })
+                    .unwrap_or_else(|| format!("{used} used this cycle"));
+                let remaining = included_pool_remaining_cents(pool, chrono::Utc::now());
+                render_balance_card(
+                    appearance,
+                    BASE_CREDITS_DOT_COLOR,
+                    "Included team usage",
+                    &date_label,
+                    BalanceAmount::Cents(remaining),
+                    Some(BalanceAmount::Cents(pool.granted_cents)),
+                    outline_color,
+                )
+            } else {
+                Text::new_inline(
+                    "Included team usage unavailable",
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_color(theme.active_ui_text_color().into())
+                .finish()
+            };
+            cards_row.add_child(Expanded::new(1., included_card).finish());
+        }
 
         if has_base_credits {
             let reset_str = ai_model
@@ -966,7 +1017,11 @@ impl BillingAndUsagePageV2View {
                     render_balance_card(
                         appearance,
                         BONUS_CREDITS_DOT_COLOR,
-                        &balance.pool_label(pool),
+                        &if is_scale && pool == "Team" {
+                            "Purchased team usage".to_string()
+                        } else {
+                            balance.pool_label(pool)
+                        },
                         &bucket.expiry_label(),
                         balance,
                         None,
@@ -990,6 +1045,14 @@ impl BillingAndUsagePageV2View {
                     .finish(),
                 )
                 .with_child(cards_row.finish())
+                .with_child(if is_scale {
+                    Text::new_inline(
+                        "Included usage is shared by members and cloud agents, resets monthly, and does not roll over. Purchased team usage is separate and expires 12 months after purchase.",
+                        appearance.ui_font_family(), 12.,
+                    ).with_color(theme.active_ui_text_color().into()).finish()
+                } else {
+                    Empty::new().finish()
+                })
                 .with_child(
                     ConstrainedBox::new(Empty::new().finish())
                         .with_height(24.)
@@ -1262,7 +1325,11 @@ impl BillingAndUsagePageV2View {
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
-        let description_text = if team_count > 1 {
+        let description_text = if workspace.is_some_and(|workspace| {
+            workspace.billing_metadata.customer_type == CustomerType::Scale
+        }) {
+            "Purchase usage at face value with no markup, shared by your team’s members and cloud agents. Purchased usage expires 12 months after purchase and is separate from your $100 monthly included team usage.".to_string()
+        } else if team_count > 1 {
             format!("{description} {team_description}")
         } else {
             description
@@ -2408,6 +2475,21 @@ impl TypedActionView for BillingAndUsagePageV2View {
                 });
             }
         }
+    }
+}
+
+fn included_pool_remaining_cents(
+    pool: &IncludedUsagePool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    if pool
+        .expires_at
+        .as_ref()
+        .is_some_and(|expiry| expiry.utc() <= now)
+    {
+        0.
+    } else {
+        pool.remaining_cents.max(0.)
     }
 }
 
