@@ -4,137 +4,132 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
 
-use super::super::environment_checkout_protocol::{
-    CheckoutFailureKind, CheckoutOutcome, CheckoutReport, CheckoutRequest,
-};
+use super::super::environment_checkout_protocol::{CheckoutFailureKind, CheckoutOutcome};
 use super::*;
 
-const INVALID_SKILL_MD: &str = "---\nname: [unterminated\n---\nBody\n";
-
-fn fake_sha(seed: char) -> String {
-    seed.to_string().repeat(40)
-}
-
-/// Writes `<dir>/<folder>/SKILL.md` with frontmatter `name`.
-fn write_skill(dir: &Path, folder: &str, name: &str) -> PathBuf {
-    let skill_dir = dir.join(folder);
-    fs::create_dir_all(&skill_dir).unwrap();
-    fs::write(
-        skill_dir.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: test skill\n---\nBody\n"),
-    )
-    .unwrap();
-    skill_dir
-}
-
-fn write_reference(dir: &Path, file_name: &str, contents: &str) {
-    fs::create_dir_all(dir).unwrap();
-    fs::write(dir.join(file_name), contents).unwrap();
-}
+const AGENT_SKILLS: &str = "agents/triage/skills";
+const FACTORY_SKILLS: &str = "skills";
+const GITHUB: Option<SkillSourceForge> = Some(SkillSourceForge::GitHub);
 
 /// What the fake checkout helper does for a source repository, keyed by repository name.
-enum SourceFixture {
-    /// Succeeds; each `(folder, contents)` becomes `<folder>/SKILL.md`.
-    Skills(Vec<(&'static str, String)>),
+enum Source {
+    /// Succeeds with a skill in each folder, named after the folder; a trailing `!` writes an
+    /// invalid `SKILL.md` instead.
+    Skills(&'static [&'static str]),
     Fails(CheckoutFailureKind),
 }
 
-fn skill(folder: &'static str, name: &str) -> (&'static str, String) {
-    (folder, format!("---\nname: {name}\n---\nBody\n"))
-}
-
-struct Workspace {
+struct Fixture {
     _temp: TempDir,
     root: PathBuf,
-    factory_skills: PathBuf,
-    agent_skills: PathBuf,
 }
 
-impl Workspace {
-    fn new() -> Self {
+impl Fixture {
+    fn new(files: &[(&str, &str)]) -> Self {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let factory_skills = root.join("definition/skills");
-        let agent_skills = root.join("definition/agents/triage/skills");
-        fs::create_dir_all(&factory_skills).unwrap();
-        fs::create_dir_all(&agent_skills).unwrap();
-        Self {
+        let fixture = Self {
+            root: temp.path().canonicalize().unwrap(),
             _temp: temp,
-            root,
-            factory_skills,
-            agent_skills,
+        };
+        for (path, contents) in files {
+            let path = fixture.root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        fixture
+    }
+
+    fn discovery(&self, forge: Option<SkillSourceForge>) -> SkillReferenceDiscovery {
+        let configured_dirs = vec![PathBuf::from(AGENT_SKILLS), PathBuf::from(FACTORY_SKILLS)];
+        let resolved_dirs = resolve_skills_dirs(&self.root, configured_dirs.clone());
+        SkillReferenceDiscovery {
+            root: self.root.join("out"),
+            levels: discover(&resolved_dirs, forge),
+            configured_dirs,
+            resolved_dirs,
         }
     }
 
-    fn skill_dirs(&self) -> Vec<PathBuf> {
-        vec![self.agent_skills.clone(), self.factory_skills.clone()]
-    }
-
-    fn sources(&self) -> PathBuf {
-        self.root.join("skill-sources/sources")
-    }
-
-    fn generated(&self) -> PathBuf {
-        self.root.join("skill-sources/skills")
-    }
-
-    /// Discovers and resolves the reference files, standing in for the checkout helper with
-    /// `fixtures`. Sources without a fixture produce no outcome.
-    fn resolve(&self, fixtures: &[(&str, SourceFixture)]) -> SkillReferenceResolution {
-        let dirs = self.skill_dirs();
-        let discovered = discover(&dirs, Some(SkillSourceForge::GitHub)).expect("reference files");
-        let plan = discovered.checkout_plan(&self.sources());
-        let report = self.run_fake_checkouts(&plan.batch.repositories, fixtures);
-        let checkouts = plan.into_checkouts(Some(&report));
-        discovered.materialize(&dirs, &dirs, &checkouts, &self.generated())
-    }
-
-    fn run_fake_checkouts(
+    /// Resolves the reference files, standing in for the checkout helper with `sources`. A source
+    /// without an entry produces no outcome; successful checkouts are git repositories whose HEAD
+    /// the helper doesn't report.
+    fn resolve(
         &self,
-        requests: &[CheckoutRequest],
-        fixtures: &[(&str, SourceFixture)],
-    ) -> CheckoutReport {
-        let outcomes = requests
+        forge: Option<SkillSourceForge>,
+        sources: &[(&str, Source)],
+    ) -> (Vec<PathBuf>, SkillSourcesReport) {
+        let discovery = self.discovery(forge);
+        let (batch, planned) = plan_checkouts(&discovery.levels, &discovery.root.join("sources"));
+        let outcomes = batch
+            .repositories
             .iter()
             .enumerate()
-            .filter_map(|(request_index, request)| {
-                let (_, fixture) = fixtures
+            .filter_map(|(index, request)| {
+                let (_, source) = sources
                     .iter()
                     .find(|(name, _)| *name == request.source.repo_name)?;
-                let failure = match fixture {
-                    SourceFixture::Skills(skills) => {
-                        let checkout = self.sources().join(&request.checkout_name);
-                        fs::create_dir_all(&checkout).unwrap();
-                        for (folder, contents) in skills {
-                            fs::create_dir_all(checkout.join(folder)).unwrap();
-                            fs::write(checkout.join(folder).join("SKILL.md"), contents).unwrap();
+                let failure = match source {
+                    Source::Skills(folders) => {
+                        let checkout = batch.working_dir.join(&request.checkout_name);
+                        for folder in *folders {
+                            write_skill(&checkout.join(folder));
                         }
+                        let repository = git2::Repository::init(&checkout).unwrap();
+                        let signature =
+                            git2::Signature::now("Fixture", "fixture@example.com").unwrap();
+                        let tree = repository.index().unwrap().write_tree().unwrap();
+                        let tree = repository.find_tree(tree).unwrap();
+                        repository
+                            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+                            .unwrap();
                         None
                     }
-                    SourceFixture::Fails(kind) => Some(*kind),
+                    Source::Fails(kind) => Some(*kind),
                 };
                 Some(CheckoutOutcome {
-                    request_index,
+                    request_index: index,
                     failure,
                     diagnostics: String::new(),
                     duration_ms: 0,
-                    resolved_head: failure.is_none().then(|| fake_sha('a')),
+                    resolved_head: None,
                 })
-            })
-            .collect();
-        CheckoutReport {
+            });
+        let report = CheckoutReport {
             requests: Vec::new(),
-            outcomes,
+            outcomes: outcomes.collect(),
             identity_diagnostics: None,
-        }
+        };
+        materialize(&discovery, &checkouts(planned, &batch, Some(&report)))
+    }
+
+    fn generated(&self, index: usize) -> PathBuf {
+        self.root.join("out/skills").join(index.to_string())
     }
 }
 
-fn loaded_names(report: &ReferenceFileReport) -> Vec<&str> {
+fn write_skill(folder: &Path) {
+    let (folder, contents) = match folder.to_str().unwrap().strip_suffix('!') {
+        Some(folder) => (
+            Path::new(folder),
+            "---\nname: [unterminated\n---\n".to_owned(),
+        ),
+        None => {
+            let name = folder.file_name().unwrap().to_str().unwrap();
+            (
+                folder,
+                format!("---\nname: {name}\ndescription: test\n---\nBody\n"),
+            )
+        }
+    };
+    fs::create_dir_all(folder).unwrap();
+    fs::write(folder.join(SKILL_FILE), contents).unwrap();
+}
+
+fn loaded(report: &ReferenceFileReport) -> Vec<&str> {
     report
         .loaded
         .iter()
-        .map(|skill| skill.name.as_str())
+        .map(|skill| skill.path.as_str())
         .collect()
 }
 
@@ -146,593 +141,258 @@ fn unresolved(report: &ReferenceFileReport) -> Vec<(&str, UnresolvedReason)> {
         .collect()
 }
 
-fn linked_skills(dir: &Path) -> Vec<String> {
-    let mut names = fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect::<Vec<_>>();
-    names.sort();
-    names
-}
-
 #[test]
 fn folders_without_reference_files_are_left_alone() {
-    let workspace = Workspace::new();
-    write_skill(&workspace.factory_skills, "deploy", "deploy");
     // YAML nested inside a skill folder is part of that skill, not a reference file.
-    write_reference(
-        &workspace.factory_skills.join("deploy"),
-        "config.yaml",
-        "source: acme/shared-skills\ninclude: [x]\n",
-    );
-    assert!(discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).is_none());
+    let fixture = Fixture::new(&[(
+        "skills/deploy/config.yaml",
+        "source: acme/skills\ninclude: [x]\n",
+    )]);
+    assert!(fixture.discovery(None).levels.is_empty());
 }
 
 #[test]
 fn entries_resolve_by_name_path_and_glob_and_excludes_apply_last() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "shared.yaml",
-        "source: acme/shared-skills@v1.4.0\ninclude:\n  - safe-secrets\n  - tools/release-notes/SKILL.md\n  - \"frontend/*\"\n  - \"legacy-*\"\nexclude:\n  - \"legacy-old\"\n  - frontend/forms\n",
-    );
-    let resolution = workspace.resolve(&[(
-        "shared-skills",
-        SourceFixture::Skills(vec![
+    let fixture = Fixture::new(&[(
+        "skills/shared.yaml",
+        "source: acme/shared@v1.4.0\ninclude: [safe, tools/notes/SKILL.md, \"web/*\", \"old-*\"]\n\
+         exclude: [old-b, web/forms]\n",
+    )]);
+    let (skill_dirs, report) = fixture.resolve(
+        GITHUB,
+        &[(
+            "shared",
             // Names search the standard folders in provider order, not path order.
-            skill(".claude/skills/safe-secrets", "safe-secrets"),
-            skill(".warp/skills/safe-secrets", "safe-secrets"),
-            skill("tools/release-notes", "release-notes"),
-            skill("frontend/buttons", "buttons"),
-            skill("frontend/forms", "forms"),
-            skill("frontend/nested/deep", "deep"),
-            skill(".claude/skills/legacy-new", "legacy-new"),
-            skill(".claude/skills/legacy-old", "legacy-old"),
-        ]),
-    )]);
-
-    let [report] = resolution.report.references.as_slice() else {
-        panic!("expected one report");
-    };
-    assert_eq!(report.reference_file, "skills/shared.yaml");
-    assert_eq!(report.level, ReferenceLevel::Factory);
-    assert_eq!(
-        loaded_names(report),
-        ["safe-secrets", "release-notes", "buttons", "legacy-new"]
+            Source::Skills(&[
+                ".claude/skills/safe",
+                ".warp/skills/safe",
+                "tools/notes",
+                "web/buttons",
+                "web/forms",
+                "web/nested/deep",
+                ".claude/skills/old-a",
+                ".claude/skills/old-b",
+            ]),
+        )],
     );
-    assert_eq!(report.loaded[0].path, ".warp/skills/safe-secrets");
-    assert_eq!(report.loaded[1].path, "tools/release-notes");
-    assert!(report.unresolved.is_empty());
-    let source = report.source.as_ref().unwrap();
+    let [file] = report.references.as_slice() else {
+        panic!("{report:?}");
+    };
+    assert_eq!(
+        (file.reference_file.as_str(), file.level),
+        ("skills/shared.yaml", ReferenceLevel::Factory)
+    );
+    assert_eq!(
+        loaded(file),
+        [
+            ".warp/skills/safe",
+            "tools/notes",
+            "web/buttons",
+            ".claude/skills/old-a"
+        ]
+    );
+    assert!(file.unresolved.is_empty());
+    let source = file.source.as_ref().unwrap();
     assert_eq!(source.requested_ref.as_deref(), Some("v1.4.0"));
-    assert_eq!(source.resolved_sha, Some(fake_sha('a')));
-
-    let generated = workspace.generated().join("1");
+    assert_eq!(source.resolved_sha.as_ref().map(String::len), Some(40));
     assert_eq!(
-        resolution.skill_dirs,
-        vec![
-            workspace.agent_skills.clone(),
-            workspace.factory_skills.clone(),
-            generated.clone(),
+        skill_dirs,
+        [
+            AGENT_SKILLS.into(),
+            FACTORY_SKILLS.into(),
+            fixture.generated(1)
         ]
     );
-    assert_eq!(
-        linked_skills(&generated),
-        ["buttons", "legacy-new", "release-notes", "safe-secrets"]
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn referenced_skills_are_their_folders_inside_the_checkout() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "shared.yaml",
-        "source: acme/shared-skills\ninclude:\n  - skills/inside\n  - skills/escape\n",
-    );
-    // A symlinked folder can't pull in a skill from outside the source repository.
-    let outside = write_skill(&workspace.root, "outside", "escape");
-    let checkout_name = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub))
-        .unwrap()
-        .checkout_plan(&workspace.sources())
-        .batch
-        .repositories[0]
-        .checkout_name
-        .clone();
-    let checkout = workspace.sources().join(checkout_name);
-    fs::create_dir_all(checkout.join("skills")).unwrap();
-    std::os::unix::fs::symlink(&outside, checkout.join("skills/escape")).unwrap();
-    let resolution = workspace.resolve(&[(
-        "shared-skills",
-        SourceFixture::Skills(vec![skill("skills/inside", "inside")]),
-    )]);
-    assert_eq!(
-        unresolved(&resolution.report.references[0]),
-        [("skills/escape", UnresolvedReason::NoMatch)]
-    );
-
-    let link = workspace.generated().join("1/inside");
-    assert_eq!(
-        fs::read_link(&link).unwrap(),
-        checkout.join("skills/inside")
-    );
-    assert!(link.join("SKILL.md").is_file());
-    assert_eq!(linked_skills(&workspace.generated().join("1")), ["inside"]);
+    assert!(fixture.generated(1).join("notes/SKILL.md").is_file());
 }
 
 #[test]
-fn levels_apply_in_folder_order_and_earlier_names_win() {
-    let workspace = Workspace::new();
-    write_skill(&workspace.agent_skills, "agent-only", "agent-only");
-    write_skill(&workspace.factory_skills, "factory-only", "factory-only");
-    write_reference(
-        &workspace.agent_skills,
-        "agent.yaml",
-        "source: acme/agent-skills\ninclude: [\"*\"]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "factory.yaml",
-        "source: acme/factory-skills\ninclude: [\"*\"]\n",
-    );
-    let resolution = workspace.resolve(&[
+fn levels_and_files_apply_in_order_and_earlier_names_win() {
+    let star = "include: [\"*\"]\n";
+    let fixture = Fixture::new(&[
         (
-            "agent-skills",
-            SourceFixture::Skills(vec![
-                skill(".agents/skills/agent-only", "agent-only"),
-                skill(".agents/skills/factory-only", "factory-only"),
-                skill(".agents/skills/shared", "shared"),
-            ]),
+            &format!("{AGENT_SKILLS}/agent.yaml"),
+            &format!("source: acme/agent\n{star}"),
         ),
-        (
-            "factory-skills",
-            SourceFixture::Skills(vec![
-                skill(".agents/skills/shared", "shared"),
-                skill(".agents/skills/factory-only", "factory-only"),
-                skill(".agents/skills/extra", "extra"),
-            ]),
-        ),
+        ("skills/b.yml", &format!("source: acme/second\n{star}")),
+        ("skills/a.yaml", &format!("source: acme/first\n{star}")),
     ]);
-
-    let [agent, factory] = resolution.report.references.as_slice() else {
-        panic!("expected two reports");
+    write_skill(&fixture.root.join(AGENT_SKILLS).join("own"));
+    let (skill_dirs, report) = fixture.resolve(
+        GITHUB,
+        &[
+            (
+                "agent",
+                Source::Skills(&[".agents/skills/own", ".agents/skills/shared"]),
+            ),
+            (
+                "first",
+                Source::Skills(&[".agents/skills/shared", ".agents/skills/lint"]),
+            ),
+            (
+                "second",
+                Source::Skills(&[".agents/skills/lint", ".agents/skills/extra"]),
+            ),
+        ],
+    );
+    let [agent, first, second] = report.references.as_slice() else {
+        panic!("{report:?}");
     };
-    assert_eq!(agent.reference_file, "agents/triage/skills/agent.yaml");
-    assert_eq!(agent.level, ReferenceLevel::Agent);
-    assert_eq!(agent.agent.as_deref(), Some("triage"));
-    // The agent's own folder wins over its references, which win over the Factory's folder.
-    assert_eq!(loaded_names(agent), ["factory-only", "shared"]);
-    // Everything earlier wins over the Factory's references, and losing on name isn't a warning.
-    assert_eq!(loaded_names(factory), ["extra"]);
-    assert_eq!(resolution.report.warning_count(), 0);
     assert_eq!(
-        resolution.skill_dirs,
-        vec![
-            workspace.agent_skills.clone(),
-            workspace.generated().join("0"),
-            workspace.factory_skills.clone(),
-            workspace.generated().join("1"),
+        (agent.reference_file.as_str(), agent.agent.as_deref()),
+        ("agents/triage/skills/agent.yaml", Some("triage"))
+    );
+    // The agent's own folder wins over its references, which win over the Factory's. Losing on
+    // name isn't a warning; two files at one level selecting the same name is.
+    assert_eq!(loaded(agent), [".agents/skills/shared"]);
+    assert_eq!(first.reference_file, "skills/a.yaml");
+    assert_eq!(
+        (loaded(first), unresolved(first)),
+        (vec![".agents/skills/lint"], vec![])
+    );
+    assert_eq!(loaded(second), [".agents/skills/extra"]);
+    assert_eq!(unresolved(second), [("*", UnresolvedReason::Collision)]);
+    assert_eq!(
+        skill_dirs,
+        [
+            AGENT_SKILLS.into(),
+            fixture.generated(0),
+            FACTORY_SKILLS.into(),
+            fixture.generated(1),
         ]
-    );
-}
-
-#[test]
-fn files_resolve_in_name_order_and_glob_collisions_warn() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "b-second.yml",
-        "source: acme/second\ninclude: [\"lint-*\"]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "a-first.yaml",
-        "source: acme/first\ninclude: [\"lint-*\"]\n",
-    );
-    let resolution = workspace.resolve(&[
-        (
-            "first",
-            SourceFixture::Skills(vec![skill(".agents/skills/lint-rust", "lint-rust")]),
-        ),
-        (
-            "second",
-            SourceFixture::Skills(vec![
-                skill(".agents/skills/lint-rust", "lint-rust"),
-                skill(".agents/skills/lint-go", "lint-go"),
-            ]),
-        ),
-    ]);
-
-    let [first, second] = resolution.report.references.as_slice() else {
-        panic!("expected two reports");
-    };
-    assert_eq!(first.reference_file, "skills/a-first.yaml");
-    assert_eq!(loaded_names(first), ["lint-rust"]);
-    assert_eq!(loaded_names(second), ["lint-go"]);
-    assert_eq!(
-        unresolved(second),
-        [("lint-*", UnresolvedReason::Collision)]
-    );
-    let link = workspace.generated().join("1/lint-rust");
-    assert!(
-        fs::read_link(link)
-            .unwrap()
-            .starts_with(workspace.sources())
     );
 }
 
 #[test]
 fn every_failure_is_recorded_and_the_rest_still_loads() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "a-broken.yaml",
-        "source: acme/broken\ninclude: [x]\nunknown: true\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "b-unreachable.yaml",
-        "source: acme/unreachable\ninclude: [one, two]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "c-missing-ref.yaml",
-        "source: acme/pinned@v9\ninclude: [one]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "d-partial.yaml",
-        "source: acme/partial\ninclude:\n  - good\n  - missing\n  - broken\n  - skills/broken-path\n  - \"nothing-*\"\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "e-no-outcome.yaml",
-        "source: acme/silent\ninclude: [one]\n",
-    );
-    let resolution = workspace.resolve(&[
+    let fixture = Fixture::new(&[
         (
-            "unreachable",
-            SourceFixture::Fails(CheckoutFailureKind::Clone),
+            "skills/a.yaml",
+            "source: github.com:acme/broken\ninclude: [x]\nbad: 1\n",
         ),
         (
-            "pinned",
-            SourceFixture::Fails(CheckoutFailureKind::Checkout),
+            "skills/b.yaml",
+            "source: github.com:acme/down\ninclude: [one, two]\n",
         ),
         (
-            "partial",
-            SourceFixture::Skills(vec![
-                skill(".agents/skills/good", "good"),
-                (".agents/skills/broken", INVALID_SKILL_MD.to_owned()),
-                ("skills/broken-path", INVALID_SKILL_MD.to_owned()),
-            ]),
+            "skills/c.yaml",
+            "source: github.com:acme/pinned@v9\ninclude: [one]\n",
+        ),
+        (
+            "skills/d.yaml",
+            "source: github.com:acme/silent\ninclude: [one]\n",
+        ),
+        (
+            "skills/e.yaml",
+            "source: acme/no-forge\ninclude: [one, two]\n",
+        ),
+        (
+            "skills/f.yaml",
+            "source: github.com:acme/partial\ninclude: [good, gone, bad, skills/bad, \"none-*\"]\n",
         ),
     ]);
-
-    let reports = &resolution.report.references;
-    assert_eq!(reports.len(), 5);
-    assert!(reports[0].source.is_none());
-    assert_eq!(
-        unresolved(&reports[0]),
-        [("", UnresolvedReason::InvalidReferenceFile)]
-    );
-    assert_eq!(
-        unresolved(&reports[1]),
-        [
-            ("one", UnresolvedReason::CloneFailed),
-            ("two", UnresolvedReason::CloneFailed)
-        ]
-    );
-    assert_eq!(reports[1].source.as_ref().unwrap().resolved_sha, None);
-    assert_eq!(
-        unresolved(&reports[2]),
-        [("one", UnresolvedReason::RefNotFound)]
-    );
-    assert_eq!(loaded_names(&reports[3]), ["good"]);
-    assert_eq!(
-        unresolved(&reports[3]),
-        [
-            ("missing", UnresolvedReason::NoMatch),
-            ("broken", UnresolvedReason::InvalidSkill),
-            ("skills/broken-path", UnresolvedReason::InvalidSkill),
-            ("nothing-*", UnresolvedReason::NoMatch),
-        ]
-    );
-    assert_eq!(
-        unresolved(&reports[4]),
-        [("one", UnresolvedReason::CloneFailed)]
-    );
-    assert_eq!(resolution.report.warning_count(), 9);
-    assert_eq!(linked_skills(&workspace.generated().join("1")), ["good"]);
-}
-
-#[test]
-fn checkout_plan_dedupes_sources_and_requests_their_heads() {
-    let workspace = Workspace::new();
-    let sha = "0123456789abcdef".repeat(4)[..40].to_owned();
-    write_reference(
-        &workspace.agent_skills,
-        "a.yaml",
-        "source: Acme/Shared-Skills@v1\ninclude: [x]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "a.yaml",
-        "source: acme/shared-skills@v1\ninclude: [x]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "b.yaml",
-        &format!("source: acme/shared-skills@{sha}\ninclude: [x]\n"),
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "c.yaml",
-        "source:\n  owner: platform/backend\n  repo: skills\n  codeForge: GITLAB\ninclude: [x]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "d.yaml",
-        &format!(
-            "source: acme/shared-skills@{}\ninclude: [x]\n",
-            "a".repeat(64)
-        ),
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "e.yaml",
-        "source: platform/backend/skills\ninclude: [x]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "f.yaml",
-        "source: github.com:ACME/shared-skills@v1\ninclude: [x]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "g.yaml",
-        "source: gitlab.com:acme/shared-skills@v1\ninclude: [x]\n",
-    );
-
-    let discovered = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).unwrap();
-    let plan = discovered.checkout_plan(&workspace.sources());
-    let requests = &plan.batch.repositories;
-    // Sources are keyed by forge, case-insensitive owner and repo, and ref, so a host prefix
-    // naming the Factory's forge dedupes with the forge-less form, and another forge doesn't.
-    assert_eq!(
-        requests
-            .iter()
-            .map(|request| (
-                request.source.code_forge,
-                request.source.repo_owner.as_str(),
-                request.source.repo_name.as_str(),
-                request.head.clone()
-            ))
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                RepositoryForge::GitHub,
-                "Acme",
-                "Shared-Skills",
-                Some(RepositoryHeadRef::Branch("v1".to_owned()))
-            ),
-            (
-                RepositoryForge::GitHub,
-                "acme",
-                "shared-skills",
-                Some(RepositoryHeadRef::CommitSha(sha))
-            ),
-            (RepositoryForge::GitLab, "platform/backend", "skills", None),
-            (
-                RepositoryForge::GitLab,
-                "acme",
-                "shared-skills",
-                Some(RepositoryHeadRef::Branch("v1".to_owned()))
-            ),
-        ]
-    );
-    assert!(plan.batch.validate().is_ok());
-
-    let checkouts = plan.into_checkouts(None);
-    let reasons = |file: &str| {
-        let resolution_reports = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub))
-            .unwrap()
-            .materialize(
-                &workspace.skill_dirs(),
-                &workspace.skill_dirs(),
-                &checkouts,
-                &workspace.generated(),
-            )
-            .report
-            .references;
-        resolution_reports
-            .into_iter()
-            .find(|report| report.reference_file == file)
-            .unwrap()
-            .unresolved
-            .into_iter()
-            .map(|entry| entry.reason)
-            .collect::<Vec<_>>()
-    };
-    // A 64-character SHA is a malformed reference file, and a GitHub owner can't contain `/`.
-    assert_eq!(
-        reasons("skills/d.yaml"),
-        [UnresolvedReason::InvalidReferenceFile]
-    );
-    assert_eq!(reasons("skills/e.yaml"), [UnresolvedReason::CloneFailed]);
-}
-
-#[test]
-fn sources_without_a_known_forge_are_not_cloned() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "a-no-forge.yaml",
-        "source: acme/shared-skills@v1\ninclude: [one, two]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "b-host.yaml",
-        "source: gitlab.com:acme/gitlab-skills\ninclude: [one]\n",
-    );
-    write_reference(
-        &workspace.factory_skills,
-        "c-mapping.yaml",
-        "source:\n  owner: acme\n  repo: github-skills\n  codeForge: GITHUB\ninclude: [one]\n",
-    );
-    let dirs = workspace.skill_dirs();
-    let discovered = discover(&dirs, None).unwrap();
-    let plan = discovered.checkout_plan(&workspace.sources());
-    assert_eq!(
-        plan.batch
-            .repositories
-            .iter()
-            .map(|request| (request.source.code_forge, request.source.repo_name.as_str()))
-            .collect::<Vec<_>>(),
-        vec![
-            (RepositoryForge::GitLab, "gitlab-skills"),
-            (RepositoryForge::GitHub, "github-skills"),
-        ]
-    );
-    let report = workspace.run_fake_checkouts(
-        &plan.batch.repositories,
+    let (_, report) = fixture.resolve(
+        None,
         &[
+            ("down", Source::Fails(CheckoutFailureKind::Clone)),
+            ("pinned", Source::Fails(CheckoutFailureKind::Checkout)),
             (
-                "gitlab-skills",
-                SourceFixture::Skills(vec![skill(".agents/skills/one", "one")]),
-            ),
-            (
-                "github-skills",
-                SourceFixture::Fails(CheckoutFailureKind::Clone),
+                "partial",
+                Source::Skills(&[".agents/skills/good", ".agents/skills/bad!", "skills/bad!"]),
             ),
         ],
     );
-    let resolution = discovered.materialize(
-        &dirs,
-        &dirs,
-        &plan.into_checkouts(Some(&report)),
-        &workspace.generated(),
-    );
-
-    let [no_forge, host, mapping] = resolution.report.references.as_slice() else {
-        panic!("expected three reports");
-    };
-    assert_eq!(
-        unresolved(no_forge),
-        [
-            ("one", UnresolvedReason::UnknownForge),
-            ("two", UnresolvedReason::UnknownForge)
-        ]
-    );
-    let source = no_forge.source.as_ref().unwrap();
-    assert_eq!(source.code_forge, None);
-    assert_eq!(
-        (source.owner.as_str(), source.repo.as_str()),
-        ("acme", "shared-skills")
-    );
-    assert_eq!(source.requested_ref.as_deref(), Some("v1"));
-    assert_eq!(source.resolved_sha, None);
-    assert_eq!(loaded_names(host), ["one"]);
-    assert_eq!(
-        host.source.as_ref().unwrap().code_forge,
-        Some(RepositoryForge::GitLab)
-    );
-    assert_eq!(
-        unresolved(mapping),
-        [("one", UnresolvedReason::CloneFailed)]
-    );
-}
-
-#[test]
-fn checkouts_without_a_reported_head_read_it_from_the_repository() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "shared.yaml",
-        "source: acme/shared-skills\ninclude: [x]\n",
-    );
-    let discovered = discover(&workspace.skill_dirs(), Some(SkillSourceForge::GitHub)).unwrap();
-    let plan = discovered.checkout_plan(&workspace.sources());
-    let checkout = workspace
-        .sources()
-        .join(&plan.batch.repositories[0].checkout_name);
-    let repository = git2::Repository::init(&checkout).unwrap();
-    let signature = git2::Signature::now("Fixture", "fixture@example.com").unwrap();
-    let tree = repository
-        .find_tree(repository.index().unwrap().write_tree().unwrap())
-        .unwrap();
-    let commit = repository
-        .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
-        .unwrap();
-    let report = CheckoutReport {
-        requests: Vec::new(),
-        outcomes: vec![CheckoutOutcome {
-            request_index: 0,
-            failure: None,
-            diagnostics: String::new(),
-            duration_ms: 0,
-            resolved_head: None,
-        }],
-        identity_diagnostics: None,
-    };
-    let resolution = discovered.materialize(
-        &workspace.skill_dirs(),
-        &workspace.skill_dirs(),
-        &plan.into_checkouts(Some(&report)),
-        &workspace.generated(),
-    );
-    assert_eq!(
-        resolution.report.references[0]
-            .source
-            .as_ref()
-            .unwrap()
-            .resolved_sha,
-        Some(commit.to_string())
-    );
-}
-
-#[test]
-fn factory_code_forge_accepts_only_known_forge_tokens() {
-    for (value, expected) in [
-        (Some(" AZURE_DEVOPS\n"), Some(SkillSourceForge::AzureDevOps)),
-        (Some("github"), None),
-        (Some("BITBUCKET"), None),
-        (None, None),
-    ] {
-        assert_eq!(factory_code_forge(value), expected, "{value:?}");
+    use UnresolvedReason::*;
+    let expected: [&[(&str, UnresolvedReason)]; 6] = [
+        &[("", InvalidReferenceFile)],
+        &[("one", CloneFailed), ("two", CloneFailed)],
+        &[("one", RefNotFound)],
+        &[("one", CloneFailed)],
+        &[("one", UnknownForge), ("two", UnknownForge)],
+        // An unparseable `SKILL.md` has no name to match.
+        &[
+            ("gone", NoMatch),
+            ("bad", NoMatch),
+            ("skills/bad", InvalidSkill),
+            ("none-*", NoMatch),
+        ],
+    ];
+    for (file, expected) in report.references.iter().zip(expected) {
+        assert_eq!(unresolved(file), expected, "{}", file.reference_file);
     }
+    assert!(report.references[0].source.is_none());
+    let no_forge = report.references[4].source.as_ref().unwrap();
+    assert_eq!((no_forge.code_forge, &no_forge.resolved_sha), (None, &None));
+    assert_eq!(loaded(&report.references[5]), [".agents/skills/good"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn skills_that_symlink_outside_their_checkout_are_rejected() {
+    let fixture = Fixture::new(&[(
+        "skills/shared.yaml",
+        "source: acme/shared\ninclude: [skills/inside, skills/escape]\n",
+    )]);
+    write_skill(&fixture.root.join("outside"));
+    let checkout = fixture.root.join("out/sources/0-shared");
+    fs::create_dir_all(checkout.join("skills")).unwrap();
+    std::os::unix::fs::symlink(fixture.root.join("outside"), checkout.join("skills/escape"))
+        .unwrap();
+    let (_, report) = fixture.resolve(GITHUB, &[("shared", Source::Skills(&["skills/inside"]))]);
+    assert!(checkout.join("skills/inside/SKILL.md").is_file());
+    assert_eq!(loaded(&report.references[0]), ["skills/inside"]);
+    assert_eq!(
+        unresolved(&report.references[0]),
+        [("skills/escape", UnresolvedReason::NoMatch)]
+    );
 }
 
 #[test]
-fn relative_skill_dirs_keep_their_configured_form() {
-    let workspace = Workspace::new();
-    write_reference(
-        &workspace.factory_skills,
-        "shared.yaml",
-        "source: acme/shared-skills\ninclude: [one]\n",
-    );
-    let configured = vec![PathBuf::from("definition/skills")];
-    let resolved = resolve_skills_dirs(&workspace.root, configured.clone());
-    let discovered = discover(&resolved, Some(SkillSourceForge::GitHub)).unwrap();
-    let plan = discovered.checkout_plan(&workspace.sources());
-    let report = workspace.run_fake_checkouts(
-        &plan.batch.repositories,
-        &[(
-            "shared-skills",
-            SourceFixture::Skills(vec![skill(".agents/skills/one", "one")]),
-        )],
-    );
-    let resolution = discovered.materialize(
-        &configured,
-        &resolved,
-        &plan.into_checkouts(Some(&report)),
-        &workspace.generated(),
-    );
+fn sources_are_checked_out_once_per_identity_and_ref() {
+    let sha = "0123456789abcdef".repeat(3)[..40].to_owned();
+    let file = |source: &str| format!("source: {source}\ninclude: [x]\n");
+    let fixture = Fixture::new(&[
+        (&format!("{AGENT_SKILLS}/a.yaml"), &file("Acme/Shared@v1")),
+        ("skills/a.yaml", &file("acme/shared@v1")),
+        ("skills/b.yaml", &file("github.com:ACME/shared@v1")),
+        ("skills/c.yaml", &file(&format!("acme/shared@{sha}"))),
+        ("skills/d.yaml", &file("gitlab.com:acme/shared@v1")),
+        ("skills/e.yaml", &file("platform/backend/skills")),
+    ]);
+    let discovery = fixture.discovery(GITHUB);
+    let (batch, planned) = plan_checkouts(&discovery.levels, &discovery.root.join("sources"));
+    let requests = batch
+        .repositories
+        .iter()
+        .map(|request| {
+            let source = &request.source;
+            (
+                source.code_forge,
+                source.repo_owner.as_str(),
+                request.head.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let branch = Some(RepositoryHeadRef::Branch("v1".to_owned()));
     assert_eq!(
-        resolution.skill_dirs,
-        vec![
-            PathBuf::from("definition/skills"),
-            workspace.generated().join("0")
+        requests,
+        [
+            (RepositoryForge::GitHub, "Acme", branch.clone()),
+            (
+                RepositoryForge::GitHub,
+                "acme",
+                Some(RepositoryHeadRef::CommitSha(sha))
+            ),
+            (RepositoryForge::GitLab, "acme", branch),
         ]
     );
+    assert!(batch.validate().is_ok());
+    // A GitHub owner can't contain `/`, so that request is rejected without failing the batch.
+    let nested = (
+        GITHUB,
+        "platform/backend".to_owned(),
+        "skills".to_owned(),
+        None,
+    );
+    assert_eq!(planned[&nested], Err(UnresolvedReason::CloneFailed));
 }

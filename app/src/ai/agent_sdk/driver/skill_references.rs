@@ -3,24 +3,20 @@
 //! folder placed right after the folder that owns the reference files. Resolution never fails a
 //! run: each problem is recorded as an unresolved entry and the rest still loads.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use ai::skills::{
     SKILL_PROVIDER_DEFINITIONS, SkillReferenceEntry, SkillReferenceFile, SkillReferenceParseError,
-    SkillSourceForge, SkillSourceRef, is_skill_reference_file_name, parse_skill,
+    SkillSource, SkillSourceForge, SkillSourceRef, is_skill_reference_file_name, parse_skill,
     parse_skill_reference_file, read_skills, resolve_skills_dirs,
 };
-use futures::channel::oneshot;
 use globset::GlobMatcher;
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
-use warp_core::safe_warn;
 use warpui::ModelSpawner;
-use warpui::r#async::executor::Background;
 
 use super::AgentDriver;
 use super::environment;
@@ -28,18 +24,10 @@ use super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest,
 };
 use super::harness::create_symlink;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 
 /// Names the Factory's code forge; set only when the Factory has exactly one.
 const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
-
-const SKILL_SOURCES_DIRECTORY: &str = "oz-skill-sources";
-const SOURCE_CHECKOUTS_DIRECTORY: &str = "sources";
-const GENERATED_SKILLS_DIRECTORY: &str = "skills";
-const AGENTS_DIRECTORY: &str = "agents";
-const SKILLS_DIRECTORY: &str = "skills";
 const SKILL_FILE: &str = "SKILL.md";
-const GIT_DIRECTORY: &str = ".git";
 /// Bounds how much of a source repository a path glob walks.
 const MAX_WALKED_ENTRIES: usize = 200_000;
 
@@ -73,11 +61,10 @@ pub(crate) struct SkillSourcesReport {
 }
 
 impl SkillSourcesReport {
-    /// The number of unresolved entries across all reference files.
     pub fn warning_count(&self) -> usize {
         self.references
             .iter()
-            .map(|reference| reference.unresolved.len())
+            .map(|file| file.unresolved.len())
             .sum()
     }
 }
@@ -85,7 +72,7 @@ impl SkillSourcesReport {
 /// The outcome for one reference file.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ReferenceFileReport {
-    /// Path of the reference file relative to the definition root.
+    /// Relative to the definition root.
     pub reference_file: String,
     pub level: ReferenceLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,14 +86,13 @@ pub(crate) struct ReferenceFileReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct ReferencedSource {
-    /// Absent when neither the source nor the run names a forge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_forge: Option<RepositoryForge>,
     pub owner: String,
     pub repo: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_ref: Option<String>,
-    /// The commit the skills were loaded from, absent when the checkout failed.
+    /// Absent when the checkout failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_sha: Option<String>,
 }
@@ -125,17 +111,40 @@ pub(crate) struct UnresolvedEntry {
     pub reason: UnresolvedReason,
 }
 
-/// Reference files found in a run's skill folders, ready to be resolved.
+/// Reference files found in a run's skill folders.
 pub(super) struct SkillReferenceDiscovery {
-    task_id: AmbientAgentTaskId,
+    /// Holds the source checkouts and generated skill folders.
+    root: PathBuf,
     configured_dirs: Vec<PathBuf>,
     resolved_dirs: Vec<PathBuf>,
-    references: DiscoveredReferences,
+    levels: Vec<Level>,
 }
 
+/// The reference files directly in one skill folder, in file-name order.
+struct Level {
+    /// The owning folder's index in the run's skill folders.
+    index: usize,
+    agent: Option<String>,
+    files: Vec<(String, Result<SkillReferenceFile, SkillReferenceParseError>)>,
+}
+
+/// Case-insensitive repository identity plus the requested ref.
+type SourceIdentity = (
+    Option<SkillSourceForge>,
+    String,
+    String,
+    Option<SkillSourceRef>,
+);
+
+/// Each source's request index in the checkout batch, or why it has no request.
+type Planned = HashMap<SourceIdentity, Result<usize, UnresolvedReason>>;
+
+/// A source's checkout directory and commit, or why it has none.
+type Checkout = Result<(PathBuf, Option<String>), UnresolvedReason>;
+
 impl AgentDriver {
-    /// Finds the reference files in this run's skill folders. Returns `None` for runs without a
-    /// task or without reference files, which then behave exactly as if references didn't exist.
+    /// Finds the reference files in this run's skill folders. `None` for runs without a task or
+    /// without reference files, which then behave as if references didn't exist.
     pub(super) async fn discover_skill_references(
         foreground: &ModelSpawner<Self>,
     ) -> Option<SkillReferenceDiscovery> {
@@ -145,48 +154,36 @@ impl AgentDriver {
             .ok()?;
         let task_id = task_id?;
         let resolved_dirs = resolve_skills_dirs(&working_dir, configured_dirs.clone());
-        let factory_forge =
-            factory_code_forge(std::env::var(FACTORY_CODE_FORGE_ENV).ok().as_deref());
-        let references = discover(&resolved_dirs, factory_forge)?;
-        Some(SkillReferenceDiscovery {
-            task_id,
+        let factory_forge = std::env::var(FACTORY_CODE_FORGE_ENV)
+            .ok()
+            .and_then(|value| SkillSourceForge::from_token(value.trim()));
+        let levels = discover(&resolved_dirs, factory_forge);
+        (!levels.is_empty()).then(|| SkillReferenceDiscovery {
+            root: std::env::temp_dir()
+                .join("oz-skill-sources")
+                .join(task_id.to_string()),
             configured_dirs,
             resolved_dirs,
-            references,
+            levels,
         })
     }
 
-    /// Checks out the referenced repositories, generates the skill folders for the selected
-    /// skills, and updates this run's skill folders to include them.
+    /// Checks out the referenced repositories, links the selected skills, and adds the generated
+    /// folders to this run's skill folders.
     pub(super) async fn resolve_skill_references(
         discovery: SkillReferenceDiscovery,
         foreground: &ModelSpawner<Self>,
     ) -> SkillSourcesReport {
-        let SkillReferenceDiscovery {
-            task_id,
-            configured_dirs,
-            resolved_dirs,
-            references,
-        } = discovery;
-        let Ok(background) = foreground.spawn(|_, ctx| ctx.background_executor()).await else {
-            return SkillSourcesReport::default();
-        };
-        let root = skill_sources_root(&task_id);
-        let sources_dir = root.join(SOURCE_CHECKOUTS_DIRECTORY);
-        let prepared = run_in_background(&background, {
-            let root = root.clone();
-            let sources_dir = sources_dir.clone();
-            move || prepare_root(&root, &sources_dir)
-        })
-        .await;
-        let plan = references.checkout_plan(&sources_dir);
-        let report = match prepared {
-            Some(Ok(())) if !plan.batch.repositories.is_empty() => {
-                let batch = plan.batch.clone();
+        // Starts empty so nothing from an earlier attempt in the same sandbox is reused.
+        let _ = fs::remove_dir_all(&discovery.root);
+        let (batch, sources) = plan_checkouts(&discovery.levels, &discovery.root.join("sources"));
+        let report =
+            if fs::create_dir_all(&batch.working_dir).is_ok() && !batch.repositories.is_empty() {
+                let request = batch.clone();
                 match foreground
                     .spawn(move |me, ctx| {
                         me.terminal_driver.update(ctx, |_, ctx| {
-                            environment::checkout_skill_sources(batch, ctx)
+                            environment::checkout_skill_sources(request, ctx)
                         })
                     })
                     .await
@@ -194,57 +191,88 @@ impl AgentDriver {
                     Ok(checkout) => checkout.await,
                     Err(_) => None,
                 }
-            }
-            Some(Ok(())) => None,
-            Some(Err(error)) => {
-                safe_warn!(
-                    safe: ("Could not prepare the skill source directory"),
-                    full: ("Could not prepare the skill source directory {}: {error}", root.display())
-                );
+            } else {
                 None
-            }
-            None => None,
-        };
-        let generated_root = root.join(GENERATED_SKILLS_DIRECTORY);
-        let resolution = run_in_background(&background, move || {
-            let checkouts = plan.into_checkouts(report.as_ref());
-            references.materialize(
-                &configured_dirs,
-                &resolved_dirs,
-                &checkouts,
-                &generated_root,
-            )
-        })
-        .await;
-        let Some(resolution) = resolution else {
-            log::warn!("Skill reference resolution did not complete");
-            return SkillSourcesReport::default();
-        };
-        log_report(&resolution.report);
-        let SkillReferenceResolution { skill_dirs, report } = resolution;
-        if let Err(error) = foreground
+            };
+        let checkouts = checkouts(sources, &batch, report.as_ref());
+        let (skill_dirs, report) = materialize(&discovery, &checkouts);
+        log::info!(
+            "Skill references: {} file(s), {} warning(s)",
+            report.references.len(),
+            report.warning_count()
+        );
+        let _ = foreground
             .spawn(move |me, _| {
                 me.skill_dirs = skill_dirs;
                 me.skill_dirs_first_name_wins = true;
             })
-            .await
-        {
-            log::warn!("Could not apply resolved skill references: {error}");
-        }
+            .await;
         report
     }
 }
 
-/// Directory holding a run's skill source checkouts and generated skill folders.
-fn skill_sources_root(task_id: &AmbientAgentTaskId) -> PathBuf {
-    std::env::temp_dir()
-        .join(SKILL_SOURCES_DIRECTORY)
-        .join(task_id.to_string())
+/// Reads the reference files directly in each skill folder. `factory_forge` fills in the forge
+/// of sources that don't name one.
+fn discover(skill_dirs: &[PathBuf], factory_forge: Option<SkillSourceForge>) -> Vec<Level> {
+    let mut seen = HashSet::new();
+    let mut levels = Vec::new();
+    for (index, skills_dir) in skill_dirs.iter().enumerate() {
+        let Ok(entries) = fs::read_dir(skills_dir) else {
+            continue;
+        };
+        if !seen.insert(skills_dir) {
+            continue;
+        }
+        let mut file_names = entries
+            .flatten()
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| is_skill_reference_file_name(name))
+            .collect::<Vec<_>>();
+        if file_names.is_empty() {
+            continue;
+        }
+        file_names.sort();
+        let mut components = skills_dir.components().rev().skip(1);
+        let agent = match (components.next(), components.next()) {
+            (Some(agent), Some(agents)) if agents.as_os_str() == "agents" => {
+                agent.as_os_str().to_str().map(str::to_owned)
+            }
+            _ => None,
+        };
+        let files = file_names
+            .into_iter()
+            .map(|name| {
+                let parsed = fs::read_to_string(skills_dir.join(&name))
+                    .map_err(|_| SkillReferenceParseError::InvalidYaml)
+                    .and_then(|contents| parse_skill_reference_file(&contents))
+                    .map(|mut file| {
+                        file.source.code_forge = file.source.code_forge.or(factory_forge);
+                        file
+                    });
+                let reference_file = match &agent {
+                    Some(agent) => format!("agents/{agent}/skills/{name}"),
+                    None => format!("skills/{name}"),
+                };
+                (reference_file, parsed)
+            })
+            .collect();
+        levels.push(Level {
+            index,
+            agent,
+            files,
+        });
+    }
+    levels
 }
 
-/// Parses the value of [`FACTORY_CODE_FORGE_ENV`]; an unknown value counts as no forge.
-fn factory_code_forge(value: Option<&str>) -> Option<SkillSourceForge> {
-    value.map(str::trim).and_then(SkillSourceForge::from_token)
+fn identity(source: &SkillSource) -> SourceIdentity {
+    (
+        source.code_forge,
+        source.owner.to_lowercase(),
+        source.repo.to_lowercase(),
+        source.reference.clone(),
+    )
 }
 
 fn repository_forge(forge: SkillSourceForge) -> RepositoryForge {
@@ -255,733 +283,354 @@ fn repository_forge(forge: SkillSourceForge) -> RepositoryForge {
     }
 }
 
-async fn run_in_background<T: Send + 'static>(
-    background: &Background,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
-    let (sender, receiver) = oneshot::channel();
-    background
-        .spawn(async move {
-            let _ = sender.send(work());
-        })
-        .detach();
-    receiver.await.ok()
-}
-
-/// Starts from an empty root so nothing from an earlier attempt in the same sandbox is reused.
-fn prepare_root(root: &Path, sources_dir: &Path) -> std::io::Result<()> {
-    match fs::remove_dir_all(root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::create_dir_all(sources_dir)
-}
-
-/// The run's skill folders with the generated folders inserted, and what was resolved.
-struct SkillReferenceResolution {
-    skill_dirs: Vec<PathBuf>,
-    report: SkillSourcesReport,
-}
-
-/// Reference files grouped by the skill folder that holds them.
-struct DiscoveredReferences {
-    levels: Vec<DiscoveredLevel>,
-}
-
-struct DiscoveredLevel {
-    skills_dir: PathBuf,
-    agent: Option<String>,
-    files: Vec<DiscoveredFile>,
-}
-
-struct DiscoveredFile {
-    reference_file: String,
-    parsed: Result<ReferenceSpec, SkillReferenceParseError>,
-}
-
-struct ReferenceSpec {
-    file: SkillReferenceFile,
-    source: SourceKey,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SourceKey {
-    /// The source's own forge, else the Factory's single forge; `None` when neither is known.
-    forge: Option<SkillSourceForge>,
-    owner: String,
-    repo: String,
-    reference: Option<SkillSourceRef>,
-}
-
-/// Source identity for deduplication: the repository identity (owners and repos are
-/// case-insensitive on every forge) plus the requested ref.
-type SourceIdentity = (
-    Option<SkillSourceForge>,
-    String,
-    String,
-    Option<SkillSourceRef>,
-);
-
-impl SourceKey {
-    fn identity(&self) -> SourceIdentity {
-        (
-            self.forge,
-            self.owner.to_lowercase(),
-            self.repo.to_lowercase(),
-            self.reference.clone(),
-        )
-    }
-
-    /// Tags ride branch heads; the checkout helper falls back to a tag when no branch matches.
-    fn head(&self) -> Option<RepositoryHeadRef> {
-        self.reference.as_ref().map(|reference| match reference {
-            SkillSourceRef::Sha(sha) => RepositoryHeadRef::CommitSha(sha.clone()),
-            SkillSourceRef::Named(name) => RepositoryHeadRef::Branch(name.clone()),
-        })
-    }
-
-    fn checkout_name(&self, forge: SkillSourceForge) -> String {
-        let (_, owner, repo, reference) = self.identity();
-        let mut hasher = Sha256::new();
-        for part in [
-            forge.token(),
-            &owner,
-            &repo,
-            reference.as_ref().map_or("", SkillSourceRef::value),
-        ] {
-            hasher.update(part.as_bytes());
-            hasher.update([0]);
-        }
-        let digest = hasher
-            .finalize()
-            .iter()
-            .take(6)
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let readable = format!("{}-{owner}-{repo}", forge.token().to_lowercase())
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                    character
-                } else {
-                    '-'
-                }
-            })
-            .take(80)
-            .collect::<String>();
-        format!("{readable}-{digest}")
-    }
-}
-
-/// Reads the reference files that sit directly in each skill folder, in file-name order.
-/// `factory_forge` is the forge for sources that don't name one. Returns `None` when there are no
-/// reference files.
-fn discover(
-    skill_dirs: &[PathBuf],
-    factory_forge: Option<SkillSourceForge>,
-) -> Option<DiscoveredReferences> {
-    let mut seen = HashSet::new();
-    let mut levels = Vec::new();
-    for skills_dir in skill_dirs {
-        if !seen.insert(skills_dir.clone()) {
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(skills_dir) else {
+/// One checkout request per distinct source, checked out into `sources_dir`.
+fn plan_checkouts(levels: &[Level], sources_dir: &Path) -> (CheckoutBatch, Planned) {
+    let mut repositories = Vec::new();
+    let mut planned = HashMap::new();
+    let sources = levels
+        .iter()
+        .flat_map(|level| &level.files)
+        .filter_map(|(_, parsed)| parsed.as_ref().ok());
+    for SkillReferenceFile { source, .. } in sources {
+        let hash_map::Entry::Vacant(slot) = planned.entry(identity(source)) else {
             continue;
         };
-        let mut file_names = entries
-            .flatten()
-            .filter(|entry| entry.path().is_file())
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|file_name| is_skill_reference_file_name(file_name))
-            .collect::<Vec<_>>();
-        if file_names.is_empty() {
+        let Some(forge) = source.code_forge else {
+            slot.insert(Err(UnresolvedReason::UnknownForge));
             continue;
-        }
-        file_names.sort();
-        let agent = agent_for_skills_dir(skills_dir);
-        let files = file_names
-            .into_iter()
-            .map(|file_name| {
-                let parsed = fs::read_to_string(skills_dir.join(&file_name))
-                    .map_err(|_| SkillReferenceParseError::InvalidYaml)
-                    .and_then(|contents| parse_skill_reference_file(&contents))
-                    .map(|file| {
-                        let source = SourceKey {
-                            forge: file.source.code_forge.or(factory_forge),
-                            owner: file.source.owner.clone(),
-                            repo: file.source.repo.clone(),
-                            reference: file.source.reference.clone(),
-                        };
-                        ReferenceSpec { file, source }
-                    });
-                DiscoveredFile {
-                    reference_file: reference_file_path(skills_dir, agent.as_deref(), &file_name),
-                    parsed,
-                }
-            })
-            .collect();
-        levels.push(DiscoveredLevel {
-            skills_dir: skills_dir.clone(),
-            agent,
-            files,
+        };
+        let repo = source
+            .repo
+            .replace(|character: char| !character.is_ascii_alphanumeric(), "-");
+        let request = CheckoutRequest {
+            source: RepositoryIdentity {
+                code_forge: repository_forge(forge),
+                repo_owner: source.owner.clone(),
+                repo_name: source.repo.clone(),
+            },
+            checkout_name: format!("{}-{repo}", repositories.len()),
+            // Tags ride branch heads; the checkout helper falls back to a tag of the same name.
+            head: source.reference.as_ref().map(|reference| match reference {
+                SkillSourceRef::Sha(sha) => RepositoryHeadRef::CommitSha(sha.clone()),
+                SkillSourceRef::Named(name) => RepositoryHeadRef::Branch(name.clone()),
+            }),
+            fetch_branch_only: false,
+            expected_sha: None,
+            remove_origin: false,
+        };
+        // An invalid request would fail the helper's whole batch, so it's rejected here alone.
+        slot.insert(match request.validate() {
+            Ok(()) => {
+                repositories.push(request);
+                Ok(repositories.len() - 1)
+            }
+            Err("invalid checkout ref" | "invalid checkout commit") => {
+                Err(UnresolvedReason::RefNotFound)
+            }
+            Err(_) => Err(UnresolvedReason::CloneFailed),
         });
     }
-    (!levels.is_empty()).then_some(DiscoveredReferences { levels })
-}
-
-/// The agent owning `skills_dir` when it is an `agents/<name>/skills` folder.
-fn agent_for_skills_dir(skills_dir: &Path) -> Option<String> {
-    let mut components = skills_dir.components().rev();
-    let (Some(skills), Some(agent), Some(agents)) =
-        (components.next(), components.next(), components.next())
-    else {
-        return None;
+    let batch = CheckoutBatch {
+        working_dir: sources_dir.to_owned(),
+        repositories,
     };
-    (skills.as_os_str() == SKILLS_DIRECTORY && agents.as_os_str() == AGENTS_DIRECTORY)
-        .then(|| agent.as_os_str().to_str().map(str::to_owned))
-        .flatten()
+    (batch, planned)
 }
 
-fn reference_file_path(skills_dir: &Path, agent: Option<&str>, file_name: &str) -> String {
-    match agent {
-        Some(agent) => format!("{AGENTS_DIRECTORY}/{agent}/{SKILLS_DIRECTORY}/{file_name}"),
-        None => {
-            let folder = skills_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(SKILLS_DIRECTORY);
-            format!("{folder}/{file_name}")
-        }
-    }
-}
-
-/// The checkout batch for every distinct source, plus the sources that can't be requested.
-struct SourceCheckoutPlan {
-    batch: CheckoutBatch,
-    /// The identity of each request in `batch`, by index.
-    planned: Vec<SourceIdentity>,
-    rejected: HashMap<SourceIdentity, UnresolvedReason>,
-}
-
-/// The checkout of each source, or why there isn't one.
-struct SourceCheckouts(HashMap<SourceIdentity, Result<CheckedOutSource, UnresolvedReason>>);
-
-struct CheckedOutSource {
-    dir: PathBuf,
-    resolved_sha: Option<String>,
-}
-
-impl DiscoveredReferences {
-    /// One request per distinct source, checked out into `sources_dir`.
-    fn checkout_plan(&self, sources_dir: &Path) -> SourceCheckoutPlan {
-        let mut seen = HashSet::new();
-        let mut repositories = Vec::new();
-        let mut planned = Vec::new();
-        let mut rejected = HashMap::new();
-        for spec in self
-            .levels
+/// Pairs each planned source with its outcome in the helper's report. A missing report or outcome
+/// means the source couldn't be cloned.
+fn checkouts(
+    planned: Planned,
+    batch: &CheckoutBatch,
+    report: Option<&CheckoutReport>,
+) -> HashMap<SourceIdentity, Checkout> {
+    let checkout = |index: usize| {
+        let request = &batch.repositories[index];
+        let outcomes = report.map_or(&[][..], |report| &report.outcomes);
+        let Some(outcome) = outcomes
             .iter()
-            .flat_map(|level| &level.files)
-            .filter_map(|file| file.parsed.as_ref().ok())
-        {
-            let identity = spec.source.identity();
-            if !seen.insert(identity.clone()) {
-                continue;
+            .find(|outcome| outcome.request_index == index)
+        else {
+            return Err(UnresolvedReason::CloneFailed);
+        };
+        match outcome.failure {
+            None => {
+                let dir = batch.working_dir.join(&request.checkout_name);
+                // The helper reports heads only when the whole batch succeeds.
+                let sha = outcome.resolved_head.clone().or_else(|| read_head(&dir));
+                Ok((dir, sha))
             }
-            let Some(forge) = spec.source.forge else {
-                continue;
-            };
-            let request = CheckoutRequest {
-                source: RepositoryIdentity {
-                    code_forge: repository_forge(forge),
-                    repo_owner: spec.source.owner.clone(),
-                    repo_name: spec.source.repo.clone(),
-                },
-                checkout_name: spec.source.checkout_name(forge),
-                head: spec.source.head(),
-                fetch_branch_only: false,
-                expected_sha: None,
-                remove_origin: false,
-            };
-            match request.validate() {
-                Ok(()) => {
-                    planned.push(identity);
-                    repositories.push(request);
-                }
-                Err("invalid checkout commit" | "invalid checkout ref") => {
-                    rejected.insert(identity, UnresolvedReason::RefNotFound);
-                }
-                Err(_) => {
-                    rejected.insert(identity, UnresolvedReason::CloneFailed);
-                }
+            Some(CheckoutFailureKind::Checkout) if request.head.is_some() => {
+                Err(UnresolvedReason::RefNotFound)
             }
+            Some(
+                CheckoutFailureKind::Clone
+                | CheckoutFailureKind::Checkout
+                | CheckoutFailureKind::RemoveOrigin
+                | CheckoutFailureKind::VerifyHead,
+            ) => Err(UnresolvedReason::CloneFailed),
         }
-        SourceCheckoutPlan {
-            batch: CheckoutBatch {
-                working_dir: sources_dir.to_owned(),
-                repositories,
-            },
-            planned,
-            rejected,
-        }
-    }
-
-    /// Selects the skills of every reference file, generates a skill folder per level, and
-    /// returns `configured_dirs` with each generated folder after the folder that owns it.
-    ///
-    /// `resolved_dirs` are `configured_dirs` resolved against the working directory. Skills are
-    /// considered in folder order, so a referenced skill whose name is already provided by an
-    /// earlier folder, or an earlier level's references, is not loaded.
-    fn materialize(
-        self,
-        configured_dirs: &[PathBuf],
-        resolved_dirs: &[PathBuf],
-        checkouts: &SourceCheckouts,
-        generated_root: &Path,
-    ) -> SkillReferenceResolution {
-        let mut levels = self
-            .levels
-            .into_iter()
-            .map(|level| (level.skills_dir.clone(), level))
-            .collect::<HashMap<_, _>>();
-        let mut indexes = HashMap::<PathBuf, SourceIndex>::new();
-        let mut claimed = HashSet::new();
-        let mut skill_dirs = Vec::with_capacity(configured_dirs.len());
-        let mut references = Vec::new();
-        for (index, (configured, resolved)) in configured_dirs.iter().zip(resolved_dirs).enumerate()
-        {
-            skill_dirs.push(configured.clone());
-            claimed.extend(read_skills(resolved).into_iter().map(|skill| skill.name));
-            let Some(level) = levels.remove(resolved) else {
-                continue;
-            };
-            let generated_dir = generated_root.join(index.to_string());
-            let mut level_names = HashSet::new();
-            for file in &level.files {
-                let mut report = file_report_without_skills(&level, file, checkouts);
-                let Ok(spec) = &file.parsed else {
-                    references.push(report);
-                    continue;
-                };
-                let Some(Ok(checkout)) = checkouts.0.get(&spec.source.identity()) else {
-                    references.push(report);
-                    continue;
-                };
-                let source_index = indexes
-                    .entry(checkout.dir.clone())
-                    .or_insert_with(|| SourceIndex::new(checkout.dir.clone()));
-                let (candidates, unresolved) = select_skills(&spec.file, source_index);
-                report.unresolved.extend(unresolved);
-                for candidate in candidates {
-                    if level_names.contains(&candidate.name) {
-                        report.unresolved.push(UnresolvedEntry {
-                            entry: candidate.entry,
-                            reason: UnresolvedReason::Collision,
-                        });
-                        continue;
-                    }
-                    if claimed.contains(&candidate.name) {
-                        continue;
-                    }
-                    if let Err(error) = link_skill(&generated_dir, &candidate) {
-                        safe_warn!(
-                            safe: ("Could not link a referenced skill"),
-                            full: ("Could not link referenced skill '{}': {error}", candidate.name)
-                        );
-                        report.unresolved.push(UnresolvedEntry {
-                            entry: candidate.entry,
-                            reason: UnresolvedReason::InvalidSkill,
-                        });
-                        continue;
-                    }
-                    level_names.insert(candidate.name.clone());
-                    report.loaded.push(LoadedSkill {
-                        name: candidate.name,
-                        path: candidate.rel_dir,
-                    });
-                }
-                references.push(report);
-            }
-            if !level_names.is_empty() {
-                skill_dirs.push(generated_dir);
-            }
-            claimed.extend(level_names);
-        }
-        SkillReferenceResolution {
-            skill_dirs,
-            report: SkillSourcesReport { references },
-        }
-    }
+    };
+    planned
+        .into_iter()
+        .map(|(identity, planned)| (identity, planned.and_then(checkout)))
+        .collect()
 }
 
-impl SourceCheckoutPlan {
-    /// Pairs each planned source with its outcome in the helper's report. A missing report or
-    /// outcome means the source couldn't be cloned.
-    fn into_checkouts(self, report: Option<&CheckoutReport>) -> SourceCheckouts {
-        let mut checkouts = self
-            .rejected
-            .into_iter()
-            .map(|(identity, reason)| (identity, Err(reason)))
-            .collect::<HashMap<_, _>>();
-        for (index, identity) in self.planned.into_iter().enumerate() {
-            let request = &self.batch.repositories[index];
-            let outcome = report.and_then(|report| {
-                report
-                    .outcomes
-                    .iter()
-                    .find(|outcome| outcome.request_index == index)
-            });
-            let checkout = match outcome.map(|outcome| outcome.failure) {
-                Some(None) => {
-                    let dir = self.batch.working_dir.join(&request.checkout_name);
-                    let resolved_sha = outcome
-                        .and_then(|outcome| outcome.resolved_head.clone())
-                        .or_else(|| read_head(&dir));
-                    Ok(CheckedOutSource { dir, resolved_sha })
-                }
-                Some(Some(CheckoutFailureKind::Checkout)) if request.head.is_some() => {
-                    Err(UnresolvedReason::RefNotFound)
-                }
-                Some(Some(
-                    CheckoutFailureKind::Clone
-                    | CheckoutFailureKind::Checkout
-                    | CheckoutFailureKind::RemoveOrigin
-                    | CheckoutFailureKind::VerifyHead,
-                ))
-                | None => Err(UnresolvedReason::CloneFailed),
-            };
-            checkouts.insert(identity, checkout);
-        }
-        SourceCheckouts(checkouts)
-    }
-}
-
-/// The commit checked out at `dir`, for checkouts whose HEAD the helper didn't report.
 fn read_head(dir: &Path) -> Option<String> {
     let repository = git2::Repository::open(dir).ok()?;
     let commit = repository.head().ok()?.peel_to_commit().ok()?;
     Some(commit.id().to_string())
 }
 
-/// The report for `file` before any skill is selected: its source, and the reason nothing
-/// loads when the file or its checkout failed.
-fn file_report_without_skills(
-    level: &DiscoveredLevel,
-    file: &DiscoveredFile,
-    checkouts: &SourceCheckouts,
-) -> ReferenceFileReport {
-    let mut report = ReferenceFileReport {
-        reference_file: file.reference_file.clone(),
-        level: if level.agent.is_some() {
-            ReferenceLevel::Agent
-        } else {
-            ReferenceLevel::Factory
-        },
-        agent: level.agent.clone(),
-        source: None,
-        loaded: Vec::new(),
-        unresolved: Vec::new(),
-    };
-    let spec = match &file.parsed {
-        Ok(spec) => spec,
-        Err(error) => {
-            safe_warn!(
-                safe: ("Skipping an invalid skill reference file"),
-                full: ("Skipping invalid skill reference file {}: {error}", file.reference_file)
-            );
-            report.unresolved.push(UnresolvedEntry {
-                entry: String::new(),
-                reason: UnresolvedReason::InvalidReferenceFile,
-            });
-            return report;
-        }
-    };
-    let checkout = match spec.source.forge {
-        None => Err(UnresolvedReason::UnknownForge),
-        Some(_) => checkouts
-            .0
-            .get(&spec.source.identity())
-            .map_or(Err(UnresolvedReason::CloneFailed), |checkout| {
-                checkout.as_ref().map_err(|reason| *reason)
-            }),
-    };
-    report.source = Some(ReferencedSource {
-        code_forge: spec.source.forge.map(repository_forge),
-        owner: spec.source.owner.clone(),
-        repo: spec.source.repo.clone(),
-        requested_ref: spec
-            .source
-            .reference
-            .as_ref()
-            .map(|reference| reference.value().to_owned()),
-        resolved_sha: checkout
-            .ok()
-            .and_then(|checkout| checkout.resolved_sha.clone()),
-    });
-    if let Err(reason) = checkout {
-        report.unresolved = spec
-            .file
-            .include
-            .iter()
-            .map(|entry| UnresolvedEntry {
-                entry: entry.value().to_owned(),
-                reason,
-            })
-            .collect();
-    }
-    report
-}
-
-/// A skill folder selected by an `include` entry.
-#[derive(Debug, Clone)]
-struct Candidate {
-    name: String,
-    rel_dir: String,
-    dir: PathBuf,
-    entry: String,
-}
-
-/// The skills a checkout offers, indexed lazily.
-struct SourceIndex {
-    root: PathBuf,
-    /// Valid skills in the standard skill folders, in provider order.
-    standard: Vec<IndexedSkill>,
-    /// Standard skill folders whose `SKILL.md` doesn't parse.
-    invalid_standard: Vec<IndexedSkill>,
-    /// Every folder holding a `SKILL.md`, found on first use by a path glob.
-    walked: Option<Vec<String>>,
-}
-
-/// A skill folder, named by its frontmatter name or, for invalid skills, its folder name.
-struct IndexedSkill {
-    name: String,
-    rel_dir: String,
-}
-
-impl SourceIndex {
-    fn new(root: PathBuf) -> Self {
-        let mut standard = Vec::new();
-        let mut invalid_standard = Vec::new();
-        for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
-            let Some(base) = slash_path(&definition.skills_path) else {
-                continue;
-            };
-            let Ok(entries) = fs::read_dir(root.join(&definition.skills_path)) else {
-                continue;
-            };
-            let mut folders = entries
-                .flatten()
-                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-                .filter(|entry| entry.path().join(SKILL_FILE).is_file())
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .collect::<Vec<_>>();
-            folders.sort();
-            for folder in folders {
-                let rel_dir = format!("{base}/{folder}");
-                match parse_skill(&root.join(&rel_dir).join(SKILL_FILE)) {
-                    Ok(skill) => standard.push(IndexedSkill {
-                        name: skill.name,
-                        rel_dir,
-                    }),
-                    Err(_) => invalid_standard.push(IndexedSkill {
-                        name: folder,
-                        rel_dir,
-                    }),
-                }
-            }
-        }
-        Self {
-            root,
-            standard,
-            invalid_standard,
-            walked: None,
-        }
-    }
-
-    fn candidate(&self, name: String, rel_dir: String, entry: &str) -> Candidate {
-        Candidate {
-            dir: self.root.join(&rel_dir),
-            name,
-            rel_dir,
-            entry: entry.to_owned(),
-        }
-    }
-
-    /// Standard skills deduplicated by name, keeping the first in provider order.
-    fn standard_by_name(&self) -> Vec<&IndexedSkill> {
-        let mut names = HashSet::new();
-        self.standard
-            .iter()
-            .filter(|skill| names.insert(skill.name.as_str()))
-            .collect()
-    }
-
-    fn walked(&mut self) -> &[String] {
-        let root = &self.root;
-        self.walked.get_or_insert_with(|| {
-            let mut dirs = WalkDir::new(root)
-                .min_depth(1)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|entry| entry.file_name() != GIT_DIRECTORY)
-                .take(MAX_WALKED_ENTRIES)
-                .flatten()
-                .filter(|entry| entry.file_type().is_dir())
-                .filter(|entry| entry.path().join(SKILL_FILE).is_file())
-                .filter_map(|entry| entry.path().strip_prefix(root).ok().and_then(slash_path))
-                .collect::<Vec<_>>();
-            dirs.sort();
-            dirs
-        })
-    }
-
-    /// Parses the skill in `rel_dir`, which must stay inside the checkout.
-    fn parse(&self, rel_dir: &str, entry: &str) -> Result<Candidate, UnresolvedReason> {
-        let dir = self.root.join(rel_dir);
-        if !dir.join(SKILL_FILE).is_file() || !is_within(&self.root, &dir) {
-            return Err(UnresolvedReason::NoMatch);
-        }
-        let skill =
-            parse_skill(&dir.join(SKILL_FILE)).map_err(|_| UnresolvedReason::InvalidSkill)?;
-        Ok(self.candidate(skill.name, rel_dir.to_owned(), entry))
-    }
-}
-
-/// Resolves `file`'s includes against a checkout and applies its excludes. Candidates are in
-/// `include` order, without repeats of the same folder.
-fn select_skills(
-    file: &SkillReferenceFile,
-    index: &mut SourceIndex,
-) -> (Vec<Candidate>, Vec<UnresolvedEntry>) {
-    let mut candidates = Vec::new();
-    let mut unresolved = Vec::new();
-    for entry in &file.include {
-        let value = entry.value();
-        let mut unresolve = |reason| {
-            unresolved.push(UnresolvedEntry {
-                entry: value.to_owned(),
-                reason,
-            })
+/// Selects each reference file's skills, links them into a generated folder per level, and returns
+/// the run's skill folders with each generated folder after the folder that owns it. A skill
+/// whose name an earlier folder or level already provides is skipped.
+fn materialize(
+    discovery: &SkillReferenceDiscovery,
+    checkouts: &HashMap<SourceIdentity, Checkout>,
+) -> (Vec<PathBuf>, SkillSourcesReport) {
+    let mut skill_dirs = Vec::new();
+    let mut claimed = HashSet::new();
+    let mut references = Vec::new();
+    let mut levels = discovery.levels.iter().peekable();
+    let dirs = discovery
+        .configured_dirs
+        .iter()
+        .zip(&discovery.resolved_dirs);
+    for (index, (configured, resolved)) in dirs.enumerate() {
+        skill_dirs.push(configured.clone());
+        claimed.extend(read_skills(resolved).into_iter().map(|skill| skill.name));
+        let Some(level) = levels.next_if(|level| level.index == index) else {
+            continue;
         };
-        match entry {
-            SkillReferenceEntry::Name(name) => {
-                if let Some(skill) = index.standard.iter().find(|skill| &skill.name == name) {
-                    candidates.push(index.candidate(
-                        skill.name.clone(),
-                        skill.rel_dir.clone(),
-                        value,
-                    ));
-                } else if index
-                    .invalid_standard
-                    .iter()
-                    .any(|skill| &skill.name == name)
+        let generated = discovery.root.join("skills").join(index.to_string());
+        let mut level_names = HashSet::new();
+        for (reference_file, parsed) in &level.files {
+            let mut report = ReferenceFileReport {
+                reference_file: reference_file.clone(),
+                level: match level.agent {
+                    Some(_) => ReferenceLevel::Agent,
+                    None => ReferenceLevel::Factory,
+                },
+                agent: level.agent.clone(),
+                source: None,
+                loaded: Vec::new(),
+                unresolved: Vec::new(),
+            };
+            let unresolve = |entry: &str, reason| UnresolvedEntry {
+                entry: entry.to_owned(),
+                reason,
+            };
+            let Ok(file) = parsed else {
+                report
+                    .unresolved
+                    .push(unresolve("", UnresolvedReason::InvalidReferenceFile));
+                references.push(report);
+                continue;
+            };
+            let checkout = checkouts
+                .get(&identity(&file.source))
+                .cloned()
+                .unwrap_or(Err(UnresolvedReason::CloneFailed));
+            report.source = Some(ReferencedSource {
+                code_forge: file.source.code_forge.map(repository_forge),
+                owner: file.source.owner.clone(),
+                repo: file.source.repo.clone(),
+                requested_ref: file
+                    .source
+                    .reference
+                    .as_ref()
+                    .map(|reference| reference.value().to_owned()),
+                resolved_sha: checkout.as_ref().ok().and_then(|(_, sha)| sha.clone()),
+            });
+            let checkout_dir = match checkout {
+                Ok((dir, _)) => dir,
+                Err(reason) => {
+                    report.unresolved = file
+                        .include
+                        .iter()
+                        .map(|entry| unresolve(entry.value(), reason))
+                        .collect();
+                    references.push(report);
+                    continue;
+                }
+            };
+            let (candidates, unresolved) = select_skills(file, &checkout_dir);
+            report.unresolved = unresolved;
+            for candidate in candidates {
+                let skill_dir = checkout_dir.join(&candidate.rel_dir);
+                let reason = if level_names.contains(&candidate.name) {
+                    Some(UnresolvedReason::Collision)
+                } else if claimed.contains(&candidate.name) {
+                    continue;
+                } else if !is_within(&checkout_dir, &skill_dir) {
+                    Some(UnresolvedReason::NoMatch)
+                } else if !is_valid_link_name(&candidate.name)
+                    || fs::create_dir_all(&generated)
+                        .and_then(|()| create_symlink(&skill_dir, &generated.join(&candidate.name)))
+                        .is_err()
                 {
-                    unresolve(UnresolvedReason::InvalidSkill);
+                    Some(UnresolvedReason::InvalidSkill)
                 } else {
-                    unresolve(UnresolvedReason::NoMatch);
-                }
-            }
-            SkillReferenceEntry::Path(path) => {
-                match normalized_skill_path(path)
-                    .ok_or(UnresolvedReason::NoMatch)
-                    .and_then(|rel_dir| index.parse(&rel_dir, value))
-                {
-                    Ok(candidate) => candidates.push(candidate),
-                    Err(reason) => unresolve(reason),
-                }
-            }
-            SkillReferenceEntry::NameGlob(_) => {
-                let Some(matcher) = entry.glob_matcher() else {
-                    unresolve(UnresolvedReason::NoMatch);
-                    continue;
+                    None
                 };
-                let matched = index
-                    .standard_by_name()
-                    .into_iter()
-                    .filter(|skill| matcher.is_match(&skill.name))
-                    .map(|skill| index.candidate(skill.name.clone(), skill.rel_dir.clone(), value))
-                    .collect::<Vec<_>>();
-                if matched.is_empty() {
-                    unresolve(UnresolvedReason::NoMatch);
-                }
-                candidates.extend(matched);
-            }
-            SkillReferenceEntry::PathGlob(_) => {
-                let Some(matcher) = entry.glob_matcher() else {
-                    unresolve(UnresolvedReason::NoMatch);
-                    continue;
-                };
-                let matched = index
-                    .walked()
-                    .iter()
-                    .filter(|rel_dir| matches_skill_path(&matcher, rel_dir))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if matched.is_empty() {
-                    unresolve(UnresolvedReason::NoMatch);
-                }
-                for rel_dir in matched {
-                    match index.parse(&rel_dir, value) {
-                        Ok(candidate) => candidates.push(candidate),
-                        Err(reason) => unresolve(reason),
+                match reason {
+                    Some(reason) => report.unresolved.push(unresolve(&candidate.entry, reason)),
+                    None => {
+                        level_names.insert(candidate.name.clone());
+                        report.loaded.push(LoadedSkill {
+                            name: candidate.name,
+                            path: candidate.rel_dir,
+                        });
                     }
                 }
             }
+            references.push(report);
+        }
+        if !level_names.is_empty() {
+            skill_dirs.push(generated);
+        }
+        claimed.extend(level_names);
+    }
+    (skill_dirs, SkillSourcesReport { references })
+}
+
+/// A skill folder selected by an `include` entry.
+struct Candidate {
+    name: String,
+    rel_dir: String,
+    entry: String,
+}
+
+/// Resolves `file`'s includes in the checkout at `root`, then applies its excludes. Candidates are
+/// in `include` order, without repeats of the same folder.
+fn select_skills(file: &SkillReferenceFile, root: &Path) -> (Vec<Candidate>, Vec<UnresolvedEntry>) {
+    let standard = standard_skills(root);
+    let mut walked = None;
+    let mut candidates = Vec::new();
+    let mut unresolved = Vec::new();
+    for entry in &file.include {
+        let matcher = entry.glob_matcher();
+        let results: Vec<_> = match entry {
+            SkillReferenceEntry::Name(_) | SkillReferenceEntry::NameGlob(_) => standard
+                .iter()
+                .filter(|(name, rel_dir)| selects(entry, matcher.as_ref(), name, rel_dir))
+                .map(|skill| Ok(skill.clone()))
+                .collect(),
+            SkillReferenceEntry::Path(path) => normalized_path(path)
+                .map(|rel_dir| skill_at(root, rel_dir))
+                .into_iter()
+                .collect(),
+            SkillReferenceEntry::PathGlob(_) => walked
+                .get_or_insert_with(|| skill_folders(root))
+                .iter()
+                .filter(|rel_dir| selects(entry, matcher.as_ref(), "", rel_dir))
+                .map(|rel_dir| skill_at(root, rel_dir.clone()))
+                .collect(),
+        };
+        if results.is_empty() {
+            unresolved.push(UnresolvedEntry {
+                entry: entry.value().to_owned(),
+                reason: UnresolvedReason::NoMatch,
+            });
+        }
+        for result in results {
+            match result {
+                Ok((name, rel_dir)) => candidates.push(Candidate {
+                    name,
+                    rel_dir,
+                    entry: entry.value().to_owned(),
+                }),
+                Err(reason) => unresolved.push(UnresolvedEntry {
+                    entry: entry.value().to_owned(),
+                    reason,
+                }),
+            }
         }
     }
-    let mut folders = HashSet::new();
-    candidates.retain(|candidate| folders.insert(candidate.rel_dir.clone()));
     let excludes = file
         .exclude
         .iter()
         .map(|entry| (entry, entry.glob_matcher()))
         .collect::<Vec<_>>();
+    let mut folders = HashSet::new();
     candidates.retain(|candidate| {
-        !excludes
-            .iter()
-            .any(|(entry, matcher)| excludes_candidate(entry, matcher.as_ref(), candidate))
+        folders.insert(candidate.rel_dir.clone())
+            && !excludes.iter().any(|(entry, matcher)| {
+                selects(entry, matcher.as_ref(), &candidate.name, &candidate.rel_dir)
+            })
     });
-    for candidate in &mut candidates {
-        if !is_valid_skill_link_name(&candidate.name) {
-            unresolved.push(UnresolvedEntry {
-                entry: candidate.entry.clone(),
-                reason: UnresolvedReason::InvalidSkill,
-            });
-        }
-    }
-    candidates.retain(|candidate| is_valid_skill_link_name(&candidate.name));
     (candidates, unresolved)
 }
 
-fn excludes_candidate(
+/// Valid skills in the standard skill folders as `(name, folder)`, keeping the first of each name
+/// in provider order.
+fn standard_skills(root: &Path) -> Vec<(String, String)> {
+    let mut names = HashSet::new();
+    let mut skills = Vec::new();
+    for provider in SKILL_PROVIDER_DEFINITIONS.iter() {
+        let Ok(entries) = fs::read_dir(root.join(&provider.skills_path)) else {
+            continue;
+        };
+        let mut dirs = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        dirs.sort();
+        skills.extend(dirs.into_iter().filter_map(|dir| {
+            let name = parse_skill(&dir.join(SKILL_FILE)).ok()?.name;
+            names.insert(name.clone()).then_some(())?;
+            Some((name, relative(root, &dir)?))
+        }));
+    }
+    skills
+}
+
+/// The skill in `rel_dir`, as `(name, folder)`.
+fn skill_at(root: &Path, rel_dir: String) -> Result<(String, String), UnresolvedReason> {
+    let skill_file = root.join(&rel_dir).join(SKILL_FILE);
+    if !skill_file.is_file() {
+        return Err(UnresolvedReason::NoMatch);
+    }
+    let skill = parse_skill(&skill_file).map_err(|_| UnresolvedReason::InvalidSkill)?;
+    Ok((skill.name, rel_dir))
+}
+
+/// Every folder in the checkout that holds a `SKILL.md`, relative to its root.
+fn skill_folders(root: &Path) -> Vec<String> {
+    WalkDir::new(root)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .take(MAX_WALKED_ENTRIES)
+        .flatten()
+        .filter(|entry| entry.file_type().is_dir() && entry.path().join(SKILL_FILE).is_file())
+        .filter_map(|entry| relative(root, entry.path()))
+        .collect()
+}
+
+/// Whether `entry` selects the skill `name` in folder `rel_dir`; `matcher` is its compiled glob.
+fn selects(
     entry: &SkillReferenceEntry,
     matcher: Option<&GlobMatcher>,
-    candidate: &Candidate,
+    name: &str,
+    rel_dir: &str,
 ) -> bool {
     match entry {
-        SkillReferenceEntry::Name(name) => &candidate.name == name,
-        SkillReferenceEntry::Path(path) => {
-            normalized_skill_path(path).is_some_and(|rel_dir| rel_dir == candidate.rel_dir)
-        }
-        SkillReferenceEntry::NameGlob(_) => {
-            matcher.is_some_and(|matcher| matcher.is_match(&candidate.name))
-        }
-        SkillReferenceEntry::PathGlob(_) => {
-            matcher.is_some_and(|matcher| matches_skill_path(matcher, &candidate.rel_dir))
-        }
+        SkillReferenceEntry::Name(entry_name) => entry_name == name,
+        SkillReferenceEntry::Path(path) => normalized_path(path).as_deref() == Some(rel_dir),
+        SkillReferenceEntry::NameGlob(_) => matcher.is_some_and(|matcher| matcher.is_match(name)),
+        // A path glob selects a skill by its folder or its `SKILL.md`.
+        SkillReferenceEntry::PathGlob(_) => matcher.is_some_and(|matcher| {
+            matcher.is_match(rel_dir) || matcher.is_match(format!("{rel_dir}/{SKILL_FILE}"))
+        }),
     }
 }
 
-/// Whether a path glob selects the skill folder `rel_dir`, by its folder or its `SKILL.md`.
-fn matches_skill_path(matcher: &GlobMatcher, rel_dir: &str) -> bool {
-    matcher.is_match(rel_dir) || matcher.is_match(format!("{rel_dir}/{SKILL_FILE}"))
-}
-
-/// A path entry as a skill folder relative to the repository root, or `None` for the root
-/// itself.
-fn normalized_skill_path(path: &str) -> Option<String> {
+/// A path entry as a skill folder relative to the repository root; `None` for the root itself.
+fn normalized_path(path: &str) -> Option<String> {
     let mut segments = path
         .split('/')
         .filter(|segment| !segment.is_empty() && *segment != ".")
@@ -992,22 +641,11 @@ fn normalized_skill_path(path: &str) -> Option<String> {
     (!segments.is_empty()).then(|| segments.join("/"))
 }
 
-fn slash_path(path: &Path) -> Option<String> {
-    let segments = path
-        .components()
-        .map(|component| match component {
-            Component::Normal(segment) => segment.to_str(),
-            Component::Prefix(_)
-            | Component::RootDir
-            | Component::CurDir
-            | Component::ParentDir => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
-    (!segments.is_empty()).then(|| segments.join("/"))
+fn relative(root: &Path, path: &Path) -> Option<String> {
+    Some(path.strip_prefix(root).ok()?.to_str()?.replace('\\', "/"))
 }
 
-/// Whether `dir` resolves to a location inside `root`, so a symlinked folder can't select files
-/// from elsewhere.
+/// Whether `dir` resolves inside `root`, so a symlinked folder can't select files from elsewhere.
 fn is_within(root: &Path, dir: &Path) -> bool {
     match (root.canonicalize(), dir.canonicalize()) {
         (Ok(root), Ok(dir)) => dir.starts_with(root),
@@ -1015,44 +653,12 @@ fn is_within(root: &Path, dir: &Path) -> bool {
     }
 }
 
-/// Whether a skill name can name its folder in a generated skill folder.
-fn is_valid_skill_link_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
+/// Whether a skill name can name a folder; names come from untrusted frontmatter.
+fn is_valid_link_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..")
         && name.len() <= 255
         && !name
-            .chars()
-            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
-}
-
-fn link_skill(generated_dir: &Path, candidate: &Candidate) -> std::io::Result<()> {
-    fs::create_dir_all(generated_dir)?;
-    create_symlink(&candidate.dir, &generated_dir.join(&candidate.name))
-}
-
-fn log_report(report: &SkillSourcesReport) {
-    let loaded = report
-        .references
-        .iter()
-        .map(|reference| reference.loaded.len())
-        .sum::<usize>();
-    log::info!(
-        "Skill references: {} file(s), {loaded} skill(s) loaded, {} warning(s)",
-        report.references.len(),
-        report.warning_count()
-    );
-    for reference in &report.references {
-        for unresolved in &reference.unresolved {
-            safe_warn!(
-                safe: ("A skill reference entry did not resolve: {:?}", unresolved.reason),
-                full: (
-                    "Skill reference {} entry '{}' did not resolve: {:?}",
-                    reference.reference_file, unresolved.entry, unresolved.reason
-                )
-            );
-        }
-    }
+            .contains(|character: char| character.is_control() || matches!(character, '/' | '\\'))
 }
 
 #[cfg(test)]
