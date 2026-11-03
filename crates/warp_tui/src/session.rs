@@ -17,7 +17,9 @@ use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
+use warp::tui_export::{
+    AIConversationAutoexecuteMode, Appearance, ServerApiProvider, ServerConversationToken,
+};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::settings::Setting as _;
@@ -107,6 +109,9 @@ enum TuiCommand {
         /// Write the schema to this path instead of standard output.
         output_path: Option<PathBuf>,
     },
+    /// Generate a new Git access token for warp-hosted factory definitions
+    /// for the current user.
+    GetGitAccessJwt { factory_id: String },
 }
 
 /// Reads a provider API key from a masked TTY prompt or, when stdin is piped,
@@ -162,9 +167,40 @@ pub fn run() -> Result<()> {
         }
         Err(error) => return Err(anyhow::Error::new(error)),
     };
-    if let Some(TuiCommand::DumpSettingsSchema { output_path }) = args.command {
-        warp::features::init_feature_flags();
-        return warp::settings::dump_settings_schema(output_path.as_deref());
+    if let Some(command) = args.command {
+        return match command {
+            TuiCommand::DumpSettingsSchema { output_path } => {
+                warp::features::init_feature_flags();
+                warp::settings::dump_settings_schema(output_path.as_deref())
+            }
+            TuiCommand::GetGitAccessJwt { factory_id } => warp::run_tui_cli_command(
+                Box::new(move |ctx| {
+                    let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+                    let app = ctx.weak_app();
+                    ctx.foreground_executor()
+                        .spawn(async move {
+                            let result = factory.get_factory_git_token(factory_id).await;
+                            let Some(mut app) = app.upgrade() else {
+                                return;
+                            };
+                            app.update(|ctx| match result {
+                                Ok(token) => {
+                                    println!("{token}");
+                                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                                }
+                                Err(error) => {
+                                    ctx.terminate_app(
+                                        TerminationMode::ForceTerminate,
+                                        Some(Err(error)),
+                                    );
+                                }
+                            });
+                        })
+                        .detach();
+                }),
+                true,
+            ),
+        };
     }
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {
@@ -188,28 +224,31 @@ pub fn run() -> Result<()> {
         }
     };
     if let Some(command) = provider_api_key_command {
-        return warp::run_tui_cli_command(Box::new(move |ctx| {
-            let (provider, api_key, success_verb) = match command {
-                ProviderApiKeyCommand::Set { provider, api_key } => {
-                    (provider, Some(api_key), "saved")
+        return warp::run_tui_cli_command(
+            Box::new(move |ctx| {
+                let (provider, api_key, success_verb) = match command {
+                    ProviderApiKeyCommand::Set { provider, api_key } => {
+                        (provider, Some(api_key), "saved")
+                    }
+                    ProviderApiKeyCommand::Clear { provider } => (provider, None, "cleared"),
+                };
+                let result = ApiKeyManager::handle(ctx)
+                    .update(ctx, |manager, ctx| {
+                        manager.persist_provider_key(provider, api_key, ctx)
+                    })
+                    .and_then(|()| warp::tui_export::notify_tui_api_keys_changed());
+                match result {
+                    Ok(()) => {
+                        println!("{} API key {success_verb}", provider.display_name());
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
+                    Err(error) => {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+                    }
                 }
-                ProviderApiKeyCommand::Clear { provider } => (provider, None, "cleared"),
-            };
-            let result = ApiKeyManager::handle(ctx)
-                .update(ctx, |manager, ctx| {
-                    manager.persist_provider_key(provider, api_key, ctx)
-                })
-                .and_then(|()| warp::tui_export::notify_tui_api_keys_changed());
-            match result {
-                Ok(()) => {
-                    println!("{} API key {success_verb}", provider.display_name());
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                }
-                Err(error) => {
-                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
-                }
-            }
-        }));
+            }),
+            false,
+        );
     }
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
     let default_autoexecute_mode = if args.auto_approve {
