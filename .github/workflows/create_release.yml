@@ -2942,12 +2942,30 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      - name: Mint internal release-changelog token
+        id: github_app_auth
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: warpdotdev/warp-internal
+          identity: release-changelog
+
+      - name: Mint public release-changelog token (stable only)
+        if: inputs.channel == 'stable'
+        id: public_github_app_auth
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: warpdotdev/warp
+          identity: release-changelog
+
       # Stable releases use the Oz changelog-draft agent for higher-quality,
       # human-reviewable output. Non-stable channels (dev/preview/beta) use the
       # legacy generate-changelog action to avoid spending Oz agent tokens on
       # daily dev cuts and preview RCs.
       - name: Generate changelog via Oz (stable only)
         if: inputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ steps.public_github_app_auth.outputs.token }}
+          INTERNAL_GH_TOKEN: ${{ steps.github_app_auth.outputs.token }}
         uses: warpdotdev/oz-agent-action@ccb5247d8faee3d0a4b70b8a776727c8f52e2355 # main
         with:
           prompt: |
@@ -2980,14 +2998,6 @@ jobs:
           python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
             --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
             --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
-
-      - name: Mint release-changelog token (non-stable only)
-        if: inputs.channel != 'stable'
-        id: github_app_auth
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
-        with:
-          scope: warpdotdev/warp-internal
-          identity: release-changelog
 
       - name: Generate changelog via legacy action (non-stable only)
         if: inputs.channel != 'stable'
