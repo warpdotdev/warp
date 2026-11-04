@@ -129,6 +129,7 @@ mod telemetry;
 #[cfg(test)]
 mod test_support;
 mod text_layout;
+mod transport_report;
 
 /// Prints a non-blocking warning to stderr when the CLI is invoked with a team-scoped API key.
 fn maybe_warn_team_api_key(ctx: &AppContext) {
@@ -1071,19 +1072,20 @@ impl AgentDriverRunner {
             if let Some(task_id) = driver_options.task_id {
                 driver::write_run_started(&task_id.to_string(), output_format);
                 // Tell the server which transport the run actually got, so follow-up
-                // attachments and session links agree with it.
+                // attachments and session links agree with it. The report is retried in the
+                // background, so setup does not wait on the server.
                 if matches!(task.harness, HarnessKind::ThirdParty(_)) {
-                    let client = foreground
+                    let transport = driver_options.harness_transport;
+                    foreground
                         .spawn(move |_, ctx| {
-                            ServerApiProvider::as_ref(ctx).get_harness_support_client()
+                            transport_report::report_transport_in_background(
+                                &ctx.background_executor(),
+                                ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                                transport,
+                                transport_fallback,
+                            );
                         })
                         .await?;
-                    harness_support::report_transport_used(
-                        client,
-                        driver_options.harness_transport,
-                        transport_fallback,
-                    )
-                    .await;
                 }
             }
 
