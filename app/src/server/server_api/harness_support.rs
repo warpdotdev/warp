@@ -9,8 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(test)]
 use mockall::automock;
-use warp_cli::agent::Harness;
-use warp_cli::agent::HarnessTransport;
+use warp_cli::agent::{Harness, HarnessTransport};
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::PresignedDownloadResponse;
 
