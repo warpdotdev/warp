@@ -110,6 +110,7 @@ futures-util.workspace = true
 futures.workspace = true
 fuzzy_match.workspace = true
 getset.workspace = true
+globset.workspace = true
 handlebars.workspace = true
 hex.workspace = true
 http.workspace = true

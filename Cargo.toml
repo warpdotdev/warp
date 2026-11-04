@@ -381,6 +381,7 @@ wgpu = { version = "30.0.0", default-features = false, features = [
   "vulkan",
   "wgsl",
 ] }
+yaml-rust = "0.4.5"
 zbus = "5.9.0"
 memchr = "2"
 memo-map = "0.3.1"

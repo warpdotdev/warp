@@ -120,6 +120,7 @@ pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod preview_retention;
 mod prewarmed;
+mod skill_references;
 mod snapshot;
 pub(crate) mod terminal;
 mod termination;
@@ -773,6 +774,7 @@ struct RunConfiguration {
     cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     workspace: environment::WorkspaceConfiguration,
     skill_dirs: Vec<PathBuf>,
+    skill_reference_dirs: Vec<PathBuf>,
     computer_use_config: Option<(bool, Option<LLMId>)>,
     third_party_harness_model_config: Option<HarnessModelConfig>,
     team_scope: Option<HeadlessTeamScope>,
@@ -905,6 +907,11 @@ fn split_run_options(
         .factory_skill_dirs
         .clone()
         .unwrap_or_else(parse_skills_dirs_env);
+    // Without an execution configuration nothing is merged in, so every folder is the definition's.
+    let skill_reference_dirs = workspace
+        .definition_skill_dirs
+        .clone()
+        .unwrap_or_else(|| skill_dirs.clone());
     Ok((
         TerminalLaunchInputs {
             should_share,
@@ -930,6 +937,7 @@ fn split_run_options(
             cloud_providers,
             workspace,
             skill_dirs,
+            skill_reference_dirs,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1036,6 +1044,11 @@ pub struct AgentDriver {
     /// The run's workspace, taken once when setup starts and `None` from then on.
     workspace: Option<WorkspaceState>,
     skill_dirs: Vec<PathBuf>,
+    /// The Factory definition's entries in `skill_dirs`, the only ones that hold reference files.
+    skill_reference_dirs: Vec<PathBuf>,
+    /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
+    /// Set once skill references add generated folders, which rely on folder order.
+    skill_dirs_first_name_wins: bool,
     factory_repository_contract: bool,
     computer_use_configured: bool,
 
@@ -1518,6 +1531,8 @@ impl AgentDriver {
                 environment::WorkspaceConfiguration::default(),
             )),
             skill_dirs: parse_skills_dirs_env(),
+            skill_reference_dirs: Vec::new(),
+            skill_dirs_first_name_wins: false,
             factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1560,6 +1575,7 @@ impl AgentDriver {
             cloud_providers,
             workspace,
             skill_dirs,
+            skill_reference_dirs,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1595,6 +1611,8 @@ impl AgentDriver {
             _ => Some(WorkspaceState::Pending(workspace)),
         };
         self.skill_dirs = skill_dirs;
+        self.skill_reference_dirs = skill_reference_dirs;
+        self.skill_dirs_first_name_wins = false;
         self.third_party_harness_model_config = third_party_harness_model_config;
         self.team_scope = team_scope;
         self.bedrock_oidc_credentials = bedrock_oidc_credentials;
@@ -2372,6 +2390,18 @@ impl AgentDriver {
                     )
                     .await;
                 Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+            }
+
+            if FeatureFlag::FactorySkillReferences.is_enabled()
+                && let Some(discovery) = Self::discover_skill_references(&foreground).await
+            {
+                setup_events
+                    .record_value_with_error_flag(
+                        SetupStep::SkillReferenceResolution,
+                        Self::resolve_skill_references(discovery, &foreground),
+                        |report| report.warning_count() > 0,
+                    )
+                    .await;
             }
 
             // Skill loading is Oz-only; third-party harnesses have their own skill systems.

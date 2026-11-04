@@ -333,6 +333,7 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "globset",
  "hex",
  "http_client",
  "ignore",
@@ -378,6 +379,7 @@ dependencies = [
  "url",
  "uuid",
  "virtual-fs",
+ "warp_cli",
  "warp_core",
  "warp_errors",
  "warp_graphql",
@@ -387,6 +389,7 @@ dependencies = [
  "warpui_core",
  "warpui_extras",
  "watcher",
+ "yaml-rust",
 ]
 
 [[package]]
@@ -15335,6 +15338,7 @@ dependencies = [
  "getrandom 0.2.16",
  "getset",
  "git2",
+ "globset",
  "gloo",
  "handlebars",
  "hashbrown 0.17.1",

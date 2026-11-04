@@ -96,6 +96,17 @@ impl SetupClientEventReporter {
         step: SetupStep,
         future: impl Future<Output = T>,
     ) -> T {
+        self.record_value_with_error_flag(step, future, |_| false)
+            .await
+    }
+
+    /// Like [`Self::record_value`], with the metric's error flag derived from the value.
+    pub(crate) async fn record_value_with_error_flag<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T>,
+        is_error: impl FnOnce(&T) -> bool,
+    ) -> T {
         let (step_name, span) = self.start_step(step);
 
         let start_timestamp = Utc::now();
@@ -106,7 +117,7 @@ impl SetupClientEventReporter {
             step_name,
             start_timestamp,
             finish_timestamp,
-            false,
+            is_error(&value),
         );
         value
     }
@@ -243,6 +254,7 @@ pub(crate) enum SetupStep {
     EnvironmentSkillLoading,
     GlobalSkillLoading,
     SkillsDirsLoading,
+    SkillReferenceResolution,
     ConversationResumeLoading,
     ThirdPartyHarnessPreparation,
     /// Launching the harness through command startup and ACP runner initialization, including
@@ -296,6 +308,8 @@ impl SetupStep {
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
+            // Skill references are checked out with the claimed task's credentials.
+            | Self::SkillReferenceResolution
             // Pre-warming is Oz-only, so these are unreachable from a standby.
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart
@@ -381,6 +395,9 @@ impl SetupStep {
             }
             Self::SkillsDirsLoading => {
                 span_and_name!("setup_skills_dirs_loading")
+            }
+            Self::SkillReferenceResolution => {
+                span_and_name!("setup_skill_reference_resolution")
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")
