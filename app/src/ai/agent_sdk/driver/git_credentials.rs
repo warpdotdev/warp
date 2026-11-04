@@ -147,6 +147,49 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Atomically replace `path` with `content` through a uniquely named, owner-only (0600 on Unix)
+/// temporary file in the same directory, so concurrent writers never share a temporary path.
+fn replace_secret_file(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let dir = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?;
+    let file_name = path
+        .file_name()
+        .with_context(|| format!("{} has no file name", path.display()))?
+        .to_string_lossy();
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(&format!(".{}.tmp-", file_name.trim_start_matches('.')))
+        .tempfile_in(dir)
+        .with_context(|| format!("Failed to create a temporary file in {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        temp_file
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions on a temporary file in {}",
+                    dir.display()
+                )
+            })?;
+    }
+    temp_file
+        .write_all(content.as_bytes())
+        .with_context(|| format!("Failed to write a temporary file in {}", dir.display()))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to sync a temporary file in {}", dir.display()))?;
+    temp_file
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to replace {}", path.display()))?;
+    Ok(())
+}
+
 fn azure_devops_auth_dir(home: &Path) -> PathBuf {
     home.join(".warp").join(AZURE_DEVOPS_AUTH_DIR)
 }
@@ -173,43 +216,7 @@ fn prepare_azure_devops_auth_dir(home: &Path) -> Result<PathBuf> {
 }
 
 fn write_azure_cli_token(auth_dir: &Path, token: &str) -> Result<()> {
-    use std::io::Write as _;
-
-    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
-    let mut temp_file = tempfile::Builder::new()
-        .prefix(&format!(".{AZURE_DEVOPS_TOKEN_FILENAME}.tmp-"))
-        .tempfile_in(auth_dir)
-        .with_context(|| {
-            format!(
-                "Failed to create a temporary token in {}",
-                auth_dir.display()
-            )
-        })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        temp_file
-            .as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))
-            .with_context(|| {
-                format!(
-                    "Failed to set permissions on temporary token in {}",
-                    auth_dir.display()
-                )
-            })?;
-    }
-    temp_file
-        .write_all(token.as_bytes())
-        .with_context(|| format!("Failed to write temporary token in {}", auth_dir.display()))?;
-    temp_file
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("Failed to sync temporary token in {}", auth_dir.display()))?;
-    temp_file
-        .persist(&token_path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("Failed to replace {}", token_path.display()))?;
-    Ok(())
+    replace_secret_file(&auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME), token)
 }
 
 fn shell_single_quote(value: &Path) -> String {
@@ -398,26 +405,15 @@ fn merge_git_credentials_file_content(existing: &str, credentials: &[GitCredenti
 /// - `https://x-access-token:{token}@{host}` for service-account tokens
 ///
 /// The write is done atomically: a temporary file is written then renamed.
-fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
+fn write_git_credentials_file(credentials: &[GitCredential], home: &Path) -> Result<()> {
     if credentials.is_empty() {
         return Ok(());
     }
 
-    let home = home_dir()?;
     let path = home.join(".git-credentials");
-    let tmp_path = home.join(".git-credentials.tmp");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let content = merge_git_credentials_file_content(&existing, credentials);
-    write_secret_file(&tmp_path, &content)?;
-    std::fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    replace_secret_file(&path, &content)
 }
 
 /// The directory `gh` reads its config from, in `gh`'s own precedence order. On Windows `gh`
@@ -470,7 +466,6 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Re
     std::fs::create_dir_all(gh_config_dir)
         .with_context(|| format!("Failed to create {}", gh_config_dir.display()))?;
     let path = gh_config_dir.join(GH_HOSTS_FILENAME);
-    let tmp_path = gh_config_dir.join(format!("{GH_HOSTS_FILENAME}.tmp"));
 
     let mut yaml = String::new();
     for cred in github_credentials {
@@ -482,16 +477,7 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], gh_config_dir: &Path) -> Re
         }
     }
 
-    write_secret_file(&tmp_path, &yaml)?;
-    std::fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    replace_secret_file(&path, &yaml)
 }
 
 /// Write `~/.config/glab-cli/config.yml` so the `glab` CLI is authenticated.
@@ -518,7 +504,6 @@ fn write_glab_config(credentials: &[GitCredential], home: &std::path::Path) -> R
     std::fs::create_dir_all(&glab_config_dir)
         .with_context(|| format!("Failed to create {}", glab_config_dir.display()))?;
     let path = glab_config_dir.join(GLAB_CONFIG_FILENAME);
-    let tmp_path = glab_config_dir.join(format!("{GLAB_CONFIG_FILENAME}.tmp"));
 
     let mut yaml = String::new();
     yaml.push_str("hosts:\n");
@@ -529,16 +514,7 @@ fn write_glab_config(credentials: &[GitCredential], home: &std::path::Path) -> R
         yaml.push_str("        api_protocol: https\n");
     }
 
-    write_secret_file(&tmp_path, &yaml)?;
-    std::fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    replace_secret_file(&path, &yaml)
 }
 
 /// Formats non-sensitive metadata for verifying local credential injection.
@@ -586,7 +562,7 @@ pub(crate) fn write_git_credentials_with_failures(
     }
     let home = home_dir()?;
     let outcomes = [
-        write_git_credentials_file(credentials),
+        write_git_credentials_file(credentials, &home),
         write_gh_hosts_yml(credentials, &gh_config_dir(&home)),
         write_glab_config(credentials, &home),
         write_azure_cli_auth(credentials, &home),

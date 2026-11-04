@@ -419,15 +419,9 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
         &gh_config_dir,
     )?;
 
-    let hosts_path = gh_config_dir.join(GH_HOSTS_FILENAME);
-    assert!(hosts_path.exists());
-    assert!(
-        !gh_config_dir
-            .join(format!("{GH_HOSTS_FILENAME}.tmp"))
-            .exists()
-    );
+    assert_eq!(sorted_file_names(&gh_config_dir)?, [GH_HOSTS_FILENAME]);
 
-    let hosts = std::fs::read_to_string(hosts_path)?;
+    let hosts = std::fs::read_to_string(gh_config_dir.join(GH_HOSTS_FILENAME))?;
     assert!(hosts.contains("github.com:"));
     assert!(hosts.contains("    oauth_token: token"));
     assert!(hosts.contains("    git_protocol: https"));
@@ -577,6 +571,75 @@ fn gitlab_credential() -> GitCredential {
         email: None,
         host: "gitlab.com".to_string(),
     }
+}
+
+fn sorted_file_names(dir: &Path) -> Result<Vec<String>> {
+    let mut names = std::fs::read_dir(dir)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+    Ok(names)
+}
+
+/// Direct-backend sandboxes on one host share `HOME` and `GH_CONFIG_DIR`, so concurrently starting
+/// tasks write the same credential stores at the same time.
+#[test]
+fn concurrent_credential_store_writes_share_directories_safely() -> Result<()> {
+    const WRITERS: usize = 8;
+    const WRITES_PER_WRITER: usize = 25;
+    let home = tempfile::tempdir()?;
+    let home = home.path();
+    let gh_config_dir = home.join(".config").join("gh");
+    let barrier = std::sync::Barrier::new(WRITERS);
+
+    std::thread::scope(|scope| {
+        let writers = (0..WRITERS)
+            .map(|writer| {
+                let barrier = &barrier;
+                let gh_config_dir = &gh_config_dir;
+                scope.spawn(move || -> Result<()> {
+                    let credentials = [
+                        GitCredential {
+                            token: format!("github-token-{writer}"),
+                            ..github_credential()
+                        },
+                        GitCredential {
+                            token: format!("gitlab-token-{writer}"),
+                            ..gitlab_credential()
+                        },
+                    ];
+                    barrier.wait();
+                    for _ in 0..WRITES_PER_WRITER {
+                        write_git_credentials_file(&credentials, home)?;
+                        write_gh_hosts_yml(&credentials, gh_config_dir)?;
+                        write_glab_config(&credentials, home)?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect::<Vec<_>>();
+        writers
+            .into_iter()
+            .try_for_each(|writer| writer.join().expect("credential writer panicked"))
+    })?;
+
+    assert_eq!(sorted_file_names(home)?, [".config", ".git-credentials"]);
+    assert_eq!(sorted_file_names(&gh_config_dir)?, [GH_HOSTS_FILENAME]);
+    assert_eq!(
+        sorted_file_names(&home.join(".config").join("glab-cli"))?,
+        [GLAB_CONFIG_FILENAME]
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join(".git-credentials"))?
+            .lines()
+            .count(),
+        2
+    );
+    assert!(
+        std::fs::read_to_string(gh_config_dir.join(GH_HOSTS_FILENAME))?
+            .contains("oauth_token: github-token-")
+    );
+    Ok(())
 }
 
 #[test]
@@ -976,15 +1039,9 @@ fn write_glab_config_uses_glab_cli_filename() -> Result<()> {
         temp_dir.path(),
     )?;
 
-    let config_path = glab_config_dir.join(GLAB_CONFIG_FILENAME);
-    assert!(config_path.exists());
-    assert!(
-        !glab_config_dir
-            .join(format!("{GLAB_CONFIG_FILENAME}.tmp"))
-            .exists()
-    );
+    assert_eq!(sorted_file_names(&glab_config_dir)?, [GLAB_CONFIG_FILENAME]);
 
-    let config = std::fs::read_to_string(config_path)?;
+    let config = std::fs::read_to_string(glab_config_dir.join(GLAB_CONFIG_FILENAME))?;
     assert!(config.contains("hosts:"));
     assert!(config.contains("    gitlab.com:"));
     assert!(config.contains("        token: gitlab-token"));
