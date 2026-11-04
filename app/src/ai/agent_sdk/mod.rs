@@ -2209,7 +2209,7 @@ impl AgentDriverRunner {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum CommandAuthentication {
+pub enum CommandAuthentication {
     PendingApiKey(String),
     RefreshUser,
 }
@@ -2352,14 +2352,13 @@ fn launch_command(
     Ok(())
 }
 
-/// Subscribes to auth events, authenticates, and dispatches the command once
+/// Subscribes to auth events, authenticates, and execute the closure once
 /// auth completes. Assumes IAP access (if applicable) is already established.
-fn authenticate_and_dispatch(
+pub fn authenticate_and_execute(
     ctx: &mut AppContext,
-    command: CliCommand,
-    global_options: GlobalOptions,
-    authentication: CommandAuthentication,
     parent_span: tracing::Span,
+    authentication: CommandAuthentication,
+    mut execute: impl FnMut(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
@@ -2373,7 +2372,7 @@ fn authenticate_and_dispatch(
         match event {
             AuthManagerEvent::AuthComplete => {
                 dispatched = true;
-                if let Err(err) = dispatch_command(ctx, command.clone(), global_options.clone()) {
+                if let Err(err) = execute(ctx) {
                     report_fatal_error(err, ctx);
                 }
             }
@@ -2402,6 +2401,16 @@ fn authenticate_and_dispatch(
         }
         CommandAuthentication::RefreshUser => auth_manager.refresh_user(ctx),
     });
+}
+
+fn authenticate_and_dispatch(
+    ctx: &mut AppContext,
+    command: CliCommand,
+    global_options: GlobalOptions,
+    authentication: CommandAuthentication,
+    parent_span: tracing::Span,
+) {
+    authenticate_and_execute(ctx, parent_span, authentication, move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()))
 }
 
 /// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI
