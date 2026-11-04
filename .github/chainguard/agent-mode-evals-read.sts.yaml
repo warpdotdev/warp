@@ -1,0 +1,6 @@
+issuer: https://token.actions.githubusercontent.com
+subject_pattern: repo:warpdotdev/agent-mode-evals:.*
+claim_pattern:
+  job_workflow_ref: warpdotdev/agent-mode-evals/\.github/workflows/(ci|passive-code-diff-evals|run-request-replay-evals|swe-bench|swe-bench-single-test|warp-bench)\.yml@.+
+permissions:
+  contents: read
