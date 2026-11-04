@@ -48,6 +48,10 @@ pub(super) struct HarnessManifest {
     /// The built-in default this manifest came from; `None` for a sidecar, whose program was
     /// verified when the manifest was read.
     pub(super) default: Option<DefaultAdapter>,
+    /// For a built-in default: whether the harness's sidecar directory was mounted without a
+    /// manifest, which means the worker mounted the terminal CLI image for an ACP run. Always
+    /// `false` for a sidecar.
+    pub(super) sidecar_without_manifest: bool,
     pub(super) auth_check_command: Option<String>,
     pub(super) runtime_error_patterns: Vec<String>,
 }
@@ -134,9 +138,8 @@ fn discover(
     override_dir: Option<&Path>,
     mounts_dir: &Path,
 ) -> Result<HarnessManifest> {
-    let mount_path = mounts_dir
-        .join(format!("{harness}-cli-sidecar"))
-        .join(MANIFEST_FILE);
+    let mount_dir = mounts_dir.join(format!("{harness}-cli-sidecar"));
+    let mount_path = mount_dir.join(MANIFEST_FILE);
     let path = if let Some(dir) = override_dir {
         dir.join(MANIFEST_FILE)
     } else if mount_path
@@ -145,8 +148,20 @@ fn discover(
     {
         mount_path
     } else {
-        log::info!("Using built-in ACP defaults for {harness}");
+        let sidecar_without_manifest = mount_dir.is_dir();
+        if sidecar_without_manifest {
+            log::info!(
+                "{} has no ACP manifest; using built-in ACP defaults for {harness}",
+                mount_dir.display()
+            );
+        } else {
+            log::info!("Using built-in ACP defaults for {harness}");
+        }
         return default_manifest(harness)
+            .map(|manifest| HarnessManifest {
+                sidecar_without_manifest,
+                ..manifest
+            })
             .with_context(|| format!("The {harness} harness cannot be driven over ACP."));
     };
     let dir = absolute(path.parent().context("Manifest has no parent directory")?)?;
@@ -157,6 +172,7 @@ fn discover(
     Ok(HarnessManifest {
         launch: manifest.acp,
         default: None,
+        sidecar_without_manifest: false,
         auth_check_command: manifest.auth.check_command,
         runtime_error_patterns: manifest.auth.runtime_error_patterns,
     })
@@ -172,6 +188,7 @@ fn default_manifest(harness: Harness) -> Option<HarnessManifest> {
             args: adapter.args.iter().map(|arg| (*arg).to_owned()).collect(),
         },
         default: Some(adapter),
+        sidecar_without_manifest: false,
         auth_check_command: pty.and_then(ThirdPartyHarness::auth_check_command),
         runtime_error_patterns: pty
             .map(ThirdPartyHarness::runtime_error_patterns_for_run)

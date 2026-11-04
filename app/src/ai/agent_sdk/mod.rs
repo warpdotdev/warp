@@ -762,6 +762,7 @@ fn build_execution_task_and_options(
         }),
         selected_harness,
         harness_transport,
+        harness_transport_fallback: None,
         third_party_harness_model_config,
         team_scope: None,
         bedrock_oidc_credentials: None,
@@ -1063,6 +1064,7 @@ impl AgentDriverRunner {
             if let Some(reason) = transport_fallback {
                 Self::note_transport_fallback(&foreground, task.harness.harness(), reason).await;
             }
+            driver_options.harness_transport_fallback = transport_fallback;
 
             // Validate that the third-party harness is installed and authed.
             if let HarnessKind::ThirdParty(harness) = &task.harness {
@@ -1082,7 +1084,7 @@ impl AgentDriverRunner {
                                 &ctx.background_executor(),
                                 ServerApiProvider::as_ref(ctx).get_harness_support_client(),
                                 transport,
-                                transport_fallback,
+                                transport_fallback.map(driver::harness::TransportFallbackReason::as_str),
                             );
                         })
                         .await?;
@@ -1579,6 +1581,7 @@ impl AgentDriverRunner {
                     computer_use_config: None,
                     selected_harness: args.harness,
                     harness_transport: args.harness_transport.unwrap_or_default(),
+                    harness_transport_fallback: None,
                     third_party_harness_model_config,
                     team_scope: None,
                     bedrock_oidc_credentials: None,
@@ -2011,7 +2014,7 @@ impl AgentDriverRunner {
     async fn note_transport_fallback(
         foreground: &ModelSpawner<Self>,
         harness: Harness,
-        reason: &'static str,
+        reason: driver::harness::TransportFallbackReason,
     ) {
         log::info!(
             "No ACP adapter for the {harness} harness in this sandbox ({reason}); driving it over a PTY"
@@ -2022,7 +2025,7 @@ impl AgentDriverRunner {
                 use warp_core::telemetry::TelemetryEvent as _;
                 let event = driver::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
                     harness: harness_name,
-                    reason,
+                    reason: reason.as_str(),
                 };
                 crate::send_telemetry_from_app_ctx!(event, ctx);
             })

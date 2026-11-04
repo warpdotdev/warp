@@ -275,12 +275,13 @@ impl AgentDriver {
                     let event =
                         super::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
                             harness: harness_name,
-                            reason,
+                            reason: reason.as_str(),
                         };
                     crate::send_telemetry_from_app_ctx!(event, ctx);
                 })
                 .await;
         }
+        options.harness_transport_fallback = transport_fallback;
         if let HarnessKind::ThirdParty(harness) = &task.harness {
             harness.validate()?;
             let transport = options.harness_transport;
@@ -290,7 +291,7 @@ impl AgentDriver {
                         &ctx.background_executor(),
                         ServerApiProvider::as_ref(ctx).get_harness_support_client(),
                         transport,
-                        transport_fallback,
+                        transport_fallback.map(super::harness::TransportFallbackReason::as_str),
                     );
                 })
                 .await?;

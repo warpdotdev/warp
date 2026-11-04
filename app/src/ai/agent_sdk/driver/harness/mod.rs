@@ -207,7 +207,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// Whether the ACP adapter this harness would launch is present in the sandbox: a sidecar
     /// manifest, or any of the default adapter's names on the oz process PATH. `None` for a
     /// harness that is not driven over ACP, which never falls back.
-    fn acp_adapter_available(&self) -> Option<bool> {
+    fn acp_adapter(&self) -> Option<AcpAdapter> {
         None
     }
 
@@ -370,9 +370,53 @@ pub(crate) fn harness_kind(
     }
 }
 
-/// Why a run the server requested over ACP is driven over a PTY instead. Reported to the
+/// Whether the ACP adapter a harness would launch is in the sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AcpAdapter {
+    /// A sidecar manifest names it, or one of the default adapter's names is on the oz process
+    /// PATH.
+    Available,
+    /// Neither, for the given reason.
+    Missing(TransportFallbackReason),
+}
+
+/// Why a run the server requested over ACP is driven over a PTY instead: no sidecar manifest
+/// and no adapter on PATH, told apart by whether a sidecar was mounted at all. Reported to the
 /// server as a bounded reason, so keep the set small.
-pub(crate) const TRANSPORT_FALLBACK_NO_ADAPTER: &str = "no_adapter";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransportFallbackReason {
+    /// No coding CLI sidecar is mounted for the harness. Expected on a self-hosted Direct
+    /// backend; elsewhere, such as on a native macOS or Windows image, the image lacks the
+    /// adapter.
+    NoSidecar,
+    /// A sidecar directory is mounted for the harness but has no ACP manifest: the worker
+    /// mounted the terminal CLI image for an ACP run, which is a misconfiguration.
+    SidecarWithoutAdapter,
+}
+
+impl TransportFallbackReason {
+    /// The value reported to the server and in telemetry.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NoSidecar => "no_sidecar",
+            Self::SidecarWithoutAdapter => "sidecar_without_adapter",
+        }
+    }
+
+    /// What the sandbox lacks, as the notice in the session puts it.
+    fn cause(self) -> &'static str {
+        match self {
+            Self::NoSidecar => "no ACP sidecar is mounted",
+            Self::SidecarWithoutAdapter => "the mounted sidecar has no ACP adapter",
+        }
+    }
+}
+
+impl fmt::Display for TransportFallbackReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Decides whether a run of `harness` over `transport` falls back to a PTY given whether the
 /// ACP adapter is present. Only Claude Code and Codex have a PTY to fall back to: Pi has no
@@ -380,14 +424,40 @@ pub(crate) const TRANSPORT_FALLBACK_NO_ADAPTER: &str = "no_adapter";
 pub(crate) fn transport_fallback_reason(
     harness: Harness,
     transport: HarnessTransport,
-    adapter_available: bool,
-) -> Option<&'static str> {
-    match (transport, harness) {
-        (HarnessTransport::Acp, Harness::Claude | Harness::Codex) if !adapter_available => {
-            Some(TRANSPORT_FALLBACK_NO_ADAPTER)
+    adapter: AcpAdapter,
+) -> Option<TransportFallbackReason> {
+    match (transport, harness, adapter) {
+        (HarnessTransport::Acp, Harness::Claude | Harness::Codex, AcpAdapter::Missing(reason)) => {
+            Some(reason)
         }
         _ => None,
     }
+}
+
+/// The line the session shows when a run of `harness` falls back to a PTY, so whoever watches
+/// it knows why the run renders in the terminal and what it cannot do. It names the cause in
+/// the words the self-hosting troubleshooting docs look for.
+pub(crate) fn transport_fallback_notice(
+    harness: Harness,
+    reason: TransportFallbackReason,
+) -> String {
+    format!(
+        "oz: {} and no ACP adapter is on PATH, so {} runs in the terminal instead of over ACP. \
+         Follow-ups to this run cannot carry file attachments.",
+        reason.cause(),
+        harness.display_name(),
+    )
+}
+
+/// A command that prints [`transport_fallback_notice`] in the session. The notice is single
+/// quoted, which every shell the driver runs (POSIX shells, fish, PowerShell) prints verbatim,
+/// so any single quote is dropped from it first.
+pub(crate) fn transport_fallback_notice_command(
+    harness: Harness,
+    reason: TransportFallbackReason,
+) -> String {
+    let notice = transport_fallback_notice(harness, reason).replace('\'', "");
+    format!("echo '{notice}'")
 }
 
 /// Replaces an ACP harness whose adapter is absent with the PTY harness for the same CLI, and
@@ -397,14 +467,14 @@ pub(crate) fn transport_fallback_reason(
 pub(crate) fn apply_transport_fallback(
     kind: &mut HarnessKind,
     transport: &mut HarnessTransport,
-) -> Result<Option<&'static str>, AgentDriverError> {
+) -> Result<Option<TransportFallbackReason>, AgentDriverError> {
     let HarnessKind::ThirdParty(harness) = &*kind else {
         return Ok(None);
     };
-    let Some(adapter_available) = harness.acp_adapter_available() else {
+    let Some(adapter) = harness.acp_adapter() else {
         return Ok(None);
     };
-    let reason = transport_fallback_reason(harness.harness(), *transport, adapter_available);
+    let reason = transport_fallback_reason(harness.harness(), *transport, adapter);
     if reason.is_some() {
         *kind = harness_kind(harness.harness(), HarnessTransport::Pty)?;
         *transport = HarnessTransport::Pty;

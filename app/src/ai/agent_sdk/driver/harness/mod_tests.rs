@@ -315,39 +315,96 @@ fn cli_activity_refreshes_metadata_without_saving_until_turn_completion() {
 
 #[test]
 fn transport_fallback_only_when_an_acp_run_has_no_adapter() {
-    use super::{TRANSPORT_FALLBACK_NO_ADAPTER, transport_fallback_reason};
+    use super::{AcpAdapter, TransportFallbackReason, transport_fallback_reason};
+
+    let no_sidecar = AcpAdapter::Missing(TransportFallbackReason::NoSidecar);
+    let empty_sidecar = AcpAdapter::Missing(TransportFallbackReason::SidecarWithoutAdapter);
 
     // A sidecar manifest, or an adapter on PATH, keeps the run on ACP.
-    assert_eq!(
-        transport_fallback_reason(Harness::Claude, HarnessTransport::Acp, true),
-        None
-    );
-    assert_eq!(
-        transport_fallback_reason(Harness::Codex, HarnessTransport::Acp, true),
-        None
-    );
-    // No adapter at all: the CLI harnesses fall back to their PTY transport.
-    assert_eq!(
-        transport_fallback_reason(Harness::Claude, HarnessTransport::Acp, false),
-        Some(TRANSPORT_FALLBACK_NO_ADAPTER)
-    );
-    assert_eq!(
-        transport_fallback_reason(Harness::Codex, HarnessTransport::Acp, false),
-        Some(TRANSPORT_FALLBACK_NO_ADAPTER)
-    );
+    for harness in [Harness::Claude, Harness::Codex] {
+        assert_eq!(
+            transport_fallback_reason(harness, HarnessTransport::Acp, AcpAdapter::Available),
+            None
+        );
+    }
+    // No adapter at all: the CLI harnesses fall back to their PTY transport, saying whether a
+    // sidecar was mounted.
+    for harness in [Harness::Claude, Harness::Codex] {
+        assert_eq!(
+            transport_fallback_reason(harness, HarnessTransport::Acp, no_sidecar),
+            Some(TransportFallbackReason::NoSidecar)
+        );
+        assert_eq!(
+            transport_fallback_reason(harness, HarnessTransport::Acp, empty_sidecar),
+            Some(TransportFallbackReason::SidecarWithoutAdapter)
+        );
+    }
     // A PTY run never falls back, and harnesses without a PTY are left alone.
     assert_eq!(
-        transport_fallback_reason(Harness::Claude, HarnessTransport::Pty, false),
+        transport_fallback_reason(Harness::Claude, HarnessTransport::Pty, no_sidecar),
         None
     );
     assert_eq!(
-        transport_fallback_reason(Harness::Pi, HarnessTransport::Acp, false),
+        transport_fallback_reason(Harness::Pi, HarnessTransport::Acp, no_sidecar),
         None
     );
     assert_eq!(
-        transport_fallback_reason(Harness::Gemini, HarnessTransport::Acp, false),
+        transport_fallback_reason(Harness::Gemini, HarnessTransport::Acp, empty_sidecar),
         None
     );
+}
+
+#[test]
+fn transport_fallback_reasons_have_stable_wire_values() {
+    use super::TransportFallbackReason;
+
+    // warp-server accepts exactly these values from report-transport.
+    assert_eq!(TransportFallbackReason::NoSidecar.as_str(), "no_sidecar");
+    assert_eq!(
+        TransportFallbackReason::SidecarWithoutAdapter.as_str(),
+        "sidecar_without_adapter"
+    );
+    assert_eq!(TransportFallbackReason::NoSidecar.to_string(), "no_sidecar");
+}
+
+#[test]
+fn transport_fallback_notice_names_the_harness_and_the_cause() {
+    use super::{TransportFallbackReason, transport_fallback_notice};
+
+    let notice = transport_fallback_notice(Harness::Claude, TransportFallbackReason::NoSidecar);
+    assert_eq!(
+        notice,
+        "oz: no ACP sidecar is mounted and no ACP adapter is on PATH, so Claude Code runs in the \
+         terminal instead of over ACP. Follow-ups to this run cannot carry file attachments."
+    );
+    let notice = transport_fallback_notice(
+        Harness::Codex,
+        TransportFallbackReason::SidecarWithoutAdapter,
+    );
+    assert!(
+        notice.contains("the mounted sidecar has no ACP adapter"),
+        "{notice}"
+    );
+    assert!(notice.contains(Harness::Codex.display_name()), "{notice}");
+}
+
+#[test]
+fn transport_fallback_notice_command_echoes_the_notice_single_quoted() {
+    use super::{
+        TransportFallbackReason, transport_fallback_notice, transport_fallback_notice_command,
+    };
+
+    for harness in [Harness::Claude, Harness::Codex] {
+        for reason in [
+            TransportFallbackReason::NoSidecar,
+            TransportFallbackReason::SidecarWithoutAdapter,
+        ] {
+            let command = transport_fallback_notice_command(harness, reason);
+            let notice = transport_fallback_notice(harness, reason);
+            assert!(!notice.contains('\''), "{notice}");
+            assert_eq!(command, format!("echo '{notice}'"));
+        }
+    }
 }
 
 #[test]
