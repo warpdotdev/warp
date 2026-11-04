@@ -1,6 +1,77 @@
+#[cfg(feature = "tui")]
+use std::cell::Cell;
+#[cfg(feature = "tui")]
+use std::rc::Rc;
+
 use clap::Parser as _;
 
 use super::*;
+#[cfg(feature = "tui")]
+use crate::auth::credentials::Credentials;
+
+#[cfg(feature = "tui")]
+fn initialize_tui_command_auth(app: &mut App) {
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.update(|ctx| {
+        AuthStateProvider::as_ref(ctx)
+            .get()
+            .set_credentials(Some(Credentials::Bearer("test-bearer".to_owned())));
+    });
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|ctx| {
+        IapManager::new(None, Box::new(|_| Box::pin(async { None })), None, ctx)
+    });
+}
+
+#[cfg(feature = "tui")]
+#[test]
+fn tui_command_preflight_hit_skips_authentication_and_execution() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            dispatch_tui_cli_command(
+                Box::new(|_| panic!("cache hit must not execute the network command")),
+                true,
+                Some(Box::new(|ctx| {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    true
+                })),
+                ctx,
+            );
+        });
+
+        // No auth models are registered: reaching the auth gate would panic.
+        assert!(app.termination_result().is_none());
+    });
+}
+
+#[cfg(feature = "tui")]
+#[test]
+fn tui_command_preflight_miss_waits_for_authentication() {
+    App::test((), |mut app| async move {
+        initialize_tui_command_auth(&mut app);
+        let runs = Rc::new(Cell::new(0));
+        let runs_for_command = runs.clone();
+        app.update(|ctx| {
+            dispatch_tui_cli_command(
+                Box::new(move |_| runs_for_command.set(runs_for_command.get() + 1)),
+                true,
+                Some(Box::new(|_| false)),
+                ctx,
+            );
+        });
+
+        assert_eq!(runs.get(), 0);
+
+        AuthManager::handle(&app).update(&mut app, |_, ctx| {
+            ctx.emit(AuthManagerEvent::AuthComplete);
+            ctx.emit(AuthManagerEvent::AuthComplete);
+        });
+
+        assert_eq!(runs.get(), 1);
+        assert!(app.termination_result().is_none());
+    });
+}
 
 fn command_line_launch_mode(arguments: &[&str]) -> LaunchMode {
     let args =

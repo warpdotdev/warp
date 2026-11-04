@@ -161,6 +161,9 @@ fn build_jwt_cache_key(ctx: &AppContext, factory_id: &str) -> Result<String> {
 }
 
 fn read_cached_git_jwt(ctx: &AppContext, factory_id: &str) -> Option<String> {
+    if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+        return None;
+    }
     let cache_key = build_jwt_cache_key(ctx, factory_id).ok()?;
 
     let cached = ctx
@@ -219,41 +222,46 @@ pub fn run() -> Result<()> {
                 warp::features::init_feature_flags();
                 warp::settings::dump_settings_schema(output_path.as_deref())
             }
-            TuiCommand::GetGitAccessJwt { factory_id } => warp::run_tui_cli_command(
-                Box::new(move |ctx| {
-                    let cached_token = read_cached_git_jwt(ctx, &factory_id);
-                    if let Some(cached_token) = cached_token {
-                        println!("{}", cached_token);
+            TuiCommand::GetGitAccessJwt { factory_id } => {
+                let cached_factory_id = factory_id.clone();
+                warp::run_tui_cli_command(
+                    Box::new(move |ctx| {
+                        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+                        let app = ctx.weak_app();
+                        ctx.foreground_executor()
+                            .spawn(async move {
+                                let result =
+                                    factory.get_factory_git_token(factory_id.clone()).await;
+                                let Some(mut app) = app.upgrade() else {
+                                    return;
+                                };
+                                app.update(|ctx| match result {
+                                    Ok(response) => {
+                                        let _ = cache_git_jwt_response(ctx, &response, &factory_id);
+                                        println!("{}", response.token);
+                                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                                    }
+                                    Err(error) => {
+                                        ctx.terminate_app(
+                                            TerminationMode::ForceTerminate,
+                                            Some(Err(error)),
+                                        );
+                                    }
+                                });
+                            })
+                            .detach();
+                    }),
+                    true,
+                    Some(Box::new(move |ctx| {
+                        let Some(token) = read_cached_git_jwt(ctx, &cached_factory_id) else {
+                            return false;
+                        };
+                        println!("{token}");
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                        return;
-                    }
-
-                    let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
-                    let app = ctx.weak_app();
-                    ctx.foreground_executor()
-                        .spawn(async move {
-                            let result = factory.get_factory_git_token(factory_id.clone()).await;
-                            let Some(mut app) = app.upgrade() else {
-                                return;
-                            };
-                            app.update(|ctx| match result {
-                                Ok(response) => {
-                                    let _ = cache_git_jwt_response(ctx, &response, &factory_id);
-                                    println!("{}", response.token);
-                                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                                }
-                                Err(error) => {
-                                    ctx.terminate_app(
-                                        TerminationMode::ForceTerminate,
-                                        Some(Err(error)),
-                                    );
-                                }
-                            });
-                        })
-                        .detach();
-                }),
-                true,
-            ),
+                        true
+                    })),
+                )
+            }
         };
     }
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
@@ -302,6 +310,7 @@ pub fn run() -> Result<()> {
                 }
             }),
             false,
+            None,
         );
     }
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
