@@ -558,11 +558,11 @@ def assert_oversized_trees_are_reported() -> None:
 
 
 def assert_file_count_boundary() -> None:
-    files = {f"runners/build-{index}.yaml": "{}" for index in range(1022)}
+    files = {f"runners/build-{index}.yaml": "{}" for index in range(2046)}
     with factory_tree(**files) as root:
         with fake_server(CLEAN_RESPONSE) as server:
             result = run_validator(root, server.url)
-            if result.returncode != EXIT_VALID or len(server.submitted_files()) != 1024:
+            if result.returncode != EXIT_VALID or len(server.submitted_files()) != 2048:
                 raise RuntimeError("the file-count limit was not accepted")
         (root / "runners" / "overflow.yaml").write_text("{}", encoding="utf-8")
         with fake_server(CLEAN_RESPONSE) as server:
