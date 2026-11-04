@@ -482,13 +482,15 @@ fn timeline_payload_has_the_agreed_shape() {
     let mut report = sample_report();
     assert_eq!(
         report.timeline_payload(),
-        json!({"references": [
+        json!({"file_count": 2, "references": [
             {
                 "reference_file": "agents/triage/skills/broken.yaml",
                 "level": "agent",
                 "agent": "triage",
                 "loaded": [],
+                "loaded_count": 0,
                 "unresolved": [{"entry": "", "reason": "invalid_reference_file"}],
+                "unresolved_count": 1,
             },
             {
                 "reference_file": "skills/shared.yaml",
@@ -501,7 +503,9 @@ fn timeline_payload_has_the_agreed_shape() {
                     "resolved_sha": SHA,
                 },
                 "loaded": [{"name": "safe-secrets", "path": ".agents/skills/safe-secrets"}],
+                "loaded_count": 1,
                 "unresolved": [{"entry": "legacy-*", "reason": "no_match"}],
+                "unresolved_count": 1,
             },
         ]})
     );
@@ -514,17 +518,18 @@ fn timeline_payload_has_the_agreed_shape() {
 }
 
 #[test]
-fn timeline_payload_stays_bounded_and_drops_loaded_skills_first() {
+fn timeline_payload_stays_bounded_keeps_counts_and_drops_loaded_skills_first() {
     let mut file = sample_report().references.remove(1);
     file.reference_file = "x".repeat(4 * MAX_RECORDED_STRING_BYTES);
     file.loaded = vec![file.loaded[0].clone(); 2 * MAX_RECORDED_ENTRIES];
     file.unresolved = vec![file.unresolved[0].clone(); 10];
-    let loaded_counts = |files| {
+    let loaded_lengths = |files| {
         let payload = SkillSourcesReport {
             references: vec![file.clone(); files],
         }
         .timeline_payload();
         assert!(payload.to_string().len() <= MAX_RECORDED_PAYLOAD_BYTES);
+        assert_eq!(payload["file_count"], files);
         let references = payload["references"].as_array().unwrap();
         references
             .iter()
@@ -532,15 +537,17 @@ fn timeline_payload_stays_bounded_and_drops_loaded_skills_first() {
                 let reference_file = file["reference_file"].as_str().unwrap();
                 assert_eq!(reference_file.len(), MAX_RECORDED_STRING_BYTES);
                 assert_eq!(file["unresolved"].as_array().unwrap().len(), 10);
+                assert_eq!(file["loaded_count"], 2 * MAX_RECORDED_ENTRIES);
+                assert_eq!(file["unresolved_count"], 10);
                 file["loaded"].as_array().unwrap().len()
             })
             .collect::<Vec<_>>()
     };
-    let full = MAX_RECORDED_ENTRIES;
-    assert_eq!(loaded_counts(4), [full, full, full, 0]);
-    let many = loaded_counts(400);
+    assert_eq!(loaded_lengths(3), [MAX_RECORDED_ENTRIES; 3]);
+    assert_eq!(loaded_lengths(4), [0; 4]);
+    let many = loaded_lengths(400);
     assert!(
-        many.len() > 10 && many.iter().all(|&count| count == 0),
+        many.len() > 10 && many.iter().all(|&length| length == 0),
         "{many:?}"
     );
 }

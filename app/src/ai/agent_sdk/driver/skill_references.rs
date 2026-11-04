@@ -75,43 +75,41 @@ impl SkillSourcesReport {
             .sum()
     }
 
-    /// The `skill_sources_resolved` timeline payload. Strings lose control characters, strings and
-    /// lists are capped, and if the record is still too large, loaded skills are dropped from the
-    /// last file back, then whole files.
+    /// The `skill_sources_resolved` timeline payload. Strings lose control characters and strings
+    /// and lists are capped, while the counts keep every file, loaded skill and unresolved entry.
+    /// If the record is still too large, every file's loaded skills are dropped, then trailing
+    /// files.
     pub fn timeline_payload(&self) -> Value {
         let mut references = self
             .references
             .iter()
             .take(MAX_RECORDED_REFERENCE_FILES)
             .map(|file| {
-                let mut file = file.clone();
-                file.loaded.truncate(MAX_RECORDED_ENTRIES);
-                file.unresolved.truncate(MAX_RECORDED_ENTRIES);
-                let mut value = serde_json::to_value(file).unwrap_or_default();
+                let mut recorded = file.clone();
+                recorded.loaded.truncate(MAX_RECORDED_ENTRIES);
+                recorded.unresolved.truncate(MAX_RECORDED_ENTRIES);
+                let mut value = serde_json::to_value(recorded).unwrap_or_default();
+                value["loaded_count"] = file.loaded.len().into();
+                value["unresolved_count"] = file.unresolved.len().into();
                 sanitize_strings(&mut value);
                 value
             })
             .collect::<Vec<_>>();
-        let mut sizes = references
-            .iter()
-            .map(|file| file.to_string().len())
-            .collect::<Vec<_>>();
-        // `{"references":[]}` plus a separator per file.
-        let fits = |sizes: &[usize]| {
-            17 + sizes.iter().map(|size| size + 1).sum::<usize>() <= MAX_RECORDED_PAYLOAD_BYTES
-        };
-        for index in (0..references.len()).rev() {
-            if fits(&sizes) {
-                break;
+        let payload = |references: &[Value]| json!({ "file_count": self.references.len(), "references": references });
+        let mut size = payload(&references).to_string().len();
+        if size > MAX_RECORDED_PAYLOAD_BYTES {
+            for file in &mut references {
+                file["loaded"] = json!([]);
             }
-            references[index]["loaded"] = json!([]);
-            sizes[index] = references[index].to_string().len();
+            size = payload(&references).to_string().len();
         }
-        while !fits(&sizes) {
-            references.pop();
-            sizes.pop();
+        while size > MAX_RECORDED_PAYLOAD_BYTES {
+            let Some(file) = references.pop() else {
+                break;
+            };
+            size -= file.to_string().len();
         }
-        json!({ "references": references })
+        payload(&references)
     }
 }
 
