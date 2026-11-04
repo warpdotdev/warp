@@ -11,6 +11,7 @@ Outputs JSON to stdout.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,9 +39,24 @@ REPO_SYNC_AUTHORS = frozenset(
 PUBLIC_PR_URL_RE = re.compile(r"https://github\.com/warpdotdev/warp/pull/(\d+)")
 
 
-def run(cmd: list[str], *, check: bool = True) -> str:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=check)
+def run(
+    cmd: list[str],
+    *,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> str:
+    result = subprocess.run(cmd, capture_output=True, text=True, check=check, env=env)
     return result.stdout.strip()
+
+
+def gh_env_for_repo(repo: str) -> dict[str, str] | None:
+    internal_token = os.environ.get("INTERNAL_GH_TOKEN")
+    if repo != INTERNAL_REPO or not internal_token:
+        return None
+
+    env = os.environ.copy()
+    env["GH_TOKEN"] = internal_token
+    return env
 
 
 def get_commits(base_ref: str, head_ref: str) -> list[str]:
@@ -108,6 +124,7 @@ def fetch_pr_data(repo: str, pr_number: int) -> dict | None:
     raw = run(
         ["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", fields],
         check=False,
+        env=gh_env_for_repo(repo),
     )
     if not raw:
         return None
@@ -122,6 +139,7 @@ def fetch_pr_commit_messages(repo: str, pr_number: int) -> list[str]:
     raw = run(
         ["gh", "api", f"repos/{repo}/pulls/{pr_number}/commits"],
         check=False,
+        env=gh_env_for_repo(repo),
     )
     if not raw:
         return []
