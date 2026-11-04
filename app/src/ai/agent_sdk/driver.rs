@@ -38,8 +38,8 @@ use warpui::{
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
-    CancellationReason, FinishedAIAgentOutput, RenderableAIError, RequestFileEditsResult,
-    TransientNetworkErrorKind,
+    BaseUserQuery, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
+    RequestFileEditsResult, TransientNetworkErrorKind,
 };
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
@@ -3167,40 +3167,50 @@ impl AgentDriver {
             .map_err(|_| AgentDriverError::InvalidRuntimeState)
             .flatten()?;
 
-        let (prompt_text, system_prompt, resumption_prompt, server_context, usage_context) =
-            match prompt {
-                AgentRunPrompt::Local(text) => {
-                    (Cow::Borrowed(text.as_str()), None, None, None, None)
-                }
-                AgentRunPrompt::ServerSide {
+        let (
+            prompt_text,
+            system_prompt,
+            resumption_prompt,
+            server_context,
+            usage_context,
+            prompt_attribution,
+        ) = match prompt {
+            AgentRunPrompt::Local(text) => {
+                (Cow::Borrowed(text.as_str()), None, None, None, None, None)
+            }
+            AgentRunPrompt::ServerSide {
+                skill,
+                attachments_dir,
+            } => {
+                let skill = skill
+                    .as_ref()
+                    .map(|parsed_skill| ResolvePromptAttachedSkill {
+                        name: parsed_skill.name.clone(),
+                        content: parsed_skill.content.clone(),
+                        path: Some(parsed_skill.path.display_path()),
+                    });
+                let request = ResolvePromptRequest {
                     skill,
-                    attachments_dir,
-                } => {
-                    let skill = skill
-                        .as_ref()
-                        .map(|parsed_skill| ResolvePromptAttachedSkill {
-                            name: parsed_skill.name.clone(),
-                            content: parsed_skill.content.clone(),
-                            path: Some(parsed_skill.path.display_path()),
-                        });
-                    let request = ResolvePromptRequest {
-                        skill,
-                        attachments_dir: attachments_dir.clone(),
-                    };
-                    let resolved = match task_id.as_ref() {
-                        Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
-                        None => server_api.resolve_prompt(request).await,
-                    }
-                    .map_err(AgentDriverError::PromptResolutionFailed)?;
-                    (
-                        Cow::Owned(resolved.prompt),
-                        resolved.system_prompt,
-                        resolved.resumption_prompt,
-                        resolved.context,
-                        resolved.harness_usage,
-                    )
+                    attachments_dir: attachments_dir.clone(),
+                };
+                let resolved = match task_id.as_ref() {
+                    Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
+                    None => server_api.resolve_prompt(request).await,
                 }
-            };
+                .map_err(AgentDriverError::PromptResolutionFailed)?;
+                (
+                    Cow::Owned(resolved.prompt),
+                    resolved.system_prompt,
+                    resolved.resumption_prompt,
+                    resolved.context,
+                    resolved.harness_usage,
+                    resolved
+                        .user_query_b64
+                        .as_deref()
+                        .and_then(BaseUserQuery::decode_b64),
+                )
+            }
+        };
 
         let (secrets, third_party_harness_model_config) = foreground
             .spawn(|me, _| {
@@ -3243,6 +3253,7 @@ impl AgentDriver {
                 system_prompt.as_deref(),
                 resumption_prompt.as_deref(),
                 server_context.as_deref(),
+                prompt_attribution.as_ref(),
                 &workspace_root,
                 &harness_working_dir,
                 task_id,

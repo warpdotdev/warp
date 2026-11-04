@@ -96,9 +96,9 @@ use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
     SavePoint, ThirdPartyHarness, install_docs_url, validate_cli_installed,
 };
-use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::{BaseUserQuery, CancellationReason};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
@@ -295,6 +295,7 @@ impl ThirdPartyHarness for AcpHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
@@ -368,6 +369,7 @@ impl ThirdPartyHarness for AcpHarness {
             harness: self.harness,
             launch: self.manifest.launch.clone(),
             user_prompt: prompt.to_owned(),
+            opening_base: prompt_attribution.cloned(),
             prompt_text,
             resumed_prompt_text,
             initial_attachments: self.initial_attachments.clone(),
@@ -465,8 +467,11 @@ struct CliSession {
 pub(crate) struct AcpHarnessRunner {
     harness: Harness,
     launch: AcpLaunchSpec,
-    /// The prompt as the user wrote it, echoed into the conversation.
+    /// The prompt the server resolved for this execution, echoed into the conversation.
     user_prompt: String,
+    /// Who sent the query that opens this execution, carried onto the echo of `user_prompt` so
+    /// live viewers see it attributed as the stored snapshot later is.
+    opening_base: Option<BaseUserQuery>,
     /// The full text sent to the agent, including server-composed context.
     prompt_text: String,
     /// `prompt_text` for a run that resumed its agent session, without what the session's
@@ -987,7 +992,8 @@ impl HarnessRunner for AcpHarnessRunner {
                     turn.request_id.clone(),
                     self.mcp_server_identities.clone(),
                 );
-                let actions = vec![mapper.user_query_action(&self.user_prompt, None)];
+                let actions =
+                    vec![mapper.user_query_action(&self.user_prompt, self.opening_base.as_ref())];
                 (mapper, actions)
             }
             None => {
@@ -996,7 +1002,7 @@ impl HarnessRunner for AcpHarnessRunner {
                     turn.request_id.clone(),
                     self.mcp_server_identities.clone(),
                 );
-                let actions = mapper.initial_actions(&self.user_prompt);
+                let actions = mapper.initial_actions(&self.user_prompt, self.opening_base.as_ref());
                 (mapper, actions)
             }
         };

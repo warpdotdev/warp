@@ -274,6 +274,10 @@ pub struct ResolvedHarnessPrompt {
         deserialize_with = "publication::deserialize_harness_usage_capability"
     )]
     pub harness_usage: Option<HarnessUsageCapability>,
+    /// Standard-Base64 serialized `Request.Input.UserQuery` carrying the attribution of the
+    /// query that opens this execution. Absent when the server has none to give.
+    #[serde(default)]
+    pub user_query_b64: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
