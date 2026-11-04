@@ -1811,10 +1811,24 @@ fn execution_policy_checkout_enforces_binding_and_preparation() {
                 working_dir: root.clone(),
                 repositories: vec![fixture.request("skill-source", None)],
             };
-            invoke(&skill_source, &env, false, false, "blocked", "no-legacy-flag");
+            invoke(
+                &skill_source,
+                &env,
+                false,
+                false,
+                "blocked",
+                "no-legacy-flag",
+            );
             let mut legacy = env.clone();
             legacy.insert("WARP_TEST_POLICY_LEGACY".into(), "1".into());
-            invoke(&skill_source, &legacy, false, false, "success", "legacy-flag");
+            invoke(
+                &skill_source,
+                &legacy,
+                false,
+                false,
+                "success",
+                "legacy-flag",
+            );
             assert!(root.join("skill-source").exists());
             batch.repositories[0] = fixture.request("substitute-identity", None);
             invoke(
