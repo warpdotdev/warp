@@ -561,31 +561,18 @@ impl BaseClient {
     #[cfg(target_family = "wasm")]
     pub fn report_ws_iap_challenge(&self, _error: &anyhow::Error) {}
 
-    /// Returns the current IAP proxy authorization header for transports outside the HTTP client.
-    pub fn iap_proxy_auth_header(&self) -> Option<(&'static str, String)> {
-        self.iap_token_provider
-            .as_ref()?
+    /// Returns IAP headers for transports outside the HTTP client.
+    pub fn iap_headers(&self) -> Vec<(&'static str, String)> {
+        let Some(provider) = self.iap_token_provider.as_ref() else {
+            return Vec::new();
+        };
+        let auth_header = provider
             .cached_token()
-            .map(|token| http_client::iap::proxy_auth_header(&token))
-    }
-
-    pub fn iap_handshake_headers(&self, server_url: &str) -> Vec<(&'static str, String)> {
-        let headers = self.iap_proxy_auth_header().into_iter();
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let routing_header = self.iap_token_provider.as_ref().and_then(|provider| {
-                let url = reqwest::Url::parse(server_url).ok()?;
-                provider
-                    .routing_header(&url)
-                    .map(|(name, value)| (name, value.to_string()))
-            });
-            headers.chain(routing_header).collect()
-        }
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = server_url;
-            headers.collect()
-        }
+            .map(|token| http_client::iap::proxy_auth_header(&token));
+        let routing_header = provider
+            .routing_header()
+            .map(|(name, value)| (name, value.to_string()));
+        auth_header.into_iter().chain(routing_header).collect()
     }
 }
 

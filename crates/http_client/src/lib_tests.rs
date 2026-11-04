@@ -49,15 +49,15 @@ fn routing_opt_in_updates_requests_without_replacing_application_auth() {
     assert_eq!(request.wrapped.headers()[AUTHORIZATION], "Bearer app-token");
     provider.0.store(true, Ordering::Relaxed);
     let request = client
-        .get("https://app.warp.dev/graphql/v2")
-        .header(iap::IAP_OPT_IN_HEADER, "1")
+        .get("https://example.com/stripe/webhook")
         .build()
         .unwrap();
+    assert_eq!(request.wrapped.headers()[iap::IAP_OPT_IN_HEADER], "1");
     assert!(
         !request
             .wrapped
             .headers()
-            .contains_key(iap::IAP_OPT_IN_HEADER)
+            .contains_key(iap::IAP_PROXY_AUTH_HEADER)
     );
 }
 
