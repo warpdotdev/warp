@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use warp_util::path::user_friendly_path;
-use warpui::elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text};
+use warpui::elements::{
+    Border, ChildView, ConstrainedBox, Container, Hoverable, MouseStateHandle, Text,
+};
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponentStyles;
@@ -37,6 +39,9 @@ pub struct RepoPicker {
 pub enum RepoPickerAction {
     Select(String),
     AddNewRepo,
+    /// The pointer entered the "+ Add new repo..." footer. Clears the row
+    /// highlight so only the footer reads as hovered.
+    HoverAddNewRepo,
 }
 
 pub enum RepoPickerEvent {
@@ -111,16 +116,27 @@ impl RepoPicker {
                     let border_fill = theme.outline();
                     let mouse_state_clone = mouse_state.clone();
                     Hoverable::new(mouse_state_clone, move |_| {
-                        Container::new(
-                            Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
-                                .with_color(text_color.into())
-                                .finish(),
+                        // Fill the menu width so the hover background spans the
+                        // whole row, not just the label.
+                        ConstrainedBox::new(
+                            Container::new(
+                                Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
+                                    .with_color(text_color.into())
+                                    .finish(),
+                            )
+                            .with_horizontal_padding(8.)
+                            .with_vertical_padding(6.)
+                            .with_background(bg)
+                            .with_border(Border::top(1.).with_border_fill(border_fill))
+                            .finish(),
                         )
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(6.)
-                        .with_background(bg)
-                        .with_border(Border::top(1.).with_border_fill(border_fill))
+                        .with_width(width)
                         .finish()
+                    })
+                    .on_hover(|is_hovered, ctx, _, _| {
+                        if is_hovered {
+                            ctx.dispatch_typed_action(RepoPickerAction::HoverAddNewRepo);
+                        }
                     })
                     .on_click(|ctx, _, _| {
                         ctx.dispatch_typed_action(RepoPickerAction::AddNewRepo);
@@ -241,6 +257,11 @@ impl TypedActionView for RepoPicker {
                     dropdown.close(ctx);
                 });
                 ctx.emit(RepoPickerEvent::RequestAddRepo);
+            }
+            RepoPickerAction::HoverAddNewRepo => {
+                self.dropdown.update(ctx, |dropdown, ctx| {
+                    dropdown.reset_selection(ctx);
+                });
             }
         }
     }
