@@ -14,7 +14,6 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -1090,9 +1089,7 @@ fn layout_text_block(
     }
 
     // Short-circuit before paragraph accumulation for table blocks.
-    if matches!(text_block.style, BufferBlockStyle::Table { .. })
-        && FeatureFlag::MarkdownTables.is_enabled()
-    {
+    if matches!(text_block.style, BufferBlockStyle::Table { .. }) {
         let spacing = layout
             .rich_text_styles()
             .block_spacings
