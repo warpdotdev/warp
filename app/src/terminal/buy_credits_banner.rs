@@ -37,6 +37,9 @@ use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{OutOfCreditsBannerAction, TelemetryEvent};
 use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
+use crate::settings_view::billing_and_usage::custom_usage_controls::{
+    CustomUsageControls, CustomUsageEvent, CustomUsagePurpose,
+};
 use crate::settings_view::create_discount_badge;
 use crate::view_components::{Dropdown, DropdownAction};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -51,6 +54,7 @@ struct MouseStates {
 }
 
 pub struct BuyCreditsBanner {
+    custom_usage: ViewHandle<CustomUsageControls>,
     view_handle: WeakViewHandle<Self>,
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
@@ -140,7 +144,24 @@ impl BuyCreditsBanner {
             }
         });
 
+        let custom_usage = ctx.add_typed_action_view(|ctx| {
+            CustomUsageControls::new(CustomUsagePurpose::Purchase, ctx)
+        });
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            match event {
+                CustomUsageEvent::Selected => me.selected_denomination_index = usize::MAX,
+                CustomUsageEvent::Saved => {
+                    me.should_display_banner = false;
+                    AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.dismiss_buy_credits_banner(ctx);
+                        model.refresh_request_usage_async(ctx);
+                    });
+                }
+            }
+            ctx.notify();
+        });
         let mut me = Self {
+            custom_usage,
             view_handle: ctx.handle(),
             mouse_states: Default::default(),
             denomination_dropdown,
@@ -155,6 +176,9 @@ impl BuyCreditsBanner {
             checkout_pending: false,
         };
         me.update_addon_credits_options(ctx);
+        if me.custom_usage.as_ref(ctx).is_selected() {
+            me.selected_denomination_index = usize::MAX;
+        }
         me
     }
 
@@ -828,6 +852,13 @@ impl BuyCreditsBanner {
             let team_uid = current_team.map(|team| team.uid);
 
             let buy_button_disabled = self.purchase_addon_credits_loading
+                || selected_option.is_none()
+                || current_workspace.is_some_and(|workspace| {
+                    workspace
+                        .settings
+                        .addon_credits_settings
+                        .auto_reload_enabled
+                })
                 || delinquent_due_to_payment_issue
                 || is_at_monthly_limit
                 || would_purchase_exceed_limit;
@@ -973,6 +1004,10 @@ impl BuyCreditsBanner {
         // The dropdown adds some margin so we need to use less padding.
         let vertical_padding = if has_admin_permissions { 6. } else { 12. };
 
+        let content = Flex::column()
+            .with_child(content)
+            .with_child(ChildView::new(&self.custom_usage).finish())
+            .finish();
         Container::new(content)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
             .with_border(Border::all(1.).with_border_fill(theme.outline()))
@@ -1048,6 +1083,8 @@ impl warpui::TypedActionView for BuyCreditsBanner {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             Action::SelectDenomination(index) => {
+                self.custom_usage
+                    .update(ctx, |view, ctx| view.select_preset(ctx));
                 self.selected_denomination_index = *index;
                 ctx.notify();
             }
