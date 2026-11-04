@@ -256,7 +256,6 @@ fn collect_visual_markdown_lightbox_collection_includes_mermaid_sections_in_sour
         app.update(|ctx| {
             let _blocklist_markdown_images =
                 FeatureFlag::BlocklistMarkdownImages.override_enabled(true);
-            let _markdown_mermaid = FeatureFlag::MarkdownMermaid.override_enabled(true);
 
             let sections = vec![
                 AIAgentTextSection::PlainText {

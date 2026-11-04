@@ -3,7 +3,7 @@ Product spec: `specs/APP-4267/PRODUCT.md`
 Linear issue: https://linear.app/warpdotdev/issue/APP-4267/show-failure-callout-when-mermaid-diagram-rendering-gets-stuck
 ## Context
 Mermaid rendering is implemented as an async image asset layered on top of the rich-text markdown renderer.
-- `crates/editor/src/content/text.rs (721-729)` classifies fenced Mermaid blocks as `CodeBlockType::Mermaid` when `FeatureFlag::MarkdownMermaid` is enabled.
+- `crates/editor/src/content/text.rs (721-729)` classifies fenced Mermaid blocks as `CodeBlockType::Mermaid`.
 - `crates/editor/src/content/edit.rs (671-726)` converts styled Mermaid code blocks into `LayoutTask::MermaidDiagram` and calls `mermaid_diagram_layout`.
 - `crates/editor/src/content/edit.rs (1031-1067)` converts that layout task into `BlockItem::MermaidDiagram` while preserving the source block content length.
 - `crates/editor/src/content/mermaid_diagram.rs:20` defines the current default pending height as 10 line-heights.
