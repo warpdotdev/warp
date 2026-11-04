@@ -879,10 +879,10 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::InsertCodeReviewComments { repo_path, .. },
+                            action: AIAgentActionType::InsertCodeReviewComments { .. },
                             id,
                             ..
-                        }) if FeatureFlag::PRCommentsV2.is_enabled() => {
+                        }) => {
                             if let Some(group) = props.imported_comments.get(id) {
                                 output_items.add_child(
                                     render_imported_comments(group, app)

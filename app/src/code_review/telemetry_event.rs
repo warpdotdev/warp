@@ -618,9 +618,6 @@ impl TelemetryEventDesc for CodeReviewTelemetryEventDiscriminants {
 
     fn enablement_state(&self) -> EnablementState {
         match self {
-            Self::CommentsReceived | Self::CommentsAttached => {
-                EnablementState::Flag(FeatureFlag::PRCommentsV2)
-            }
             Self::GitButtonTriggered | Self::GitDialogCompleted => {
                 EnablementState::Flag(FeatureFlag::GitOperationsInCodeReview)
             }
