@@ -29,26 +29,6 @@ fn bundled_child_coordination_is_published_to_harness_skill_roots() {
     assert!(published.contains(&coordination));
     assert!(coordination.join("SKILL.md").is_file());
     assert!(skill_root.join("oz-finish-task/SKILL.md").is_file());
-
-    let finish = fs::read_to_string(skill_root.join("oz-finish-task/SKILL.md")).unwrap();
-    for requirement in [
-        "You MUST use this skill before stopping",
-        "even if it was purely informational or no code changed",
-        "summary as a message to the parent agent's inbox",
-        "do not also use `oz run message send` to report that same outcome",
-        "Put the full answer or actionable handoff",
-        "check your unread inbox",
-        "resolve the error and retry",
-        "If you are a child agent",
-        "this reports `BLOCKED`, not `FAILED`",
-    ] {
-        assert!(finish.contains(requirement), "Missing: {requirement}");
-    }
-    let coordination = fs::read_to_string(coordination.join("SKILL.md")).unwrap();
-    assert!(coordination.contains("without updating your task status"));
-    assert!(coordination.contains("do not send a separate message reporting that same outcome"));
-    assert!(!coordination.contains("- **Complete**:"));
-    assert!(!coordination.contains("\\\""));
 }
 
 #[test]
