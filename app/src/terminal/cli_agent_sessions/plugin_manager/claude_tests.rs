@@ -24,6 +24,11 @@ fn version_below(version: &str) -> String {
 }
 
 #[test]
+fn platform_plugin_with_old_completion_skills_is_outdated() {
+    assert!(super::compare_versions("1.1.2", MINIMUM_PLATFORM_PLUGIN_VERSION).is_lt());
+}
+
+#[test]
 fn installed_when_plugin_present() {
     let dir = tempfile::tempdir().unwrap();
     let plugins_dir = dir.path().join("plugins");
