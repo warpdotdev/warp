@@ -207,14 +207,16 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
                 return Err(SkillReferenceParseError::UnknownKey);
             }
             let field = |key: &str| mapping.get(&Yaml::String(key.to_owned()));
-            let owner = match field("owner") {
-                Some(Yaml::String(owner)) if is_valid_owner(owner.trim()) => owner.trim(),
-                _ => return Err(SkillReferenceParseError::MalformedSource),
+            let segments = |key: &str| match field(key) {
+                Some(Yaml::String(value)) => Some(trim_segments(value)),
+                _ => None,
             };
-            let repo = match field("repo") {
-                Some(Yaml::String(repo)) if is_valid_repository_segment(repo.trim()) => repo.trim(),
-                _ => return Err(SkillReferenceParseError::MalformedSource),
+            let (Some(owner), Some(repo)) = (segments("owner"), segments("repo")) else {
+                return Err(SkillReferenceParseError::MalformedSource);
             };
+            if !is_valid_owner(&owner) || !is_valid_repository_segment(&repo) {
+                return Err(SkillReferenceParseError::MalformedSource);
+            }
             let code_forge = match field("codeForge") {
                 None | Some(Yaml::Null) => None,
                 Some(Yaml::String(token)) => Some(
@@ -230,8 +232,8 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
             };
             Ok(SkillSource {
                 code_forge,
-                owner: owner.to_owned(),
-                repo: repo.to_owned(),
+                owner,
+                repo,
                 reference,
             })
         }
@@ -246,17 +248,18 @@ fn parse_source_shorthand(shorthand: &str) -> Result<SkillSource, SkillReference
         return Err(SkillReferenceParseError::MissingSource);
     }
     let (host, rest) = match shorthand.split_once(':') {
-        Some((host, rest)) if !host.contains(['/', '@']) => (Some(host), rest),
+        Some((host, rest)) if !host.contains(['/', '@']) => (Some(host.trim()), rest),
         _ => (None, shorthand),
     };
     let (repository, reference) = match rest.rsplit_once('@') {
-        Some((repository, reference)) => (repository, Some(reference)),
+        Some((repository, reference)) => (repository, Some(reference.trim())),
         None => (rest, None),
     };
     let Some((owner, repo)) = repository.rsplit_once('/') else {
         return Err(SkillReferenceParseError::MalformedSource);
     };
-    if !is_valid_owner(owner) || !is_valid_repository_segment(repo) {
+    let (owner, repo) = (trim_segments(owner), trim_segments(repo));
+    if !is_valid_owner(&owner) || !is_valid_repository_segment(&repo) {
         return Err(SkillReferenceParseError::MalformedSource);
     }
     let code_forge = host
@@ -264,8 +267,8 @@ fn parse_source_shorthand(shorthand: &str) -> Result<SkillSource, SkillReference
         .transpose()?;
     Ok(SkillSource {
         code_forge,
-        owner: owner.to_owned(),
-        repo: repo.to_owned(),
+        owner,
+        repo,
         reference: reference.map(parse_ref).transpose()?,
     })
 }
@@ -294,6 +297,12 @@ fn parse_entries(value: &Yaml) -> Result<Vec<SkillReferenceEntry>, SkillReferenc
             _ => Err(SkillReferenceParseError::NonStringEntry),
         })
         .collect()
+}
+
+/// Trims whitespace around each `/` segment, leaving inner spaces alone since Azure DevOps project
+/// names can contain them.
+fn trim_segments(path: &str) -> String {
+    path.split('/').map(str::trim).collect::<Vec<_>>().join("/")
 }
 
 fn is_valid_owner(owner: &str) -> bool {

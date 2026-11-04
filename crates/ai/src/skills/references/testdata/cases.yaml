@@ -32,6 +32,22 @@
       include: [{kind: "name", value: "safe-secrets"}]
       exclude: []
 
+- name: shorthand_trims_segments
+  input: "source: \" dev.azure.com : acme / My Project / shared-skills @ v1 \"\ninclude: [safe-secrets]\n"
+  expected:
+    reference:
+      source: {code_forge: "AZURE_DEVOPS", owner: "acme/My Project", repo: "shared-skills", ref: {kind: "named", value: "v1"}}
+      include: [{kind: "name", value: "safe-secrets"}]
+      exclude: []
+
+- name: mapping_trims_segments
+  input: "source: {codeForge: AZURE_DEVOPS, owner: \" acme / My Project \", repo: \" shared-skills \"}\ninclude: [safe-secrets]\n"
+  expected:
+    reference:
+      source: {code_forge: "AZURE_DEVOPS", owner: "acme/My Project", repo: "shared-skills", ref: null}
+      include: [{kind: "name", value: "safe-secrets"}]
+      exclude: []
+
 - name: mapping_github_sha
   input: "source: {codeForge: GITHUB, owner: acme, repo: shared-skills, ref: 0123456789abcdef0123456789abcdef01234567}\ninclude: [deploy]\n"
   expected:
@@ -86,6 +102,10 @@
 
 - name: malformed_source_no_slash
   input: "source: shared-skills\ninclude: [safe-secrets]\n"
+  expected: {error: malformed_source}
+
+- name: malformed_source_blank_segment
+  input: "source: \"acme/ /shared-skills\"\ninclude: [safe-secrets]\n"
   expected: {error: malformed_source}
 
 - name: unknown_code_forge_host
