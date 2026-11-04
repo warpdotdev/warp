@@ -227,6 +227,12 @@ pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
+/// A tab that another tab can be merged into, as listed in the tab context menu.
+pub struct MergeDestination {
+    pub index: usize,
+    pub title: String,
+}
+
 /// Decides which tab-group context-menu entries apply to a tab, based on its
 /// group membership, whether it is the sole member of that group, and whether
 /// any *other* groups exist.
@@ -423,6 +429,7 @@ impl TabData {
         is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
+        merge_destinations: &[MergeDestination],
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         self.menu_items_with_pane_name_target(
@@ -432,6 +439,7 @@ impl TabData {
             is_only_member_of_group,
             can_move_left,
             can_move_right,
+            merge_destinations,
             None,
             ctx,
         )
@@ -446,6 +454,7 @@ impl TabData {
         is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
+        merge_destinations: &[MergeDestination],
         pane_name_target: Option<PaneNameMenuTarget>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
@@ -456,6 +465,7 @@ impl TabData {
         for section_items in [
             self.pin_menu_items(index),
             self.tab_group_menu_items(index, tab_groups, is_only_member_of_group),
+            self.merge_into_tab_menu_items(index, merge_destinations, ctx),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
@@ -872,6 +882,41 @@ impl TabData {
             );
         }
         menu_items
+    }
+
+    /// Returns one `Merge into tab` entry per destination, offered only when every pane in this
+    /// tab can be moved.
+    ///
+    /// The entries are flat rows rather than a submenu so they work identically in the
+    /// horizontal and vertical tab layouts. Each label embeds the destination's tab number, which
+    /// keeps labels unique (menu rows use their label as a saved-position id) and tells
+    /// identically titled tabs apart.
+    fn merge_into_tab_menu_items(
+        &self,
+        index: usize,
+        merge_destinations: &[MergeDestination],
+        ctx: &AppContext,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::MergeTabIntoTab.is_enabled()
+            || !self.pane_group.as_ref(ctx).can_merge_into_another_tab()
+        {
+            return vec![];
+        }
+        merge_destinations
+            .iter()
+            .map(|destination| {
+                MenuItemFields::new(format!(
+                    "Merge into tab {}: {}",
+                    destination.index + 1,
+                    destination.title
+                ))
+                .with_on_select_action(WorkspaceAction::MergeTabIntoTab {
+                    source_tab_index: index,
+                    destination_tab_index: destination.index,
+                })
+                .into_item()
+            })
+            .collect()
     }
 
     fn color_option_menu_items(

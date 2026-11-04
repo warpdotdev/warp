@@ -1003,6 +1003,10 @@ pub enum FeatureFlag {
     /// from the remote. Disabling it restores direct, network-only checkouts.
     GitMirrorCache,
     AgentPromptSteering,
+
+    /// Gates the "Merge into tab" tab context-menu action, which moves every pane of one
+    /// tab into another tab as splits.
+    MergeTabIntoTab,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

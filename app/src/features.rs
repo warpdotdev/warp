@@ -463,6 +463,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GroupedTabs,
         #[cfg(feature = "pinned_tabs")]
         FeatureFlag::PinnedTabs,
+        #[cfg(feature = "merge_tab_into_tab")]
+        FeatureFlag::MergeTabIntoTab,
         #[cfg(feature = "warp_control_cli")]
         FeatureFlag::WarpControlCli,
         #[cfg(feature = "agent_harness")]

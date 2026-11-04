@@ -4153,3 +4153,146 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
         });
     });
 }
+
+fn add_terminal_panes_to_the_right(
+    panes: &mut PaneGroup,
+    count: usize,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    for _ in 0..count {
+        panes.add_terminal_pane(Direction::Right, None, ctx);
+    }
+}
+
+fn terminal_view_ids(panes: &PaneGroup, ctx: &AppContext) -> Vec<EntityId> {
+    panes
+        .visible_pane_ids()
+        .into_iter()
+        .map(|pane_id| panes.terminal_view_from_pane_id(pane_id, ctx).unwrap().id())
+        .collect()
+}
+
+#[test]
+fn merging_terminal_panes_appends_them_in_order_and_keeps_their_sessions() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_pane_group(&mut app, Default::default());
+        let destination = mock_pane_group(&mut app, Default::default());
+
+        let (source_pane_ids, source_terminal_view_ids) = source.update(&mut app, |panes, ctx| {
+            add_terminal_panes_to_the_right(panes, 2, ctx);
+            (panes.visible_pane_ids(), terminal_view_ids(panes, ctx))
+        });
+        let destination_pane_ids = destination.read(&app, |panes, _| panes.visible_pane_ids());
+        assert_eq!(source_pane_ids.len(), 3);
+
+        let panes_to_merge = source.update(&mut app, |panes, ctx| panes.take_panes_for_merge(ctx));
+        assert_eq!(panes_to_merge.len(), 3);
+        source.read(&app, |panes, _| assert_eq!(panes.pane_ids().count(), 0));
+
+        destination.update(&mut app, |panes, ctx| {
+            panes.add_merged_panes(panes_to_merge, ctx);
+
+            let expected_pane_ids =
+                [destination_pane_ids.clone(), source_pane_ids.clone()].concat();
+            assert_eq!(panes.visible_pane_ids(), expected_pane_ids);
+            assert_eq!(panes.pane_ids().count(), expected_pane_ids.len());
+
+            // The moved panes still host the very same terminal views (and so the same sessions).
+            let merged_terminal_view_ids = terminal_view_ids(panes, ctx);
+            assert_eq!(
+                merged_terminal_view_ids[destination_pane_ids.len()..],
+                source_terminal_view_ids[..]
+            );
+            assert_eq!(panes.focused_pane_id(ctx), source_pane_ids[0]);
+        });
+    });
+}
+
+#[test]
+fn tab_with_a_hidden_pane_cannot_be_merged_and_keeps_all_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_pane_group(&mut app, Default::default());
+
+        source.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            add_terminal_panes_to_the_right(panes, 1, ctx);
+            panes.insert_terminal_pane_hidden_for_child_agent(
+                parent_pane_id,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
+                ctx,
+            );
+            let pane_ids_before: Vec<_> = panes.pane_ids().collect();
+            let visible_pane_ids_before = panes.visible_pane_ids();
+
+            assert!(!panes.can_merge_into_another_tab());
+            assert!(panes.take_panes_for_merge(ctx).is_empty());
+
+            assert_eq!(panes.pane_ids().count(), pane_ids_before.len());
+            assert_eq!(panes.visible_pane_ids(), visible_pane_ids_before);
+        });
+    });
+}
+
+#[test]
+fn tab_with_a_non_terminal_pane_cannot_be_merged_and_keeps_all_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_pane_group(&mut app, Default::default());
+
+        source.update(&mut app, |panes, ctx| {
+            panes.add_pane_with_direction(
+                Direction::Right,
+                NotebookPane::new(new_notebook(ctx), ctx),
+                false,
+                ctx,
+            );
+            let visible_pane_ids_before = panes.visible_pane_ids();
+            assert_eq!(visible_pane_ids_before.len(), 2);
+
+            assert!(!panes.can_merge_into_another_tab());
+            assert!(panes.take_panes_for_merge(ctx).is_empty());
+
+            assert_eq!(panes.visible_pane_ids(), visible_pane_ids_before);
+        });
+    });
+}
+
+#[test]
+fn tab_with_only_visible_terminal_panes_can_be_merged() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_pane_group(&mut app, Default::default());
+
+        source.update(&mut app, |panes, ctx| {
+            assert!(panes.can_merge_into_another_tab());
+            add_terminal_panes_to_the_right(panes, 1, ctx);
+            assert!(panes.can_merge_into_another_tab());
+        });
+    });
+}
+
+#[test]
+fn tab_tracking_a_visible_child_agent_pane_cannot_be_merged_and_keeps_all_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source = mock_pane_group(&mut app, Default::default());
+
+        source.update(&mut app, |panes, ctx| {
+            add_terminal_panes_to_the_right(panes, 1, ctx);
+            let visible_pane_ids_before = panes.visible_pane_ids();
+            let child_pane_id = *visible_pane_ids_before.last().unwrap();
+            panes
+                .child_agent_panes
+                .insert(AIConversationId::new(), child_pane_id);
+
+            assert!(!panes.can_merge_into_another_tab());
+            assert!(panes.take_panes_for_merge(ctx).is_empty());
+
+            assert_eq!(panes.visible_pane_ids(), visible_pane_ids_before);
+            assert_eq!(panes.pane_ids().count(), visible_pane_ids_before.len());
+        });
+    });
+}
