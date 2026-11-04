@@ -88,7 +88,10 @@ warp_terminal.workspace = true
 warp_util.workspace = true
 warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
+warpui_extras.workspace = true
 uuid.workspace = true
+hex.workspace = true
+sha2.workspace = true
 
 # Native OS-clipboard transport for local TUI runs (copy-out only, text-only).
 # OSC 52 (see `src/clipboard.rs`) remains the transport for remote/SSH sessions
