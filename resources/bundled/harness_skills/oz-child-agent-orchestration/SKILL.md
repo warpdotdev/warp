@@ -45,19 +45,16 @@ You have access to messaging commands for communicating with other agents:
 - `"$OZ_CLI" run message mark-delivered "$MESSAGE_ID"` or `"$OZ_CLI" run message delivered "$MESSAGE_ID"`: Acknowledge delivery if your harness surfaces an inbox notification that requires it.
 Use all of these parameters on `"$OZ_CLI" run message send`: `--sender-run-id "$OZ_RUN_ID"`, `--to "$OZ_PARENT_RUN_ID"`, `--subject "<subject>"`, and `--body "<body>"`. If `OZ_RUN_ID`, `OZ_PARENT_RUN_ID`, or `OZ_CLI` is missing, that is a blocker.
 
-### Required polling workflow
-Do not assume your harness will surface parent messages automatically.
-Use this workflow whenever you coordinate with the parent:
-1. Send your message with `"$OZ_CLI" run message send --sender-run-id "$OZ_RUN_ID" --to "$OZ_PARENT_RUN_ID" --subject "<subject>" --body "<body>"`.
-2. Immediately run `"$OZ_CLI" run message list "$OZ_RUN_ID" --unread --limit 25`.
-3. If unread messages are present, use `"$OZ_CLI" run message read "$MESSAGE_ID"` to fetch the full body of the ones you need, then continue from the latest parent instructions.
-4. Only after that inbox check may you decide to keep working, wait, or stop.
+### Checking for messages
+Usually, your harness will surface messages for you automatically, but you can poll for messages proactively by running
+`"$OZ_CLI" run message list "$OZ_RUN_ID" --unread --limit 25`.
 
-Poll your inbox at these times even if you have not just sent a message:
+Omit the `--unread` flag if you expect new messages to exist but don't see them - it's possible they were mistakenly marked as read even if you didn't actually read them.
+
+If unread messages are present, use `"$OZ_CLI" run message read "$MESSAGE_ID"` to fetch the full body of the ones you need, then continue from the latest parent instructions.
+
+It's a good idea to poll your inbox at these times:
+- you just sent a message
 - before starting a new chunk of work after any pause,
 - before deciding you still need to wait for parent input,
 - before saying you are done, waiting, standing by, or otherwise ending your turn.
-
-### Waiting for replies
-If you are waiting on the parent, periodically poll for unread messages yourself instead of assuming the harness will wake you automatically. Use a modest cadence rather than a tight loop — for example, wait a short interval between checks, then run `"$OZ_CLI" run message list "$OZ_RUN_ID" --unread --limit 25` again. Once a reply arrives, read it and resume work.
-Never say you are standing by until a post-send or pre-idle inbox check has shown no unread parent messages that require action.
