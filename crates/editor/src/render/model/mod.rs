@@ -175,7 +175,7 @@ const DASHED_UNDERLINE_GAP_LENGTH: f32 = 4.;
 
 /// In the future, we should also support MinimumWidth(f32) setting so the content will
 /// be laid out with a minimum width that could be larger than the viewport.
-#[derive(Default)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum WidthSetting {
     #[default]
     FitViewport,
@@ -327,6 +327,50 @@ impl<'a> RenderContentTreeRef<'a> {
         Some(target_item_count - boundary_item_count)
     }
 
+    /// The buffer line range of the block starting at `offset`. Soft-wrapped rows do not count,
+    /// so the range stays in buffer lines whatever the width setting.
+    pub fn hard_line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        if !cursor.seek(&offset, SeekBias::Right) {
+            return None;
+        }
+        let start = cursor.start().hard_lines;
+        let end = start + cursor.item()?.hard_lines();
+        Some(start.into()..end.into())
+    }
+
+    /// The soft-wrapped row count of each buffer line, in buffer order. Lines inside a hidden
+    /// section count as one row, as do non-text blocks.
+    pub fn visual_rows_by_hard_line(&self) -> Vec<usize> {
+        let mut rows = Vec::new();
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+        while let Some(item) = cursor.item() {
+            match item {
+                BlockItem::TemporaryBlock { .. } => {}
+                BlockItem::Paragraph(paragraph)
+                | BlockItem::Header { paragraph, .. }
+                | BlockItem::UnorderedList { paragraph, .. }
+                | BlockItem::OrderedList { paragraph, .. }
+                | BlockItem::TaskList { paragraph, .. } => {
+                    rows.push(paragraph.lines().as_usize().max(1));
+                }
+                BlockItem::TextBlock { paragraph_block }
+                | BlockItem::RunnableCodeBlock {
+                    paragraph_block, ..
+                } => rows.extend(
+                    paragraph_block
+                        .paragraphs()
+                        .iter()
+                        .map(|paragraph| paragraph.lines().as_usize().max(1)),
+                ),
+                other => rows.extend(std::iter::repeat_n(1, other.hard_lines().as_usize())),
+            }
+            cursor.next();
+        }
+        rows
+    }
+
     pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         if cursor.seek(&offset, SeekBias::Right) {
@@ -350,7 +394,8 @@ impl<'a> RenderContentTreeRef<'a> {
             let range = {
                 let positioned = cursor.positioned_item()?;
                 if matches!(positioned.item, BlockItem::Hidden(_)) {
-                    Some(positioned.start_line..positioned.start_line + positioned.item.lines())
+                    let start = LineCount::from(cursor.start().hard_lines);
+                    Some(start..start + positioned.item.lines())
                 } else {
                     None
                 }
@@ -400,12 +445,14 @@ impl<'a> RenderContentTreeRef<'a> {
     /// Returns the cumulative Y offset (in content-space pixels) at the given line.
     ///
     /// When `line >= total_lines`, returns the total content height.
+    /// `line` is a buffer line: soft-wrapped rows do not count.
     pub fn y_offset_at_line(&self, line: LineCount) -> Pixels {
+        let line = HardLineCount::from(line);
         let summary = self.0.summary();
-        if line >= summary.lines {
+        if line >= summary.hard_lines {
             return (summary.height as f32).into_pixels();
         }
-        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
+        let mut cursor = self.0.cursor::<HardLineCount, LayoutSummary>();
         cursor.seek_clamped(&line, SeekBias::Right);
         (cursor.start().height as f32).into_pixels()
     }
@@ -1319,6 +1366,8 @@ pub struct LayoutSummary {
     height: f64,
     width: Pixels,
     lines: LineCount,
+    /// Buffer lines, which unlike `lines` do not count the extra rows of soft-wrapped lines.
+    hard_lines: HardLineCount,
     item_count: usize,
 }
 
@@ -1336,6 +1385,25 @@ pub struct Width(OrderedFloat<Pixels>);
 pub struct LineCount(usize);
 
 impl_offset!(LineCount);
+
+/// A count of buffer lines that ignores soft wrapping. It equals [`LineCount`] whenever nothing
+/// wraps, as with [`WidthSetting::InfiniteWidth`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HardLineCount(usize);
+
+impl_offset!(HardLineCount);
+
+impl From<HardLineCount> for LineCount {
+    fn from(lines: HardLineCount) -> Self {
+        LineCount(lines.0)
+    }
+}
+
+impl From<LineCount> for HardLineCount {
+    fn from(lines: LineCount) -> Self {
+        HardLineCount(lines.0)
+    }
+}
 
 impl LineCount {
     pub fn as_u32(&self) -> u32 {
@@ -2686,6 +2754,20 @@ impl RenderState {
         self
     }
 
+    /// Changes the width setting of a live render state. Returns `true` if it changed; the caller
+    /// must then rebuild the layout for existing content to rewrap.
+    pub fn set_width_setting(&mut self, setting: WidthSetting) -> bool {
+        if self.width_setting == setting {
+            return false;
+        }
+        self.width_setting = setting;
+        true
+    }
+
+    pub fn width_setting(&self) -> WidthSetting {
+        self.width_setting
+    }
+
     /// Whether the surrounding container for this render state already provides horizontal
     /// scrolling over its full content area. Blocks that would otherwise introduce a nested
     /// horizontal scroll (for example, wide Markdown tables) should render at full intrinsic
@@ -3504,13 +3586,18 @@ impl RenderState {
     }
 
     /// Replace all temporary blocks in the BlockItem cache with a new set of temporary
-    fn reset_temporary_block(&self, mut blocks: HashMap<LineCount, Vec<BlockItem>>) {
+    /// blocks. Blocks are keyed by buffer line, so soft-wrapped rows do not shift them.
+    fn reset_temporary_block(&self, blocks: HashMap<LineCount, Vec<BlockItem>>) {
+        let mut blocks: HashMap<HardLineCount, Vec<BlockItem>> = blocks
+            .into_iter()
+            .map(|(line, items)| (HardLineCount::from(line), items))
+            .collect();
         let mut new_tree = SumTree::new();
         {
             let content = self.content.borrow();
-            let mut cursor = content.cursor::<LineCount, CharOffset>();
+            let mut cursor = content.cursor::<HardLineCount, CharOffset>();
 
-            if let Some(items) = blocks.remove(&LineCount::zero()) {
+            if let Some(items) = blocks.remove(&HardLineCount::zero()) {
                 for item in items {
                     new_tree.push(item);
                 }
@@ -4185,7 +4272,7 @@ impl RenderState {
     pub fn start_line_index(&self, block: &dyn RenderableBlock) -> Option<LineCount> {
         let content = self.content();
         let offset = block.viewport_item().block_offset();
-        Some(content.block_at_offset(offset)?.start_line)
+        Some(content.hard_line_range_at_offset(offset)?.start)
     }
 
     /// The line height of the first line. Different from `first_line_bounds`, this does not
@@ -4209,19 +4296,15 @@ impl RenderState {
     }
 
     pub fn line_range(&self, block: &dyn RenderableBlock) -> Option<Range<LineCount>> {
-        let start = self.start_line_index(block)?;
         let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(start..start + content.block_at_offset(offset)?.item.lines())
+        content.hard_line_range_at_offset(block.viewport_item().block_offset())
     }
 
     /// The full line range of the block starting at `offset`, resolved without a
     /// `RenderableBlock`. Used to compute a hidden section's complete range for
     /// double-click full expansion.
     pub fn line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
-        let content = self.content();
-        let block = content.block_at_offset(offset)?;
-        Some(block.start_line..block.start_line + block.item.lines())
+        self.content().hard_line_range_at_offset(offset)
     }
 }
 
@@ -4418,6 +4501,7 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
         self.content_length += rhs.content_length;
         self.width = self.width.max(rhs.width);
         self.lines += rhs.lines;
+        self.hard_lines += rhs.hard_lines;
         self.item_count += rhs.item_count;
     }
 }
@@ -4576,6 +4660,23 @@ impl BlockItem {
             | BlockItem::Image { .. } => CharOffset::from(1),
             BlockItem::Table(laid_out_table) => laid_out_table.content_length(),
             BlockItem::Hidden(config) => config.content_length(),
+        }
+    }
+
+    /// The buffer lines this item covers. Unlike [`Self::lines`], a soft-wrapped paragraph
+    /// counts once.
+    pub fn hard_lines(&self) -> HardLineCount {
+        match self {
+            BlockItem::Paragraph(_)
+            | BlockItem::Header { .. }
+            | BlockItem::UnorderedList { .. }
+            | BlockItem::OrderedList { .. }
+            | BlockItem::TaskList { .. } => HardLineCount(1),
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } => HardLineCount(paragraph_block.paragraphs().len()),
+            _ => self.lines().into(),
         }
     }
 
@@ -4907,6 +5008,7 @@ impl sum_tree::Item for BlockItem {
             height: self.height().as_f32() as f64,
             width: self.width(),
             lines: self.lines(),
+            hard_lines: self.hard_lines(),
             item_count: 1,
         }
     }
@@ -5484,6 +5586,12 @@ impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LayoutSummary {
 impl<'a> sum_tree::Dimension<'a, LayoutSummary> for LineCount {
     fn add_summary(&mut self, summary: &'a LayoutSummary) {
         *self += summary.lines;
+    }
+}
+
+impl<'a> sum_tree::Dimension<'a, LayoutSummary> for HardLineCount {
+    fn add_summary(&mut self, summary: &'a LayoutSummary) {
+        *self += summary.hard_lines;
     }
 }
 

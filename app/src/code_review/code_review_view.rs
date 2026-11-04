@@ -5736,6 +5736,11 @@ impl CodeReviewView {
                 self.sync_split_pane(&file_path, ctx);
                 self.invalidate_file_height(&file_path, ctx);
             }
+            CodeEditorEvent::LayoutInvalidated => {
+                if Self::effective_diff_layout(ctx).is_side_by_side() {
+                    self.sync_split_wrap(&file_path, ctx);
+                }
+            }
             CodeEditorEvent::DiffUpdated => {
                 if Self::effective_diff_layout(ctx).is_side_by_side() {
                     if self.sync_split_pane(&file_path, ctx) {

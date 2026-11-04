@@ -117,6 +117,41 @@ impl DiffAlignment {
         self.gaps(|row| row.modified)
     }
 
+    /// Gap rows for both panes when lines soft-wrap, as `(base, modified)`.
+    ///
+    /// `base_rows` and `modified_rows` give the wrapped row count of each line; a missing entry
+    /// counts as one row. Each aligned row becomes as tall as its taller side: the shorter line
+    /// gets blank rows after it, and a gap faces its opposite line with as many rows as that line
+    /// wraps to. With every line one row tall this matches [`Self::base_gaps`] and
+    /// [`Self::modified_gaps`].
+    pub fn wrapped_gaps(
+        &self,
+        base_rows: &[usize],
+        modified_rows: &[usize],
+    ) -> (Vec<GapRun>, Vec<GapRun>) {
+        let rows_of = |rows: &[usize], line: Option<usize>| {
+            line.map(|line| rows.get(line).copied().unwrap_or(1).max(1))
+        };
+        let mut base_gaps = Vec::new();
+        let mut modified_gaps = Vec::new();
+        let mut next_base_line = 0;
+        let mut next_modified_line = 0;
+        for row in &self.rows {
+            let base = rows_of(base_rows, row.base);
+            let modified = rows_of(modified_rows, row.modified);
+            let height = base.unwrap_or(0).max(modified.unwrap_or(0)).max(1);
+            pad_side(&mut base_gaps, &mut next_base_line, row.base, base, height);
+            pad_side(
+                &mut modified_gaps,
+                &mut next_modified_line,
+                row.modified,
+                modified,
+                height,
+            );
+        }
+        (base_gaps, modified_gaps)
+    }
+
     /// Ranges of base lines that were removed or replaced, merged where adjacent.
     pub fn changed_base_lines(&self) -> Vec<Range<usize>> {
         let mut ranges: Vec<Range<usize>> = Vec::new();
@@ -176,6 +211,30 @@ impl DiffAlignment {
             }
         }
         gaps
+    }
+}
+
+/// Pads one pane's side of an aligned row up to `height` rows.
+fn pad_side(
+    gaps: &mut Vec<GapRun>,
+    next_line: &mut usize,
+    line: Option<usize>,
+    rows: Option<usize>,
+    height: usize,
+) {
+    if let Some(line) = line {
+        *next_line = line + 1;
+    }
+    let count = height - rows.unwrap_or(0);
+    if count == 0 {
+        return;
+    }
+    match gaps.last_mut() {
+        Some(gap) if gap.insert_before == *next_line => gap.count += count,
+        _ => gaps.push(GapRun {
+            insert_before: *next_line,
+            count,
+        }),
     }
 }
 

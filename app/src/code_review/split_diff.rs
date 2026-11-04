@@ -22,7 +22,7 @@ use super::{
     CodeReviewViewEvent, CodeReviewViewState, ShowCommentEditor,
 };
 use crate::code::diff_layout::DiffLayout;
-use crate::code::editor::diff_alignment::{ChangeSpan, DiffAlignment};
+use crate::code::editor::diff_alignment::{ChangeSpan, DiffAlignment, GapRun};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::DiffDecorationMode;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
@@ -97,6 +97,12 @@ impl CodeReviewView {
                 modified.update(ctx, |editor, ctx| {
                     editor.set_diff_decoration_mode(DiffDecorationMode::Unified, ctx);
                 });
+                // The unified layout never wraps.
+                let model = modified.as_ref(ctx).model.clone();
+                model.update(ctx, |model, ctx| {
+                    model.set_split_gap_override(None, ctx);
+                    model.set_soft_wrap(false, ctx);
+                });
             }
             return false;
         }
@@ -148,10 +154,54 @@ impl CodeReviewView {
             ctx,
         );
 
+        // Each pane wraps at its own width. The wrapped rows are evened out once both are laid
+        // out, in `sync_split_wrap`.
+        for editor in [&modified, &baseline_editor] {
+            let model = editor.as_ref(ctx).model.clone();
+            model.update(ctx, |model, ctx| model.set_soft_wrap(true, ctx));
+        }
+
         if let Some(editor_state) = self.editor_state_mut(file_path) {
             editor_state.baseline = Some(baseline);
         }
+        self.sync_split_wrap(file_path, ctx);
         created
+    }
+
+    /// Makes each aligned row as tall as its taller side once the panes have wrapped their lines,
+    /// by padding the shorter side with gap rows. Runs after every layout of either pane. A pane
+    /// gaining gap rows does not change how its lines wrap, so this settles after one pass.
+    pub(super) fn sync_split_wrap(&mut self, file_path: &str, ctx: &mut ViewContext<Self>) {
+        let Some(editor_state) = self.editor_state_mut(file_path) else {
+            return;
+        };
+        let Some(baseline) = editor_state.baseline.as_ref() else {
+            return;
+        };
+        let modified = editor_state
+            .editor
+            .as_ref(ctx)
+            .editor()
+            .as_ref(ctx)
+            .model
+            .clone();
+        let baseline = baseline
+            .editor
+            .as_ref(ctx)
+            .editor()
+            .as_ref(ctx)
+            .model
+            .clone();
+        let alignment = modified.as_ref(ctx).split_diff_alignment(ctx);
+        let base_rows = baseline.as_ref(ctx).visual_rows_by_line(ctx);
+        let modified_rows = modified.as_ref(ctx).visual_rows_by_line(ctx);
+        let (base_gaps, modified_gaps) = split_wrap_gaps(&alignment, &base_rows, &modified_rows);
+        baseline.update(ctx, |model, ctx| {
+            model.set_split_gap_override(base_gaps, ctx);
+        });
+        modified.update(ctx, |model, ctx| {
+            model.set_split_gap_override(modified_gaps, ctx);
+        });
     }
 
     fn create_baseline_pane(
@@ -327,6 +377,10 @@ impl CodeReviewView {
                 self.mirror_baseline_hidden_lines(file_path, MirrorDirection::FromModified, ctx);
                 self.invalidate_file_height(file_path, ctx);
             }
+            CodeEditorEvent::LayoutInvalidated => {
+                self.sync_split_wrap(file_path, ctx);
+                self.invalidate_file_height(file_path, ctx);
+            }
             CodeEditorEvent::Focused => {
                 ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::FocusSelf));
             }
@@ -343,7 +397,6 @@ impl CodeReviewView {
             | CodeEditorEvent::CommentEditorOpened
             | CodeEditorEvent::ViewportUpdated
             | CodeEditorEvent::DelayedRenderingFlushed
-            | CodeEditorEvent::LayoutInvalidated
             | CodeEditorEvent::MouseHovered { .. }
             | CodeEditorEvent::VimGotoDefinition
             | CodeEditorEvent::VimFindReferences
@@ -595,6 +648,20 @@ fn mirror_hidden_lines(
 /// A collapsed range at the end of a file can include the empty line after a trailing newline,
 /// which the alignment doesn't cover. Both panes have that line, so lines past the aligned ones
 /// map one to one.
+/// The gap rows for each pane of a wrapped split diff, as `(base, modified)`. Both are `None`
+/// when nothing wraps, so each pane keeps the alignment's own one-row gaps.
+fn split_wrap_gaps(
+    alignment: &DiffAlignment,
+    base_rows: &[usize],
+    modified_rows: &[usize],
+) -> (Option<Vec<GapRun>>, Option<Vec<GapRun>>) {
+    if base_rows.iter().chain(modified_rows).all(|rows| *rows <= 1) {
+        return (None, None);
+    }
+    let (base, modified) = alignment.wrapped_gaps(base_rows, modified_rows);
+    (Some(base), Some(modified))
+}
+
 fn map_hidden_range(
     range: Range<usize>,
     source_line_count: usize,

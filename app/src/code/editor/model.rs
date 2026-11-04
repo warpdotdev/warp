@@ -314,6 +314,9 @@ pub struct CodeEditorModel {
     /// The current state of diff navigation (collapsed, expanded, or focused on a specific hunk)
     diff_navigation_state: DiffNavigationState,
     diff_decoration_mode: DiffDecorationMode,
+    /// Gap rows that replace the split diff's one-row-per-line gaps, set when soft-wrapped lines
+    /// need extra rows to stay level with the other pane.
+    split_gap_override: Option<Vec<GapRun>>,
     interaction_state: InteractionState,
     /// Only applies to scenarios where current line highlighting is possible.
     /// For example, current line highlighting will always be disabled during diff navigation.
@@ -482,6 +485,7 @@ impl CodeEditorModel {
             hidden_lines,
             diff_navigation_state: DiffNavigationState::Collapsed,
             diff_decoration_mode: DiffDecorationMode::Unified,
+            split_gap_override: None,
             interaction_state: InteractionState::Editable,
             show_current_line_highlights,
             delay_rendering: None,
@@ -610,6 +614,11 @@ impl CodeEditorModel {
         match event {
             RenderEvent::PendingEditsFlushed => {
                 self.mark_lazy_layout_initialized(ctx);
+                // With lazy layout, `LayoutUpdated` fires when work is queued, before lines are
+                // wrapped. Wrapped row counts are only final once the queue flushes.
+                if self.soft_wrap(ctx) {
+                    ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
+                }
             }
             RenderEvent::ViewportUpdated(version) => {
                 self.mark_lazy_layout_initialized(ctx);
@@ -620,7 +629,12 @@ impl CodeEditorModel {
             RenderEvent::LayoutUpdated => {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
-            RenderEvent::NeedsResize => {}
+            // Wrapped lines rewrap when the width changes. Unwrapped layout does not depend on it.
+            RenderEvent::NeedsResize => {
+                if self.soft_wrap(ctx) {
+                    self.rebuild_layout_and_refresh_diff(ctx);
+                }
+            }
         }
     }
 
@@ -1192,6 +1206,7 @@ impl CodeEditorModel {
             gaps,
         } = &self.diff_decoration_mode
         {
+            let gaps = self.split_gap_override.as_deref().unwrap_or(gaps);
             self.apply_split_baseline_decorations(removed_lines, gaps, ctx);
             return;
         }
@@ -1334,8 +1349,57 @@ impl CodeEditorModel {
     /// Gap rows for the modified side of a split diff, one per removed line that has no added
     /// line beside it.
     fn split_modified_gap_blocks(&self, ctx: &AppContext) -> Vec<TemporaryBlock> {
-        let alignment = self.split_diff_alignment(ctx);
-        gap_blocks(&alignment.modified_gaps(), Appearance::as_ref(ctx))
+        let appearance = Appearance::as_ref(ctx);
+        match &self.split_gap_override {
+            Some(gaps) => gap_blocks(gaps, appearance),
+            None => gap_blocks(&self.split_diff_alignment(ctx).modified_gaps(), appearance),
+        }
+    }
+
+    /// Whether lines soft-wrap at the viewport width instead of scrolling horizontally.
+    pub fn soft_wrap(&self, ctx: &AppContext) -> bool {
+        self.render_state.as_ref(ctx).width_setting() == WidthSetting::FitViewport
+    }
+
+    /// Turns soft wrapping on or off. Content that is already laid out is laid out again; a
+    /// pending initial layout picks the setting up by itself, and rebuilding before it lands would
+    /// lay the text out twice.
+    pub fn set_soft_wrap(&mut self, wrap: bool, ctx: &mut ModelContext<Self>) {
+        let rebuild = !self.lazy_layout_enabled || self.lazy_layout_initialized;
+        let setting = if wrap {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        };
+        let changed = self.render_state.update(ctx, |render_state, _| {
+            render_state.set_width_setting(setting)
+        });
+        if changed && rebuild {
+            self.rebuild_layout_and_refresh_diff(ctx);
+        }
+    }
+
+    /// The soft-wrapped row count of each line, as currently laid out.
+    pub fn visual_rows_by_line(&self, ctx: &AppContext) -> Vec<usize> {
+        self.render_state
+            .as_ref(ctx)
+            .content()
+            .visual_rows_by_hard_line()
+    }
+
+    /// Replaces the split diff's gap rows, or restores the alignment's own with `None`.
+    pub fn set_split_gap_override(
+        &mut self,
+        gaps: Option<Vec<GapRun>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.split_gap_override == gaps {
+            return;
+        }
+        self.split_gap_override = gaps;
+        if self.diff_decoration_mode != DiffDecorationMode::Unified {
+            self.refresh_diff_state(ctx);
+        }
     }
 
     fn apply_split_baseline_decorations(

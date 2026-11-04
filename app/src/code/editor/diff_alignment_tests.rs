@@ -234,3 +234,81 @@ fn aligns_a_large_multi_hunk_diff() {
     assert_eq!(alignment.modified_gaps().len(), 200);
     assert_eq!(alignment.rows().len(), 5_000);
 }
+
+#[test]
+fn wrapped_gaps_match_plain_gaps_when_nothing_wraps() {
+    let alignment = DiffAlignment::new(vec![span(1..4, 1..2), span(6..6, 4..6)], 8, 8);
+    let (base, modified) = alignment.wrapped_gaps(&[1; 8], &[1; 8]);
+    assert_eq!(base, alignment.base_gaps());
+    assert_eq!(modified, alignment.modified_gaps());
+    let (base, modified) = alignment.wrapped_gaps(&[], &[]);
+    assert_eq!(base, alignment.base_gaps());
+    assert_eq!(modified, alignment.modified_gaps());
+}
+
+#[test]
+fn wrapped_line_pads_the_shorter_side() {
+    // Line 1 is replaced; the new version wraps to 4 rows, the old one to 1.
+    let alignment = DiffAlignment::new(vec![span(1..2, 1..2)], 3, 3);
+    let (base, modified) = alignment.wrapped_gaps(&[1, 1, 1], &[1, 4, 1]);
+    assert_eq!(
+        base,
+        vec![GapRun {
+            insert_before: 2,
+            count: 3
+        }]
+    );
+    assert!(modified.is_empty());
+}
+
+#[test]
+fn wrapped_context_line_pads_the_other_side() {
+    // An unchanged line wraps differently in each pane, for example after a font fallback.
+    let alignment = DiffAlignment::new(Vec::new(), 2, 2);
+    let (base, modified) = alignment.wrapped_gaps(&[3, 1], &[1, 2]);
+    assert!(base.iter().all(|gap| gap.insert_before == 2));
+    assert_eq!(
+        modified,
+        vec![GapRun {
+            insert_before: 1,
+            count: 2
+        }]
+    );
+    assert_eq!(
+        base,
+        vec![GapRun {
+            insert_before: 2,
+            count: 1
+        }]
+    );
+}
+
+#[test]
+fn gap_row_facing_a_wrapped_line_spans_its_rows() {
+    // Two lines added after line 0; the first wraps to 3 rows.
+    let alignment = DiffAlignment::new(vec![span(1..1, 1..3)], 2, 4);
+    let (base, modified) = alignment.wrapped_gaps(&[1, 1], &[1, 3, 1, 1]);
+    assert_eq!(
+        base,
+        vec![GapRun {
+            insert_before: 1,
+            count: 4
+        }]
+    );
+    assert!(modified.is_empty());
+}
+
+#[test]
+fn wrapped_removed_line_pads_its_gap_on_the_modified_side() {
+    // Line 1 is removed and wraps to 2 rows.
+    let alignment = DiffAlignment::new(vec![span(1..2, 1..1)], 3, 2);
+    let (base, modified) = alignment.wrapped_gaps(&[1, 2, 1], &[1, 1]);
+    assert!(base.is_empty());
+    assert_eq!(
+        modified,
+        vec![GapRun {
+            insert_before: 1,
+            count: 2
+        }]
+    );
+}
