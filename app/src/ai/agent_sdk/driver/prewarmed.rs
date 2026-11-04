@@ -283,15 +283,17 @@ impl AgentDriver {
         }
         if let HarnessKind::ThirdParty(harness) = &task.harness {
             harness.validate()?;
-            let client = spawner
-                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
+            let transport = options.harness_transport;
+            spawner
+                .spawn(move |_, ctx| {
+                    crate::ai::agent_sdk::transport_report::report_transport_in_background(
+                        &ctx.background_executor(),
+                        ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                        transport,
+                        transport_fallback,
+                    );
+                })
                 .await?;
-            crate::ai::agent_sdk::harness_support::report_transport_used(
-                client,
-                options.harness_transport,
-                transport_fallback,
-            )
-            .await;
         }
         if let Some(conversation_id) = conversation_id {
             options.resume = setup_events
