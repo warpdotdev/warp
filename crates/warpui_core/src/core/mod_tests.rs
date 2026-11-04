@@ -23,6 +23,28 @@ mod ref_count_tests;
 
 #[path = "try_update_view_tests.rs"]
 mod try_update_view_tests;
+#[test]
+fn test_app_drives_local_tasks_and_returns_a_non_send_value() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let result = App::test((), |app| {
+        let values = values.clone();
+        async move {
+            let (sender, receiver) = async_channel::bounded(1);
+            let task_values = values.clone();
+            app.foreground_executor()
+                .spawn(async move {
+                    task_values.borrow_mut().push(7);
+                    sender.send(()).await.unwrap();
+                })
+                .detach();
+            receiver.recv().await.unwrap();
+            values
+        }
+    });
+
+    assert!(Rc::ptr_eq(&values, &result));
+    assert_eq!(*result.borrow(), vec![7]);
+}
 
 #[test]
 fn test_subscribe_and_emit_from_model() {

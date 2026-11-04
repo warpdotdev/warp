@@ -94,6 +94,15 @@ impl App {
         asset_provider: A,
         f: impl FnOnce(App) -> F,
     ) -> T {
+        let (app, executor) = Self::new_test(Box::new(asset_provider));
+        log::info!("Executing test...");
+        // Erase the test future before the executor so its driver isn't compiled for every test.
+        let result = block_on(executor.run(f(app).boxed_local()));
+        log::info!("Test complete; terminating application...");
+        result
+    }
+
+    fn new_test(asset_provider: Box<dyn AssetProvider>) -> (Self, Rc<executor::Foreground>) {
         log::info!("Starting test app...");
         let platform = Box::new(platform::test::AppDelegate::new().unwrap());
         let window_manager = Box::new(platform::test::WindowManager::new());
@@ -104,17 +113,14 @@ impl App {
             platform,
             window_manager,
             font_cache,
-            Box::new(asset_provider),
+            asset_provider,
             true, /* is_unit_test */
         ))));
         {
             let mut app_mut = app.0.borrow_mut();
             app_mut.weak_self = Rc::downgrade(&app.0);
         }
-        log::info!("Executing test...");
-        let result = block_on(executor.run(f(app)));
-        log::info!("Test complete; terminating application...");
-        result
+        (app, executor)
     }
 
     pub fn new(
