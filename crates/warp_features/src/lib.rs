@@ -1003,6 +1003,9 @@ pub enum FeatureFlag {
     /// from the remote. Disabling it restores direct, network-only checkouts.
     GitMirrorCache,
     AgentPromptSteering,
+    /// Renders right-to-left scripts (e.g. Arabic, Hebrew) in terminal output in visual order with
+    /// contextual shaping, instead of drawing each cell's glyph in logical order.
+    RtlTerminalText,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1083,6 +1086,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::RtlTerminalText,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

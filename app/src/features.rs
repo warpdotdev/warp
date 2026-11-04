@@ -541,6 +541,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudAgentShellRespawn,
         #[cfg(feature = "acp_harness")]
         FeatureFlag::AcpHarness,
+        #[cfg(feature = "rtl_terminal_text")]
+        FeatureFlag::RtlTerminalText,
     ]);
 
     flags

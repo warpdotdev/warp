@@ -1,6 +1,7 @@
 mod box_drawing;
 mod cell_glyph_cache;
 mod cell_type;
+mod rtl;
 
 use core::mem;
 use std::cmp::Ordering;
@@ -26,6 +27,7 @@ use warpui::{AppContext, Element, EntityId, PaintContext, Scene, SingletonEntity
 
 pub use self::cell_glyph_cache::CellGlyphCache;
 use self::cell_type::{CellType, IsFocused, Secret};
+use self::rtl::RtlRuns;
 use super::block_filter::{BLOCK_FILTER_DOTTED_LINE_DASH, BLOCK_FILTER_DOTTED_LINE_WIDTH};
 use super::blockgrid_renderer::GridRenderParams;
 use super::model::char_or_str::CharOrStr;
@@ -639,6 +641,7 @@ fn render_grid_without_ligatures<'a>(
             );
             continue;
         };
+        let mut rtl_runs = RtlRuns::for_row(&row[..], font_family);
 
         for col in 0..grid.columns() {
             let current_point = Point::new(row_idx, col);
@@ -706,6 +709,7 @@ fn render_grid_without_ligatures<'a>(
                         &mut native_glyphs_to_render,
                         obfuscate_secrets,
                         bg_color_sampler.as_deref_mut(),
+                        None,
                         ctx,
                     );
                     continue;
@@ -841,9 +845,17 @@ fn render_grid_without_ligatures<'a>(
                 &mut native_glyphs_to_render,
                 obfuscate_secrets,
                 bg_color_sampler.as_deref_mut(),
+                rtl_runs.run_containing(col),
                 ctx,
             );
         }
+        rtl_runs.paint(
+            grid_origin + vec2f(0., cell_size.y() * offset_row as f32) + baseline_position,
+            cell_size.x(),
+            font_size,
+            line_height_ratio,
+            ctx,
+        );
 
         if grid.filter_has_context_lines() {
             maybe_render_dotted_lines(
@@ -916,6 +928,7 @@ fn render_cell(
     native_glyphs_to_render: &mut Vec<NativeGlyph>,
     obfuscate_mode: ObfuscateSecrets,
     bg_color_sampler: Option<&mut ColorSampler>,
+    rtl_run: Option<&mut AttributedStringBuilder>,
     ctx: &mut PaintContext,
 ) -> Option<CachedBackgroundColor> {
     let cell_colors = cell_colors(
@@ -947,6 +960,7 @@ fn render_cell(
 
     render_cell_glyph(
         cell,
+        col,
         &cell_type,
         first_cell_in_link,
         first_cell_in_secret,
@@ -961,6 +975,7 @@ fn render_cell(
         cell_colors.foreground_color,
         native_glyphs_to_render,
         obfuscate_mode,
+        rtl_run,
         ctx,
     );
     cell_decorations.extend(calculate_cell_decorations(
@@ -1150,6 +1165,7 @@ fn render_grid_with_ligatures<'a>(
             );
             continue;
         };
+        let mut rtl_runs = RtlRuns::for_row(&row[..], font_family);
 
         // Elide any empty cells at the end of the row, they don't need to be included in the text
         // layout
@@ -1407,16 +1423,14 @@ fn render_grid_with_ligatures<'a>(
                 obfuscate_secrets,
             ));
 
-            string_builder.update_style(
-                if cell_type.is_filter_match() {
-                    let mut flags = cell.flags;
-                    flags.insert(Flags::BOLD);
-                    flags.into()
-                } else {
-                    cell.flags.into()
-                },
-                cell_colors.foreground_color,
-            );
+            let font_style = if cell_type.is_filter_match() {
+                let mut flags = cell.flags;
+                flags.insert(Flags::BOLD);
+                flags.into()
+            } else {
+                cell.flags.into()
+            };
+            string_builder.update_style(font_style, cell_colors.foreground_color);
 
             if !cell
                 .flags
@@ -1450,6 +1464,10 @@ fn render_grid_with_ligatures<'a>(
                     // to properly align the contents. We don't want the text layout engine to
                     // attempt the same thing, so we replace it with a placeholder
                     string_builder.append_placeholder(col);
+                } else if let Some(rtl_run) = rtl_runs.run_containing(col) {
+                    rtl_run.update_style(font_style, cell_colors.foreground_color);
+                    rtl_run.append_content(cell.content_for_display(), col);
+                    string_builder.append_placeholder(col);
                 } else {
                     string_builder.append_content(cell.content_for_display(), col);
                 }
@@ -1479,6 +1497,13 @@ fn render_grid_with_ligatures<'a>(
             cell_size.x(),
             &string_data.character_index_to_cell_map,
             ctx.scene,
+        );
+        rtl_runs.paint(
+            line_origin,
+            cell_size.x(),
+            font_size,
+            line_height_ratio,
+            ctx,
         );
 
         if grid.filter_has_context_lines() {
@@ -1701,6 +1726,7 @@ impl FontIdCache {
 #[allow(clippy::too_many_arguments)]
 fn render_cell_glyph(
     cell: &Cell,
+    col: usize,
     cell_type: &CellType,
     first_cell_in_link: bool,
     first_cell_in_secret: FirstCellInSecret,
@@ -1715,6 +1741,7 @@ fn render_cell_glyph(
     foreground_color: ColorU,
     native_glyphs_to_render: &mut Vec<NativeGlyph>,
     obfuscate_mode: ObfuscateSecrets,
+    rtl_run: Option<&mut AttributedStringBuilder>,
     ctx: &mut PaintContext,
 ) {
     let cell_size = if cell.flags().intersects(Flags::WIDE_CHAR) {
@@ -1785,11 +1812,17 @@ fn render_cell_glyph(
                 foreground_color,
                 glyph_type,
             });
+            if let Some(rtl_run) = rtl_run {
+                rtl_run.append_placeholder(col);
+            }
         }
         None => {
-            // Add FontId as part of the hashkey since characters with different
-            // fonts will have different glyph ids.
-            if let Some((glyph_id, font_id)) = glyph_and_font {
+            if let Some(rtl_run) = rtl_run {
+                rtl_run.update_style(font_style, foreground_color);
+                rtl_run.append_content(cell_content, col);
+            } else if let Some((glyph_id, font_id)) = glyph_and_font {
+                // Add FontId as part of the hashkey since characters with different
+                // fonts will have different glyph ids.
                 // If we don't have special handling for the character, draw the
                 // glyph from the font.
                 ctx.scene
