@@ -9,11 +9,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    SKILL_PROVIDER_DEFINITIONS, SkillReferenceEntry, SkillReferenceFile, SkillReferenceParseError,
-    SkillSource, SkillSourceRef, is_skill_reference_file_name, parse_code_forge, parse_skill,
-    parse_skill_reference_file, read_skills, resolve_skills_dirs,
+    SKILL_PROVIDER_DEFINITIONS, SkillGlobMatcher, SkillReferenceEntry, SkillReferenceFile,
+    SkillReferenceParseError, SkillSource, SkillSourceRef, is_skill_reference_file_name,
+    parse_code_forge, parse_skill, parse_skill_reference_file, read_skills, resolve_skills_dirs,
 };
-use globset::GlobMatcher;
 use serde::Serialize;
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
@@ -660,7 +659,7 @@ fn skill_folders(root: &Path) -> Vec<String> {
 /// Whether `entry` selects the skill `name` in folder `rel_dir`; `matcher` is its compiled glob.
 fn selects(
     entry: &SkillReferenceEntry,
-    matcher: Option<&GlobMatcher>,
+    matcher: Option<&SkillGlobMatcher>,
     name: &str,
     rel_dir: &str,
 ) -> bool {
@@ -670,7 +669,7 @@ fn selects(
         SkillReferenceEntry::NameGlob(_) => matcher.is_some_and(|matcher| matcher.is_match(name)),
         // A path glob selects a skill by its folder or its `SKILL.md`.
         SkillReferenceEntry::PathGlob(_) => matcher.is_some_and(|matcher| {
-            matcher.is_match(rel_dir) || matcher.is_match(format!("{rel_dir}/{SKILL_FILE}"))
+            matcher.is_match(rel_dir) || matcher.is_match(&format!("{rel_dir}/{SKILL_FILE}"))
         }),
     }
 }

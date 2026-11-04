@@ -91,11 +91,17 @@ impl SkillReferenceEntry {
     }
 
     /// The compiled matcher for glob entries; `None` for names and paths.
-    pub fn glob_matcher(&self) -> Option<GlobMatcher> {
+    pub fn glob_matcher(&self) -> Option<SkillGlobMatcher> {
         match self {
-            Self::NameGlob(pattern) | Self::PathGlob(pattern) => compile_glob(pattern)
+            // globset reads `\` in a candidate as a path separator on Windows, which a name
+            // isn't, so names match the glob's regex directly.
+            Self::NameGlob(pattern) => compile_glob(pattern)
                 .ok()
-                .map(|glob| glob.compile_matcher()),
+                .and_then(|glob| regex::bytes::Regex::new(glob.regex()).ok())
+                .map(SkillGlobMatcher::Name),
+            Self::PathGlob(pattern) => compile_glob(pattern)
+                .ok()
+                .map(|glob| SkillGlobMatcher::Path(glob.compile_matcher())),
             Self::Name(_) | Self::Path(_) => None,
         }
     }
@@ -332,6 +338,21 @@ fn is_lowercase_hex(value: &str, len: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+/// A compiled name or path glob.
+pub enum SkillGlobMatcher {
+    Name(regex::bytes::Regex),
+    Path(GlobMatcher),
+}
+
+impl SkillGlobMatcher {
+    pub fn is_match(&self, candidate: &str) -> bool {
+        match self {
+            Self::Name(regex) => regex.is_match(candidate.as_bytes()),
+            Self::Path(matcher) => matcher.is_match(candidate),
+        }
+    }
 }
 
 /// Compiles a glob with only `*`, `**`, `?` and `[...]` as syntax; every other character,
