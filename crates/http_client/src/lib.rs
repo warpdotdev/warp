@@ -24,7 +24,7 @@ use warp_core::execution_mode;
 use warp_core::operating_system_info::OperatingSystemInfo;
 use warp_errors::report_error;
 
-use crate::iap::{IapTokenProvider, proxy_auth_header};
+use crate::iap::IapTokenProvider;
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
@@ -270,16 +270,12 @@ impl Client {
         let Some(provider) = self.iap_token_provider.as_ref() else {
             return Vec::new();
         };
-        let mut headers = Vec::new();
-        if url.into_url().is_ok_and(|url| is_warp_server_origin(&url))
-            && let Some(token) = provider.cached_token()
-        {
-            headers.push(proxy_auth_header(&token));
-        }
-        if provider.routing_opt_in_enabled() {
-            headers.push((iap::IAP_OPT_IN_HEADER, "1".to_string()));
-        }
-        headers
+        let token = if url.into_url().is_ok_and(|url| is_warp_server_origin(&url)) {
+            provider.cached_token()
+        } else {
+            None
+        };
+        iap::headers(token, provider.routing_opt_in_enabled())
     }
 
     /// Helper method to determine if the request should include warp-specific headers. The only case
