@@ -383,6 +383,21 @@ pub fn test_image_completion_before_execution_routes_to_output_grid() {
 }
 
 #[test]
+pub fn script_execution_text_is_not_serialized_as_a_command() {
+    let mut block = TestBlockBuilder::new()
+        .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+        .build();
+    block.start();
+
+    for c in "motd".chars() {
+        block.input(c);
+    }
+
+    assert_eq!(block.command_to_string(), "");
+    assert_eq!(block.output_grid().contents_to_string(false, None), "motd");
+}
+
+#[test]
 pub fn test_image_completion_drops_in_warp_input_stage() {
     let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
     let mut block = TestBlockBuilder::new()
