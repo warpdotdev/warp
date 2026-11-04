@@ -26,6 +26,7 @@ use super::{
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -251,6 +252,10 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// `resolved_secrets` provides the raw typed managed secrets so harnesses
     /// can read structured fields (e.g. `base_url`) without relying on env vars.
     ///
+    /// `prompt_attribution` is the attribution (origin, author, source message) of the query
+    /// that opens this execution, for a harness that echoes `prompt` into the conversation
+    /// itself rather than relaying the server's echo.
+    ///
     /// `skill_dirs` lists the workspace's skill source directories in precedence order.
     ///
     /// `workspace_root` is the root used for workspace-level inputs, while
@@ -265,6 +270,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,

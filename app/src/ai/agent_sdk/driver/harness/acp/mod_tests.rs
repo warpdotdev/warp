@@ -169,6 +169,7 @@ fn initial_files_reach_the_acp_runner_without_changing_the_pty_prompt() {
                 None,
                 None,
                 Some("context"),
+                None,
                 temp.path(),
                 temp.path(),
                 None,
