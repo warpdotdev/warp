@@ -22,7 +22,6 @@ use session_sharing_protocol::sharer::{
     ReconnectPayload, ReconnectToken, ReconnectionFailedReason, SessionEndedReason,
     SessionSourceType, SessionTerminatedReason, UpstreamMessage,
 };
-use warp_server_client::iap::IapManager;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::executor::Foreground;
 use warpui::r#async::{FutureExt as _, Timer};
@@ -1750,16 +1749,6 @@ fn test_messages_are_buffered_before_session_initialized() {
 fn test_messages_are_buffered_while_reconnecting() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        // Disabled (`None`) IapManager so the reconnect path, which reads the
-        // singleton, doesn't panic; inert no-op in tests.
-        app.add_singleton_model(|ctx| {
-            IapManager::new(
-                None,
-                Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
-                None,
-                ctx,
-            )
-        });
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
         app.add_singleton_model(AuthManager::new_for_test);
