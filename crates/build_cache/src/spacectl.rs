@@ -11,7 +11,11 @@
 //!    checks whether each mode supported by `spacectl` applies to the current directory
 //! 2. To set up caches, by running `spacectl cache mount --dry_run=false --mode=...`. This
 //!    configures *only* the requested cache modes
+//!
+//! `spacectl cache modes` performs the same detection as (1) without planning mounts, which makes
+//! it much cheaper when the mount destinations are not needed.
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -63,6 +67,25 @@ pub struct DiskUsage {
     pub total: String,
     pub used: String,
 }
+
+/// Error printed to stdout by `spacectl -o json` when a command fails.
+#[derive(Deserialize)]
+struct ErrorResponse {
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct ModesResponse {
+    #[serde(default)]
+    modes: BTreeMap<String, ModeDetection>,
+}
+
+#[derive(Deserialize)]
+struct ModeDetection {
+    #[serde(default)]
+    detected: bool,
+}
+
 pub(super) struct MountContext {
     pub relative_cache_dir: PathBuf,
     pub cache_root: PathBuf,
@@ -74,7 +97,8 @@ pub(super) struct MountContext {
 /// `cargo metadata`, ...). Those queries only need cache locations, but by default they download
 /// whichever toolchain a repository pins. The download takes several seconds and lands in a
 /// directory that is about to be covered by a cache mount, so it is repeated on every run.
-const SPACECTL_ENV: &[(&str, &str)] = &[("GOTOOLCHAIN", "local"), ("RUSTUP_AUTO_INSTALL", "0")];
+pub(super) const SPACECTL_ENV: &[(&str, &str)] =
+    &[("GOTOOLCHAIN", "local"), ("RUSTUP_AUTO_INSTALL", "0")];
 
 fn spacectl_command() -> Command {
     let mut command = Command::new_with_process_group("spacectl");
@@ -82,9 +106,8 @@ fn spacectl_command() -> Command {
     command
 }
 
-/// Construct a `spacectl` command for detecting all cache modes that apply to
-/// `cwd`. Currently, this uses `spacectl cache mount`, though we could use
-/// `spacectl cache modes` as well.
+/// Construct a `spacectl` command for detecting all cache modes that apply to `cwd` and reporting
+/// the mounts they would make, without mounting anything.
 fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
     let mut command = spacectl_command();
     command
@@ -97,6 +120,16 @@ fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
         ])
         .arg(cache_root)
         .args(["-o", "json"])
+        .current_dir(cwd);
+    command
+}
+
+/// Construct a `spacectl` command for detecting the cache modes that apply to `cwd` without
+/// planning their mounts.
+fn modes_command(cwd: &Path) -> Command {
+    let mut command = spacectl_command();
+    command
+        .args(["cache", "modes", "-o", "json"])
         .current_dir(cwd);
     command
 }
@@ -196,15 +229,117 @@ where
             }
         }
         Err(err) => {
-            let diagnostic = mount_error_diagnostic(&err);
-            let diagnostic: &str = diagnostic.as_ref();
-            span.record("mount_error", diagnostic);
-            span.record("otel.status_code", "ERROR");
-            span.record("otel.status_description", err.to_string());
+            record_error(&span, &err);
             tracing::error!(error = ?err, "spacectl cache mount failed");
             failed_invocation(scope, modes, context.relative_cache_dir, err, duration)
         }
     }
+}
+
+/// Run `spacectl cache modes`. A successful report's response lists the detected modes and no
+/// mounts.
+#[tracing::instrument(
+    name = "spacectl_cache_modes",
+    skip_all,
+    fields(
+        tags.cloud_agent = true,
+        scope = scope.kind(),
+        repo_key = scope.repo_key().map(RepoCacheKey::as_str).unwrap_or(""),
+        modes = tracing::field::Empty,
+        relative_cache_dir = %relative_cache_dir.display(),
+        stable_child_id = stable_child_id,
+        duration_ms = tracing::field::Empty,
+        mount_error = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        otel.status_description = tracing::field::Empty,
+    )
+)]
+pub(super) async fn run_spacectl_modes<F, Fut>(
+    scope: CacheScope,
+    relative_cache_dir: PathBuf,
+    cwd: &Path,
+    stable_child_id: &str,
+    run_command: &F,
+) -> CachePreparationReport
+where
+    F: Fn(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    let command = modes_command(cwd);
+    tracing::info!(?command, "Executing spacectl");
+    let started = Instant::now();
+    let result = async {
+        let bytes = run_command(command).await?;
+        serde_json::from_slice::<ModesResponse>(&bytes)
+            .map_err(|_| CacheSetupError::JsonParseFailed)
+    }
+    .await;
+    let duration = started.elapsed();
+    let span = tracing::Span::current();
+    span.record("duration_ms", duration.as_millis() as u64);
+
+    match result {
+        Ok(response) => {
+            let modes = canonical_modes(
+                response
+                    .modes
+                    .into_iter()
+                    .filter(|(_, detection)| detection.detected)
+                    .map(|(mode, _)| mode)
+                    .collect(),
+            );
+            span.record("modes", modes.join(","));
+            let response = MountResponse {
+                input: MountInput {
+                    modes: modes.clone(),
+                },
+                output: MountOutput::default(),
+            };
+            CachePreparationReport {
+                scope,
+                mode_stats: aggregate_mode_stats(&modes, &response),
+                modes,
+                relative_cache_dir,
+                response: Some(response),
+                error: None,
+                duration,
+            }
+        }
+        Err(err) => {
+            record_error(&span, &err);
+            tracing::warn!(error = ?err, "spacectl cache modes failed");
+            failed_invocation(scope, Vec::new(), relative_cache_dir, err, duration)
+        }
+    }
+}
+
+/// Identifies which of `modes` failed to plan, from spacectl's `planning <mode>: ...` error.
+pub(super) fn failed_planning_mode(error: &CacheSetupError, modes: &[String]) -> Option<String> {
+    let CacheSetupError::NonzeroExit { stdout, stderr, .. } = error else {
+        return None;
+    };
+    let message = serde_json::from_str::<ErrorResponse>(stdout)
+        .map(|response| response.message)
+        .unwrap_or_default();
+    [message.as_str(), stdout, stderr]
+        .into_iter()
+        .find_map(|output| {
+            output
+                .match_indices("planning ")
+                .find_map(|(index, prefix)| {
+                    let (mode, _) = output[index + prefix.len()..].split_once(':')?;
+                    modes.iter().find(|candidate| *candidate == mode)
+                })
+        })
+        .cloned()
+}
+
+fn record_error(span: &tracing::Span, error: &CacheSetupError) {
+    let diagnostic = mount_error_diagnostic(error);
+    let diagnostic: &str = diagnostic.as_ref();
+    span.record("mount_error", diagnostic);
+    span.record("otel.status_code", "ERROR");
+    span.record("otel.status_description", error.to_string());
 }
 fn mount_error_diagnostic(error: &CacheSetupError) -> Cow<'_, str> {
     match error {
