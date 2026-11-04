@@ -156,15 +156,18 @@ fn relative_key(path: &Path) -> Result<String, CacheMetadataError> {
 }
 
 pub(crate) fn normalized_cache_root(path: &Path) -> Result<PathBuf, CacheMetadataError> {
+    let absolute = std::path::absolute(path).map_err(|source| CacheMetadataError::Io {
+        operation: "normalize cache root",
+        path: path.to_owned(),
+        source,
+    })?;
+    Ok(lexically_normalized(&absolute))
+}
+
+/// Resolves `.` and `..` components without consulting the filesystem.
+pub(crate) fn lexically_normalized(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
-    for component in std::path::absolute(path)
-        .map_err(|source| CacheMetadataError::Io {
-            operation: "normalize cache root",
-            path: path.to_owned(),
-            source,
-        })?
-        .components()
-    {
+    for component in path.components() {
         match component {
             Component::ParentDir => {
                 normalized.pop();
@@ -175,7 +178,7 @@ pub(crate) fn normalized_cache_root(path: &Path) -> Result<PathBuf, CacheMetadat
             }
         }
     }
-    Ok(normalized)
+    normalized
 }
 
 fn usage_entries(
