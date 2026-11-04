@@ -11,13 +11,14 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use http::StatusCode;
 use warp_cli::agent::HarnessTransport;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt as _, Timer};
 
-use crate::server::retry_strategies::{backoff_after_attempts, is_transient_http_error};
-use crate::server::server_api::harness_support::HarnessSupportClient;
-use crate::server::server_api::presigned_upload::HttpStatusError;
+use crate::server::graphql::GraphQLError;
+use crate::server::retry_strategies::{backoff_after_attempts, is_transient_graphql_or_http_error};
+use crate::server::server_api::harness_support::{HarnessSupportClient, TransportReportRejected};
 
 /// Upper bound on one attempt, so a server that hangs costs one attempt rather than the report.
 const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,7 +39,7 @@ pub(crate) fn report_transport_in_background(
             if let Err(error) =
                 report_with_retry(client.as_ref(), transport, fallback_reason, Timer::after).await
             {
-                if endpoint_missing(&error) {
+                if mutation_unsupported(&error) {
                     log::info!(
                         "The server does not accept harness transport reports; not reporting: {error:#}"
                     );
@@ -50,9 +51,9 @@ pub(crate) fn report_transport_in_background(
         .detach();
 }
 
-/// Sends the report, retrying transient failures (network errors, timeouts, 408, 429 and 5xx)
-/// up to [`REPORT_MAX_ATTEMPTS`] times and waiting with `sleep` between attempts. Any other
-/// error, such as the 404 of a server without the endpoint, is returned at once.
+/// Sends the report, retrying transient failures (see [`is_transient_report_error`]) up to
+/// [`REPORT_MAX_ATTEMPTS`] times and waiting with `sleep` between attempts. Any other error,
+/// such as the 422 of a server without the mutation, is returned at once.
 async fn report_with_retry<S, SF>(
     client: &dyn HarnessSupportClient,
     transport: HarnessTransport,
@@ -76,7 +77,7 @@ where
                 "harness transport report timed out after {REPORT_ATTEMPT_TIMEOUT:?}"
             ),
         };
-        if attempt >= REPORT_MAX_ATTEMPTS || !is_transient_http_error(&error) {
+        if attempt >= REPORT_MAX_ATTEMPTS || !is_transient_report_error(&error) {
             return Err(error);
         }
         log::info!(
@@ -87,12 +88,32 @@ where
     }
 }
 
-/// Whether `error` means the server has no report-transport endpoint, as an older server does.
-fn endpoint_missing(error: &anyhow::Error) -> bool {
+/// Whether sending the report again may succeed. A rejection (a user-facing error, or a report
+/// this client could not build) never will. A GraphQL transport failure is retried when it is a
+/// network error, 408, 429 or 5xx, and not otherwise, so the 422 of a server without the mutation
+/// fails at once. Anything else is retried: an attempt that timed out, a failure before the
+/// request was sent, or a server-side failure answered as GraphQL errors without data.
+fn is_transient_report_error(error: &anyhow::Error) -> bool {
+    if error
+        .chain()
+        .any(|cause| cause.is::<TransportReportRejected>())
+    {
+        return false;
+    }
+    if error.chain().any(|cause| cause.is::<GraphQLError>()) {
+        return is_transient_graphql_or_http_error(error);
+    }
+    true
+}
+
+/// Whether `error` means the server's schema does not accept the report, as an older server
+/// without the `reportHarnessTransport` mutation answers: a GraphQL validation failure (422).
+fn mutation_unsupported(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
-        cause
-            .downcast_ref::<HttpStatusError>()
-            .is_some_and(|error| matches!(error.status, 404 | 405 | 501))
+        matches!(
+            cause.downcast_ref::<GraphQLError>(),
+            Some(GraphQLError::HttpError { status, .. }) if *status == StatusCode::UNPROCESSABLE_ENTITY
+        )
     })
 }
 

@@ -358,7 +358,7 @@ fn transport_fallback_only_when_an_acp_run_has_no_adapter() {
 fn transport_fallback_reasons_have_stable_wire_values() {
     use super::TransportFallbackReason;
 
-    // warp-server accepts exactly these values from report-transport.
+    // The reportHarnessTransport report maps exactly these values to its fallback reasons.
     assert_eq!(TransportFallbackReason::NoSidecar.as_str(), "no_sidecar");
     assert_eq!(
         TransportFallbackReason::SidecarWithoutAdapter.as_str(),

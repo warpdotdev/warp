@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use instant::Instant;
-use warp_server_client::HttpStatusError;
 
 use super::*;
 use crate::server::server_api::harness_support::MockHarnessSupportClient;
@@ -15,9 +14,21 @@ fn background() -> Arc<Background> {
 /// Counts the waits between attempts instead of sleeping.
 async fn no_wait(_: Duration) {}
 
+/// A GraphQL request answered with a non-OK HTTP status.
 fn http_error(status: u16) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError::new(status, String::new()))
-        .context(format!("API request failed with status {status}"))
+    anyhow::Error::new(GraphQLError::HttpError {
+        status: StatusCode::from_u16(status).unwrap(),
+        body: String::new(),
+    })
+}
+
+/// A server-side failure, which the GraphQL layer answers as errors without data.
+fn graphql_errors() -> anyhow::Error {
+    anyhow::anyhow!("missing response data for ReportHarnessTransport: internal error")
+}
+
+fn rejected() -> anyhow::Error {
+    TransportReportRejected("fixed transport".to_string()).into()
 }
 
 /// A client whose `report_transport` answers with `results` in turn and counts its calls.
@@ -95,38 +106,79 @@ async fn transient_failures_stop_at_the_attempt_bound() {
 }
 
 #[tokio::test]
-async fn a_rejected_report_is_not_retried() {
-    let (client, calls) = client_answering(vec![|| Err(http_error(400))]);
+async fn a_server_side_failure_is_retried() {
+    let (client, calls) = client_answering(vec![|| Err(graphql_errors()), || Ok(())]);
 
-    let error = report_with_retry(&client, HarnessTransport::Pty, Some("bogus"), no_wait)
+    report_with_retry(&client, HarnessTransport::Pty, Some("no_sidecar"), no_wait)
+        .await
+        .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_rejected_report_is_not_retried() {
+    let (client, calls) = client_answering(vec![|| Err(rejected())]);
+
+    let error = report_with_retry(&client, HarnessTransport::Pty, None, no_wait)
         .await
         .unwrap_err();
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(!endpoint_missing(&error));
+    assert!(!mutation_unsupported(&error));
 }
 
 #[tokio::test]
-async fn a_server_without_the_endpoint_is_not_retried() {
-    let (client, calls) = client_answering(vec![|| Err(http_error(404))]);
+async fn a_client_error_status_is_not_retried() {
+    let (client, calls) = client_answering(vec![|| Err(http_error(400))]);
+
+    let error = report_with_retry(&client, HarnessTransport::Pty, None, no_wait)
+        .await
+        .unwrap_err();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!mutation_unsupported(&error));
+}
+
+#[tokio::test]
+async fn a_server_without_the_mutation_is_not_retried() {
+    let (client, calls) = client_answering(vec![|| Err(http_error(422))]);
 
     let error = report_with_retry(&client, HarnessTransport::Acp, None, no_wait)
         .await
         .unwrap_err();
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(endpoint_missing(&error));
+    assert!(mutation_unsupported(&error));
 }
 
 #[test]
-fn a_missing_endpoint_is_told_apart_from_other_failures() {
-    for status in [404, 405, 501] {
-        assert!(endpoint_missing(&http_error(status)), "{status}");
+fn an_unsupported_mutation_is_told_apart_from_other_failures() {
+    assert!(mutation_unsupported(&http_error(422)));
+    for status in [400, 401, 404, 500, 503] {
+        assert!(!mutation_unsupported(&http_error(status)), "{status}");
     }
-    for status in [400, 401, 500, 503] {
-        assert!(!endpoint_missing(&http_error(status)), "{status}");
+    assert!(!mutation_unsupported(&graphql_errors()));
+    assert!(!mutation_unsupported(&rejected()));
+    assert!(!mutation_unsupported(&anyhow::anyhow!("connection reset")));
+}
+
+#[test]
+fn transient_failures_are_told_apart_from_final_ones() {
+    for status in [408, 429, 500, 502, 503] {
+        assert!(is_transient_report_error(&http_error(status)), "{status}");
     }
-    assert!(!endpoint_missing(&anyhow::anyhow!("connection reset")));
+    for status in [400, 401, 403, 404, 422] {
+        assert!(!is_transient_report_error(&http_error(status)), "{status}");
+    }
+    assert!(is_transient_report_error(&graphql_errors()));
+    assert!(is_transient_report_error(&anyhow::anyhow!(
+        "harness transport report timed out"
+    )));
+    assert!(!is_transient_report_error(&rejected()));
+    assert!(!is_transient_report_error(
+        &rejected().context("while reporting")
+    ));
 }
 
 #[test]
