@@ -14,7 +14,6 @@ use anyhow::{Context, Result, anyhow};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use log::debug;
 use sha2::{Digest, Sha256};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
