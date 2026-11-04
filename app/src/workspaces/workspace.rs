@@ -580,6 +580,7 @@ pub struct Tier {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BillingMetadata {
+    pub custom_usage_amounts: Option<warp_graphql::billing::CustomUsageAmounts>,
     pub tier: Tier,
     pub customer_type: CustomerType,
     pub delinquency_status: DelinquencyStatus,

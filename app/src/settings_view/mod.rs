@@ -81,7 +81,7 @@ mod agent_assisted_environment_modal;
 mod agent_profiles_page;
 mod ai_shared;
 mod appearance_page;
-mod billing_and_usage;
+pub(crate) mod billing_and_usage;
 mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
