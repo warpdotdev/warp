@@ -14,6 +14,7 @@ use ai::skills::{
     parse_code_forge, parse_skill, parse_skill_reference_file, read_skills, resolve_skills_dirs,
 };
 use serde::Serialize;
+use serde_json::{Value, json};
 use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 use warpui::ModelSpawner;
@@ -30,6 +31,12 @@ const SKILL_FILE: &str = "SKILL.md";
 const FACTORY_FILE: &str = "factory.yaml";
 /// Bounds how much of a source repository a path glob walks.
 const MAX_WALKED_ENTRIES: usize = 200_000;
+
+/// Bounds on the run record, kept within what the server stores for one timeline event.
+const MAX_RECORDED_REFERENCE_FILES: usize = 200;
+const MAX_RECORDED_ENTRIES: usize = 256;
+const MAX_RECORDED_STRING_BYTES: usize = 512;
+const MAX_RECORDED_PAYLOAD_BYTES: usize = 60 * 1024;
 
 /// Whether a reference file applies to the whole Factory or to one agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -66,6 +73,56 @@ impl SkillSourcesReport {
             .iter()
             .map(|file| file.unresolved.len())
             .sum()
+    }
+
+    /// The `skill_sources_resolved` timeline payload. Strings lose control characters and strings
+    /// and lists are capped, while the counts keep every file, loaded skill and unresolved entry.
+    /// If the record is still too large, every file's loaded skills are dropped, then trailing
+    /// files.
+    pub fn timeline_payload(&self) -> Value {
+        let mut references = self
+            .references
+            .iter()
+            .take(MAX_RECORDED_REFERENCE_FILES)
+            .map(|file| {
+                let mut recorded = file.clone();
+                recorded.loaded.truncate(MAX_RECORDED_ENTRIES);
+                recorded.unresolved.truncate(MAX_RECORDED_ENTRIES);
+                let mut value = serde_json::to_value(recorded).unwrap_or_default();
+                value["loaded_count"] = file.loaded.len().into();
+                value["unresolved_count"] = file.unresolved.len().into();
+                sanitize_strings(&mut value);
+                value
+            })
+            .collect::<Vec<_>>();
+        let payload = |references: &[Value]| json!({ "file_count": self.references.len(), "references": references });
+        let mut size = payload(&references).to_string().len();
+        if size > MAX_RECORDED_PAYLOAD_BYTES {
+            for file in &mut references {
+                file["loaded"] = json!([]);
+            }
+            size = payload(&references).to_string().len();
+        }
+        while size > MAX_RECORDED_PAYLOAD_BYTES {
+            let Some(file) = references.pop() else {
+                break;
+            };
+            size -= file.to_string().len();
+        }
+        payload(&references)
+    }
+}
+
+/// The server rejects control characters, which skill names from a source's frontmatter can hold.
+fn sanitize_strings(value: &mut Value) {
+    match value {
+        Value::String(string) => {
+            string.retain(|character| !character.is_control());
+            string.truncate(string.floor_char_boundary(MAX_RECORDED_STRING_BYTES));
+        }
+        Value::Array(items) => items.iter_mut().for_each(sanitize_strings),
+        Value::Object(fields) => fields.values_mut().for_each(sanitize_strings),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 

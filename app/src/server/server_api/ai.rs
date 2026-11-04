@@ -488,6 +488,8 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    /// An event-specific JSON payload for a timeline event.
+    Timeline(serde_json::Value),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
 
@@ -433,6 +434,122 @@ fn skills_that_reach_outside_their_checkout_are_rejected() {
     ]
     .map(|entry| (entry, UnresolvedReason::NoMatch));
     assert_eq!(unresolved(&report.references[0]), escaped);
+}
+
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+fn sample_report() -> SkillSourcesReport {
+    SkillSourcesReport {
+        references: vec![
+            ReferenceFileReport {
+                reference_file: "agents/triage/skills/broken.yaml".to_owned(),
+                level: ReferenceLevel::Agent,
+                agent: Some("triage".to_owned()),
+                source: None,
+                loaded: Vec::new(),
+                unresolved: vec![UnresolvedEntry {
+                    entry: String::new(),
+                    reason: UnresolvedReason::InvalidReferenceFile,
+                }],
+            },
+            ReferenceFileReport {
+                reference_file: "skills/shared.yaml".to_owned(),
+                level: ReferenceLevel::Factory,
+                agent: None,
+                source: Some(ReferencedSource {
+                    code_forge: Some(RepositoryForge::GitHub),
+                    owner: "acme".to_owned(),
+                    repo: "shared-skills".to_owned(),
+                    requested_ref: Some("v1.4.0".to_owned()),
+                    resolved_sha: Some(SHA.to_owned()),
+                }),
+                loaded: vec![LoadedSkill {
+                    // The payload drops control characters.
+                    name: "safe-\u{0}secrets\n".to_owned(),
+                    path: ".agents/skills/safe-secrets".to_owned(),
+                }],
+                unresolved: vec![UnresolvedEntry {
+                    entry: "legacy-*".to_owned(),
+                    reason: UnresolvedReason::NoMatch,
+                }],
+            },
+        ],
+    }
+}
+
+#[test]
+fn timeline_payload_has_the_agreed_shape() {
+    let mut report = sample_report();
+    assert_eq!(
+        report.timeline_payload(),
+        json!({"file_count": 2, "references": [
+            {
+                "reference_file": "agents/triage/skills/broken.yaml",
+                "level": "agent",
+                "agent": "triage",
+                "loaded": [],
+                "loaded_count": 0,
+                "unresolved": [{"entry": "", "reason": "invalid_reference_file"}],
+                "unresolved_count": 1,
+            },
+            {
+                "reference_file": "skills/shared.yaml",
+                "level": "factory",
+                "source": {
+                    "code_forge": "GITHUB",
+                    "owner": "acme",
+                    "repo": "shared-skills",
+                    "requested_ref": "v1.4.0",
+                    "resolved_sha": SHA,
+                },
+                "loaded": [{"name": "safe-secrets", "path": ".agents/skills/safe-secrets"}],
+                "loaded_count": 1,
+                "unresolved": [{"entry": "legacy-*", "reason": "no_match"}],
+                "unresolved_count": 1,
+            },
+        ]})
+    );
+    let source = report.references[1].source.as_mut().unwrap();
+    (source.code_forge, source.requested_ref, source.resolved_sha) = (None, None, None);
+    assert_eq!(
+        report.timeline_payload()["references"][1]["source"],
+        json!({"owner": "acme", "repo": "shared-skills"})
+    );
+}
+
+#[test]
+fn timeline_payload_stays_bounded_keeps_counts_and_drops_loaded_skills_first() {
+    let mut file = sample_report().references.remove(1);
+    file.reference_file = "x".repeat(4 * MAX_RECORDED_STRING_BYTES);
+    file.loaded = vec![file.loaded[0].clone(); 2 * MAX_RECORDED_ENTRIES];
+    file.unresolved = vec![file.unresolved[0].clone(); 10];
+    let loaded_lengths = |files| {
+        let payload = SkillSourcesReport {
+            references: vec![file.clone(); files],
+        }
+        .timeline_payload();
+        assert!(payload.to_string().len() <= MAX_RECORDED_PAYLOAD_BYTES);
+        assert_eq!(payload["file_count"], files);
+        let references = payload["references"].as_array().unwrap();
+        references
+            .iter()
+            .map(|file| {
+                let reference_file = file["reference_file"].as_str().unwrap();
+                assert_eq!(reference_file.len(), MAX_RECORDED_STRING_BYTES);
+                assert_eq!(file["unresolved"].as_array().unwrap().len(), 10);
+                assert_eq!(file["loaded_count"], 2 * MAX_RECORDED_ENTRIES);
+                assert_eq!(file["unresolved_count"], 10);
+                file["loaded"].as_array().unwrap().len()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(loaded_lengths(3), [MAX_RECORDED_ENTRIES; 3]);
+    assert_eq!(loaded_lengths(4), [0; 4]);
+    let many = loaded_lengths(400);
+    assert!(
+        many.len() > 10 && many.iter().all(|&length| length == 0),
+        "{many:?}"
+    );
 }
 
 #[test]
