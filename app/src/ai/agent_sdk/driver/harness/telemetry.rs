@@ -37,7 +37,8 @@ pub(crate) enum ThirdPartyHarnessTelemetryEvent {
     TransportFallback {
         /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
         harness: String,
-        /// `"no_adapter"`.
+        /// `"no_sidecar"` or `"sidecar_without_adapter"`; see
+        /// [`super::TransportFallbackReason`].
         reason: &'static str,
     },
 }

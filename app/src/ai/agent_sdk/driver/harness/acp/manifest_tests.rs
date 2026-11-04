@@ -157,6 +157,32 @@ fn unsupported_versions_and_unknown_section_fields_are_rejected() {
 }
 
 #[test]
+fn defaults_say_whether_a_sidecar_without_a_manifest_was_mounted() {
+    let root = tempdir().unwrap();
+    let mounts = root.path().join("mnt");
+
+    // Nothing mounted, as on the Direct backend or a native image.
+    let selected = discover(Harness::Claude, None, &mounts).unwrap();
+    assert!(selected.default.is_some());
+    assert!(!selected.sidecar_without_manifest);
+
+    // The terminal CLI image mounted where the ACP sidecar was expected.
+    let mount_dir = mounts.join("claude-cli-sidecar");
+    write_executable(&mount_dir.join("usr/local/bin/claude"));
+    let selected = discover(Harness::Claude, None, &mounts).unwrap();
+    assert!(selected.default.is_some());
+    assert!(selected.sidecar_without_manifest);
+
+    // A sidecar with a manifest is not a default at all.
+    let pi_mount = mounts.join("pi-cli-sidecar");
+    write_manifest(&pi_mount.join(MANIFEST_FILE), &[]);
+    write_executable(&pi_mount.join("usr/local/bin").join(PROGRAM));
+    let selected = discover(Harness::Pi, None, &mounts).unwrap();
+    assert!(selected.default.is_none());
+    assert!(!selected.sidecar_without_manifest);
+}
+
+#[test]
 fn claude_default_lists_the_package_launcher_before_the_npm_bin() {
     let manifest = default_manifest(Harness::Claude).unwrap();
     assert_eq!(manifest.launch.program, "claude-code-acp");

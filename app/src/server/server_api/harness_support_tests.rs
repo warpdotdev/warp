@@ -250,11 +250,11 @@ fn report_transport_serializes_the_transport_and_optional_reason() {
 
     let fallback = serde_json::to_value(ReportTransportRequest::new(
         HarnessTransport::Pty,
-        Some("no_adapter"),
+        Some("no_sidecar"),
     ))
     .unwrap();
     assert_eq!(
         fallback,
-        serde_json::json!({"transport": "pty", "fallback_reason": "no_adapter"})
+        serde_json::json!({"transport": "pty", "fallback_reason": "no_sidecar"})
     );
 }

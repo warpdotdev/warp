@@ -87,8 +87,9 @@ use super::transcript_persistence::{
     UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
-    SavePoint, ThirdPartyHarness, install_docs_url, validate_cli_installed,
+    AcpAdapter, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers,
+    ResumePayload, SavePoint, ThirdPartyHarness, TransportFallbackReason, install_docs_url,
+    validate_cli_installed,
 };
 use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
@@ -276,17 +277,25 @@ impl ThirdPartyHarness for AcpHarness {
         Ok(())
     }
 
-    fn acp_adapter_available(&self) -> Option<bool> {
+    fn acp_adapter(&self) -> Option<AcpAdapter> {
         // A sidecar's program was verified when its manifest was read. Without one, any of the
         // default adapter's names will do, the same lookup `validate` makes.
         let Some(adapter) = &self.manifest.default else {
-            return Some(true);
+            return Some(AcpAdapter::Available);
         };
-        Some(
-            adapter
-                .programs()
-                .any(|program| resolve_executable(program).is_some()),
-        )
+        if adapter
+            .programs()
+            .any(|program| resolve_executable(program).is_some())
+        {
+            return Some(AcpAdapter::Available);
+        }
+        Some(AcpAdapter::Missing(
+            if self.manifest.sidecar_without_manifest {
+                TransportFallbackReason::SidecarWithoutAdapter
+            } else {
+                TransportFallbackReason::NoSidecar
+            },
+        ))
     }
 
     fn auth_check_command(&self) -> Option<String> {
