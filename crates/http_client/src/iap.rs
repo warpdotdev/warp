@@ -27,11 +27,6 @@ pub trait IapTokenProvider: Send + Sync {
     fn routing_opt_in_enabled(&self) -> bool {
         false
     }
-
-    fn routing_header(&self) -> Option<(&'static str, &'static str)> {
-        self.routing_opt_in_enabled()
-            .then_some((IAP_OPT_IN_HEADER, "1"))
-    }
 }
 
 #[cfg(test)]

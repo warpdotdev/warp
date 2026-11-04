@@ -570,8 +570,8 @@ impl BaseClient {
             .cached_token()
             .map(|token| http_client::iap::proxy_auth_header(&token));
         let routing_header = provider
-            .routing_header()
-            .map(|(name, value)| (name, value.to_string()));
+            .routing_opt_in_enabled()
+            .then(|| (http_client::iap::IAP_OPT_IN_HEADER, "1".to_string()));
         auth_header.into_iter().chain(routing_header).collect()
     }
 }
