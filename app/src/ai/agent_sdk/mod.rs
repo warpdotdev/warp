@@ -1,12 +1,14 @@
 //! Agent SDK entry points for invoking Agent-related functionality from the app.
 //! For now this provides a simple runner that echoes the received command.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2209,7 +2211,7 @@ impl AgentDriverRunner {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CommandAuthentication {
+enum CommandAuthentication {
     PendingApiKey(String),
     RefreshUser,
 }
@@ -2290,21 +2292,31 @@ fn launch_command(
     command: CliCommand,
     global_options: GlobalOptions,
 ) -> anyhow::Result<()> {
-    let parent_span = tracing::Span::current();
     let requires_auth = command_requires_auth(&command);
 
     if !requires_auth {
         return dispatch_command(ctx, command, global_options);
     }
 
+    authenticate_then_execute(global_options.api_key.clone(), ctx, move |ctx| {
+        dispatch_command(ctx, command.clone(), global_options.clone())
+    })
+}
+
+/// Establishes IAP access and validates credentials before executing a command once.
+pub(crate) fn authenticate_then_execute(
+    pending_api_key: Option<String>,
+    ctx: &mut AppContext,
+    execute: impl FnMut(&mut AppContext) -> anyhow::Result<()> + 'static,
+) -> anyhow::Result<()> {
+    let parent_span = tracing::Span::current();
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-    let Some(authentication) =
-        command_authentication(global_options.api_key.clone(), auth_state.is_logged_in())
+    let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
         return Err(anyhow::anyhow!(
-            "You are not logged in - please log in with `{cli_name} login` to continue."
+            "You are not logged in - please log into `{cli_name}` to continue."
         ));
     };
 
@@ -2312,10 +2324,11 @@ fn launch_command(
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_dispatch(ctx, command, global_options, authentication, parent_span);
+        authenticate_and_execute(ctx, parent_span, authentication, execute);
         return Ok(());
     }
 
+    let execute = Rc::new(RefCell::new(execute));
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
@@ -2328,12 +2341,12 @@ fn launch_command(
                 if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
             {
                 handled = true;
-                authenticate_and_dispatch(
+                let execute = execute.clone();
+                authenticate_and_execute(
                     ctx,
-                    command.clone(),
-                    global_options.clone(),
-                    authentication.clone(),
                     parent_span.clone(),
+                    authentication.clone(),
+                    move |ctx| (execute.borrow_mut())(ctx),
                 );
             }
             IapManagerEvent::AccessUnavailable => {
@@ -2354,7 +2367,7 @@ fn launch_command(
 
 /// Subscribes to auth events, authenticates, and execute the closure once
 /// auth completes. Assumes IAP access (if applicable) is already established.
-pub fn authenticate_and_execute(
+fn authenticate_and_execute(
     ctx: &mut AppContext,
     parent_span: tracing::Span,
     authentication: CommandAuthentication,
@@ -2401,16 +2414,6 @@ pub fn authenticate_and_execute(
         }
         CommandAuthentication::RefreshUser => auth_manager.refresh_user(ctx),
     });
-}
-
-fn authenticate_and_dispatch(
-    ctx: &mut AppContext,
-    command: CliCommand,
-    global_options: GlobalOptions,
-    authentication: CommandAuthentication,
-    parent_span: tracing::Span,
-) {
-    authenticate_and_execute(ctx, parent_span, authentication, move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()))
 }
 
 /// Check if we're running within Warp (for example, if this is an invocation of the Warp CLI
