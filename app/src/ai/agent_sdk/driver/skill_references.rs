@@ -18,12 +18,11 @@ use walkdir::WalkDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 use warpui::ModelSpawner;
 
-use super::AgentDriver;
-use super::environment;
 use super::environment_checkout_protocol::{
     CheckoutBatch, CheckoutFailureKind, CheckoutReport, CheckoutRequest, MAX_CHECKOUT_REQUESTS,
 };
 use super::harness::create_symlink;
+use super::{AgentDriver, environment};
 
 /// Names the Factory's code forge; set only when the Factory has exactly one.
 const FACTORY_CODE_FORGE_ENV: &str = "WARP_FACTORY_CODE_FORGE";
