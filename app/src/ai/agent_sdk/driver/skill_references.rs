@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use ai::skills::{
     SKILL_PROVIDER_DEFINITIONS, SkillReferenceEntry, SkillReferenceFile, SkillReferenceParseError,
-    SkillSource, SkillSourceForge, SkillSourceRef, is_skill_reference_file_name, parse_skill,
+    SkillSource, SkillSourceRef, is_skill_reference_file_name, parse_code_forge, parse_skill,
     parse_skill_reference_file, read_skills, resolve_skills_dirs,
 };
 use globset::GlobMatcher;
@@ -132,7 +132,7 @@ struct Level {
 
 /// Case-insensitive repository identity plus the requested ref.
 type SourceIdentity = (
-    Option<SkillSourceForge>,
+    Option<RepositoryForge>,
     String,
     String,
     Option<SkillSourceRef>,
@@ -166,7 +166,7 @@ impl AgentDriver {
         let reference_dirs = resolve_skills_dirs(&working_dir, reference_dirs);
         let factory_forge = std::env::var(FACTORY_CODE_FORGE_ENV)
             .ok()
-            .and_then(|value| value.trim().parse().ok());
+            .and_then(|value| parse_code_forge(value.trim()));
         let levels = discover(&resolved_dirs, &reference_dirs, factory_forge);
         (!levels.is_empty()).then(|| SkillReferenceDiscovery {
             root: std::env::temp_dir()
@@ -224,7 +224,7 @@ impl AgentDriver {
 fn discover(
     skill_dirs: &[PathBuf],
     reference_dirs: &[PathBuf],
-    factory_forge: Option<SkillSourceForge>,
+    factory_forge: Option<RepositoryForge>,
 ) -> Vec<Level> {
     let mut seen = HashSet::new();
     let mut levels = Vec::new();
@@ -305,14 +305,6 @@ fn identity(source: &SkillSource) -> SourceIdentity {
     )
 }
 
-fn repository_forge(forge: SkillSourceForge) -> RepositoryForge {
-    match forge {
-        SkillSourceForge::GitHub => RepositoryForge::GitHub,
-        SkillSourceForge::GitLab => RepositoryForge::GitLab,
-        SkillSourceForge::AzureDevOps => RepositoryForge::AzureDevOps,
-    }
-}
-
 /// One checkout request per distinct source, checked out into `sources_dir`.
 fn plan_checkouts(levels: &[Level], sources_dir: &Path) -> (CheckoutBatch, Planned) {
     let mut repositories = Vec::new();
@@ -334,7 +326,7 @@ fn plan_checkouts(levels: &[Level], sources_dir: &Path) -> (CheckoutBatch, Plann
             .replace(|character: char| !character.is_ascii_alphanumeric(), "-");
         let request = CheckoutRequest {
             source: RepositoryIdentity {
-                code_forge: repository_forge(forge),
+                code_forge: forge,
                 repo_owner: source.owner.clone(),
                 repo_name: source.repo.clone(),
             },
@@ -488,7 +480,7 @@ fn materialize(
                 .cloned()
                 .unwrap_or(Err(UnresolvedReason::CloneFailed));
             report.source = Some(ReferencedSource {
-                code_forge: file.source.code_forge.map(repository_forge),
+                code_forge: file.source.code_forge,
                 owner: file.source.owner.clone(),
                 repo: file.source.repo.clone(),
                 requested_ref: file

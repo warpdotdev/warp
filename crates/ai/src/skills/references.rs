@@ -4,7 +4,11 @@
 use std::collections::HashSet;
 
 use globset::{Glob, GlobBuilder, GlobMatcher};
-use strum_macros::{EnumString, IntoStaticStr};
+use serde::Deserialize as _;
+use serde::de::IntoDeserializer as _;
+use serde::de::value::{Error as ValueError, StrDeserializer};
+use strum_macros::IntoStaticStr;
+use warp_cli::agent::RepositoryForge;
 use yaml_rust::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust::scanner::Marker;
 use yaml_rust::{Yaml, YamlLoader};
@@ -23,7 +27,7 @@ pub struct SkillReferenceFile {
 pub struct SkillSource {
     /// `None` when the file doesn't name a forge, which is allowed only for a Factory with a
     /// single code forge.
-    pub code_forge: Option<SkillSourceForge>,
+    pub code_forge: Option<RepositoryForge>,
     /// May contain `/`, for GitLab subgroups or an Azure DevOps `org/project`.
     pub owner: String,
     pub repo: String,
@@ -31,26 +35,18 @@ pub struct SkillSource {
     pub reference: Option<SkillSourceRef>,
 }
 
-/// Code forges a skill source can live on, spelled as in `factory.yaml` repository entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
-pub enum SkillSourceForge {
-    #[strum(serialize = "GITHUB")]
-    GitHub,
-    #[strum(serialize = "GITLAB")]
-    GitLab,
-    #[strum(serialize = "AZURE_DEVOPS")]
-    AzureDevOps,
+/// Parses a code forge token such as `GITHUB`, spelled as in `factory.yaml` repository entries.
+pub fn parse_code_forge(token: &str) -> Option<RepositoryForge> {
+    let deserializer: StrDeserializer<'_, ValueError> = token.into_deserializer();
+    RepositoryForge::deserialize(deserializer).ok()
 }
 
-impl SkillSourceForge {
-    /// Parses a shorthand host prefix such as `github.com`.
-    fn from_host(host: &str) -> Option<Self> {
-        match host {
-            "github.com" => Some(Self::GitHub),
-            "gitlab.com" => Some(Self::GitLab),
-            "dev.azure.com" => Some(Self::AzureDevOps),
-            _ => None,
-        }
+fn code_forge_from_host(host: &str) -> Option<RepositoryForge> {
+    match host {
+        "github.com" => Some(RepositoryForge::GitHub),
+        "gitlab.com" => Some(RepositoryForge::GitLab),
+        "dev.azure.com" => Some(RepositoryForge::AzureDevOps),
+        _ => None,
     }
 }
 
@@ -222,10 +218,8 @@ fn parse_source(value: Option<&Yaml>) -> Result<SkillSource, SkillReferenceParse
             let code_forge = match field("codeForge") {
                 None | Some(Yaml::Null) => None,
                 Some(Yaml::String(token)) => Some(
-                    token
-                        .trim()
-                        .parse()
-                        .map_err(|_| SkillReferenceParseError::UnknownCodeForge)?,
+                    parse_code_forge(token.trim())
+                        .ok_or(SkillReferenceParseError::UnknownCodeForge)?,
                 ),
                 Some(_) => return Err(SkillReferenceParseError::UnknownCodeForge),
             };
@@ -266,9 +260,7 @@ fn parse_source_shorthand(shorthand: &str) -> Result<SkillSource, SkillReference
         return Err(SkillReferenceParseError::MalformedSource);
     }
     let code_forge = host
-        .map(|host| {
-            SkillSourceForge::from_host(host).ok_or(SkillReferenceParseError::UnknownCodeForge)
-        })
+        .map(|host| code_forge_from_host(host).ok_or(SkillReferenceParseError::UnknownCodeForge))
         .transpose()?;
     Ok(SkillSource {
         code_forge,

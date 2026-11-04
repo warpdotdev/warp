@@ -58,6 +58,7 @@ futures.workspace = true
 generic-array = "0.14.7"
 derivative.workspace = true
 hex.workspace = true
+warp_cli.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_terminal.workspace = true

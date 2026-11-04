@@ -38,7 +38,7 @@ fn result_json(result: Result<SkillReferenceFile, SkillReferenceParseError>) -> 
     json!({
         "reference": {
             "source": {
-                "code_forge": file.source.code_forge.map(<&str>::from),
+                "code_forge": file.source.code_forge,
                 "owner": file.source.owner,
                 "repo": file.source.repo,
                 "ref": reference,

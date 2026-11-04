@@ -9,7 +9,7 @@ use super::*;
 
 const AGENT_SKILLS: &str = "agents/triage/skills";
 const FACTORY_SKILLS: &str = "skills";
-const GITHUB: Option<SkillSourceForge> = Some(SkillSourceForge::GitHub);
+const GITHUB: Option<RepositoryForge> = Some(RepositoryForge::GitHub);
 
 /// What the fake checkout helper does for a source repository, keyed by repository name.
 enum Source {
@@ -43,7 +43,7 @@ impl Fixture {
         fixture
     }
 
-    fn discovery(&self, forge: Option<SkillSourceForge>) -> SkillReferenceDiscovery {
+    fn discovery(&self, forge: Option<RepositoryForge>) -> SkillReferenceDiscovery {
         let configured_dirs = vec![PathBuf::from(AGENT_SKILLS), PathBuf::from(FACTORY_SKILLS)];
         let resolved_dirs = resolve_skills_dirs(&self.root, configured_dirs.clone());
         SkillReferenceDiscovery {
@@ -59,7 +59,7 @@ impl Fixture {
     /// the helper doesn't report.
     fn resolve(
         &self,
-        forge: Option<SkillSourceForge>,
+        forge: Option<RepositoryForge>,
         sources: &[(&str, Source)],
     ) -> (Vec<PathBuf>, SkillSourcesReport) {
         let discovery = self.discovery(forge);

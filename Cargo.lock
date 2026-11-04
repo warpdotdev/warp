@@ -379,6 +379,7 @@ dependencies = [
  "url",
  "uuid",
  "virtual-fs",
+ "warp_cli",
  "warp_core",
  "warp_errors",
  "warp_graphql",
