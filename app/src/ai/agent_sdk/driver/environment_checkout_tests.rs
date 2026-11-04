@@ -43,6 +43,7 @@ fn strict_checkout_preserves_existing_work_and_reports_partial_success() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: true,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request(
@@ -152,6 +153,7 @@ fn cleanup_only_preserves_refs_and_reports_failures_without_cloning() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: true,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request(
@@ -281,6 +283,7 @@ fn helper_report_times_every_checkout_and_omits_unresolved_heads() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("empty", None),
@@ -1227,6 +1230,7 @@ fn helper_writes_typed_failures_and_rejects_invalid_requests_before_work() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             let batch = fixture.batch(vec![
                 fixture.request("good", None),
@@ -1485,6 +1489,7 @@ fn checkout_traces_report_operation_outcomes_without_request_details() {
                     report_file: directory.path().join("report.json"),
                     remove_origins_only: false,
                     fail_if_target_exists: false,
+                    legacy_preparation: false,
                 };
                 let batch = fixture.batch(vec![
                     fixture.request("direct", None),
@@ -1596,6 +1601,7 @@ fn helper_without_handoff_keeps_checkout_working() {
             report_file: directory.path().join("report.json"),
             remove_origins_only: false,
             fail_if_target_exists: false,
+            legacy_preparation: false,
         };
         fs::write(
             &args.requests_file,
@@ -1622,6 +1628,7 @@ fn helper_with_expired_handoff_keeps_checkout_working() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: false,
+                legacy_preparation: false,
             };
             fs::write(
                 &args.requests_file,
@@ -1671,6 +1678,7 @@ fn execution_policy_helper_subprocess() {
         report_file: report_file.clone(),
         remove_origins_only: cleanup,
         fail_if_target_exists: strict,
+        legacy_preparation: std::env::var_os("WARP_TEST_POLICY_LEGACY").is_some(),
     };
     let result = run(&args);
     match std::env::var("WARP_TEST_POLICY_EXPECT").unwrap().as_str() {
@@ -1799,6 +1807,15 @@ fn execution_policy_checkout_enforces_binding_and_preparation() {
             invalid.insert(FILE_ENV.into(), malformed.into_os_string());
             invoke(&batch, &invalid, true, false, "blocked", "malformed");
             invoke(&batch, &env, false, false, "blocked", "strict-flag-dropped");
+            let skill_source = CheckoutBatch {
+                working_dir: root.clone(),
+                repositories: vec![fixture.request("skill-source", None)],
+            };
+            invoke(&skill_source, &env, false, false, "blocked", "no-legacy-flag");
+            let mut legacy = env.clone();
+            legacy.insert("WARP_TEST_POLICY_LEGACY".into(), "1".into());
+            invoke(&skill_source, &legacy, false, false, "success", "legacy-flag");
+            assert!(root.join("skill-source").exists());
             batch.repositories[0] = fixture.request("substitute-identity", None);
             invoke(
                 &batch,
@@ -1878,6 +1895,7 @@ fn lazy_pins_verify_sha_origin_policy_and_never_fall_back() {
                 report_file: directory.path().join("report.json"),
                 remove_origins_only: false,
                 fail_if_target_exists: true,
+                legacy_preparation: false,
             };
             fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
             assert!(run(&args).is_err());

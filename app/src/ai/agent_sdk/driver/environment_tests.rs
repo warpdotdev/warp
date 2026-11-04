@@ -314,6 +314,7 @@ fn head_probe_timeout_preserves_later_snapshot_repositories() {
         report_file: directory.path().join("report.json"),
         remove_origins_only: false,
         fail_if_target_exists: false,
+        legacy_preparation: false,
     };
     fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
 
@@ -1286,8 +1287,6 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
 
 #[test]
 fn only_skill_source_checkouts_run_under_legacy_preparation() {
-    let legacy = "env OZ_REPOSITORY_PREPARATION_MODE=legacy OZ_REPOSITORY_PREPARATION_FILE= \
-                  WARP_EXECUTION_ID= '/oz' environment-checkout";
     for shell in [
         ShellType::Bash,
         ShellType::Zsh,
@@ -1303,9 +1302,12 @@ fn only_skill_source_checkouts_run_under_legacy_preparation() {
                 skill_sources,
                 shell,
             );
-            let expected = skill_sources && shell != ShellType::PowerShell;
-            assert_eq!(command.starts_with(legacy), expected, "{command}");
-            assert_eq!(command.contains("PREPARATION"), expected, "{command}");
+            assert_eq!(
+                command.ends_with(" --legacy-preparation"),
+                skill_sources,
+                "{command}"
+            );
+            assert!(!command.contains("PREPARATION"), "{command}");
         }
     }
 }

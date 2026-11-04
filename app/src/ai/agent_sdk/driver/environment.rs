@@ -30,9 +30,7 @@ use super::environment_checkout_protocol::{
     CloneFailureIdentityDiagnostics, ResolvedHeads, parse_resolved_head_sha,
     sanitize_git_author_name, sanitize_git_credential_username,
 };
-use super::environment_preparation::{
-    FILE_ENV, MODE_ENV, PreparationPolicy, PreparationRepository,
-};
+use super::environment_preparation::{PreparationPolicy, PreparationRepository};
 use super::terminal::TerminalDriver;
 use super::{AgentDriverError, Harness, failure_output, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
@@ -1079,21 +1077,23 @@ fn build_checkout_helper_command(
             shell_escape_single_quotes(&path.to_string_lossy(), shell_type)
         )
     };
-    let prefix = match shell_type {
-        // PowerShell can't scope variables to one command, so it keeps the session's preparation.
-        ShellType::PowerShell => "& ".to_owned(),
-        ShellType::Bash | ShellType::Zsh | ShellType::Fish if legacy_preparation => {
-            format!("env {MODE_ENV}=legacy {FILE_ENV}= WARP_EXECUTION_ID= ")
-        }
-        ShellType::Bash | ShellType::Zsh | ShellType::Fish => String::new(),
+    let prefix = if shell_type == ShellType::PowerShell {
+        "& "
+    } else {
+        ""
     };
     let operation = if remove_origins_only {
         " --remove-origins-only"
     } else {
         ""
     };
+    let preparation = if legacy_preparation {
+        " --legacy-preparation"
+    } else {
+        ""
+    };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}",
+        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}{preparation}",
         quote(executable),
         quote(requests_file),
         quote(report_file)

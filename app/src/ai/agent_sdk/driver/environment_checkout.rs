@@ -114,12 +114,14 @@ async fn run_async(args: &EnvironmentCheckoutArgs) -> anyhow::Result<()> {
         .map_err(|error| sanitized_error("could not read environment checkout requests", error))?;
     let mut batch = CheckoutBatch::parse(&bytes)
         .map_err(|error| sanitized_error("could not parse environment checkout requests", error))?;
-    super::environment_preparation::resolve_from_environment(
-        &mut batch,
-        args.fail_if_target_exists,
-        args.remove_origins_only,
-    )
-    .map_err(|error| sanitized_error("execution repository preparation rejected", error))?;
+    if !args.legacy_preparation {
+        super::environment_preparation::resolve_from_environment(
+            &mut batch,
+            args.fail_if_target_exists,
+            args.remove_origins_only,
+        )
+        .map_err(|error| sanitized_error("execution repository preparation rejected", error))?;
+    }
     let mirror_root = (!args.remove_origins_only)
         .then(optional_mirror_root)
         .flatten();
