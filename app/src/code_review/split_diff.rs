@@ -196,6 +196,30 @@ impl CodeReviewView {
         SplitBaselinePane { editor, base }
     }
 
+    /// Copies collapsed sections between the two panes of a split file, from the modified pane
+    /// when `from_modified` is set and from the base pane otherwise.
+    fn mirror_baseline_hidden_lines(
+        &mut self,
+        file_path: &str,
+        from_modified: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(editor_state) = self.editor_state_mut(file_path) else {
+            return;
+        };
+        let Some(baseline) = editor_state.baseline.as_ref() else {
+            return;
+        };
+        let modified = editor_state.editor.as_ref(ctx).editor().clone();
+        let baseline = baseline.editor.as_ref(ctx).editor().clone();
+        let alignment = modified
+            .as_ref(ctx)
+            .model
+            .as_ref(ctx)
+            .split_diff_alignment(ctx);
+        mirror_hidden_lines(&modified, &baseline, &alignment, from_modified, ctx);
+    }
+
     fn handle_baseline_editor_event(
         &mut self,
         file_path: &str,
@@ -285,18 +309,14 @@ impl CodeReviewView {
                 self.delete_comment_by_id(*id, ctx);
             }
             CodeEditorEvent::HiddenSectionExpanded => {
-                if let Some(editor_state) = self.editor_state_mut(file_path)
-                    && let Some(baseline) = editor_state.baseline.as_ref()
-                {
-                    let modified = editor_state.editor.as_ref(ctx).editor().clone();
-                    let baseline = baseline.editor.as_ref(ctx).editor().clone();
-                    let alignment = modified
-                        .as_ref(ctx)
-                        .model
-                        .as_ref(ctx)
-                        .split_diff_alignment(ctx);
-                    mirror_hidden_lines(&modified, &baseline, &alignment, false, ctx);
-                }
+                self.mirror_baseline_hidden_lines(file_path, false, ctx);
+                self.invalidate_file_height(file_path, ctx);
+            }
+            // Loading the base text recomputes the base pane's own (empty) diff, and the rebuild
+            // that follows drops the collapsed sections copied from the modified pane. Copy them
+            // again once that lands.
+            CodeEditorEvent::DiffUpdated => {
+                self.mirror_baseline_hidden_lines(file_path, true, ctx);
                 self.invalidate_file_height(file_path, ctx);
             }
             CodeEditorEvent::Focused => {
@@ -311,7 +331,6 @@ impl CodeReviewView {
             | CodeEditorEvent::CopiedEmptyText
             | CodeEditorEvent::VimEscapeInNormalMode
             | CodeEditorEvent::EscapePressed
-            | CodeEditorEvent::DiffUpdated
             | CodeEditorEvent::DiffReverted
             | CodeEditorEvent::CommentEditorOpened
             | CodeEditorEvent::ViewportUpdated
@@ -514,13 +533,16 @@ fn mirror_hidden_lines(
             alignment.modified_line_for_base_line(line)
         }
     };
+    let (source_line_count, target_line_count) = if from_modified {
+        (alignment.modified_line_count(), alignment.base_line_count())
+    } else {
+        (alignment.base_line_count(), alignment.modified_line_count())
+    };
     let source_ranges = source.as_ref(ctx).model.as_ref(ctx).hidden_line_ranges(ctx);
     let target_ranges: RangeSet<LineCount> = source_ranges
         .into_iter()
         .filter_map(|range: Range<usize>| {
-            let start = map_line(range.start)?;
-            let end = map_line(range.end.checked_sub(1)?)? + 1;
-            (start < end).then(|| LineCount::from(start)..LineCount::from(end))
+            map_hidden_range(range, source_line_count, target_line_count, map_line)
         })
         .collect();
     let current: RangeSet<LineCount> = target
@@ -534,11 +556,43 @@ fn mirror_hidden_lines(
     if current == target_ranges {
         return;
     }
+    let collapses_new_lines = target_ranges.iter().any(|range| {
+        !current
+            .iter()
+            .any(|hidden| hidden.start <= range.start && range.end <= hidden.end)
+    });
     target.update(ctx, |editor, ctx| {
         editor.model.update(ctx, |model, ctx| {
-            model.set_hidden_lines(target_ranges, ctx);
+            if collapses_new_lines {
+                model.set_hidden_lines_and_rebuild(target_ranges, ctx);
+            } else {
+                model.set_hidden_lines(target_ranges, ctx);
+            }
         });
     });
+}
+
+/// Maps a collapsed range of source pane lines onto the target pane.
+///
+/// A collapsed range at the end of a file can include the empty line after a trailing newline,
+/// which the alignment doesn't cover. Both panes have that line, so lines past the aligned ones
+/// map one to one.
+fn map_hidden_range(
+    range: Range<usize>,
+    source_line_count: usize,
+    target_line_count: usize,
+    map_line: impl Fn(usize) -> Option<usize>,
+) -> Option<Range<LineCount>> {
+    let map = |line: usize| {
+        if line < source_line_count {
+            map_line(line)
+        } else {
+            Some(target_line_count + (line - source_line_count))
+        }
+    };
+    let start = map(range.start)?;
+    let end = map(range.end.checked_sub(1)?)? + 1;
+    (start < end).then(|| LineCount::from(start)..LineCount::from(end))
 }
 
 #[cfg(test)]

@@ -132,6 +132,16 @@ impl DiffAlignment {
         ranges
     }
 
+    /// The number of base lines the rows cover.
+    pub fn base_line_count(&self) -> usize {
+        self.row_by_base_line.len()
+    }
+
+    /// The number of modified lines the rows cover.
+    pub fn modified_line_count(&self) -> usize {
+        self.row_by_modified_line.len()
+    }
+
     pub fn row_for_base_line(&self, line: usize) -> Option<usize> {
         self.row_by_base_line.get(line).copied()
     }

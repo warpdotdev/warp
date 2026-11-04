@@ -6973,7 +6973,7 @@ impl CodeReviewView {
         };
         items.push(
             MenuItemFields::new(label)
-                .with_icon(Icon::SplitDiff)
+                .with_image_icon("bundled/svg/split-diff.svg")
                 .with_on_select_action(CodeReviewAction::ToggleDiffLayout)
                 .into_item(),
         );

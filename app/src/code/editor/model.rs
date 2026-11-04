@@ -746,6 +746,17 @@ impl CodeEditorModel {
         });
     }
 
+    /// Sets the hidden lines and rebuilds the layout, which newly hidden lines need before they
+    /// collapse in an editor that is already laid out.
+    pub fn set_hidden_lines_and_rebuild(
+        &mut self,
+        ranges: RangeSet<warp_editor::content::text::LineCount>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.set_hidden_lines(ranges, ctx);
+        self.rebuild_layout_and_refresh_diff(ctx);
+    }
+
     pub fn hidden_ranges(&self, ctx: &AppContext) -> RangeSet<CharOffset> {
         self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx)
     }

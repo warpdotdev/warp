@@ -1,6 +1,7 @@
+use warp_editor::content::text::LineCount;
 use warp_editor::render::model::LineCount as RenderLineCount;
 
-use super::{modified_range_for_base_line, unchanged_line_location};
+use super::{map_hidden_range, modified_range_for_base_line, unchanged_line_location};
 use crate::code::editor::diff_alignment::{ChangeSpan, DiffAlignment};
 use crate::code::editor::line::EditorLineLocation;
 
@@ -63,4 +64,30 @@ fn unchanged_base_line_comments_land_on_the_same_row_after_an_addition() {
 fn changed_base_lines_are_not_treated_as_unchanged() {
     let alignment = DiffAlignment::new(spans(), 6, 7);
     assert_eq!(unchanged_line_location(&alignment, 1), None);
+}
+
+#[test]
+fn hidden_range_maps_through_the_alignment() {
+    let alignment = DiffAlignment::new(spans(), 6, 7);
+    // Modified lines 5..7 (e f) sit on the same rows as base lines 4..6.
+    let mapped = map_hidden_range(
+        5..7,
+        alignment.modified_line_count(),
+        alignment.base_line_count(),
+        |line| alignment.base_line_for_modified_line(line),
+    );
+    assert_eq!(mapped, Some(LineCount::from(4)..LineCount::from(6)));
+}
+
+#[test]
+fn hidden_range_covering_the_trailing_empty_line_still_maps() {
+    let alignment = DiffAlignment::new(spans(), 6, 7);
+    // Modified line 7 is the empty line after the trailing newline, past the aligned lines.
+    let mapped = map_hidden_range(
+        5..8,
+        alignment.modified_line_count(),
+        alignment.base_line_count(),
+        |line| alignment.base_line_for_modified_line(line),
+    );
+    assert_eq!(mapped, Some(LineCount::from(4)..LineCount::from(7)));
 }
