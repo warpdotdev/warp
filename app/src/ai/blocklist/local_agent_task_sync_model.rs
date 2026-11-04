@@ -14,7 +14,9 @@ use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
-use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
+use crate::ai::agent::{
+    AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
@@ -240,6 +242,14 @@ impl LocalAgentTaskSyncModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
+            BlocklistAIHistoryEvent::AppendedExchange {
+                conversation_id,
+                exchange_id,
+                response_stream_id: Some(_),
+                ..
+            } => {
+                self.on_exchange_appended(*conversation_id, *exchange_id, ctx);
+            }
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
                 update,
@@ -298,6 +308,36 @@ impl LocalAgentTaskSyncModel {
             | CLIAgentSessionsModelEvent::Ended { .. }
             | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
+    }
+
+    fn on_exchange_appended(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some((task_id, Some(update))) =
+            with_local_conversation(conversation_id, ctx, |conversation| {
+                if conversation
+                    .task_sync_mode()
+                    .suppresses_task_lifecycle_updates()
+                    || !conversation
+                        .exchange_with_id(exchange_id)
+                        .is_some_and(|exchange| exchange.has_user_query())
+                {
+                    return None;
+                }
+                Some(LocalTaskUpdate {
+                    task_state: Some(AgentTaskState::InProgress),
+                    force_task_state: true,
+                    ..LocalTaskUpdate::default()
+                })
+            })
+        else {
+            return;
+        };
+
+        self.enqueue_update(task_id, update, ctx);
     }
 
     fn on_conversation_status_updated(
