@@ -2,6 +2,71 @@ use chrono::{Duration, Utc};
 
 use super::*;
 
+#[test]
+fn usage_history_notifications_create_details_views() {
+    use warpui::App;
+    use warpui::platform::WindowStyle;
+
+    use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (_, page) = app.add_window(WindowStyle::NotStealFocus, BillingAndUsagePageV2View::new);
+        let mut tools = serde_json::json!({
+            "runCommandsExecuted": 0,
+            "applyFileDiffStats": {"count": 0, "linesAdded": 0, "linesRemoved": 0, "filesChanged": 0}
+        });
+        for name in [
+            "runCommandStats",
+            "readFilesStats",
+            "searchCodebaseStats",
+            "grepStats",
+            "fileGlobStats",
+            "callMcpToolStats",
+            "readMcpResourceStats",
+            "suggestPlanStats",
+            "suggestCreatePlanStats",
+            "writeToLongRunningShellCommandStats",
+            "readShellCommandOutputStats",
+            "useComputerStats",
+        ] {
+            tools[name] = serde_json::json!({"count": 0});
+        }
+        let entry = serde_json::from_value(serde_json::json!({
+            "conversationId": "history-entry", "title": "History entry", "lastUpdated": "2026-10-14T19:30:00Z",
+            "usageMetadata": {
+                "contextWindowUsage": 0, "contextWindowSegments": [], "creditsSpent": 0,
+                "platformCreditsSpent": 0, "summarized": false, "tokenUsage": [],
+                "totalBilledCostInCents": null, "totalPlatformCostInCents": null,
+                "chargedUsageByCategory": null,
+                "warpTokenUsage": [{"modelId": "gpt-5", "totalTokens": 100, "tokenUsageByCategory": []}],
+                "byokTokenUsage": [], "toolUsageMetadata": tools
+            }
+        })).unwrap();
+        page.update(&mut app, |page, ctx| {
+            page.usage_history.model.update(ctx, |model, ctx| {
+                model.set_entries_for_test(vec![entry], ctx)
+            });
+        });
+        page.read(&app, |page, ctx| {
+            let details = page
+                .usage_history
+                .details_views
+                .get("history-entry")
+                .expect("history notification must create its details view");
+            let content = details
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap();
+            assert!(
+                content.contains("INFERENCE USAGE") && content.contains("100 tokens"),
+                "{content:?}"
+            );
+        });
+    });
+}
+
 fn workspace_uid(id: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(id))
 }

@@ -32,7 +32,9 @@ use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
-use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
+use super::billing_and_usage::usage_history_entry::{
+    UsageHistoryEntry, update_usage_details_views,
+};
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
 use super::billing_and_usage_page::{
@@ -42,6 +44,7 @@ use super::billing_and_usage_page::{
 use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
 use super::{SettingsSection, plan_header_presentation};
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::usage::usage_popover_view::HistoryUsageDetailsView;
 use crate::ai::blocklist::view_util::{format_dollars, usage_display_unit};
 use crate::ai::request_usage_model::{
     AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
@@ -202,7 +205,7 @@ struct UsageHistoryState {
     model: ModelHandle<UsageHistoryModel>,
     expanded_entries: HashMap<String, bool>,
     entry_mouse_states: RefCell<HashMap<String, MouseStateHandle>>,
-    tooltip_mouse_states: RefCell<HashMap<String, MouseStateHandle>>,
+    details_views: HashMap<String, ViewHandle<HistoryUsageDetailsView>>,
     load_more_button: ViewHandle<ActionButton>,
 }
 
@@ -378,7 +381,9 @@ impl BillingAndUsagePageV2View {
         );
 
         let usage_history_model = ctx.add_model(UsageHistoryModel::new);
-        ctx.subscribe_to_model(&usage_history_model, |_, _, _, ctx| {
+        ctx.observe(&usage_history_model, |me, model, ctx| {
+            let entries = model.as_ref(ctx).entries().to_vec();
+            update_usage_details_views(&entries, &mut me.usage_history.details_views, ctx);
             ctx.notify();
         });
         usage_history_model.update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
@@ -444,7 +449,7 @@ impl BillingAndUsagePageV2View {
                 model: usage_history_model,
                 expanded_entries: HashMap::new(),
                 entry_mouse_states: RefCell::new(HashMap::new()),
-                tooltip_mouse_states: RefCell::new(HashMap::new()),
+                details_views: HashMap::new(),
                 load_more_button,
             },
             addon_credits: AddonCreditsState {
@@ -2014,20 +2019,16 @@ impl BillingAndUsagePageV2View {
                 .entry(entry.conversation_id.clone())
                 .or_default()
                 .clone();
-            let entry_tooltip_mouse_state = self
-                .usage_history
-                .tooltip_mouse_states
-                .borrow_mut()
-                .entry(entry.conversation_id.clone())
-                .or_default()
-                .clone();
             list.add_child(
                 Container::new(
                     UsageHistoryEntry::new(
                         Some(entry.clone()),
                         expanded,
                         Some(entry_mouse_state),
-                        entry_tooltip_mouse_state,
+                        self.usage_history
+                            .details_views
+                            .get(&entry.conversation_id)
+                            .cloned(),
                     )
                     .render(appearance, app),
                 )
@@ -2067,8 +2068,7 @@ impl BillingAndUsagePageV2View {
             let mut list = Flex::column().with_spacing(8.);
             for _ in 0..3 {
                 list.add_child(
-                    UsageHistoryEntry::new(None, false, None, MouseStateHandle::default())
-                        .render(appearance, app),
+                    UsageHistoryEntry::new(None, false, None, None).render(appearance, app),
                 );
             }
             content.add_child(list.finish());
