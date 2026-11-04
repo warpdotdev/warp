@@ -147,11 +147,6 @@ impl IapState {
         self.routing_opt_in.store(enabled, Ordering::Relaxed);
     }
 
-    pub fn proxy_auth_header(&self) -> Option<(&'static str, String)> {
-        self.get_cached()
-            .map(|token| http_client::iap::proxy_auth_header(&token))
-    }
-
     pub fn state(&self) -> IapCredentialsState {
         self.inner.read().expect("IAP state lock poisoned").clone()
     }
@@ -251,14 +246,6 @@ impl IapManager {
 
     pub fn state(&self) -> Option<IapCredentialsState> {
         self.state.as_ref().map(|s| s.state())
-    }
-
-    /// Returns a handle to the shared IAP credential state, if IAP is active.
-    /// Mirrors how `AuthStateProvider` hands out the `Arc<AuthState>`, letting
-    /// callers read cached credentials (e.g. to build a proxy-auth header) off
-    /// a `ModelContext` without reaching through `ServerApi`.
-    pub fn iap_state(&self) -> Option<Arc<IapState>> {
-        self.state.clone()
     }
 
     /// Returns `true` when a currently-valid (unexpired) IAP token is available.
@@ -555,20 +542,6 @@ impl IapManager {
             },
         ));
     }
-
-    /// Inspects a websocket *handshake* connect error for an IAP challenge.
-    /// If detected, triggers a refresh so the caller's retry loop can pick up
-    /// a fresh token on the next attempt.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn check_ws_connect_error(&mut self, err: &anyhow::Error, ctx: &mut ModelContext<Self>) {
-        if ws_connect_is_iap_challenge(err) {
-            log::warn!("Received IAP challenge on websocket handshake");
-            self.handle_challenge(ctx);
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub fn check_ws_connect_error(&mut self, _err: &anyhow::Error, _ctx: &mut ModelContext<Self>) {}
 }
 
 #[cfg(not(target_family = "wasm"))]
