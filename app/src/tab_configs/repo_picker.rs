@@ -39,9 +39,9 @@ pub struct RepoPicker {
 pub enum RepoPickerAction {
     Select(String),
     AddNewRepo,
-    /// The pointer entered the "+ Add new repo..." footer. Clears the row
-    /// highlight so only the footer reads as hovered.
-    HoverAddNewRepo,
+    /// The pointer entered (`true`) or left (`false`) the "+ Add new repo..."
+    /// footer. While it is hovered, no repo row stays highlighted.
+    HoverAddNewRepo(bool),
 }
 
 pub enum RepoPickerEvent {
@@ -134,9 +134,7 @@ impl RepoPicker {
                         .finish()
                     })
                     .on_hover(|is_hovered, ctx, _, _| {
-                        if is_hovered {
-                            ctx.dispatch_typed_action(RepoPickerAction::HoverAddNewRepo);
-                        }
+                        ctx.dispatch_typed_action(RepoPickerAction::HoverAddNewRepo(is_hovered));
                     })
                     .on_click(|ctx, _, _| {
                         ctx.dispatch_typed_action(RepoPickerAction::AddNewRepo);
@@ -258,9 +256,15 @@ impl TypedActionView for RepoPicker {
                 });
                 ctx.emit(RepoPickerEvent::RequestAddRepo);
             }
-            RepoPickerAction::HoverAddNewRepo => {
+            RepoPickerAction::HoverAddNewRepo(is_hovered) => {
+                // Restore the highlight on leave so arrow keys continue from
+                // the current repo instead of jumping to the first row.
                 self.dropdown.update(ctx, |dropdown, ctx| {
-                    dropdown.reset_selection(ctx);
+                    if *is_hovered {
+                        dropdown.reset_selection(ctx);
+                    } else {
+                        dropdown.restore_selection(ctx);
+                    }
                 });
             }
         }
