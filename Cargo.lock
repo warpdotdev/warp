@@ -6494,6 +6494,7 @@ dependencies = [
  "async-stream",
  "bytes",
  "cfg-if",
+ "flate2",
  "futures",
  "gloo",
  "http 1.4.0",

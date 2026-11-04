@@ -14,6 +14,9 @@ pub enum Error {
     #[error("Failed to resolve ambient headers for multi-agent request")]
     AmbientHeaders(#[source] anyhow::Error),
 
+    #[error("Failed to compress multi-agent request")]
+    Compression(#[source] std::io::Error),
+
     #[error("Failed to decode base64 multi-agent response event")]
     Base64Decode(#[source] base64::DecodeError),
 
@@ -57,11 +60,15 @@ pub async fn generate_multi_agent_output(
     let is_passive = is_passive_suggestion_request(request);
     let url = endpoint_url(is_passive);
 
-    let mut request_builder = client
-        .http_client()
-        .post(url)
-        .proto(request)
-        .prevent_sleep("Agent Mode request in-progress");
+    let request_builder = client.http_client().post(url);
+    let request_builder = if is_passive {
+        request_builder.proto(request)
+    } else {
+        request_builder
+            .proto_gzip(request)
+            .map_err(Error::Compression)?
+    };
+    let mut request_builder = request_builder.prevent_sleep("Agent Mode request in-progress");
     if let Some(token) = auth_token.as_bearer_token() {
         request_builder = request_builder.bearer_auth(token);
     }
