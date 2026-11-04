@@ -36,6 +36,100 @@ fn bridge_command_names_the_executable_and_the_launch_file_escaped_for_the_shell
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn relocated_native_manifest_launches_an_agent_through_the_bridge_and_shuts_down_on_eof() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use serde_json::{Value, json};
+    use warp_cli::agent::Harness;
+    use warpui::r#async::FutureExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original");
+    let installed = root.path().join("installed tools with spaces");
+    let project = root.path().join("project working directory");
+    fs::create_dir_all(original.join("runtime/bin")).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    let project = fs::canonicalize(project).unwrap();
+    let interpreter = original.join("runtime/bin/interpreter");
+    fs::write(&interpreter, "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
+    fs::set_permissions(&interpreter, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        original.join("adapter.sh"),
+        r#"test "$1" = "literal argument with spaces" || { printf 'unexpected argument: %s\n' "$1" >&2; exit 21; }
+test "$PWD" = "$2" || { printf 'cwd: %s, expected: %s\n' "$PWD" "$2" >&2; exit 22; }
+IFS= read -r request || { printf 'initialize request missing\n' >&2; exit 23; }
+case "$request" in *'"method":"initialize"'*) ;; *) exit 24 ;; esac
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+while IFS= read -r line; do :; done
+"#,
+    )
+    .unwrap();
+    fs::write(
+        original.join("warp-harness.pi.json"),
+        json!({
+            "schema_version": 1,
+            "harness": "pi",
+            "acp": {
+                "program": "${SIDECAR_ROOT}/runtime/bin/interpreter",
+                "args": [
+                    "${SIDECAR_ROOT}/adapter.sh",
+                    "literal argument with spaces",
+                    project.to_str().unwrap()
+                ]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::rename(original, &installed).unwrap();
+    let manifest =
+        super::super::manifest::discover(Harness::Pi, None, &root.path().join("mnt"), &[installed])
+            .unwrap();
+    let listener = BridgeListener::bind(&manifest.launch.program, &manifest.launch.args).unwrap();
+    let launch = read_launch(listener.launch_file()).unwrap();
+    let (program, args) = launch.agent.split_first().unwrap();
+    let (connected, accepted) = connect_while_accepting(&listener, &launch.token);
+    let mut agent = super::exec_agent_command(connected.unwrap(), program, args)
+        .unwrap()
+        .current_dir(&project)
+        .spawn()
+        .unwrap();
+    let (reader, mut writer) = accepted.unwrap();
+    let exchange = block_on(
+        async {
+            writer
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            let mut reader = BufReader::new(reader);
+            let mut reply = String::new();
+            reader.read_line(&mut reply).await.unwrap();
+            let closed = writer.close().await;
+            let mut rest = String::new();
+            reader.read_line(&mut rest).await.unwrap();
+            (reply, rest, closed)
+        }
+        .with_timeout(Duration::from_secs(5)),
+    );
+    if exchange.is_err() {
+        agent.kill().unwrap();
+    }
+    let status = agent.wait().unwrap();
+    let (reply, rest, closed) =
+        exchange.expect("manifest-selected agent must respond and close stdout on EOF");
+    assert!(status.success(), "{status}");
+    closed.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&reply).unwrap(),
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+    );
+    assert!(rest.is_empty(), "{rest}");
+}
+
 #[test]
 fn bridge_command_uses_the_current_executable() {
     let command = bridge_command(Path::new("/tmp/launch.json"), ShellFamily::Posix).unwrap();
