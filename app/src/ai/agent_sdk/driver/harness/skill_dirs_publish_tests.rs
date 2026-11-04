@@ -35,17 +35,18 @@ fn bundled_child_coordination_is_published_to_harness_skill_roots() {
         "You MUST use this skill before stopping",
         "even if it was purely informational or no code changed",
         "summary as a message to the parent agent's inbox",
-        "do not send a separate completion message",
+        "do not also use `oz run message send` to report that same outcome",
         "Put the full answer or actionable handoff",
         "check your unread inbox",
         "resolve the error and retry",
-        "Waiting for input is not completion",
+        "If you are a child agent",
+        "this reports `BLOCKED`, not `FAILED`",
     ] {
         assert!(finish.contains(requirement), "Missing: {requirement}");
     }
     let coordination = fs::read_to_string(coordination.join("SKILL.md")).unwrap();
-    assert!(coordination.contains("for progress updates and blockers"));
-    assert!(coordination.contains("do not send a separate Complete message"));
+    assert!(coordination.contains("without updating your task status"));
+    assert!(coordination.contains("do not send a separate message reporting that same outcome"));
     assert!(!coordination.contains("- **Complete**:"));
     assert!(!coordination.contains("\\\""));
 }
