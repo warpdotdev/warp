@@ -223,7 +223,6 @@ pub fn run() -> Result<()> {
                 Box::new(move |ctx| {
                     let cached_token = read_cached_git_jwt(ctx, &factory_id);
                     if let Some(cached_token) = cached_token {
-                        println!("Using cached Git access token:");
                         println!("{}", cached_token);
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         return;
