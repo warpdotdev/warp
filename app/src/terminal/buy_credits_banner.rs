@@ -150,6 +150,7 @@ impl BuyCreditsBanner {
         ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
             match event {
                 CustomUsageEvent::Selected => me.selected_denomination_index = usize::MAX,
+                CustomUsageEvent::PresetRestored => me.selected_denomination_index = 0,
                 CustomUsageEvent::Saved => {
                     me.should_display_banner = false;
                     AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {

@@ -447,6 +447,10 @@ impl BillingAndUsagePageV2View {
                 me.addon_credits.selected_denomination = usize::MAX;
                 me.update_denomination_buttons_focus(ctx);
                 ctx.notify();
+            } else if matches!(event, CustomUsageEvent::PresetRestored) {
+                me.addon_credits.selected_denomination = 0;
+                me.refresh_addon_credits_settings(ctx);
+                ctx.notify();
             }
         });
         let mut me = Self {
@@ -487,7 +491,9 @@ impl BillingAndUsagePageV2View {
     }
 
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
+        if self.custom_usage.as_ref(ctx).is_selected() {
+            self.addon_credits.selected_denomination = usize::MAX;
+        } else if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
             let addon_credits_settings = &workspace.settings.addon_credits_settings;
             if addon_credits_settings.auto_reload_enabled {
                 self.addon_credits.selected_denomination = addon_credits_settings
@@ -672,10 +678,13 @@ impl BillingAndUsagePageV2View {
         {
             return;
         }
-        self.addon_credits.selected_denomination = self
-            .addon_credits
-            .selected_denomination
-            .min(options.len().saturating_sub(1));
+        self.addon_credits.selected_denomination = if self.custom_usage.as_ref(ctx).is_selected() {
+            usize::MAX
+        } else {
+            self.addon_credits
+                .selected_denomination
+                .min(options.len().saturating_sub(1))
+        };
         self.addon_credits.options = options;
         self.addon_credits.display_unit = unit;
         self.addon_credits.denomination_buttons =

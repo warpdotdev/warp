@@ -9,8 +9,10 @@ use warpui::{
 
 use super::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use crate::Appearance;
+use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::auth::AuthStateProvider;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
+use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 #[derive(Clone, Copy)]
@@ -22,6 +24,7 @@ pub enum CustomUsagePurpose {
 
 pub enum CustomUsageEvent {
     Selected,
+    PresetRestored,
     Saved,
 }
 
@@ -164,6 +167,11 @@ impl CustomUsageControls {
             }
             ctx.notify();
         });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
         let mut me = Self {
             handle: ctx.handle(),
             editor,
@@ -222,6 +230,7 @@ impl CustomUsageControls {
             self.selected = false;
             self.editor
                 .update(ctx, |editor, ctx| editor.system_reset_buffer_text("", ctx));
+            ctx.emit(CustomUsageEvent::PresetRestored);
         }
     }
 
@@ -356,6 +365,8 @@ impl View for CustomUsageControls {
         if !self.selected {
             return column.finish();
         }
+        column
+            .add_child(Text::new("Custom amount (USD)", appearance.ui_font_family(), 12.).finish());
         column.add_child(
             Container::new(ChildView::new(&self.editor).finish())
                 .with_uniform_padding(8.)
@@ -380,6 +391,19 @@ impl View for CustomUsageControls {
             },
         );
         column.add_child(Text::new(text, appearance.ui_font_family(), 12.).finish());
+        if usage_display_unit(app) == UsageDisplayUnit::Credits
+            && let Some(cents) = amount
+        {
+            let credits = (f64::from(cents) / 1.8).floor() as i32;
+            column.add_child(
+                Text::new(
+                    format!("Approximately {credits} display credits."),
+                    appearance.ui_font_family(),
+                    12.,
+                )
+                .finish(),
+            );
+        }
         let reload_enabled = workspace.is_some_and(|workspace| {
             workspace
                 .settings
@@ -442,7 +466,18 @@ impl View for CustomUsageControls {
             }
         }
         if amount.is_some() && !enabled && !self.loading {
-            column.add_child(Text::new("This amount exceeds your remaining monthly allowance or billing is restricted. Edit your limit in Billing & usage, or contact your admin.", appearance.ui_font_family(), 12.).finish());
+            let warning = if workspace.is_some_and(|workspace| {
+                workspace
+                    .billing_metadata
+                    .is_delinquent_due_to_payment_issue()
+            }) {
+                "Billing is restricted. Update your payment method in Billing & usage."
+            } else if admin {
+                "This purchase would exceed your monthly limit. Increase your limit to continue."
+            } else {
+                "This purchase would exceed your monthly limit. Contact your admin to increase it."
+            };
+            column.add_child(Text::new(warning, appearance.ui_font_family(), 12.).finish());
         }
         if reload_enabled {
             column.add_child(
