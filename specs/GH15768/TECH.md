@@ -113,7 +113,7 @@ Do not add `muse` to `ONE_OFF_SHELL_COMMAND_KEYWORDS` unless NLD steals the comm
 | 6 Images | Manual clipboard paste / drop |
 | 7 Skills `/` | Manual slash menu; unit `supported_skill_providers` |
 | 8 Bash `!` | Unit `supports_bash_mode() == true`; manual leading `!` enters bang-shell like Claude |
-| 9 Review + attach | Manual under `HoaCodeReview`; no new review tests required beyond existing CLI-agent paths |
+| 9 Review + attach | Manual; no new review tests required beyond existing CLI-agent paths |
 | 10 Tab Configs / Remote Control | Manual: restore a Muse tab config launches `muse`; share chip matches other agents |
 | 11 Toolbelt without plugin | Manual on a machine with no Muse hooks and no Warp writes under `~/.config/muse` |
 | 12 OSC 777 if something else emits it | Unit parse `"agent":"muse"` |
