@@ -154,6 +154,7 @@ impl EnableAutoReloadModalBody {
         ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
             match event {
                 CustomUsageEvent::Selected => me.selected_denomination_index = usize::MAX,
+                CustomUsageEvent::PresetRestored => me.selected_denomination_index = 0,
                 CustomUsageEvent::Saved => ctx.emit(EnableAutoReloadModalBodyEvent::Close),
             }
             ctx.notify();
