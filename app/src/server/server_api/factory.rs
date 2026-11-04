@@ -35,6 +35,7 @@ pub struct FactoryGitTokenResponse {
 }
 
 impl FactoryGitTokenResponse {
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn expires_in(&self, delta: chrono::TimeDelta) -> bool {
         self.expires_at < chrono::Utc::now() + delta
     }
