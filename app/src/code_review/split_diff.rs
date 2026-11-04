@@ -137,7 +137,16 @@ impl CodeReviewView {
             .split_diff_alignment(ctx);
         apply_alignment_to_baseline(&baseline.editor, &alignment, ctx);
         let baseline_editor = baseline.editor.as_ref(ctx).editor().clone();
-        mirror_hidden_lines(&modified, &baseline_editor, &alignment, true, ctx);
+        // A pane created here hasn't laid out yet, so the copied folds apply on its first layout.
+        // Rebuilding now would race that layout and lay the text out twice.
+        mirror_hidden_lines(
+            &modified,
+            &baseline_editor,
+            &alignment,
+            MirrorDirection::FromModified,
+            !created,
+            ctx,
+        );
 
         if let Some(editor_state) = self.editor_state_mut(file_path) {
             editor_state.baseline = Some(baseline);
@@ -196,12 +205,11 @@ impl CodeReviewView {
         SplitBaselinePane { editor, base }
     }
 
-    /// Copies collapsed sections between the two panes of a split file, from the modified pane
-    /// when `from_modified` is set and from the base pane otherwise.
+    /// Copies collapsed sections between the two laid-out panes of a split file.
     fn mirror_baseline_hidden_lines(
         &mut self,
         file_path: &str,
-        from_modified: bool,
+        direction: MirrorDirection,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(editor_state) = self.editor_state_mut(file_path) else {
@@ -217,7 +225,7 @@ impl CodeReviewView {
             .model
             .as_ref(ctx)
             .split_diff_alignment(ctx);
-        mirror_hidden_lines(&modified, &baseline, &alignment, from_modified, ctx);
+        mirror_hidden_lines(&modified, &baseline, &alignment, direction, true, ctx);
     }
 
     fn handle_baseline_editor_event(
@@ -309,14 +317,14 @@ impl CodeReviewView {
                 self.delete_comment_by_id(*id, ctx);
             }
             CodeEditorEvent::HiddenSectionExpanded => {
-                self.mirror_baseline_hidden_lines(file_path, false, ctx);
+                self.mirror_baseline_hidden_lines(file_path, MirrorDirection::FromBase, ctx);
                 self.invalidate_file_height(file_path, ctx);
             }
             // Loading the base text recomputes the base pane's own (empty) diff, and the rebuild
             // that follows drops the collapsed sections copied from the modified pane. Copy them
             // again once that lands.
             CodeEditorEvent::DiffUpdated => {
-                self.mirror_baseline_hidden_lines(file_path, true, ctx);
+                self.mirror_baseline_hidden_lines(file_path, MirrorDirection::FromModified, ctx);
                 self.invalidate_file_height(file_path, ctx);
             }
             CodeEditorEvent::Focused => {
@@ -512,15 +520,30 @@ fn apply_alignment_to_baseline(
     });
 }
 
+/// Which pane of a split file collapsed sections are copied from.
+#[derive(Clone, Copy)]
+enum MirrorDirection {
+    FromModified,
+    FromBase,
+}
+
 /// Copies the collapsed unchanged ranges from one pane to the other. Collapsed ranges only ever
 /// cover unchanged lines, which sit on the same rows in both panes.
+///
+/// A laid-out target only shows changed folds after a layout rebuild, which `rebuild` allows. Pass
+/// false for a target that hasn't laid out yet, where the folds apply on the first layout.
 fn mirror_hidden_lines(
     modified: &ViewHandle<CodeEditorView>,
     baseline: &ViewHandle<CodeEditorView>,
     alignment: &DiffAlignment,
-    from_modified: bool,
+    direction: MirrorDirection,
+    rebuild: bool,
     ctx: &mut ViewContext<CodeReviewView>,
 ) {
+    let from_modified = match direction {
+        MirrorDirection::FromModified => true,
+        MirrorDirection::FromBase => false,
+    };
     let (source, target) = if from_modified {
         (modified, baseline)
     } else {
@@ -556,14 +579,9 @@ fn mirror_hidden_lines(
     if current == target_ranges {
         return;
     }
-    let collapses_new_lines = target_ranges.iter().any(|range| {
-        !current
-            .iter()
-            .any(|hidden| hidden.start <= range.start && range.end <= hidden.end)
-    });
     target.update(ctx, |editor, ctx| {
         editor.model.update(ctx, |model, ctx| {
-            if collapses_new_lines {
+            if rebuild {
                 model.set_hidden_lines_and_rebuild(target_ranges, ctx);
             } else {
                 model.set_hidden_lines(target_ranges, ctx);
