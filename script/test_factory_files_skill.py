@@ -557,6 +557,20 @@ def assert_oversized_trees_are_reported() -> None:
             raise RuntimeError(f"an oversized file was not reported: {result.stderr}")
 
 
+def assert_file_count_boundary() -> None:
+    files = {f"runners/build-{index}.yaml": "{}" for index in range(1022)}
+    with factory_tree(**files) as root:
+        with fake_server(CLEAN_RESPONSE) as server:
+            result = run_validator(root, server.url)
+            if result.returncode != EXIT_VALID or len(server.submitted_files()) != 1024:
+                raise RuntimeError("the file-count limit was not accepted")
+        (root / "runners" / "overflow.yaml").write_text("{}", encoding="utf-8")
+        with fake_server(CLEAN_RESPONSE) as server:
+            result = run_validator(root, server.url)
+            if result.returncode != EXIT_NOT_VALIDATED or server.submitted_files():
+                raise RuntimeError("a tree above the file-count limit was uploaded")
+
+
 def assert_json_output_never_implies_a_verdict() -> None:
     """--json distinguishes "checked and clean" from "not checked"."""
     with factory_tree() as root:
@@ -644,6 +658,7 @@ CHECKS = (
     ),
     ("symlinked resources are refused", assert_symlinked_resources_are_refused),
     ("oversized trees are reported", assert_oversized_trees_are_reported),
+    ("file-count boundary is enforced", assert_file_count_boundary),
     ("json output never implies a verdict", assert_json_output_never_implies_a_verdict),
     ("no local copy of the format remains", assert_no_format_copy_remains),
     ("source and bundled trees match", assert_packaged_skill_matches),
