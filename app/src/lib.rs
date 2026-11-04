@@ -1929,6 +1929,14 @@ pub(crate) fn initialize_app(
         AppearanceManager::as_ref(ctx).set_app_icon(ctx);
     }
 
+    #[cfg(windows)]
+    if launch_mode.is_gui()
+        && FeatureFlag::WindowsJumpList.is_enabled()
+        && FeatureFlag::TabConfigs.is_enabled()
+    {
+        ctx.add_singleton_model(app_services::windows::jump_list::JumpList::new);
+    }
+
     #[cfg(feature = "local_tty")]
     terminal::available_shells::register(ctx);
 
