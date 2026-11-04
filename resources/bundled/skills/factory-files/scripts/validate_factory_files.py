@@ -53,7 +53,7 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 # Mirrors the caps the endpoint enforces, so an oversized tree is reported here
 # rather than collecting a 400.
-MAX_REMOTE_FILES = 256
+MAX_REMOTE_FILES = 2048
 MAX_REMOTE_FILE_BYTES = 256 * 1024
 MAX_REMOTE_CONTENT_BYTES = 2 * 1024 * 1024
 
