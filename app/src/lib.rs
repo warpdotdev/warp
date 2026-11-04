@@ -147,6 +147,7 @@ pub use ai::agent::todos::AIAgentTodoList;
 pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
+use ai::agent_sdk::{CommandAuthentication, authenticate_and_execute};
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
@@ -1402,7 +1403,19 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                     require_login,
                 } => {
                     if require_login {
-                        tui::authenticate_then_execute(execute, ctx);
+                        let mut callable = Some(execute);
+                        let once_wrapper = move |ctx: &mut AppContext| {
+                            if let Some(callable) = callable.take() {
+                                callable(ctx);
+                            }
+                            Ok(())
+                        };
+                        authenticate_and_execute(
+                            ctx,
+                            ::tracing::Span::current(),
+                            CommandAuthentication::RefreshUser,
+                            once_wrapper,
+                        );
                     } else {
                         execute(ctx);
                     }
