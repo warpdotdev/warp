@@ -61,7 +61,7 @@ fn reported_result(event: &TurnEvent) -> (String, ToolResult) {
 
 #[test]
 fn initial_actions_create_task_then_echo_user_query() {
-    let actions = mapper().initial_actions("hello");
+    let actions = mapper().initial_actions("hello", None);
     assert_eq!(actions.len(), 2);
     let Some(Action::CreateTask(create)) = &actions[0].action else {
         panic!("expected CreateTask");
@@ -73,6 +73,35 @@ fn initial_actions_create_task_then_echo_user_query() {
     assert_eq!(messages[0].request_id, "req-1");
     match &messages[0].message {
         Some(MessageKind::UserQuery(query)) => assert_eq!(query.query, "hello"),
+        other => panic!("expected UserQuery, got {other:?}"),
+    }
+}
+
+#[test]
+fn initial_actions_carry_the_opening_query_attribution() {
+    let origin = UserQueryOrigin {
+        variant: Some(user_query_origin::Variant::WarpClient(
+            user_query_origin::WarpClient::default(),
+        )),
+    };
+    let source_message = ExternalMessage {
+        body: "fix the flaky test".to_owned(),
+        ..Default::default()
+    };
+    let base = BaseUserQuery::from_proto(api::request::input::UserQuery {
+        origin: Some(origin.clone()),
+        source_message: Some(source_message.clone()),
+        ..Default::default()
+    });
+
+    let actions = mapper().initial_actions("<skill>...</skill>\n\nfix the flaky test", Some(&base));
+    match &added_messages(&actions[1])[0].message {
+        Some(MessageKind::UserQuery(query)) => {
+            assert_eq!(query.query, "<skill>...</skill>\n\nfix the flaky test");
+            assert_eq!(query.origin, Some(origin));
+            assert!(query.author.is_none());
+            assert_eq!(query.source_message, Some(source_message));
+        }
         other => panic!("expected UserQuery, got {other:?}"),
     }
 }

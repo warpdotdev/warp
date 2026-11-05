@@ -129,6 +129,7 @@ mod telemetry;
 #[cfg(test)]
 mod test_support;
 mod text_layout;
+mod transport_report;
 
 /// Prints a non-blocking warning to stderr when the CLI is invoked with a team-scoped API key.
 fn maybe_warn_team_api_key(ctx: &AppContext) {
@@ -761,6 +762,7 @@ fn build_execution_task_and_options(
         }),
         selected_harness,
         harness_transport,
+        harness_transport_fallback: None,
         third_party_harness_model_config,
         team_scope: None,
         bedrock_oidc_credentials: None,
@@ -992,7 +994,7 @@ impl AgentDriverRunner {
             // For the `--task-id` path, `task_conversation_id` is the `conversation_id` read off
             // the fetched `AmbientAgentTask` (set by the server when linking the task to an
             // existing conversation, e.g. via `run-cloud --conversation`).
-            let (mut driver_options, task, task_conversation_id) =
+            let (mut driver_options, mut task, task_conversation_id) =
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
@@ -1052,6 +1054,18 @@ impl AgentDriverRunner {
                 HarnessKind::Oz | HarnessKind::ThirdParty(_) => {}
             }
 
+            // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
+            // instead. This runs before anything reads the transport: the native prompt
+            // queue, the harness environment, the terminal launch and the resume path.
+            let transport_fallback = driver::harness::apply_transport_fallback(
+                &mut task.harness,
+                &mut driver_options.harness_transport,
+            )?;
+            if let Some(reason) = transport_fallback {
+                Self::note_transport_fallback(&foreground, task.harness.harness(), reason).await;
+            }
+            driver_options.harness_transport_fallback = transport_fallback;
+
             // Validate that the third-party harness is installed and authed.
             if let HarnessKind::ThirdParty(harness) = &task.harness {
                 harness.validate()?;
@@ -1059,6 +1073,23 @@ impl AgentDriverRunner {
 
             if let Some(task_id) = driver_options.task_id {
                 driver::write_run_started(&task_id.to_string(), output_format);
+                // Tell the server which transport the run actually got, so follow-up
+                // attachments and session links agree with it. The report is retried in the
+                // background, so setup does not wait on the server. A harness whose transport
+                // is fixed (Pi) is skipped: the server rejects a report for it.
+                if task.harness.reports_transport() {
+                    let transport = driver_options.harness_transport;
+                    foreground
+                        .spawn(move |_, ctx| {
+                            transport_report::report_transport_in_background(
+                                &ctx.background_executor(),
+                                ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                                transport,
+                                transport_fallback.map(driver::harness::TransportFallbackReason::as_str),
+                            );
+                        })
+                        .await?;
+                }
             }
 
             // Pull conversation information, if we have it
@@ -1551,6 +1582,7 @@ impl AgentDriverRunner {
                     computer_use_config: None,
                     selected_harness: args.harness,
                     harness_transport: args.harness_transport.unwrap_or_default(),
+                    harness_transport_fallback: None,
                     third_party_harness_model_config,
                     team_scope: None,
                     bedrock_oidc_credentials: None,
@@ -1977,6 +2009,28 @@ impl AgentDriverRunner {
         }
 
         Ok((task_conversation_id, additional_source_repos))
+    }
+
+    /// Logs and records in telemetry that a run requested over ACP is driven over a PTY.
+    async fn note_transport_fallback(
+        foreground: &ModelSpawner<Self>,
+        harness: Harness,
+        reason: driver::harness::TransportFallbackReason,
+    ) {
+        log::info!(
+            "No ACP adapter for the {harness} harness in this sandbox ({reason}); driving it over a PTY"
+        );
+        let harness_name = harness.to_string();
+        let _ = foreground
+            .spawn(move |_, ctx| {
+                use warp_core::telemetry::TelemetryEvent as _;
+                let event = driver::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
+                    harness: harness_name,
+                    reason: reason.as_str(),
+                };
+                crate::send_telemetry_from_app_ctx!(event, ctx);
+            })
+            .await;
     }
 
     /// If we are starting this agent run from an existing conversation, load the conversation

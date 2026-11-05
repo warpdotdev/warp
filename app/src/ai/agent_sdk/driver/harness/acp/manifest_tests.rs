@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use warp_cli::agent::Harness;
 
-use super::{MANIFEST_FILE, discover, read_manifest, resolve_sidecar_program};
+use super::{
+    MANIFEST_FILE, default_adapter, default_manifest, discover, read_manifest,
+    resolve_sidecar_program,
+};
 
 #[cfg(windows)]
 const PROGRAM: &str = "adapter.exe";
@@ -54,14 +57,18 @@ fn discovery_selects_override_then_mount_then_defaults_without_merging() {
         Path::new(&selected.launch.program),
         override_dir.join("usr/local/bin").join(PROGRAM)
     );
-    assert!(selected.is_sidecar);
+    assert!(selected.default.is_none());
+    assert_eq!(
+        selected.program_candidates(),
+        [selected.launch.program.as_str()]
+    );
     let selected = discover(Harness::Pi, None, &mounts).unwrap();
     assert_eq!(selected.launch.args, ["mount"]);
     fs::remove_file(mount_manifest).unwrap();
     let selected = discover(Harness::Pi, None, &mounts).unwrap();
     assert_eq!(selected.launch.program, "pi-acp");
     assert!(selected.launch.args.is_empty());
-    assert!(!selected.is_sidecar);
+    assert!(selected.default.is_some());
 }
 
 #[test]
@@ -147,4 +154,91 @@ fn unsupported_versions_and_unknown_section_fields_are_rejected() {
                 .contains("unknown field")
         );
     }
+}
+
+#[test]
+fn defaults_say_whether_a_sidecar_without_a_manifest_was_mounted() {
+    let root = tempdir().unwrap();
+    let mounts = root.path().join("mnt");
+
+    // Nothing mounted, as on the Direct backend or a native image.
+    let selected = discover(Harness::Claude, None, &mounts).unwrap();
+    assert!(selected.default.is_some());
+    assert!(!selected.sidecar_without_manifest);
+
+    // The terminal CLI image mounted where the ACP sidecar was expected.
+    let mount_dir = mounts.join("claude-cli-sidecar");
+    write_executable(&mount_dir.join("usr/local/bin/claude"));
+    let selected = discover(Harness::Claude, None, &mounts).unwrap();
+    assert!(selected.default.is_some());
+    assert!(selected.sidecar_without_manifest);
+
+    // A sidecar with a manifest is not a default at all.
+    let pi_mount = mounts.join("pi-cli-sidecar");
+    write_manifest(&pi_mount.join(MANIFEST_FILE), &[]);
+    write_executable(&pi_mount.join("usr/local/bin").join(PROGRAM));
+    let selected = discover(Harness::Pi, None, &mounts).unwrap();
+    assert!(selected.default.is_none());
+    assert!(!selected.sidecar_without_manifest);
+}
+
+#[test]
+fn claude_default_lists_the_package_launcher_before_the_npm_bin() {
+    let manifest = default_manifest(Harness::Claude).unwrap();
+    assert_eq!(manifest.launch.program, "claude-code-acp");
+    assert!(manifest.launch.args.is_empty());
+    assert_eq!(
+        manifest.program_candidates(),
+        ["claude-code-acp", "claude-agent-acp"]
+    );
+    let adapter = manifest.default.unwrap();
+    assert_eq!(adapter.wraps_cli, Some("claude"));
+    assert_eq!(
+        adapter.package,
+        Some("@agentclientprotocol/claude-agent-acp")
+    );
+    // The terminal transport's auth knowledge comes along.
+    assert_eq!(
+        manifest.auth_check_command.as_deref(),
+        Some("claude auth status --json")
+    );
+
+    // The other defaults are single names that wrap nothing.
+    for harness in [Harness::Codex, Harness::Gemini, Harness::Pi] {
+        let (adapter, _) = default_adapter(harness).unwrap();
+        assert!(adapter.alternates.is_empty(), "{harness}");
+        assert_eq!(adapter.wraps_cli, None, "{harness}");
+    }
+    for harness in [Harness::Oz, Harness::OpenCode, Harness::Unknown] {
+        assert!(default_adapter(harness).is_none(), "{harness}");
+    }
+}
+
+#[test]
+fn missing_adapter_reason_names_every_program_the_package_and_the_wrapped_cli() {
+    let (claude, _) = default_adapter(Harness::Claude).unwrap();
+    let reason = claude.missing_reason(Some("https://docs.example"));
+    for expected in [
+        "'claude-code-acp'",
+        "'claude-agent-acp'",
+        "npm install -g @agentclientprotocol/claude-agent-acp",
+        "oz process",
+        "shell",
+        "'claude' CLI must be installed too: https://docs.example",
+    ] {
+        assert!(reason.contains(expected), "{reason:?} lacks {expected:?}");
+    }
+    assert!(!claude.missing_reason(None).contains("https://"));
+
+    let (codex, _) = default_adapter(Harness::Codex).unwrap();
+    let reason = codex.missing_reason(Some("https://docs.example"));
+    assert!(
+        reason.starts_with("ACP adapter 'codex-acp' is not on PATH."),
+        "{reason:?}"
+    );
+    assert!(!reason.contains("npm install"), "{reason:?}");
+    assert!(
+        reason.ends_with("Install docs: https://docs.example"),
+        "{reason:?}"
+    );
 }

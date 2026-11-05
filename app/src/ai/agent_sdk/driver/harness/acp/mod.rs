@@ -51,7 +51,7 @@ use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event::StreamFinished;
 use warp_multi_agent_api::{ClientAction, McpServerIdentity, ResponseEvent, response_event};
-use warp_util::path::{EscapeChar, ShellFamily};
+use warp_util::path::{EscapeChar, ShellFamily, resolve_executable};
 use warpui::r#async::Timer;
 use warpui::r#async::executor::Background;
 use warpui::{ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
@@ -93,12 +93,13 @@ use super::transcript_persistence::{
     UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
-    SavePoint, ThirdPartyHarness, install_docs_url, validate_cli_installed,
+    AcpAdapter, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers,
+    ResumePayload, SavePoint, ThirdPartyHarness, TransportFallbackReason, install_docs_url,
+    validate_cli_installed,
 };
-use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::{BaseUserQuery, CancellationReason};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
@@ -266,11 +267,49 @@ impl ThirdPartyHarness for AcpHarness {
     }
 
     fn validate(&self) -> Result<(), AgentDriverError> {
-        if self.manifest.is_sidecar {
-            Ok(())
-        } else {
-            validate_cli_installed(&self.manifest.launch.program, self.install_docs_url())
+        // A sidecar's program was verified when its manifest was read.
+        let Some(adapter) = &self.manifest.default else {
+            return Ok(());
+        };
+        let docs_url = self.install_docs_url();
+        // Checked against this process's `PATH`, like the terminal transports do. The bridge
+        // picks the name again on the session shell's `PATH`, which is the one that counts.
+        if !adapter
+            .programs()
+            .any(|program| resolve_executable(program).is_some())
+        {
+            return Err(AgentDriverError::HarnessSetupFailed {
+                harness: self.harness.to_string(),
+                reason: adapter.missing_reason(docs_url),
+            });
         }
+        // The adapter only drives the CLI; without it the run would fail at the auth
+        // preflight and read as a login problem.
+        if let Some(cli) = adapter.wraps_cli {
+            validate_cli_installed(cli, docs_url)?;
+        }
+        Ok(())
+    }
+
+    fn acp_adapter(&self) -> Option<AcpAdapter> {
+        // A sidecar's program was verified when its manifest was read. Without one, any of the
+        // default adapter's names will do, the same lookup `validate` makes.
+        let Some(adapter) = &self.manifest.default else {
+            return Some(AcpAdapter::Available);
+        };
+        if adapter
+            .programs()
+            .any(|program| resolve_executable(program).is_some())
+        {
+            return Some(AcpAdapter::Available);
+        }
+        Some(AcpAdapter::Missing(
+            if self.manifest.sidecar_without_manifest {
+                TransportFallbackReason::SidecarWithoutAdapter
+            } else {
+                TransportFallbackReason::NoSidecar
+            },
+        ))
     }
 
     fn auth_check_command(&self) -> Option<String> {
@@ -295,6 +334,7 @@ impl ThirdPartyHarness for AcpHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
@@ -367,7 +407,9 @@ impl ThirdPartyHarness for AcpHarness {
         Ok(Box::new(AcpHarnessRunner {
             harness: self.harness,
             launch: self.manifest.launch.clone(),
+            program_candidates: self.manifest.program_candidates(),
             user_prompt: prompt.to_owned(),
+            opening_base: prompt_attribution.cloned(),
             prompt_text,
             resumed_prompt_text,
             initial_attachments: self.initial_attachments.clone(),
@@ -465,8 +507,13 @@ struct CliSession {
 pub(crate) struct AcpHarnessRunner {
     harness: Harness,
     launch: AcpLaunchSpec,
-    /// The prompt as the user wrote it, echoed into the conversation.
+    /// Names the bridge may launch `launch.program` under, preferred first.
+    program_candidates: Vec<String>,
+    /// The prompt the server resolved for this execution, echoed into the conversation.
     user_prompt: String,
+    /// Who sent the query that opens this execution, carried onto the echo of `user_prompt` so
+    /// live viewers see it attributed as the stored snapshot later is.
+    opening_base: Option<BaseUserQuery>,
     /// The full text sent to the agent, including server-composed context.
     prompt_text: String,
     /// `prompt_text` for a run that resumed its agent session, without what the session's
@@ -715,7 +762,8 @@ impl AcpHarnessRunner {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for AcpHarnessRunner {
     fn harness_name(&self) -> &str {
-        &self.launch.program
+        // The harness, not the program: the same harness launches under several names.
+        self.harness.config_name()
     }
     #[cfg(test)]
     fn prompt_text_for_test(&self) -> Option<&str> {
@@ -781,7 +829,12 @@ impl HarnessRunner for AcpHarnessRunner {
             })
         });
 
-        let listener = BridgeListener::bind(&self.launch.program, &self.launch.args)
+        let programs = self
+            .program_candidates
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let listener = BridgeListener::bind(&programs, &self.launch.args)
             .map_err(|error| self.setup_failed(format!("{error:#}")))?;
         let command = bridge_command(listener.launch_file(), shell_family)
             .map_err(|error| self.setup_failed(format!("{error:#}")))?;
@@ -987,7 +1040,8 @@ impl HarnessRunner for AcpHarnessRunner {
                     turn.request_id.clone(),
                     self.mcp_server_identities.clone(),
                 );
-                let actions = vec![mapper.user_query_action(&self.user_prompt, None)];
+                let actions =
+                    vec![mapper.user_query_action(&self.user_prompt, self.opening_base.as_ref())];
                 (mapper, actions)
             }
             None => {
@@ -996,7 +1050,7 @@ impl HarnessRunner for AcpHarnessRunner {
                     turn.request_id.clone(),
                     self.mcp_server_identities.clone(),
                 );
-                let actions = mapper.initial_actions(&self.user_prompt);
+                let actions = mapper.initial_actions(&self.user_prompt, self.opening_base.as_ref());
                 (mapper, actions)
             }
         };

@@ -334,7 +334,11 @@ impl AcpTurnMapper {
 
     /// Actions that open the conversation: create the root task and echo the user's prompt,
     /// mirroring what the MAA server streams first.
-    pub(super) fn initial_actions(&self, prompt: &str) -> Vec<ClientAction> {
+    pub(super) fn initial_actions(
+        &self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> Vec<ClientAction> {
         vec![
             action(client_action::Action::CreateTask(CreateTask {
                 task: Some(Task {
@@ -342,7 +346,7 @@ impl AcpTurnMapper {
                     ..Default::default()
                 }),
             })),
-            self.user_query_action(prompt, None),
+            self.user_query_action(prompt, base),
         ]
     }
 
