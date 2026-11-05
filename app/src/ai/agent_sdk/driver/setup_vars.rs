@@ -24,6 +24,18 @@ pub(super) struct SetupVars {
     metadata: HashMap<String, String>,
 }
 
+fn extend_environment(
+    environment: &mut HashMap<OsString, OsString>,
+    entries: impl IntoIterator<Item = (OsString, OsString)>,
+) {
+    for (key, value) in entries {
+        if cfg!(windows) {
+            environment.retain(|name, _| !same_key(name, &key.to_string_lossy()));
+        }
+        environment.insert(key, value);
+    }
+}
+
 pub(super) fn file_path(working_dir: &Path, environment: &HashMap<OsString, OsString>) -> PathBuf {
     let root = environment
         .get(OsStr::new("OZ_WORKSPACE_ROOT"))
@@ -292,7 +304,8 @@ impl AgentDriver {
         foreground
             .spawn(move |me, _| {
                 let mut runtime: HashMap<_, _> = std::env::vars_os().collect();
-                runtime.extend(
+                extend_environment(
+                    &mut runtime,
                     me.resolved_env_vars
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone())),
@@ -329,7 +342,8 @@ impl AgentDriver {
         let (values, mcp_environment) = foreground
             .spawn(move |me, ctx| {
                 let mut protected: HashMap<_, _> = std::env::vars_os().collect();
-                protected.extend(
+                extend_environment(
+                    &mut protected,
                     me.resolved_env_vars
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone())),
@@ -338,7 +352,7 @@ impl AgentDriver {
                 if apply_to_session
                     && let Some(path) = me.terminal_driver.as_ref(ctx).session_path(ctx)
                 {
-                    environment.insert("PATH".into(), path.into());
+                    extend_environment(&mut environment, [("PATH".into(), path.into())]);
                 }
                 let Some(vars) = me.setup_vars.as_mut() else {
                     return (HashMap::new(), HashMap::new());
@@ -357,7 +371,7 @@ impl AgentDriver {
                     VARS_FILE_ENV.into(),
                     vars.path.to_string_lossy().into_owned(),
                 );
-                Arc::make_mut(&mut me.resolved_env_vars).extend(applied.clone());
+                extend_environment(Arc::make_mut(&mut me.resolved_env_vars), applied.clone());
                 (applied, mcp_environment)
             })
             .await?;
@@ -379,18 +393,22 @@ impl AgentDriver {
             return;
         };
         let mut protected: HashMap<_, _> = std::env::vars_os().collect();
-        protected.extend(
+        extend_environment(
+            &mut protected,
             self.resolved_env_vars
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         let mut environment = protected.clone();
         let applied = merge(&vars.values, &protected, &mut environment);
-        Arc::make_mut(&mut self.resolved_env_vars).extend(applied);
+        extend_environment(Arc::make_mut(&mut self.resolved_env_vars), applied);
         Arc::make_mut(&mut self.resolved_env_vars)
             .insert(VARS_FILE_ENV.into(), vars.path.as_os_str().to_owned());
         let mut mcp: HashMap<_, _> = std::env::vars_os().collect();
-        mcp.extend(mcp_environment.iter().map(|(k, v)| (k.into(), v.into())));
+        extend_environment(
+            &mut mcp,
+            mcp_environment.iter().map(|(k, v)| (k.into(), v.into())),
+        );
         let applied = merge(&vars.values, &protected, &mut mcp);
         mcp_environment.extend(
             applied.into_iter().filter_map(|(key, value)| {

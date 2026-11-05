@@ -26,6 +26,37 @@ fn vars_file_uses_workspace_root_instead_of_a_repository_directory() {
 
 #[test]
 #[cfg(windows)]
+fn windows_runtime_path_replaces_case_variant_before_file_prepend() {
+    let mut environment = HashMap::from([
+        (OsString::from("Path"), OsString::from("C:\\system")),
+        (OsString::from("Run_Value"), OsString::from("process")),
+    ]);
+    extend_environment(
+        &mut environment,
+        [
+            (OsString::from("PATH"), OsString::from("C:\\runtime")),
+            (OsString::from("RUN_VALUE"), OsString::from("runtime")),
+        ],
+    );
+    let protected = environment.clone();
+    let values = parse("PATH=C:\\tools\nrun_value=file\n", &HashMap::new());
+
+    merge(&values, &protected, &mut environment);
+
+    assert_eq!(
+        environment,
+        HashMap::from([
+            (
+                OsString::from("PATH"),
+                OsString::from("C:\\tools;C:\\runtime")
+            ),
+            (OsString::from("RUN_VALUE"), OsString::from("runtime")),
+        ])
+    );
+}
+
+#[test]
+#[cfg(windows)]
 fn windows_keys_use_last_write_and_paths_deduplicate_without_case() {
     let values = parse(
         "Value=old\nVALUE=last\nPath=C:\\Tools;C:\\WINDOWS\nPATH=C:\\Tools;C:\\Windows\n",
