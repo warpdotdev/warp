@@ -188,9 +188,7 @@ impl BlocklistAIController {
         if needs_preparation {
             self.prepare_queued_attachments(id, query_id, attachments.to_vec(), ctx);
         }
-        if self.can_dispatch_queued_warp_agent_prompt(id, ctx) {
-            self.dispatch_queued_warp_agent_prompt(id, None, ctx);
-        }
+        self.dispatch_queued_warp_agent_prompt(id, None, ctx);
         true
     }
 
@@ -201,6 +199,9 @@ impl BlocklistAIController {
         query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if query_id.is_none() && !self.can_dispatch_queued_warp_agent_prompt(conversation_id, ctx) {
+            return;
+        }
         let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|conversation| conversation.has_active_subagent());
