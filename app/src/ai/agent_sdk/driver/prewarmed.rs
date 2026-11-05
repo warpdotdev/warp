@@ -13,7 +13,6 @@ use crate::terminal::view::load_ai_conversation::{
 };
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
-    execution_config::validate_prewarmed_harness(execution_config::harness(&config.harness)?)?;
     anyhow::ensure!(
         FeatureFlag::FactoryDeferredRepositories.is_enabled()
             || config

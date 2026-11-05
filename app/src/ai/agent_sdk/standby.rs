@@ -499,8 +499,6 @@ async fn prepare(
             )
         })
         .map_err(AgentDriverError::ConfigBuildFailed)?;
-    execution_config::validate_prewarmed_harness(harness)
-        .map_err(AgentDriverError::ConfigBuildFailed)?;
     // Deferred checkouts belong to the claiming task, so the standby workspace declares none and
     // only validates them.
     let mut workspace = WorkspaceConfiguration::from_resolved(
