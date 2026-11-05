@@ -26,8 +26,9 @@ pub enum FindWorkItem {
     DirtyRange {
         block_index: BlockIndex,
         grid_type: GridType,
-        row_range: RangeInclusive<usize>,
-        num_lines_truncated: u64,
+        /// The dirty rows in absolute row coordinates, so that scrollback truncation before the
+        /// scan runs cannot shift which content is scanned.
+        row_range: RangeInclusive<u64>,
     },
     /// Request scanning of an AI block on the main thread.
     AIBlock {
@@ -70,8 +71,8 @@ impl FindWorkQueue {
 
     /// Populates the queue with initial scan items from a block info list.
     ///
-    /// Terminal blocks become [`FindWorkItem::ScanFullBlock`] items and rich
-    /// content blocks become [`FindWorkItem::ScanAIBlock`] items. Items are
+    /// Terminal blocks become [`FindWorkItem::FullBlock`] items and rich
+    /// content blocks become [`FindWorkItem::AIBlock`] items. Items are
     /// pushed in the order provided (typically newest-first from
     /// [`collect_block_info`](super::collect_block_info)).
     pub fn enqueue_full_scan(&self, blocks: &[BlockInfo]) {
@@ -98,14 +99,14 @@ impl FindWorkQueue {
 
     /// Enqueues work for a block that has been invalidated.
     ///
-    /// If a [`FindWorkItem::ScanFullBlock`] for this block is already pending in
+    /// If a [`FindWorkItem::FullBlock`] for this block is already pending in
     /// the queue, this is a no-op: the pending scan will pick up the latest
     /// content. Otherwise, the appropriate work item is pushed to the **front**
     /// of the queue so it is processed before remaining initial-scan items.
     pub fn invalidate_block(
         &self,
         block_index: BlockIndex,
-        dirty_range: Option<(RangeInclusive<usize>, GridType, u64)>,
+        dirty_range: Option<(RangeInclusive<u64>, GridType)>,
     ) {
         let mut inner = self.inner.lock().unwrap();
 
@@ -119,11 +120,10 @@ impl FindWorkQueue {
 
         // Enqueue the appropriate item at the front (high priority).
         let item = match dirty_range {
-            Some((row_range, grid_type, num_lines_truncated)) => FindWorkItem::DirtyRange {
+            Some((row_range, grid_type)) => FindWorkItem::DirtyRange {
                 block_index,
                 grid_type,
                 row_range,
-                num_lines_truncated,
             },
             None => FindWorkItem::FullBlock { block_index },
         };
