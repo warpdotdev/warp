@@ -977,9 +977,7 @@ pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
 
 /// Executes a CLI command after initializing TUI-scoped settings and secure storage.
 #[cfg(feature = "tui")]
-pub fn run_tui_cli_command(
-    execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
-) -> Result<()> {
+pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut AppContext)>, ) -> Result<()> {
     run_internal(LaunchMode::Tui {
         entrypoint: TuiEntryPoint::CliCommand {
             execute,
@@ -2521,7 +2519,9 @@ pub(crate) fn initialize_app(
         // `startup_auth_is_non_blocking`).
         LaunchMode::CommandLine { .. } => None,
         // Login-required TUI commands subscribe before starting authentication in their dispatch path.
-        LaunchMode::Tui { entrypoint: TuiEntryPoint::CliCommand { .. } } => None,
+        LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::CliCommand { .. }
+        } => None,
         _ => pending_api_key
             .map(StartupUserAuthentication::ApiKey)
             .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser)),
