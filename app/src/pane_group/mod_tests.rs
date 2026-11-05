@@ -5,6 +5,7 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
+use float_cmp::assert_approx_eq;
 use instant::Instant;
 use mockito::Matcher;
 use pathfinder_geometry::rect::RectF;
@@ -4150,6 +4151,158 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 file_view.as_ref(ctx).file_id_for_test().is_none(),
                 "a permanently discarded pane should release its file"
             );
+        });
+    });
+}
+
+/// Lays out a two-pane horizontal split as if it had just been rendered at 500px + 500px, then
+/// starts dragging the divider from x = 500.
+/// Splits the group in two and starts dragging the divider between the panes, as if the last
+/// layout had drawn them at `leading_rect` and `trailing_rect` (`None` leaves a pane unmeasured).
+fn start_dragging_divider_of_rendered_split(
+    panes: &mut PaneGroup,
+    ctx: &mut ViewContext<PaneGroup>,
+    split: Direction,
+    leading_rect: Option<RectF>,
+    trailing_rect: Option<RectF>,
+    start_mouse_location: Vector2F,
+) {
+    let leading_pane_id = get_newly_created_pane_id(panes, &[]);
+    panes.add_terminal_pane(split, None, ctx);
+    let trailing_pane_id = get_newly_created_pane_id(panes, &[leading_pane_id]);
+
+    let presenter = ctx.presenter(ctx.window_id()).unwrap();
+    let mut presenter = presenter.borrow_mut();
+    let position_cache = presenter.position_cache_mut();
+    position_cache.start();
+    if let Some(rect) = leading_rect {
+        position_cache.cache_position_indefinitely(leading_pane_id.position_id(), rect);
+    }
+    if let Some(rect) = trailing_rect {
+        position_cache.cache_position_indefinitely(trailing_pane_id.position_id(), rect);
+    }
+    position_cache.end();
+    drop(presenter);
+
+    let PaneNode::Branch(branch) = &panes.panes.root else {
+        panic!("expected the root to be a split");
+    };
+    let border_id = branch.divider_ids()[0];
+    let direction = branch.axis();
+    panes.start_resizing(
+        DraggedBorder {
+            border_id,
+            direction,
+            start_mouse_location,
+            anchor: None,
+        },
+        ctx,
+    );
+}
+
+fn start_dragging_divider_of_rendered_side_by_side_split(
+    panes: &mut PaneGroup,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    start_dragging_divider_of_rendered_split(
+        panes,
+        ctx,
+        Direction::Right,
+        Some(RectF::new(Vector2F::new(0., 0.), Vector2F::new(500., 768.))),
+        Some(RectF::new(
+            Vector2F::new(500., 0.),
+            Vector2F::new(500., 768.),
+        )),
+        Vector2F::new(500., 300.),
+    );
+}
+
+fn root_flexes(panes: &PaneGroup) -> (f32, f32) {
+    let PaneNode::Branch(branch) = &panes.panes.root else {
+        panic!("expected the root to be a split");
+    };
+    (branch.nodes[0].0.0, branch.nodes[1].0.0)
+}
+
+#[test]
+fn divider_drag_applies_every_mouse_event_received_before_the_next_layout() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            start_dragging_divider_of_rendered_side_by_side_split(panes, ctx);
+
+            // Three 10px mouse moves arrive before the panes are laid out again.
+            panes.resize_pane(Vector2F::new(510., 300.), ctx);
+            panes.resize_pane(Vector2F::new(520., 300.), ctx);
+            panes.resize_pane(Vector2F::new(530., 300.), ctx);
+
+            // The divider should sit 30px right of where it started: 530px / 470px.
+            let (left_flex, right_flex) = root_flexes(panes);
+            assert_approx_eq!(f32, left_flex, 1.06, epsilon = 0.0001);
+            assert_approx_eq!(f32, right_flex, 0.94, epsilon = 0.0001);
+        });
+    });
+}
+
+#[test]
+fn divider_drag_between_stacked_panes_follows_vertical_mouse_movement() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            start_dragging_divider_of_rendered_split(
+                panes,
+                ctx,
+                Direction::Down,
+                Some(RectF::new(
+                    Vector2F::new(0., 0.),
+                    Vector2F::new(1024., 500.),
+                )),
+                Some(RectF::new(
+                    Vector2F::new(0., 500.),
+                    Vector2F::new(1024., 500.),
+                )),
+                Vector2F::new(300., 500.),
+            );
+
+            // Horizontal mouse movement is ignored; only the 30px downward move counts.
+            panes.resize_pane(Vector2F::new(340., 510.), ctx);
+            panes.resize_pane(Vector2F::new(380., 520.), ctx);
+            panes.resize_pane(Vector2F::new(420., 530.), ctx);
+
+            let (top_flex, bottom_flex) = root_flexes(panes);
+            assert_approx_eq!(f32, top_flex, 1.06, epsilon = 0.0001);
+            assert_approx_eq!(f32, bottom_flex, 0.94, epsilon = 0.0001);
+        });
+    });
+}
+
+#[test]
+fn divider_drag_waits_until_both_panes_have_been_laid_out() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            // Only the left pane has a rendered size so far.
+            start_dragging_divider_of_rendered_split(
+                panes,
+                ctx,
+                Direction::Right,
+                Some(RectF::new(Vector2F::new(0., 0.), Vector2F::new(500., 768.))),
+                None,
+                Vector2F::new(500., 300.),
+            );
+
+            panes.resize_pane(Vector2F::new(510., 300.), ctx);
+
+            // Nothing moves until both sides can be measured.
+            let (left_flex, right_flex) = root_flexes(panes);
+            assert_approx_eq!(f32, left_flex, 1.0, epsilon = 0.0001);
+            assert_approx_eq!(f32, right_flex, 1.0, epsilon = 0.0001);
         });
     });
 }
