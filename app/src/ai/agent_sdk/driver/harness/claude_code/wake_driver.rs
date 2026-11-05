@@ -8,6 +8,7 @@ use shell_words::quote as shell_quote;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_graphql::ai::AgentTaskState;
+use warp_util::path::ShellFamily;
 
 use super::super::claude_transcript::{
     ClaudeTranscriptEnvelope, claude_config_dir, write_envelope, write_session_index_entry,
@@ -231,6 +232,8 @@ impl ClaudeHarness {
         std::fs::write(&prompt_path, remote.wake_prompt.as_bytes())
             .with_context(|| format!("Failed to write {}", prompt_path.display()))?;
 
+        // The wake command is wrapped in a POSIX `env K=V ...` prefix below, so it is only
+        // ever executed by a POSIX shell.
         let command = claude_command(
             CLIAgent::Claude.command_prefix(),
             &remote.session_id,
@@ -238,6 +241,7 @@ impl ClaudeHarness {
             None,
             None,
             true,
+            ShellFamily::Posix,
         );
         let env_vars = local_wake_task_env_vars(Some(&task_id), parent_run_id.as_deref());
 

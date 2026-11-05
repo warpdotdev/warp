@@ -7,6 +7,7 @@ use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
+use warp_util::path::ShellFamily;
 
 use super::*;
 use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
@@ -59,7 +60,15 @@ fn write_surfaced_parent_bridge_message(state_dir: &Path, record: &MessageBridge
 #[test]
 fn claude_command_uses_session_id_when_not_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, false);
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        "/tmp/prompt.txt",
+        None,
+        None,
+        false,
+        ShellFamily::Posix,
+    );
     assert!(
         cmd.contains(&format!("--session-id {uuid}")),
         "expected --session-id flag in non-resume command, got: {cmd}"
@@ -73,7 +82,15 @@ fn claude_command_uses_session_id_when_not_resuming() {
 #[test]
 fn claude_command_uses_resume_flag_when_resuming() {
     let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt.txt", None, None, true);
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        "/tmp/prompt.txt",
+        None,
+        None,
+        true,
+        ShellFamily::Posix,
+    );
     assert!(
         cmd.contains(&format!("--resume {uuid}")),
         "expected --resume flag in resume command, got: {cmd}"
@@ -94,6 +111,7 @@ fn claude_command_pipes_prompt_path() {
         None,
         None,
         true,
+        ShellFamily::Posix,
     );
     assert!(
         cmd.contains("< '/tmp/prompt with spaces.txt'"),
@@ -103,6 +121,31 @@ fn claude_command_pipes_prompt_path() {
         cmd.contains("--dangerously-skip-permissions"),
         "expected --dangerously-skip-permissions, got: {cmd}"
     );
+}
+
+/// PowerShell reserves `<`, so the prompt file is piped into the CLI's stdin with
+/// `Get-Content -Raw` while every flag keeps its single-quoted path.
+#[test]
+fn claude_command_pipes_prompt_file_with_get_content_under_powershell() {
+    let uuid = Uuid::new_v4();
+    let cmd = claude_command(
+        "claude",
+        &uuid,
+        r"C:\Temp\oz prompt.txt",
+        Some(r"C:\Temp\oz system.txt"),
+        Some(r"C:\Temp\oz mcp.json"),
+        false,
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(
+        cmd,
+        format!(
+            "Get-Content -Raw 'C:\\Temp\\oz prompt.txt' | claude --session-id {uuid} \
+             --dangerously-skip-permissions --append-system-prompt-file 'C:\\Temp\\oz system.txt' \
+             --mcp-config 'C:\\Temp\\oz mcp.json'"
+        )
+    );
+    assert!(!cmd.contains('<'), "PowerShell rejects `<`, got: {cmd}");
 }
 
 #[test]
