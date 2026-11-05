@@ -29,6 +29,10 @@ pub fn get_input_buffer(
 #[derive(EnumIter)]
 pub enum ShellRcType {
     Bash,
+    /// Bash's interactive (non-login) rcfile, `~/.bashrc`. Distinct from
+    /// [`ShellRcType::Bash`], which maps to the login-order files Warp
+    /// emulates during bootstrap (`~/.bash_profile` et al.).
+    BashRc,
     Zsh,
     Fish,
     PowerShell,
@@ -39,6 +43,7 @@ impl ShellRcType {
     fn rc_file_paths(&self, home_dir: impl AsRef<Path>) -> Vec<PathBuf> {
         let relative_paths = match self {
             ShellRcType::Bash => vec![Path::new(".bash_profile")],
+            ShellRcType::BashRc => vec![Path::new(".bashrc")],
             ShellRcType::Zsh => vec![Path::new(".zshrc")],
             ShellRcType::Fish => vec![Path::new(".config/fish/config.fish")],
             #[cfg(not(windows))]
@@ -136,7 +141,17 @@ where
     P: AsRef<Path>,
     C: AsRef<str>,
 {
-    write_rc_files_for_test(dir, rc_contents, ShellRcType::iter())
+    // `BashRc` is bash's *second* rc file (the interactive one, alongside the
+    // login-order `.bash_profile` covered by `Bash`). Writing both with the
+    // same contents would make bash sessions source the contents twice now
+    // that the bootstrap mirrors the interactive startup sequence too, so
+    // tests that assert on rcfile side effects must opt into `.bashrc`
+    // explicitly via `write_rc_files_for_test`.
+    write_rc_files_for_test(
+        dir,
+        rc_contents,
+        ShellRcType::iter().filter(|rc_type| !matches!(rc_type, ShellRcType::BashRc)),
+    )
 }
 
 /// Writes a histfile for `shell_types` to the given `dir`.
