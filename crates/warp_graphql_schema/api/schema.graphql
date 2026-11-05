@@ -4005,7 +4005,7 @@ type Task {
   """
   Configuration for the active cloud execution. Requires the execution's workload token.
   """
-  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false): ExecutionConfiguration!
+  executionConfig(executionId: ID!, supportsDeferredRepositories: Boolean = false, supportsGithubInstances: Boolean = false): ExecutionConfiguration!
 
   """The ID of the task."""
   taskId: ID!
@@ -4031,6 +4031,7 @@ type TaskAttachment {
 
 """A set of git credentials for a single hosting provider."""
 type TaskGitCredential {
+  codeForge: CodeForge
   """
   The email address associated with the token, if available.
   Null for service-account (installation) tokens.
@@ -4052,6 +4053,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  supportsGithubInstances: Boolean
   """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
@@ -4072,6 +4074,7 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  removedHosts: [String!]!
   """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
 
@@ -5303,6 +5306,8 @@ type ExecutionRepositoryRef {
 
 
 type ExecutionRepository {
+  gitHost: String
+  githubInstanceUid: ID
   forge: CodeForge!
   owner: String!
   name: String!
@@ -5390,6 +5395,8 @@ enum CodeForge {
 }
 
 type SourceRepo {
+  gitHost: String
+  githubInstanceUid: ID
   codeForge: CodeForge!
   owner: String!
   repo: String!

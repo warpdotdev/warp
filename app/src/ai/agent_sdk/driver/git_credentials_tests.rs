@@ -93,6 +93,7 @@ fn assignment_replaces_standby_author_and_credentials() -> Result<()> {
             configure_git_credentials(&[github_credential()])?;
             configure_repository_git_identity_if_unset(home, GITHUB_HOST, global_git_identity());
             let creator = GitCredential {
+                code_forge: None,
                 token: "creator-token".into(),
                 username: Some("creator".into()),
                 email: Some("creator@example.com".into()),
@@ -128,6 +129,7 @@ fn assignment_preserves_setup_authors() -> Result<()> {
         run_repository_git_config(home, "user.name", "Setup Local");
         run_repository_git_config(home, "user.email", "local@example.com");
         let creator = GitCredential {
+            code_forge: None,
             token: "creator-token".into(),
             username: Some("creator".into()),
             email: Some("creator@example.com".into()),
@@ -260,6 +262,7 @@ fn retained_scope_refresh_subprocess() {
             })
             .returning(|_, _, _, _| {
                 Ok(TaskGitCredentialsResponse {
+                    removed_hosts: Vec::new(),
                     credentials: Vec::new(),
                     failed_hosts: Vec::new(),
                 })
@@ -411,6 +414,7 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
 
     write_gh_hosts_yml(
         &[GitCredential {
+            code_forge: None,
             token: "token".to_string(),
             username: Some("octocat".to_string()),
             email: Some("octocat@example.com".to_string()),
@@ -429,9 +433,10 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
 
     let hosts = std::fs::read_to_string(hosts_path)?;
     assert!(hosts.contains("github.com:"));
-    assert!(hosts.contains("    oauth_token: token"));
-    assert!(hosts.contains("    git_protocol: https"));
-    assert!(hosts.contains("    user: octocat"));
+    let hosts: serde_yaml::Value = serde_yaml::from_str(&hosts)?;
+    assert_eq!(hosts["github.com"]["oauth_token"], "token");
+    assert_eq!(hosts["github.com"]["git_protocol"], "https");
+    assert_eq!(hosts["github.com"]["user"], "octocat");
 
     Ok(())
 }
@@ -444,12 +449,14 @@ fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
     write_gh_hosts_yml(
         &[
             GitCredential {
+                code_forge: None,
                 token: "github-token".to_string(),
                 username: Some("octocat".to_string()),
                 email: None,
                 host: "github.com".to_string(),
             },
             GitCredential {
+                code_forge: None,
                 token: "gitlab-token".to_string(),
                 username: Some("oauth2".to_string()),
                 email: None,
@@ -474,6 +481,7 @@ fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
 
     write_gh_hosts_yml(
         &[GitCredential {
+            code_forge: None,
             token: "gitlab-token".to_string(),
             username: Some("oauth2".to_string()),
             email: None,
@@ -553,8 +561,185 @@ fn gh_config_dir_follows_gh_precedence() {
     }
 }
 
+#[test]
+fn github_hosts_refresh_and_remove_independently() -> Result<()> {
+    with_assignment_git_home("github_hosts_refresh_and_remove_independently", |home| {
+        let enterprise = GitCredential {
+            host: "github.company.com".into(),
+            code_forge: Some(cloud_object_models::CodeForge::GitHub),
+            token: "enterprise-token".into(),
+            username: Some("enterprise-user".into()),
+            email: None,
+        };
+        write_git_credentials(&[github_credential(), enterprise.clone()])?;
+        assert!(!apply_refreshed_credentials(TaskGitCredentialsResponse {
+            credentials: vec![GitCredential {
+                token: "rotated-token".into(),
+                ..enterprise
+            }],
+            failed_hosts: vec!["github.com".into()],
+            removed_hosts: Vec::new(),
+        })?);
+        let hosts = serde_yaml::Value::Mapping(read_yaml_mapping(
+            &gh_config_dir(home).join(GH_HOSTS_FILENAME),
+        )?);
+        assert_eq!(
+            hosts["github.com"]["oauth_token"].as_str(),
+            Some("github-token")
+        );
+        assert_eq!(
+            hosts["github.company.com"]["oauth_token"].as_str(),
+            Some("rotated-token")
+        );
+        assert!(apply_refreshed_credentials(TaskGitCredentialsResponse {
+            removed_hosts: vec!["github.company.com".into()],
+            ..Default::default()
+        })?);
+        let hosts = serde_yaml::Value::Mapping(read_yaml_mapping(
+            &gh_config_dir(home).join(GH_HOSTS_FILENAME),
+        )?);
+        assert!(hosts.get("github.company.com").is_none());
+        assert_eq!(
+            hosts["github.com"]["oauth_token"].as_str(),
+            Some("github-token")
+        );
+        let git = std::fs::read_to_string(home.join(".git-credentials"))?;
+        assert!(!git.contains("company.com"));
+        assert!(git.contains("github-token@github.com"));
+        Ok(())
+    })
+}
+
+#[test]
+fn unknown_hosts_do_not_become_github_without_explicit_metadata() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    write_gh_hosts_yml(
+        &[GitCredential {
+            host: "unknown.company.com".into(),
+            ..github_credential()
+        }],
+        directory.path(),
+    )?;
+    assert!(!directory.path().join(GH_HOSTS_FILENAME).exists());
+    Ok(())
+}
+
+#[test]
+fn managed_auth_is_private_with_a_shared_home() -> Result<()> {
+    let Some(shared_home) = std::env::var_os("WARP_TEST_SHARED_AUTH_HOME") else {
+        let home = tempfile::tempdir()?;
+        std::fs::write(home.path().join(".git-credentials"), "runner-credentials")?;
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            "[user]\nname = Runner\n[include]\npath = runner-config\n",
+        )?;
+        let output = BlockingCommand::new(std::env::current_exe()?)
+            .args(["--exact", "ai::agent_sdk::driver::git_credentials::tests::managed_auth_is_private_with_a_shared_home", "--nocapture"])
+            .env("WARP_TEST_SHARED_AUTH_HOME", home.path())
+            .env("HOME", home.path())
+            .env("GH_TOKEN", "inherited-token")
+            .env("GH_ENTERPRISE_TOKEN", "inherited-enterprise-token")
+            .env("GIT_CONFIG_GLOBAL", home.path().join(".gitconfig"))
+            .env_remove("WARP_GIT_AUTH_BINDING")
+            .env_remove("WARP_GIT_AUTH_DIR")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".git-credentials"))?,
+            "runner-credentials"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".gitconfig"))?,
+            "[user]\nname = Runner\n[include]\npath = runner-config\n"
+        );
+        let scoped_root = std::fs::read_to_string(home.path().join("scoped-root"))?;
+        assert!(!Path::new(&scoped_root).exists());
+        return Ok(());
+    };
+    #[cfg(unix)]
+    if std::env::var_os("WARP_GIT_AUTH_BINDING").is_none() {
+        std::fs::write(
+            PathBuf::from(&shared_home).join("agent-pid"),
+            std::process::id().to_string(),
+        )?;
+    }
+    let _managed_auth_scope = isolate_managed_auth("isolation-test")?;
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_to_string(PathBuf::from(&shared_home).join("agent-pid"))?,
+        std::process::id().to_string(),
+    );
+    assert_eq!(std::env::var_os("HOME"), Some(shared_home.clone()));
+    std::fs::write(
+        PathBuf::from(&shared_home).join("scoped-root"),
+        home_dir()?.to_string_lossy().as_bytes(),
+    )?;
+    assert_eq!(std::fs::read_to_string(home_dir()?.join(".gitconfig"))?, "");
+    assert_ne!(home_dir()?, PathBuf::from(shared_home));
+    assert!(std::env::var_os("GH_TOKEN").is_none());
+    assert!(std::env::var_os("GH_ENTERPRISE_TOKEN").is_none());
+    configure_git_credentials(&[
+        github_credential(),
+        GitCredential {
+            code_forge: Some(cloud_object_models::CodeForge::GitHub),
+            host: "github.company.com".into(),
+            token: "enterprise:@/#?token".into(),
+            username: Some("enterprise-user".into()),
+            email: None,
+        },
+    ])?;
+    let mut overlay = HashMap::from([
+        (OsString::from("GH_TOKEN"), OsString::from("overlay-token")),
+        (
+            OsString::from("GIT_CONFIG_GLOBAL"),
+            OsString::from("/shared-config"),
+        ),
+    ]);
+    protect_managed_auth_environment(&mut overlay);
+    assert_eq!(overlay[OsStr::new("GH_TOKEN")], OsString::new());
+    assert_eq!(
+        overlay[OsStr::new("GIT_CONFIG_GLOBAL")],
+        std::env::var_os("GIT_CONFIG_GLOBAL").unwrap()
+    );
+    let rewritten = BlockingCommand::new("git")
+        .args([
+            "ls-remote",
+            "--get-url",
+            "git@github.company.com:owner/repo.git",
+        ])
+        .envs(&overlay)
+        .output()?;
+    assert!(rewritten.status.success());
+    assert_eq!(
+        String::from_utf8(rewritten.stdout)?.trim(),
+        "https://github.company.com/owner/repo.git"
+    );
+    let mut child = BlockingCommand::new("git")
+        .args(["credential", "fill"])
+        .envs(&overlay)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"protocol=https\nhost=github.company.com\n\n")?;
+    let result = child.wait_with_output()?;
+    assert!(result.status.success());
+    assert!(String::from_utf8(result.stdout)?.contains("password=enterprise:@/#?token"));
+    Ok(())
+}
+
 fn github_credential() -> GitCredential {
     GitCredential {
+        code_forge: None,
         token: "github-token".to_string(),
         username: None,
         email: None,
@@ -563,6 +748,7 @@ fn github_credential() -> GitCredential {
 }
 fn azure_devops_credential(token: &str) -> GitCredential {
     GitCredential {
+        code_forge: None,
         token: token.to_string(),
         username: None,
         email: None,
@@ -572,6 +758,7 @@ fn azure_devops_credential(token: &str) -> GitCredential {
 
 fn gitlab_credential() -> GitCredential {
     GitCredential {
+        code_forge: None,
         token: "gitlab-token".to_string(),
         username: Some("oauth2".to_string()),
         email: None,
@@ -733,6 +920,7 @@ fn merged_credentials_preserve_an_unrelated_host() {
 fn credential_diagnostics_reports_presence_without_values() {
     let diagnostics = credential_diagnostics(
         &[GitCredential {
+            code_forge: None,
             token: "secret-token".to_string(),
             username: Some("oauth2".to_string()),
             email: Some("user@example.com".to_string()),
@@ -779,15 +967,14 @@ fn repository_identity_selects_the_matching_host() {
 }
 
 #[test]
-fn repository_identity_falls_back_to_the_primary_forge() {
+fn repository_identity_never_borrows_another_hosts_author() {
     let identities = [HostIdentity {
         host: "github.com".to_string(),
         name: "warp-agent[bot]".to_string(),
         email: "bot@users.noreply.github.com".to_string(),
     }];
 
-    let matched = select_host_identity(&identities, "gitlab.com").expect("an identity");
-    assert_eq!(matched.name, "warp-agent[bot]");
+    assert!(select_host_identity(&identities, "gitlab.com").is_none());
 
     assert!(select_host_identity(&[], "github.com").is_none());
 }
@@ -941,6 +1128,7 @@ fn unique_credentials_reject_conflicting_duplicate_hosts() {
 #[test]
 fn bootstrap_rejects_a_one_host_failure() {
     let error = credentials_for_bootstrap(TaskGitCredentialsResponse {
+        removed_hosts: Vec::new(),
         credentials: vec![github_credential()],
         failed_hosts: vec!["gitlab.com".to_string()],
     })
@@ -953,6 +1141,7 @@ fn bootstrap_rejects_a_one_host_failure() {
 #[test]
 fn bootstrap_accepts_complete_multi_host_credentials() {
     let credentials = credentials_for_bootstrap(TaskGitCredentialsResponse {
+        removed_hosts: Vec::new(),
         credentials: vec![github_credential(), gitlab_credential()],
         failed_hosts: vec![],
     })
@@ -968,6 +1157,7 @@ fn write_glab_config_uses_glab_cli_filename() -> Result<()> {
 
     write_glab_config(
         &[GitCredential {
+            code_forge: None,
             token: "gitlab-token".to_string(),
             username: Some("oauth2".to_string()),
             email: Some("user@example.com".to_string()),
@@ -1002,12 +1192,14 @@ fn write_glab_config_excludes_github_credentials() -> Result<()> {
     write_glab_config(
         &[
             GitCredential {
+                code_forge: None,
                 token: "github-token".to_string(),
                 username: Some("octocat".to_string()),
                 email: None,
                 host: "github.com".to_string(),
             },
             GitCredential {
+                code_forge: None,
                 token: "gitlab-token".to_string(),
                 username: Some("oauth2".to_string()),
                 email: None,
@@ -1031,6 +1223,7 @@ fn write_glab_config_skips_github_only_credentials() -> Result<()> {
 
     write_glab_config(
         &[GitCredential {
+            code_forge: None,
             token: "github-token".to_string(),
             username: Some("octocat".to_string()),
             email: None,
@@ -1050,6 +1243,7 @@ fn refreshed_credentials_return_err_when_the_local_write_fails() {
     conflicting.token = "other-github-token".to_string();
 
     let error = apply_refreshed_credentials(TaskGitCredentialsResponse {
+        removed_hosts: Vec::new(),
         credentials: vec![github_credential(), conflicting],
         failed_hosts: vec![],
     })

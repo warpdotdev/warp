@@ -68,11 +68,11 @@ fn forge(forge: CodeForge) -> anyhow::Result<RuntimeForge> {
 }
 
 fn source_repo(source: ConfigSourceRepo) -> anyhow::Result<SourceRepo> {
-    Ok(SourceRepo::new(
-        forge(source.code_forge)?,
-        source.owner,
-        source.repo,
-    ))
+    let mut repo = SourceRepo::new(forge(source.code_forge)?, source.owner, source.repo);
+    repo.git_host = source.git_host;
+    repo.github_instance_uid = source.github_instance_uid.map(cynic::Id::into_inner);
+    repo.validate_host().map_err(anyhow::Error::msg)?;
+    Ok(repo)
 }
 
 pub(super) fn repositories(
@@ -81,7 +81,10 @@ pub(super) fn repositories(
     repositories
         .into_iter()
         .map(|repo| {
-            let source = SourceRepo::new(forge(repo.forge)?, repo.owner, repo.name);
+            let mut source = SourceRepo::new(forge(repo.forge)?, repo.owner, repo.name);
+            source.git_host = repo.git_host;
+            source.github_instance_uid = repo.github_instance_uid.map(cynic::Id::into_inner);
+            source.validate_host().map_err(anyhow::Error::msg)?;
             let checkout = repo
                 .ref_
                 .map(|reference| match reference.type_ {

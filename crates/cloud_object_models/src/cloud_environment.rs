@@ -90,6 +90,10 @@ pub struct SourceRepo {
     /// primary. A mixed environment leaves it unset so clone fails closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_forge: Option<CodeForge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_instance_uid: Option<String>,
     pub owner: String,
     pub repo: String,
     /// Ref to check out after cloning this repository (commit SHA, branch, or
@@ -103,6 +107,8 @@ impl SourceRepo {
     pub fn new(code_forge: CodeForge, owner: String, repo: String) -> Self {
         Self {
             code_forge: Some(code_forge),
+            git_host: None,
+            github_instance_uid: None,
             owner,
             repo,
             checkout_ref: None,
@@ -111,6 +117,8 @@ impl SourceRepo {
     pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
         Self {
             code_forge: Some(self.code_forge.unwrap_or(code_forge)),
+            git_host: self.git_host.clone(),
+            github_instance_uid: self.github_instance_uid.clone(),
             owner: self.owner.clone(),
             repo: self.repo.clone(),
             checkout_ref: self.checkout_ref.clone(),
@@ -120,6 +128,29 @@ impl SourceRepo {
     pub fn with_checkout_ref(mut self, checkout_ref: Option<String>) -> Self {
         self.checkout_ref = checkout_ref;
         self
+    }
+
+    pub fn host(&self) -> &str {
+        self.git_host
+            .as_deref()
+            .unwrap_or_else(|| self.code_forge.map(CodeForge::host).unwrap_or(""))
+    }
+
+    pub fn validate_host(&self) -> Result<(), &'static str> {
+        use warp_cli::agent::{RepositoryForge, validate_repository_host};
+        let forge = match self.code_forge {
+            Some(CodeForge::GitHub) => RepositoryForge::GitHub,
+            Some(CodeForge::GitLab) => RepositoryForge::GitLab,
+            Some(CodeForge::AzureDevOps) => RepositoryForge::AzureDevOps,
+            Some(CodeForge::None | CodeForge::Unknown) | None => {
+                return Err("unsupported repository forge");
+            }
+        };
+        validate_repository_host(
+            forge,
+            self.git_host.as_deref(),
+            self.github_instance_uid.as_deref(),
+        )
     }
 
     pub fn https_clone_url(&self) -> String {
@@ -139,12 +170,14 @@ impl SourceRepo {
             }
             return clone_url.into();
         }
-        format!(
-            "https://{}/{}/{}.git",
-            self.code_forge.map(CodeForge::host).unwrap_or(""),
-            self.owner,
-            self.repo
-        )
+        let Ok(mut url) = Url::parse(&format!("https://{}", self.host())) else {
+            return format!("https://{}/{}/{}.git", self.host(), self.owner, self.repo);
+        };
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.extend(self.owner.split('/'));
+            segments.push(&format!("{}.git", self.repo));
+        }
+        url.into()
     }
 }
 
@@ -367,6 +400,8 @@ impl AmbientAgentEnvironment {
             .into_iter()
             .map(|repo| SourceRepo {
                 code_forge: self.fill_forge_for_repo(&repo),
+                git_host: repo.git_host,
+                github_instance_uid: repo.github_instance_uid,
                 owner: repo.owner,
                 repo: repo.repo,
                 checkout_ref: repo.checkout_ref,

@@ -172,12 +172,7 @@ impl AgentDriver {
                 Ok(prepared
                     .repositories
                     .iter()
-                    .map(|repo| {
-                        (
-                            me.working_dir.join(&repo.repo),
-                            repo.code_forge.map(|forge| forge.host()).unwrap_or(""),
-                        )
-                    })
+                    .map(|repo| (me.working_dir.join(&repo.repo), repo.host().to_owned()))
                     .collect::<Vec<_>>())
             })
             .await??;
@@ -188,6 +183,10 @@ impl AgentDriver {
         )
         .await
         .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+        let repositories = repositories
+            .iter()
+            .map(|(path, host)| (path.clone(), host.as_str()))
+            .collect::<Vec<_>>();
         git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;

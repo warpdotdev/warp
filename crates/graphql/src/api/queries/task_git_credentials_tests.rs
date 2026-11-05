@@ -22,6 +22,7 @@ fn request_context() -> RequestContext {
 fn current_query_selects_partial_refresh_fields() {
     let operation = TaskGitCredentials::build(TaskGitCredentialsVariables {
         input: TaskGitCredentialsInput {
+            supports_github_instances: Some(true),
             task_id: cynic::Id::new("task"),
             workload_token: "token".to_string(),
             accepts_partial_refresh: Some(true),
@@ -32,12 +33,15 @@ fn current_query_selects_partial_refresh_fields() {
 
     assert!(operation.query.contains("failedHosts"));
     assert!(operation.query.contains("credentials"));
+    assert!(operation.query.contains("removedHosts"));
+    assert!(operation.query.contains("codeForge"));
 }
 
 #[test]
 fn bootstrap_query_still_selects_failed_hosts() {
     let operation = TaskGitCredentials::build(TaskGitCredentialsVariables {
         input: TaskGitCredentialsInput {
+            supports_github_instances: Some(true),
             task_id: cynic::Id::new("task"),
             workload_token: "token".to_string(),
             accepts_partial_refresh: Some(false),
@@ -61,5 +65,7 @@ fn legacy_query_omits_partial_refresh_fields() {
 
     assert!(!operation.query.contains("acceptsPartialRefresh"));
     assert!(!operation.query.contains("failedHosts"));
+    assert!(!operation.query.contains("removedHosts"));
+    assert!(!operation.query.contains("codeForge"));
     assert!(operation.query.contains("credentials"));
 }
