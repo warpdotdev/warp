@@ -7345,6 +7345,84 @@ fn test_link_at_range_trims_zero_width_spaces() {
     })
 }
 
+/// Regression test for #3970: Cmd/Ctrl-clicking a `file://` URL with a `:line:col` suffix
+/// (as printed by Gradle and other compilers) should open the file at that position, not
+/// pass the whole URL, suffix included, to the OS.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_clicking_file_url_with_line_and_column_opens_file() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Main.kt");
+        std::fs::write(&file, "").unwrap();
+        let link = format!("{}:35:24", url::Url::from_file_path(&file).unwrap());
+
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let opened_clone = opened.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::OpenFileWithTarget { path, line_col, .. } = event {
+                    opened_clone.borrow_mut().push((path.clone(), *line_col));
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .simulate_block(format!("echo {link}").as_str(), link.as_str());
+        });
+
+        let (point, url) = terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            let block = view
+                .viewport_state(model.block_list(), InputMode::PinnedToBottom, ctx)
+                .iter()
+                .next()
+                .expect("blocklist should have at least one item");
+            let point = WithinModel::BlockList(WithinBlock::new(
+                Point::new(0, 4),
+                block.block_index.expect("block index should exist"),
+                crate::terminal::GridType::Output,
+            ));
+            let url = model
+                .url_at_point(&point)
+                .expect("the file URL should be detected as a link");
+            assert_eq!(
+                model.link_at_range(&url, RespectObfuscatedSecrets::No),
+                link
+            );
+            (point, url)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.highlighted_link
+                .set(GridHighlightedLink::Url(url), &mut view.model.lock());
+            // `cmd` directly opens links on macOS, `ctrl` on Linux and Windows.
+            let modifiers = ModifiersState {
+                cmd: true,
+                ctrl: true,
+                ..Default::default()
+            };
+            view.click_on_grid(&point, &modifiers, ctx);
+        });
+
+        assert_eq!(
+            *opened.borrow(),
+            vec![(
+                file,
+                Some(LineAndColumnArg {
+                    line_num: 35,
+                    column_num: Some(24),
+                })
+            )]
+        );
+    })
+}
+
 #[test]
 fn test_scroll_position_doesnt_change_when_block_finished() {
     use futures_lite::StreamExt;
