@@ -1832,9 +1832,20 @@ impl TerminalView {
         }
         let task_id = self.ambient_agent_task_id_for_details_panel(ctx);
         let terminal_view_id = self.id();
+        let startup_error_message = self
+            .ambient_agent_view_model
+            .as_ref()
+            .and_then(|model| model.as_ref(ctx).error_message())
+            .map(str::to_owned);
 
         let tombstone_view_handle = ctx.add_typed_action_view(|ctx| {
-            ConversationEndedTombstoneView::new(ctx, terminal_view_id, task_id, tombstone_cta)
+            ConversationEndedTombstoneView::new(
+                ctx,
+                terminal_view_id,
+                task_id,
+                tombstone_cta,
+                startup_error_message,
+            )
         });
         ctx.subscribe_to_view(&tombstone_view_handle, |me, _, event, ctx| match event {
             ConversationEndedTombstoneEvent::ContinueInCloud { task_id } => {

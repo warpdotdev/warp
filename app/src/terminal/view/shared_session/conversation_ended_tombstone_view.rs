@@ -172,6 +172,7 @@ impl ConversationEndedTombstoneView {
         terminal_view_id: EntityId,
         task_id: Option<AmbientAgentTaskId>,
         tombstone_cta: Option<TombstoneCta>,
+        startup_error_message: Option<String>,
     ) -> Self {
         let conversation_id = BlocklistAIHistoryModel::handle(ctx)
             .as_ref(ctx)
@@ -189,7 +190,16 @@ impl ConversationEndedTombstoneView {
                 )
             })
             .unwrap_or_default();
-        if display_data.is_error && task_id.is_none() && !display_data.conversation_is_transcript {
+        if display_data.error_message.is_none()
+            && let Some(message) = startup_error_message
+        {
+            display_data.is_error = true;
+            display_data.error_message = Some(message);
+        }
+        let is_startup_failure = display_data.is_error
+            && (task_id.is_none() || conversation_id.is_none())
+            && !display_data.conversation_is_transcript;
+        if is_startup_failure {
             display_data.title = Some("Cloud agent failed to start".to_string());
             display_data.credits = None;
         }
@@ -319,9 +329,12 @@ impl ConversationEndedTombstoneView {
             let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
             ctx.spawn(
                 async move { ai_client.get_ambient_agent_task(&task_id).await },
-                |me, result, ctx| match result {
+                move |me, result, ctx| match result {
                     Ok(task) => {
                         me.display_data.enrich_from_task(task);
+                        if is_startup_failure {
+                            me.display_data.credits = None;
+                        }
                         me.artifact_buttons_view.update(ctx, |row, ctx| {
                             row.update_artifacts(&me.display_data.artifacts, ctx);
                         });
