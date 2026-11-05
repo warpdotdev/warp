@@ -466,24 +466,28 @@ impl CLIAgent {
         if !self.command_prefixes().contains(&basename) {
             return false;
         }
-        if matches!(self, CLIAgent::WarpTui) {
+        let non_session_subcommands: &[&str] = match self {
+            CLIAgent::Claude => &["auth"],
+            CLIAgent::Codex => &["login", "logout"],
             // The ACP bridge uses this executable but receives prompts over a socket, not its PTY.
-            let is_acp_bridge = match escape_char {
-                Some(esc) => all_parsed_commands(command, esc)
-                    .next()
-                    .is_some_and(|command| {
-                        command
-                            .parts
-                            .get(1)
-                            .is_some_and(|part| part.item == "acp-bridge")
-                    }),
-                None => command.split_whitespace().nth(1) == Some("acp-bridge"),
-            };
-            if is_acp_bridge {
-                return false;
-            }
-        }
-        true
+            CLIAgent::WarpTui => &["acp-bridge"],
+            _ => return true,
+        };
+        let is_non_session_command = match escape_char {
+            Some(esc) => all_parsed_commands(command, esc)
+                .next()
+                .is_some_and(|command| {
+                    command
+                        .parts
+                        .get(1)
+                        .is_some_and(|part| non_session_subcommands.contains(&part.item.as_str()))
+                }),
+            None => command
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|part| non_session_subcommands.contains(&part)),
+        };
+        !is_non_session_command
     }
 
     /// Detects the CLI agent from a command string.
