@@ -836,7 +836,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         let usage = conversation
             .token_usage()
             .iter()
-            .find(|usage| usage.model_id == "Custom endpoint")
+            .find(|usage| usage.model_id == "Unavailable custom model")
             .expect("unknown custom endpoint usage should use the fallback label");
         assert_eq!(usage.custom_endpoint_tokens, 9);
         assert_eq!(usage.byok_tokens, 0);
@@ -1098,6 +1098,10 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         );
         assert_eq!(byok_usage.warp_tokens, 0);
         assert_eq!(custom_usage.warp_tokens, 0);
+        assert_eq!(
+            custom_usage.custom_endpoint_config_key.as_deref(),
+            Some("config-key")
+        );
         assert_eq!(custom_usage.byok_tokens, 0);
     });
 }
@@ -1137,10 +1141,14 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
             app.read(|ctx| footer_model_token_usage(&usage_metadata, LLMPreferences::as_ref(ctx)));
         let custom_usage = model_usage
             .iter()
-            .find(|usage| usage.model_id == "Custom endpoint")
+            .find(|usage| usage.model_id == "Unavailable custom model")
             .expect("fallback custom endpoint usage should be present");
 
         assert_eq!(model_usage.len(), 1);
+        assert_eq!(
+            custom_usage.custom_endpoint_config_key.as_deref(),
+            Some("missing-config-key")
+        );
         assert_eq!(custom_usage.custom_endpoint_tokens, 9);
         assert_eq!(custom_usage.byok_tokens, 0);
         assert_eq!(
