@@ -147,8 +147,6 @@ pub use ai::agent::todos::AIAgentTodoList;
 pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
-#[cfg(feature = "tui")]
-use ai::agent_sdk::authenticate_then_execute;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
@@ -429,9 +427,6 @@ pub(crate) enum LaunchMode {
 }
 
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-type TuiCommandPreflight = Box<dyn FnOnce(&mut AppContext) -> bool>;
-
-#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 enum TuiEntryPoint {
     /// Build the root TUI view, initialize login, and start the TUI driver.
     Interactive {
@@ -442,8 +437,6 @@ enum TuiEntryPoint {
     /// Execute a CLI command after TUI-scoped app initialization, then exit.
     CliCommand {
         execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
-        require_login: bool,
-        preflight: Option<TuiCommandPreflight>,
     },
 }
 
@@ -983,45 +976,15 @@ pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
 }
 
 /// Executes a CLI command after initializing TUI-scoped settings and secure storage.
-/// A preflight returning `true` has handled the command and skips authentication and execution.
 #[cfg(feature = "tui")]
 pub fn run_tui_cli_command(
     execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
-    require_login: bool,
-    preflight: Option<TuiCommandPreflight>,
 ) -> Result<()> {
     run_internal(LaunchMode::Tui {
         entrypoint: TuiEntryPoint::CliCommand {
             execute,
-            require_login,
-            preflight,
         },
     })
-}
-
-#[cfg(feature = "tui")]
-fn dispatch_tui_cli_command(
-    execute: Box<dyn FnOnce(&mut AppContext)>,
-    require_login: bool,
-    preflight: Option<TuiCommandPreflight>,
-    ctx: &mut AppContext,
-) {
-    if preflight.is_some_and(|preflight| preflight(ctx)) {
-        return;
-    }
-    if require_login {
-        let mut execute = Some(execute);
-        if let Err(error) = authenticate_then_execute(None, ctx, move |ctx| {
-            if let Some(execute) = execute.take() {
-                execute(ctx);
-            }
-            Ok(())
-        }) {
-            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
-        }
-    } else {
-        execute(ctx);
-    }
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -1431,11 +1394,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             #[cfg(feature = "tui")]
             LaunchMode::Tui { entrypoint } => match entrypoint {
                 TuiEntryPoint::Interactive { mount, .. } => crate::tui::init(mount, ctx),
-                TuiEntryPoint::CliCommand {
-                    execute,
-                    require_login,
-                    preflight,
-                } => dispatch_tui_cli_command(execute, require_login, preflight, ctx),
+                TuiEntryPoint::CliCommand { execute } => execute(ctx),
             },
             #[cfg(not(feature = "tui"))]
             LaunchMode::Tui { .. } => {
@@ -2562,9 +2521,7 @@ pub(crate) fn initialize_app(
         // `startup_auth_is_non_blocking`).
         LaunchMode::CommandLine { .. } => None,
         // Login-required TUI commands subscribe before starting authentication in their dispatch path.
-        LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::CliCommand { require_login, .. },
-        } if *require_login => None,
+        LaunchMode::Tui { entrypoint: TuiEntryPoint::CliCommand { .. } } => None,
         _ => pending_api_key
             .map(StartupUserAuthentication::ApiKey)
             .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser)),

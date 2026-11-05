@@ -49,6 +49,7 @@ pub use crate::ai::agent_conversations_model::{
     AgentManagementFilters, AgentRunDisplayStatus, HarnessFilter, OwnerFilter,
     query_conversation_entries,
 };
+pub use crate::ai::agent_sdk::authenticate_then_execute;
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
 pub use crate::ai::ambient_agents::telemetry::{
     CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffSurface,
