@@ -18,7 +18,7 @@ use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
 mod support;
 
 #[test]
-fn supported_harnesses_validate_the_workspace_before_metadata_access() {
+fn preparation_validates_the_workspace_before_metadata_access() {
     App::test((), |mut app| async move {
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
         let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
@@ -67,8 +67,8 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             Arc::new(MockAIClient::new()),
             app.background_executor(),
         );
-        let mut wrong_harness = parse_configuration();
-        wrong_harness.preparation.harness = "gemini".to_string();
+        let mut unknown_harness = parse_configuration();
+        unknown_harness.preparation.harness = "not-a-harness".to_string();
         let mut escaping_skills = parse_configuration();
         escaping_skills.preparation.factory_skill_dirs = vec!["../outside".to_string()];
         let mut duplicate_repository = parse_configuration();
@@ -87,7 +87,7 @@ fn invalid_preparation_inputs_fail_before_driver_creation_or_metadata_access() {
             .deferred_repositories[0]
             .code_forge = ConfigCodeForge::Unknown;
         for config in [
-            wrong_harness,
+            unknown_harness,
             escaping_skills,
             duplicate_repository,
             invalid_mcp,

@@ -333,7 +333,7 @@ impl SetupStep {
             | Self::ConversationResumeLoading
             // Skill references are checked out with the claimed task's credentials.
             | Self::SkillReferenceResolution
-            // Pre-warming is Oz-only, so these are unreachable from a standby.
+            // Third-party harness setup needs the assigned run, so standby defers these steps.
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart
             | Self::ThirdPartyHarnessExternalConversation
