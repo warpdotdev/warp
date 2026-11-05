@@ -283,6 +283,137 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       _warp_native_bash_completions "$line"
       printf '\e]9280;B\a'
     }
+    _warp_bash_unquote_completion_path() {
+      local text="$1" output="" quote="" escaped=0 char i
+      local LC_ALL=C
+      for (( i = 0; i < ${#text}; i++ )); do
+        char="${text:i:1}"
+        if (( escaped )); then
+          output+="$char"
+          escaped=0
+        elif [[ "$char" == '\' && "$quote" != "'" ]]; then
+          if [[ "$quote" == '"' ]]; then
+            case "${text:i+1:1}" in
+              '\' | '"' | '$' | '`') escaped=1 ;;
+              *) output+='\' ;;
+            esac
+          else
+            escaped=1
+          fi
+        elif [[ -n "$quote" ]]; then
+          if [[ "$char" == "$quote" ]]; then
+            quote=""
+          else
+            output+="$char"
+          fi
+        elif [[ "$char" == '"' || "$char" == "'" ]]; then
+          quote="$char"
+        else
+          output+="$char"
+        fi
+      done
+      (( escaped )) && output+='\'
+      printf -v "$2" '%s' "$output"
+    }
+
+    _warp_bash_completion_path_is_directory() {
+      local candidate="$1" cmd="$2" token_quote="$3"
+      [[ -z "$candidate" || "$candidate" == */ ]] && return 1
+      if [[ -d "$candidate" ]]; then
+        return 0
+      fi
+      if [[ "$candidate" == '~'* && "$token_quote" != '"' && "$token_quote" != "'" &&
+            ( "$candidate" == '~' || "$candidate" == '~/'* ) ]]; then
+        [[ -d "$HOME${candidate:1}" ]] && return 0
+      fi
+      if [[ "$cmd" == cd && "$candidate" != /* && "$candidate" != '~/'* ]]; then
+        local entry
+        local -a cdpath_entries
+        IFS=: read -ra cdpath_entries <<< "$CDPATH"
+        for entry in "${cdpath_entries[@]}"; do
+          case "$entry" in
+            '') entry=. ;;
+            '~' | '~/'*) entry="$HOME${entry:1}" ;;
+            '~+' | '~+'/*) [[ -n "$PWD" ]] && entry="$PWD${entry:2}" ;;
+            '~-' | '~-'/*) [[ -n "$OLDPWD" ]] && entry="$OLDPWD${entry:2}" ;;
+            '~'*)
+              local username="${entry:1}"
+              username="${username%%/*}"
+              if [[ "$username" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
+                local passwd_record home_directory
+                passwd_record="$(command -p getent passwd "$username" 2>/dev/null || command -p id -P "$username" 2>/dev/null)"
+                if [[ -n "$passwd_record" ]]; then
+                  # Darwin's id -P has more fields than getent; the home directory is penultimate.
+                  home_directory="${passwd_record%:*}"
+                  home_directory="${home_directory##*:}"
+                  [[ "$home_directory" == /* ]] && entry="$home_directory${entry:$((1 + ${#username}))}"
+                fi
+              fi
+              ;;
+          esac
+          [[ -d "$entry/$candidate" ]] && return 0
+        done
+      fi
+      return 1
+    }
+    _warp_bash_completion_is_directory() {
+      local reply="$1" cmd="$2" current_word="$3" path_option="$4" token_quote="$5" output_var="$6"
+      [[ "$reply" == */ ]] && return 1
+      [[ "$cmd" == cd || "$path_option" == 1 || "$reply" == */* || "$current_word" == */* ]] || return 1
+
+      if _warp_bash_completion_path_is_directory "$reply" "$cmd" "$token_quote"; then
+        printf -v "$output_var" '%s' "$reply"
+        return 0
+      fi
+      local decoded
+      _warp_bash_unquote_completion_path "$reply" decoded
+      if [[ "$decoded" != "$reply" ]] &&
+           _warp_bash_completion_path_is_directory "$decoded" "$cmd" "$token_quote"; then
+        printf -v "$output_var" '%s' "$decoded"
+        return 0
+      fi
+      return 1
+    }
+
+    _warp_bash_parse_completion_line() {
+      local LC_ALL=C
+      local word="" quote="" escaped=0 in_word=0 char i
+      for (( i = 0; i < ${#line}; i++ )); do
+        char="${line:i:1}"
+        if (( escaped )); then
+          word+="$char"
+          escaped=0
+        elif [[ "$char" == '\' && "$quote" != "'" ]]; then
+          escaped=1
+        elif [[ -n "$quote" ]]; then
+          if [[ "$char" == "$quote" ]]; then
+            quote=""
+          else
+            word+="$char"
+          fi
+        elif [[ "$char" == '"' || "$char" == "'" ]]; then
+          quote="$char"
+        elif [[ "$char" == ' ' || "$char" == $'\t' ]]; then
+          if (( in_word )); then
+            words+=("$word")
+            word=""
+            in_word=0
+          fi
+          token_start=$((i + 1))
+          token_quote=""
+          continue
+        else
+          word+="$char"
+        fi
+        if (( !in_word )); then
+          token_start=$i
+          token_quote="$char"
+          in_word=1
+        fi
+      done
+      (( escaped )) && word+='\'
+      words+=("$word")
+    }
 
     # Populates COMPREPLY for the given line using bash's own completion machinery (resolved via
     # `complete -p`), then prints each entry via the completions OSC.
@@ -290,12 +421,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       local line="$1"
       # Force the default IFS; the session's may have been changed by a plugin or the user.
       local IFS=$' \t\n'
-      local -a words
-      read -ra words <<< "$line"
-      # A trailing space means the user is completing a new, empty word.
-      if [[ "$line" == *[[:space:]] ]]; then
-        words+=("")
-      fi
+      local -a words=()
+      local token_start=0
+      local token_quote=""
+      _warp_bash_parse_completion_line
       (( ${#words[@]} == 0 )) && return
       local cword=$(( ${#words[@]} - 1 ))
       local cmd="${words[0]}"
@@ -331,6 +460,15 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       done
       [[ -z "$func" ]] && return
       declare -F "$func" >/dev/null 2>&1 || return
+      local path_option=0
+      for (( i = 0; i < ${#compspec_words[@]} - 1; i++ )); do
+        if [[ "${compspec_words[$i]}" == -o ]]; then
+          case "${compspec_words[$((i + 1))]}" in
+            filenames | dirnames | plusdirs) path_option=1 ;;
+          esac
+        fi
+      done
+
 
       # $func expects COMP_WORDS/COMP_CWORD/etc. as ambient globals, the way bash's real
       # completion machinery presents them. `local` makes them visible to $func via bash's
@@ -342,6 +480,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # COMP_POINT is a byte offset into COMP_LINE, not a character count: ${#line} counts
       # characters under the session's locale, which undercounts for multibyte text.
       local COMP_POINT=$(( $(LC_ALL=C printf '%s' "$line" | LC_ALL=C command wc -c) ))
+      printf '\e]9280;S;%s,%s\a' "$token_start" "$(( COMP_POINT - token_start ))"
       # COMP_TYPE=9 (plain Tab), faithful to real interactive completion. cobra-generated
       # "bash completion V2" scripts (kubectl, gh, most modern Go CLIs) bake a padded
       # "name  (description)" string into each entry under this type when there's more than
@@ -387,6 +526,28 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         if (( split_cobra_padding )) && [[ "$reply" =~ $cobra_padded_shape ]]; then
           reply_description="${BASH_REMATCH[3]}"
           reply="${BASH_REMATCH[1]}"
+        fi
+        local candidate
+        if _warp_bash_completion_is_directory "$reply" "$cmd" "${words[$cword]}" "$path_option" "$token_quote" candidate; then
+          if [[ "$token_quote" == '"' ]]; then
+            candidate="${candidate//\\/\\\\}"
+            candidate="${candidate//\$/\\\$}"
+            candidate="${candidate//\`/\\\`}"
+            candidate="${candidate//\"/\\\"}"
+            reply="\"$candidate\"/"
+          elif [[ "$token_quote" == "'" && "$candidate" != *"'"* ]]; then
+            reply="'$candidate'/"
+          else
+            if [[ "$candidate" == '~' ]]; then
+              reply='~'
+            elif [[ "$candidate" == '~/'* ]]; then
+              printf -v reply '%q' "${candidate:2}"
+              reply="~/$reply"
+            else
+              printf -v reply '%q' "$candidate"
+            fi
+            reply+="/"
+          fi
         fi
 
         warp_completions_hex_encode_into __warp_hex_match "$reply"
