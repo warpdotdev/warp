@@ -105,6 +105,39 @@ fn acp_transport_does_not_affect_the_oz_harness() {
 }
 
 #[test]
+fn a_harness_with_a_fixed_transport_sends_no_transport_report() {
+    use super::fixed_transport;
+
+    // Pi is driven over ACP whatever transport the run was dispatched with, so the option
+    // does not describe it and the server rejects a report for it.
+    assert_eq!(fixed_transport(Harness::Pi), Some(HarnessTransport::Acp));
+    for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+        let kind = harness_kind(Harness::Pi, transport).unwrap();
+        assert!(
+            matches!(&kind, HarnessKind::ThirdParty(harness) if harness.harness() == Harness::Pi)
+        );
+        assert!(!kind.reports_transport(), "{transport:?}");
+    }
+
+    // The harnesses the transport option selects report it, over either transport.
+    for harness in [Harness::Claude, Harness::Codex] {
+        assert_eq!(fixed_transport(harness), None);
+        for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+            assert!(
+                harness_kind(harness, transport)
+                    .unwrap()
+                    .reports_transport(),
+                "{harness:?} over {transport:?}"
+            );
+        }
+    }
+
+    // Oz has no transport to report.
+    assert_eq!(fixed_transport(Harness::Oz), None);
+    assert!(!HarnessKind::Oz.reports_transport());
+}
+
+#[test]
 fn claude_model_env_vars_depend_on_transport() {
     let config = HarnessModelConfig {
         model_id: "claude-fable-5-1".to_string(),

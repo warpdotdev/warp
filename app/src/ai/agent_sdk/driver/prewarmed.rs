@@ -284,6 +284,9 @@ impl AgentDriver {
         options.harness_transport_fallback = transport_fallback;
         if let HarnessKind::ThirdParty(harness) = &task.harness {
             harness.validate()?;
+        }
+        // A harness whose transport is fixed (Pi) sends no report: the server rejects it.
+        if task.harness.reports_transport() {
             let transport = options.harness_transport;
             spawner
                 .spawn(move |_, ctx| {

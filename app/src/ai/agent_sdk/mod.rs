@@ -1075,8 +1075,9 @@ impl AgentDriverRunner {
                 driver::write_run_started(&task_id.to_string(), output_format);
                 // Tell the server which transport the run actually got, so follow-up
                 // attachments and session links agree with it. The report is retried in the
-                // background, so setup does not wait on the server.
-                if matches!(task.harness, HarnessKind::ThirdParty(_)) {
+                // background, so setup does not wait on the server. A harness whose transport
+                // is fixed (Pi) is skipped: the server rejects a report for it.
+                if task.harness.reports_transport() {
                     let transport = driver_options.harness_transport;
                     foreground
                         .spawn(move |_, ctx| {

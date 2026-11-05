@@ -310,6 +310,17 @@ impl HarnessKind {
             HarnessKind::Unsupported(harness) => *harness,
         }
     }
+
+    /// Whether the run tells the server which transport this harness is driven over. Only a
+    /// third-party harness whose transport the client chooses does: the server fixes the
+    /// transport of the others (see [`fixed_transport`]) and rejects a report for them, and
+    /// the transport option it would report is not what drives them anyway.
+    pub(crate) fn reports_transport(&self) -> bool {
+        match self {
+            HarnessKind::ThirdParty(harness) => fixed_transport(harness.harness()).is_none(),
+            HarnessKind::Oz | HarnessKind::Unsupported(_) => false,
+        }
+    }
 }
 
 impl fmt::Debug for HarnessKind {
@@ -343,6 +354,22 @@ pub(crate) fn renders_natively(harness: Harness, transport: HarnessTransport) ->
     }
 }
 
+/// The transport a third-party harness is always driven over, regardless of the transport
+/// option a run was dispatched with: Pi has no interactive CLI mode, so it only runs over ACP.
+/// `None` for a harness whose transport the option selects. Oz is Warp's own loop and has no
+/// transport at all, so it is `None` too; [`harness_kind`] never consults the option for it.
+pub(crate) fn fixed_transport(harness: Harness) -> Option<HarnessTransport> {
+    match harness {
+        Harness::Pi => Some(HarnessTransport::Acp),
+        Harness::Oz
+        | Harness::Claude
+        | Harness::Codex
+        | Harness::OpenCode
+        | Harness::Gemini
+        | Harness::Unknown => None,
+    }
+}
+
 /// Build a [`HarnessKind`] for the given [`Harness`] and transport.
 ///
 /// We shouldn't ever get a `--harness unknown` here because clap should handle
@@ -351,17 +378,12 @@ pub(crate) fn harness_kind(
     harness: Harness,
     transport: HarnessTransport,
 ) -> Result<HarnessKind, AgentDriverError> {
-    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop
-    // and Pi has no interactive CLI mode, so neither consults it.
-    match harness {
-        Harness::Oz => return Ok(HarnessKind::Oz),
-        Harness::Pi => return acp_harness_kind(harness),
-        Harness::Claude
-        | Harness::Codex
-        | Harness::OpenCode
-        | Harness::Gemini
-        | Harness::Unknown => {}
+    // The transport only selects how a third-party harness is driven; Oz is Warp's own loop,
+    // so it does not consult it, and a harness with a fixed transport ignores it.
+    if harness == Harness::Oz {
+        return Ok(HarnessKind::Oz);
     }
+    let transport = fixed_transport(harness).unwrap_or(transport);
     match transport {
         HarnessTransport::Pty => match harness {
             Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),

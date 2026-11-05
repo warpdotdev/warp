@@ -31,6 +31,12 @@ fn rejected() -> anyhow::Error {
     TransportReportRejected("fixed transport".to_string()).into()
 }
 
+/// A 401 or 403 as the GraphQL layer re-raises it when the client may not refresh its
+/// credentials: a plain error with no `GraphQLError` in the chain.
+fn credentials_rejected() -> anyhow::Error {
+    anyhow::anyhow!(AUTH_REJECTED_MESSAGE)
+}
+
 /// A client whose `report_transport` answers with `results` in turn and counts its calls.
 fn client_answering(
     results: Vec<fn() -> anyhow::Result<()>>,
@@ -141,6 +147,18 @@ async fn a_client_error_status_is_not_retried() {
 }
 
 #[tokio::test]
+async fn rejected_credentials_are_not_retried() {
+    let (client, calls) = client_answering(vec![|| Err(credentials_rejected())]);
+
+    let error = report_with_retry(&client, HarnessTransport::Pty, None, no_wait)
+        .await
+        .unwrap_err();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!mutation_unsupported(&error));
+}
+
+#[tokio::test]
 async fn a_server_without_the_mutation_is_not_retried() {
     let (client, calls) = client_answering(vec![|| Err(http_error(422))]);
 
@@ -178,6 +196,10 @@ fn transient_failures_are_told_apart_from_final_ones() {
     assert!(!is_transient_report_error(&rejected()));
     assert!(!is_transient_report_error(
         &rejected().context("while reporting")
+    ));
+    assert!(!is_transient_report_error(&credentials_rejected()));
+    assert!(!is_transient_report_error(
+        &credentials_rejected().context("while reporting")
     ));
 }
 

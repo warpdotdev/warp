@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use http::StatusCode;
 use warp_cli::agent::HarnessTransport;
+use warp_server_client::graphql_helpers::AUTH_REJECTED_MESSAGE;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt as _, Timer};
 
@@ -89,10 +90,13 @@ where
 }
 
 /// Whether sending the report again may succeed. A rejection (a user-facing error, or a report
-/// this client could not build) never will. A GraphQL transport failure is retried when it is a
-/// network error, 408, 429 or 5xx, and not otherwise, so the 422 of a server without the mutation
-/// fails at once. Anything else is retried: an attempt that timed out, a failure before the
-/// request was sent, or a server-side failure answered as GraphQL errors without data.
+/// this client could not build) never will, and neither will a request whose credentials the
+/// server rejected, which the GraphQL layer answers with a plain error rather than the 401 or
+/// 403 when the agent process may not refresh them. A GraphQL transport failure is retried when
+/// it is a network error, 408, 429 or 5xx, and not otherwise, so the 422 of a server without
+/// the mutation fails at once. Anything else is retried: an attempt that timed out, a failure
+/// before the request was sent, or a server-side failure answered as GraphQL errors without
+/// data.
 fn is_transient_report_error(error: &anyhow::Error) -> bool {
     if error
         .chain()
@@ -103,7 +107,9 @@ fn is_transient_report_error(error: &anyhow::Error) -> bool {
     if error.chain().any(|cause| cause.is::<GraphQLError>()) {
         return is_transient_graphql_or_http_error(error);
     }
-    true
+    !error
+        .chain()
+        .any(|cause| cause.to_string() == AUTH_REJECTED_MESSAGE)
 }
 
 /// Whether `error` means the server's schema does not accept the report, as an older server
