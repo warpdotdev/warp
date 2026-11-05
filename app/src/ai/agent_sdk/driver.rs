@@ -4298,26 +4298,6 @@ impl AgentDriver {
                     }
                 })
             });
-
-            // Dispatch any shared-session startup follow-up that arrived while the initial
-            // prompt was being prepared. Must run after the update above returns, since
-            // `dispatch_queued_warp_agent_prompt` targets this terminal surface's *active*
-            // conversation, which the initial send just set. If more than one row accumulated,
-            // the rest are picked up one at a time by `Steering`'s piggyback-on-next-request
-            // mechanism or the idle-triggered drain, not flushed here all at once.
-            if let Some(conversation_id) = prepared_conversation_id {
-                self.terminal_driver.update(ctx, |td, ctx| {
-                    td.with_terminal_view(ctx, |terminal, ctx| {
-                        terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.dispatch_queued_warp_agent_prompt(
-                                conversation_id,
-                                None,
-                                ctx,
-                            );
-                        });
-                    });
-                });
-            }
         }
 
         if self.skip_initial_turn
