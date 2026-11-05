@@ -23,6 +23,7 @@ use warpui_core::{Event, async_assert_eq};
 
 use super::new_builder;
 use crate::Builder;
+use crate::util::{ShellRcType, write_rc_files_for_test};
 
 /// Ensures that tab completions are hidden when the completions menu is opened
 /// but re-appear when the menu is closed.
@@ -220,6 +221,66 @@ pub fn test_latest_buffer_operations() -> Builder {
                     "Ensure the latest buffer operations are empty",
                     latest_buffer_operations_are_empty(0, true),
                 ),
+        )
+}
+
+/// Fish abbreviations expand when a space is typed after them, following their `--position`,
+/// `--command` and `--set-cursor` options.
+pub fn test_fish_abbreviations_expand_on_space() -> Builder {
+    let clear_input = |name: &str| {
+        new_step_with_default_assertions(name)
+            .with_action(|app, window_id, _| {
+                let input = single_input_view_for_tab(app, window_id, 0);
+                input.update(app, |input, ctx| {
+                    input.clear_buffer_and_reset_undo_stack(ctx)
+                });
+            })
+            .add_named_assertion("input is cleared", input_is_empty(0))
+    };
+
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == ShellType::Fish
+        })
+        .with_setup(|utils| {
+            write_rc_files_for_test(
+                utils.test_dir(),
+                "abbr --add gco 'git checkout'
+abbr --add --position anywhere --set-cursor --command git glc 'log % --oneline'",
+                [ShellRcType::Fish],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type a command abbreviation and a space")
+                .with_typed_characters(&["gco", " "])
+                .add_named_assertion(
+                    "gco expands to git checkout",
+                    input_contains_string(0, "git checkout ".to_owned()),
+                ),
+        )
+        .with_step(clear_input("Clear the input after gco"))
+        .with_step(
+            new_step_with_default_assertions(
+                "Type a --command git --set-cursor abbreviation after git, then -3",
+            )
+            .with_typed_characters(&["git glc", " ", "-3"])
+            .add_named_assertion(
+                "glc expands after git and -3 is typed where the marker was",
+                input_contains_string(0, "git log -3 --oneline ".to_owned()),
+            ),
+        )
+        .with_step(clear_input("Clear the input after git glc"))
+        .with_step(
+            new_step_with_default_assertions(
+                "Type the git-only abbreviation after another command",
+            )
+            .with_typed_characters(&["ls glc", " "])
+            .add_named_assertion(
+                "glc does not expand as an argument to ls",
+                input_contains_string(0, "ls glc ".to_owned()),
+            ),
         )
 }
 
