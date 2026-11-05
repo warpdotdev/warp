@@ -1,14 +1,12 @@
 //! Agent SDK entry points for invoking Agent-related functionality from the app.
 //! For now this provides a simple runner that echoes the received command.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2227,10 +2225,10 @@ fn launch_command(
 }
 
 /// Establishes IAP access and validates credentials before executing a command once.
-pub(crate) fn authenticate_then_execute(
+pub fn authenticate_then_execute(
     pending_api_key: Option<String>,
     ctx: &mut AppContext,
-    execute: impl FnMut(&mut AppContext) -> anyhow::Result<()> + 'static,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) -> anyhow::Result<()> {
     let parent_span = tracing::Span::current();
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
@@ -2251,7 +2249,7 @@ pub(crate) fn authenticate_then_execute(
         return Ok(());
     }
 
-    let execute = Rc::new(RefCell::new(execute));
+    let mut execute = Some(execute);
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
@@ -2264,16 +2262,18 @@ pub(crate) fn authenticate_then_execute(
                 if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
             {
                 handled = true;
-                let execute = execute.clone();
-                authenticate_and_execute(
-                    ctx,
-                    parent_span.clone(),
-                    authentication.clone(),
-                    move |ctx| (execute.borrow_mut())(ctx),
-                );
+                if let Some(execute) = execute.take() {
+                    authenticate_and_execute(
+                        ctx,
+                        parent_span.clone(),
+                        authentication.clone(),
+                        execute,
+                    );
+                }
             }
             IapManagerEvent::AccessUnavailable => {
                 handled = true;
+                execute = None;
                 report_fatal_error(
                     anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
                     ctx,
@@ -2294,11 +2294,12 @@ fn authenticate_and_execute(
     ctx: &mut AppContext,
     parent_span: tracing::Span,
     authentication: CommandAuthentication,
-    mut execute: impl FnMut(&mut AppContext) -> anyhow::Result<()> + 'static,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     // Subscribe to auth events and wait for validation before running the command.
+    let mut execute_once = Some(execute);
     let mut dispatched = false;
     ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, ctx| {
         let _guard = parent_span.enter();
@@ -2308,12 +2309,15 @@ fn authenticate_and_execute(
         match event {
             AuthManagerEvent::AuthComplete => {
                 dispatched = true;
-                if let Err(err) = execute(ctx) {
+                if let Some(execute) = execute_once.take()
+                    && let Err(err) = execute(ctx)
+                {
                     report_fatal_error(err, ctx);
                 }
             }
             AuthManagerEvent::NeedsReauth => {
                 dispatched = true;
+                execute_once = None;
                 let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
                 let message = if auth_state.is_api_key_authenticated() {
                     "Your API key is invalid. Please provide a valid key via '--api-key' or the WARP_API_KEY environment variable.".to_string()
@@ -2324,6 +2328,7 @@ fn authenticate_and_execute(
             }
             AuthManagerEvent::AuthFailed(err) => {
                 dispatched = true;
+                execute_once = None;
                 report_fatal_error(anyhow::anyhow!("Authentication failed: {err:#}"), ctx);
             }
             _ => {}

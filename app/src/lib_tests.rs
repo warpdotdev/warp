@@ -1,11 +1,8 @@
-#[cfg(feature = "tui")]
-use std::cell::Cell;
-#[cfg(feature = "tui")]
-use std::rc::Rc;
-
 use clap::Parser as _;
 
 use super::*;
+#[cfg(feature = "tui")]
+use crate::ai::agent_sdk::authenticate_then_execute;
 #[cfg(feature = "tui")]
 use crate::auth::credentials::Credentials;
 
@@ -26,49 +23,26 @@ fn initialize_tui_command_auth(app: &mut App) {
 
 #[cfg(feature = "tui")]
 #[test]
-fn tui_command_preflight_hit_skips_authentication_and_execution() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            dispatch_tui_cli_command(
-                Box::new(|_| panic!("cache hit must not execute the network command")),
-                true,
-                Some(Box::new(|ctx| {
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                    true
-                })),
-                ctx,
-            );
-        });
-
-        // No auth models are registered: reaching the auth gate would panic.
-        assert!(app.termination_result().is_none());
-    });
-}
-
-#[cfg(feature = "tui")]
-#[test]
-fn tui_command_preflight_miss_waits_for_authentication() {
+fn command_auth_gate_waits_before_executing() {
     App::test((), |mut app| async move {
         initialize_tui_command_auth(&mut app);
-        let runs = Rc::new(Cell::new(0));
-        let runs_for_command = runs.clone();
+        let (executed, mut completion) = futures::channel::oneshot::channel();
         app.update(|ctx| {
-            dispatch_tui_cli_command(
-                Box::new(move |_| runs_for_command.set(runs_for_command.get() + 1)),
-                true,
-                Some(Box::new(|_| false)),
-                ctx,
-            );
+            authenticate_then_execute(None, ctx, move |_| {
+                executed.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
         });
 
-        assert_eq!(runs.get(), 0);
+        assert_eq!(completion.try_recv().unwrap(), None);
 
         AuthManager::handle(&app).update(&mut app, |_, ctx| {
             ctx.emit(AuthManagerEvent::AuthComplete);
             ctx.emit(AuthManagerEvent::AuthComplete);
         });
 
-        assert_eq!(runs.get(), 1);
+        completion.await.unwrap();
         assert!(app.termination_result().is_none());
     });
 }
