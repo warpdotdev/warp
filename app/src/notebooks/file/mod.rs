@@ -99,6 +99,9 @@ pub struct FileNotebookView {
     code_source: Option<CodeSource>,
     /// Persistent hover state for the header title tooltip.
     header_title_mouse_state: MouseStateHandle,
+    /// Vertical scroll fraction (`0..=1`) to restore once the file content is first loaded,
+    /// captured before a markdown raw->rendered toggle. Consumed on the first `set_content`.
+    pending_scroll_fraction: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +213,18 @@ impl FileState {
     }
 }
 
+/// Keymap context set by a pane that can switch between the rendered and raw views of its file,
+/// so the toggle shortcut is only available where the Rendered/Raw control is shown.
+pub const MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT: &str = "MarkdownDisplayModeToggle";
+
+// The rendered and raw views are separate panes with their own actions, so each registers its own
+// direction of the toggle. Sharing the name and description gives them a single, jointly
+// rebindable entry in settings.
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME: &str = "markdown:toggle_display_mode";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION: &str =
+    "Toggle Markdown rendered/raw view";
+pub const TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING: &str = "cmdorctrl-e";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -227,6 +242,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION,
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!("FileNotebookView") & id!(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT))
+        .with_key_binding(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING),
     ])
 }
 
@@ -294,6 +316,7 @@ impl FileNotebookView {
             #[cfg(feature = "local_fs")]
             code_source: None,
             header_title_mouse_state: Default::default(),
+            pending_scroll_fraction: None,
         }
     }
 
@@ -305,6 +328,27 @@ impl FileNotebookView {
     #[cfg(feature = "local_fs")]
     pub fn code_source(&self) -> Option<&CodeSource> {
         self.code_source.as_ref()
+    }
+
+    /// Set the scroll fraction to restore once the file content is first loaded. Used to preserve
+    /// scroll position when toggling markdown from raw to rendered.
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
+    pub(crate) fn set_pending_scroll_fraction(&mut self, scroll_fraction: Option<f32>) {
+        self.pending_scroll_fraction = scroll_fraction;
+    }
+
+    /// The current vertical scroll fraction of the rendered editor, in `0..=1`.
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
+    fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
+        Some(
+            self.editor
+                .as_ref(ctx)
+                .model()
+                .as_ref(ctx)
+                .render_state()
+                .as_ref(ctx)
+                .scroll_fraction(),
+        )
     }
 
     pub fn title(&self) -> String {
@@ -331,6 +375,7 @@ impl FileNotebookView {
         let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
         let render_as_ipynb =
             FeatureFlag::JupyterNotebookRendering.is_enabled() && self.is_jupyter_notebook_file();
+        let scroll_fraction = self.pending_scroll_fraction.take();
         self.editor.update(ctx, |editor, ctx| {
             if render_as_ipynb {
                 editor.reset_with_ipynb(content, ctx);
@@ -340,6 +385,17 @@ impl FileNotebookView {
             // Relative image paths in the content resolve against this.
             editor.model().update(ctx, |model, ctx| {
                 model.set_document_path(doc_path, ctx);
+                // Restore scroll captured before a raw->rendered toggle. Deferred through the
+                // layout pipeline so it applies after the new content is laid out. The version is
+                // read here (after the reset above advanced it) rather than at dequeue: the reset's
+                // BufferEdit reaches the layout channel via a deferred subscription, so it can be
+                // enqueued after our ScrollToFraction.
+                if let Some(fraction) = scroll_fraction {
+                    let version = model.buffer_version(ctx);
+                    model.render_state().update(ctx, |render_state, _ctx| {
+                        render_state.scroll_to_fraction(fraction, version);
+                    });
+                }
             });
         });
     }
@@ -428,12 +484,10 @@ impl FileNotebookView {
 
         #[cfg(feature = "local_fs")]
         {
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| {
-                    m.cancel(prev_id);
-                    m.unsubscribe(prev_id, ctx)
-                });
-            }
+            // Reopening (e.g. "Try again") must not leave the previous read, its watcher, or its
+            // event subscription behind: `subscribe_to_model` appends, so re-subscribing without
+            // this would stack one stale closure per attempt.
+            self.release_file_model(ctx);
 
             let file_model = FileModel::handle(ctx);
             let file_id = file_model.update(ctx, |m, ctx| m.open(&local_path, true, ctx));
@@ -509,6 +563,28 @@ impl FileNotebookView {
         }
     }
 
+    /// The [`FileId`] this view currently holds open, if any.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn file_id_for_test(&self) -> Option<FileId> {
+        self.file_id
+    }
+
+    /// Releases everything this view holds in the shared [`FileModel`]: the in-flight read, the
+    /// file's watcher registration, and this view's subscription to the model's events.
+    ///
+    /// Safe to call when no file is open, and idempotent, so every teardown path can run it.
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn release_file_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let file_model = FileModel::handle(ctx);
+        if let Some(file_id) = self.file_id.take() {
+            file_model.update(ctx, |model, ctx| {
+                model.cancel(file_id);
+                model.unsubscribe(file_id, ctx);
+            });
+        }
+        ctx.unsubscribe_to_model(&file_model);
+    }
+
     /// Open static Markdown as a file pane.
     pub fn open_static(
         &mut self,
@@ -517,11 +593,7 @@ impl FileNotebookView {
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(feature = "local_fs")]
-        {
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
+        self.release_file_model(ctx);
         self.set_content(content, ctx);
         let title = title.into();
         self.pane_configuration.update(ctx, |pane_config, ctx| {
@@ -665,9 +737,11 @@ impl FileNotebookView {
     #[cfg(feature = "local_fs")]
     fn open_as_code(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(path) = self.file_state.path().cloned() {
+            let scroll_fraction = self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
             ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
                 path,
                 source: self.code_source.clone(),
+                scroll_fraction,
             }));
         }
     }
@@ -959,6 +1033,14 @@ impl View for FileNotebookView {
         "FileNotebookView"
     }
 
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.shows_markdown_toggle() {
+            context.set.insert(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT);
+        }
+        context
+    }
+
     fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new_without_help(
             format!("{} notebook", self.title()),
@@ -987,7 +1069,7 @@ impl View for FileNotebookView {
                     ctx.dispatch_typed_action(FileNotebookAction::Focus);
                     DispatchEventResult::StopPropagation
                 })
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, _, position, _| {
                     show_rich_editor_context_menu::<FileNotebookAction>(
                         ctx,
                         position,
@@ -1009,7 +1091,8 @@ impl TypedActionView for FileNotebookView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             FileNotebookAction::Focus => ctx.focus_self(),
-            FileNotebookAction::Close => ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close)),
+            // Route through `BackingView::close` so this takes the header close button's path.
+            FileNotebookAction::Close => BackingView::close(self, ctx),
             FileNotebookAction::FocusTerminalInput => {
                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
             }
@@ -1037,9 +1120,12 @@ impl TypedActionView for FileNotebookView {
                     });
                 } else if let Some(path) = self.file_state.path().cloned() {
                     // For remote files, open as a code editor pane.
+                    let scroll_fraction =
+                        self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
                     ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
                         path,
                         source: None,
+                        scroll_fraction,
                     }));
                 }
             }
@@ -1069,9 +1155,12 @@ impl TypedActionView for FileNotebookView {
                         #[cfg(feature = "local_fs")]
                         {
                             if let Some(path) = self.file_state.path().cloned() {
+                                let scroll_fraction =
+                                    self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
                                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
                                     path,
                                     source: self.code_source.clone(),
+                                    scroll_fraction,
                                 }));
                             }
                         }
@@ -1145,14 +1234,11 @@ impl BackingView for FileNotebookView {
         actions
     }
 
+    /// Requests that the pane close. The file itself is released by
+    /// `FilePane::detach(DetachType::Closed)`, once the pane is permanently discarded: with
+    /// undo-close the pane is only hidden, and the same view is reattached without reopening its
+    /// file, so releasing here would leave a restored pane showing content that never updates.
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "local_fs")]
-        {
-            // Unsubscribe from the file watcher before closing.
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
         ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close));
     }
 

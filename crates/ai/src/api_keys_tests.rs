@@ -8,6 +8,63 @@ use super::*;
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
 }
+#[test]
+fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
+        let strategy = AwsCredentialsRefreshStrategy::OidcManaged;
+        let credentials = AwsCredentials::new(
+            "access-key".into(),
+            "secret-key".into(),
+            Some("session-token".into()),
+            Some(SystemTime::now() + Duration::from_secs(3600)),
+        );
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert_eq!(
+                manager.aws_credentials_state(),
+                &AwsCredentialsState::Missing
+            );
+
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert!(matches!(
+                manager.aws_credentials_state(),
+                AwsCredentialsState::Loaded { .. }
+            ));
+
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::LocalChain,
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(
+                manager.aws_credentials_state(),
+                &AwsCredentialsState::Missing
+            );
+            assert_eq!(
+                manager.aws_credentials_refresh_strategy(),
+                AwsCredentialsRefreshStrategy::LocalChain
+            );
+        });
+    });
+}
 
 #[test]
 fn llm_provider_parses_supported_api_key_provider_names() {
@@ -112,9 +169,18 @@ fn custom_model_providers_preserves_configured_schema() {
 }
 
 fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> ApiKeyManager {
+    let custom_endpoints = keys.custom_endpoints.clone();
     ApiKeyManager {
         keys,
+        custom_endpoints: CustomEndpointState {
+            definitions: None,
+            settings_valid: true,
+            keys: HashMap::new(),
+            resolved: custom_endpoints,
+        },
         grok_tokens,
+        chatgpt_connection: ChatGPTConnectionStatus::Unknown,
+        chatgpt_oauth_pending: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
@@ -222,6 +288,172 @@ fn endpoint_with_keys(
     }
 }
 
+#[test]
+fn custom_endpoint_definitions_round_trip_without_secrets() {
+    let legacy = vec![endpoint_with_keys(
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        "secret",
+        &[("openai/gpt-5", Some("GPT-5"), "config-key")],
+    )];
+    let (definitions, keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+    let json = serde_json::to_string(&definitions).unwrap();
+    let decoded: CustomEndpointDefinitions = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(decoded, definitions);
+    assert!(!json.contains("secret"));
+    assert_eq!(keys.values().next().map(String::as_str), Some("secret"));
+}
+
+#[test]
+fn custom_endpoint_definitions_reject_duplicate_model_config_keys() {
+    let legacy = vec![
+        endpoint_with_keys(
+            "One",
+            "https://one.example.com",
+            "one",
+            &[("model-one", None, "duplicate")],
+        ),
+        endpoint_with_keys(
+            "Two",
+            "https://two.example.com",
+            "two",
+            &[("model-two", None, "duplicate")],
+        ),
+    ];
+
+    assert!(CustomEndpointDefinitions::from_legacy(&legacy).is_err());
+}
+
+#[test]
+fn custom_endpoint_url_requires_public_https() {
+    for valid in [
+        "https://api.example.com/v1",
+        "https://openrouter.ai/api/v1",
+        "https://8.8.8.8/v1",
+    ] {
+        assert_eq!(validate_custom_endpoint_url(valid), Ok(()));
+    }
+    for invalid in [
+        "http://api.example.com/v1",
+        "https://localhost:8080",
+        "https://127.0.0.1/v1",
+        "https://10.0.0.1/v1",
+        "https://[::1]/v1",
+        "not a url",
+    ] {
+        assert!(
+            validate_custom_endpoint_url(invalid).is_err(),
+            "{invalid} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn legacy_endpoint_ids_are_deterministic_and_preserve_config_keys() {
+    let legacy = vec![endpoint_with_keys(
+        "Endpoint",
+        "https://api.example.com/v1",
+        "secret",
+        &[("model", None, "existing-config-key")],
+    )];
+    let (first, first_keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+    let (second, second_keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first_keys, second_keys);
+    let (id, definition) = first.definitions().next().unwrap();
+    assert!(id.as_str().starts_with(LEGACY_ENDPOINT_PREFIX));
+    assert_eq!(definition.models[0].config_key, "existing-config-key");
+}
+
+#[test]
+fn endpoint_definitions_join_keys_fail_closed_and_recover() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let legacy = vec![endpoint_with_keys(
+            "Endpoint",
+            "https://api.example.com/v1",
+            "secret",
+            &[("model", None, "config-key")],
+        )];
+        let (definitions, keys) = CustomEndpointDefinitions::from_legacy(&legacy).unwrap();
+        let endpoint_id = definitions.id_at(0).unwrap().clone();
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.set_custom_endpoint_definitions(definitions.clone(), ctx);
+                assert_eq!(manager.custom_endpoints()[0].api_key, "");
+                manager.persist_custom_endpoint_keys(keys, ctx)
+            })
+            .unwrap();
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), Some("secret"));
+            assert_eq!(manager.custom_endpoints()[0].api_key, "secret");
+            assert!(manager.custom_model_providers_for_request(true).is_some());
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.invalidate_custom_endpoint_definitions(ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(!manager.custom_endpoint_settings_valid());
+            assert!(manager.custom_endpoints().is_empty());
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), Some("secret"));
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions, ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoint_settings_valid());
+            assert_eq!(manager.custom_endpoints()[0].api_key, "secret");
+        });
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key(endpoint_id.clone(), None, ctx)
+            })
+            .unwrap();
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.custom_endpoint_key(&endpoint_id), None);
+            assert_eq!(manager.custom_endpoints()[0].api_key, "");
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+        });
+    });
+}
+
+#[test]
+fn empty_active_definitions_disable_the_legacy_fallback() {
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|_| {
+            make_manager(ApiKeys {
+                custom_endpoints: vec![endpoint_with_keys(
+                    "Legacy",
+                    "https://legacy.example.com",
+                    "secret",
+                    &[("model", None, "config-key")],
+                )],
+                ..Default::default()
+            })
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_model_providers_for_request(true).is_some());
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(CustomEndpointDefinitions::default(), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoints().is_empty());
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+        });
+    });
+}
 // ── serde round-trip ────────────────────────────────────────────
 
 #[test]
@@ -670,6 +902,51 @@ fn manager_has_any_key_false_for_blank_grok_and_no_keys() {
     assert!(!mgr.has_any_key());
 }
 
+// ── ChatGPT subscription ────────────────────────────────────────
+
+fn chatgpt_connection(token_sharing_active: bool) -> ChatGPTConnectionStatus {
+    ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+        email: Some("user@example.com".into()),
+        connected_at: SystemTime::now(),
+        token_sharing_active,
+    })
+}
+
+fn make_manager_with_chatgpt(chatgpt_connection: ChatGPTConnectionStatus) -> ApiKeyManager {
+    let mut manager = make_manager(ApiKeys::default());
+    manager.chatgpt_connection = chatgpt_connection;
+    manager
+}
+
+#[test]
+fn has_chatgpt_subscription_false_when_status_unknown_or_not_connected() {
+    assert!(
+        !make_manager_with_chatgpt(ChatGPTConnectionStatus::Unknown).has_chatgpt_subscription()
+    );
+    assert!(
+        !make_manager_with_chatgpt(ChatGPTConnectionStatus::NotConnected)
+            .has_chatgpt_subscription()
+    );
+}
+
+#[test]
+fn has_chatgpt_subscription_true_when_token_sharing_active() {
+    let mgr = make_manager_with_chatgpt(chatgpt_connection(true));
+    assert!(mgr.has_chatgpt_subscription());
+    // The subscription is BYO inference, so it counts as a usable credential
+    // even with no pasted keys, matching the connected-Grok case.
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn has_chatgpt_subscription_false_when_linked_without_token_sharing() {
+    // A linked account without delegated credentials can't fund requests, so
+    // it must not count as a usable credential.
+    let mgr = make_manager_with_chatgpt(chatgpt_connection(false));
+    assert!(!mgr.has_chatgpt_subscription());
+    assert!(!mgr.has_any_key());
+}
+
 // ── geap credentials ────────────────────────────────────────────
 
 #[test]
@@ -905,6 +1182,180 @@ fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
     // A later success reopens the blocking path.
     manager.clear_geap_mint_failure();
     assert!(manager.geap_expired_refresh_eligibility(&binding));
+}
+
+// ── chatgpt connection status ──────────────────
+
+fn chatgpt_connected() -> ChatGPTConnectionStatus {
+    ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+        email: Some("user@example.com".into()),
+        connected_at: SystemTime::now(),
+        token_sharing_active: true,
+    })
+}
+
+/// Runs `f` against a fresh manager and returns the events it emitted.
+fn chatgpt_events(
+    f: impl FnOnce(&mut ApiKeyManager, &mut ModelContext<ApiKeyManager>) + 'static,
+) -> Vec<ApiKeyManagerEvent> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let events_for_test = events.clone();
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager(ApiKeys::default()));
+        let sink = events_for_test.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&manager, move |_, event, _| {
+                sink.borrow_mut().push(event.clone());
+            });
+        });
+        manager.update(&mut app, f);
+    });
+    Rc::try_unwrap(events).unwrap().into_inner()
+}
+
+#[test]
+fn chatgpt_connection_is_only_reported_when_connected() {
+    let mut mgr = make_manager(ApiKeys::default());
+    assert_eq!(mgr.chatgpt_connection(), None);
+    mgr.chatgpt_connection = ChatGPTConnectionStatus::NotConnected;
+    assert_eq!(mgr.chatgpt_connection(), None);
+    mgr.chatgpt_connection = chatgpt_connected();
+    assert_eq!(
+        mgr.chatgpt_connection().map(|c| c.token_sharing_active),
+        Some(true)
+    );
+}
+
+#[test]
+fn set_chatgpt_connection_status_emits_only_on_change() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        manager.set_chatgpt_connection_status(chatgpt_connected(), ctx);
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+        ]
+    );
+}
+
+#[test]
+fn set_chatgpt_connection_status_does_not_clear_pending_connect() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        // A refresh unrelated to the browser handoff (e.g. opening settings)
+        // must not be mistaken for the attempt finishing.
+        manager.set_chatgpt_connection_status(ChatGPTConnectionStatus::NotConnected, ctx);
+        assert!(manager.chatgpt_oauth_pending());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+fn is_connect_failed(event: &ApiKeyManagerEvent) -> bool {
+    matches!(event, ApiKeyManagerEvent::ChatGPTConnectFailed(_))
+}
+
+#[test]
+fn resolve_chatgpt_oauth_reports_failure_when_server_has_no_link() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(Some(ChatGPTConnectionStatus::NotConnected), ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert_eq!(
+            manager.chatgpt_connection_status(),
+            &ChatGPTConnectionStatus::NotConnected
+        );
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectFailed(ChatGPTConnectFailure::Unknown),
+        ]
+    );
+}
+
+#[test]
+fn resolve_chatgpt_oauth_succeeds_when_server_reports_link() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(Some(chatgpt_connected()), ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert!(manager.chatgpt_connection().is_some());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+#[test]
+fn resolve_chatgpt_oauth_keeps_cached_status_when_fetch_failed() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_connection_status(chatgpt_connected(), ctx);
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.resolve_chatgpt_oauth(None, ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+        assert!(manager.chatgpt_connection().is_some());
+    });
+    assert!(!events.iter().any(is_connect_failed));
+}
+
+#[test]
+fn fail_chatgpt_oauth_reports_the_browser_reported_reason() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.set_chatgpt_oauth_pending(true, ctx);
+        manager.fail_chatgpt_oauth(ChatGPTConnectFailure::AlreadyLinked, ctx);
+        assert!(!manager.chatgpt_oauth_pending());
+    });
+    assert_eq!(
+        events,
+        vec![
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectionUpdated,
+            ApiKeyManagerEvent::ChatGPTConnectFailed(ChatGPTConnectFailure::AlreadyLinked),
+        ]
+    );
+}
+
+#[test]
+fn chatgpt_connect_failure_parses_server_error_codes() {
+    let cases = [
+        ("already_linked", ChatGPTConnectFailure::AlreadyLinked),
+        ("email_unverified", ChatGPTConnectFailure::EmailUnverified),
+        ("denied", ChatGPTConnectFailure::Denied),
+        ("account_mismatch", ChatGPTConnectFailure::AccountMismatch),
+        ("failed", ChatGPTConnectFailure::Unknown),
+        ("", ChatGPTConnectFailure::Unknown),
+    ];
+    for (code, expected) in cases {
+        assert_eq!(
+            ChatGPTConnectFailure::from_deep_link_code(code),
+            expected,
+            "code {code:?}"
+        );
+    }
+}
+
+#[test]
+fn fail_chatgpt_oauth_without_pending_attempt_is_a_no_op() {
+    let events = chatgpt_events(|manager, ctx| {
+        manager.fail_chatgpt_oauth(ChatGPTConnectFailure::Denied, ctx);
+    });
+    assert!(events.is_empty());
+}
+
+#[test]
+fn resolve_chatgpt_oauth_without_pending_attempt_never_reports_failure() {
+    // e.g. an ordinary login while nothing was pending.
+    let events = chatgpt_events(|manager, ctx| {
+        manager.resolve_chatgpt_oauth(Some(ChatGPTConnectionStatus::NotConnected), ctx);
+    });
+    assert_eq!(events, vec![ApiKeyManagerEvent::ChatGPTConnectionUpdated]);
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────

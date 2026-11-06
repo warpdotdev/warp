@@ -14,6 +14,7 @@ use crate::pane_group::{PaneGroup, PaneId};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
+use crate::window_settings::WindowSettings;
 use crate::workspace::Workspace;
 
 /// A unique identifier for an item in the undo close stack.
@@ -140,7 +141,10 @@ impl ClosedItem {
     fn clean_up_pane_group(pane_group: &ViewHandle<PaneGroup>, ctx: &mut AppContext) {
         let window_id = pane_group.window_id(ctx);
 
-        if !ctx.is_window_open(window_id) {
+        if ctx
+            .view_with_id::<PaneGroup>(window_id, pane_group.id())
+            .is_none()
+        {
             return;
         }
 
@@ -261,7 +265,14 @@ impl UndoCloseStack {
                 );
 
                 let window_id = data.window_id;
-                ctx.reopen_closed_window(*data);
+                let (background_blur_radius_pixels, background_backdrop) = {
+                    let window_settings = WindowSettings::as_ref(ctx);
+                    (
+                        Some(*window_settings.background_blur_radius),
+                        *window_settings.background_backdrop,
+                    )
+                };
+                ctx.reopen_closed_window(*data, background_blur_radius_pixels, background_backdrop);
 
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {

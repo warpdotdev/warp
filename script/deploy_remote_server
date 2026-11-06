@@ -147,10 +147,9 @@ echo "==> Build complete ($BINARY_SIZE)"
 # Prepare the bundled resources tree (skills, settings schema) deployed to
 # the global, version-independent location the daemon reads.
 rm -rf "$LOCAL_RESOURCES_DIR"
-"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
   "$LOCAL_RESOURCES_DIR" \
-  local \
-  "$CARGO_PROFILE"
+  local
 
 # Resolve $HOME on the remote so our upload lands in the same directory the
 # Warp client checks. The client runs `test -x ~/.warp-local/...` and lets
@@ -194,6 +193,9 @@ echo "==> Uploading bundled resources to $HOST:$REMOTE_ABS_DIR/$BUNDLED_RESOURCE
 rsync -z -rlt --delete --partial --progress \
   "$LOCAL_RESOURCES_DIR/" \
   "$HOST:$REMOTE_ABS_DIR/$BUNDLED_RESOURCES_DIR_NAME/"
+echo "==> Generating Linux settings schema on $HOST"
+ssh "$HOST" \
+  "$REMOTE_ABS_DIR/$BINARY_NAME dump-settings-schema $REMOTE_ABS_DIR/$BUNDLED_RESOURCES_DIR_NAME/settings_schema.json"
 
 echo "==> Stopping stale remote-server daemons on $HOST"
 ssh "$HOST" bash <<'EOF'

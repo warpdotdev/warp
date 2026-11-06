@@ -14,6 +14,42 @@ use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::ids::ServerId;
 
+#[test]
+fn terminal_busy_restores_as_recoverable_error() {
+    let result = api::message::ToolCallResult {
+        tool_call_id: "ls".into(),
+        result: Some(api::message::tool_call_result::Result::RunShellCommand(
+            api::RunShellCommandResult {
+                command: "ls".into(),
+                result: Some(api::run_shell_command_result::Result::TerminalBusy(
+                    api::run_shell_command_result::TerminalBusy {
+                        running_command_id: "lint-block".into(),
+                    },
+                )),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let input = convert_tool_call_result_to_input(
+        &TaskId::new("root".into()),
+        &result,
+        &HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .unwrap();
+    let AIAgentInput::ActionResult { result, .. } = input else {
+        panic!("expected action result");
+    };
+    assert!(result.result.is_failed());
+    assert!(!result.result.is_cancelled());
+    assert!(
+        matches!(result.result, AIAgentActionResultType::RequestCommandOutput(
+        RequestCommandOutputResult::TerminalBusy { block_id, command }
+    ) if block_id.as_str() == "lint-block" && command == "ls")
+    );
+}
+
 fn test_server_metadata(
     server_token: &str,
     ambient_agent_task_id: Option<AmbientAgentTaskId>,
@@ -27,8 +63,10 @@ fn test_server_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: Some(3.2),
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -93,10 +131,12 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
         ordered_message_ids: vec![],
     };
 
+    let mut server_metadata = test_server_metadata("server-token", Some(ambient_agent_task_id));
+    server_metadata.usage.total_billed_cost_in_cents = Some(3.2);
     let conversation = convert_conversation_data_to_ai_conversation(
         conversation_id,
         &conversation_data,
-        test_server_metadata("server-token", Some(ambient_agent_task_id)),
+        server_metadata,
         RestorationMode::Continue,
     )
     .expect("conversation should restore");
@@ -107,16 +147,19 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
         conversation.run_id(),
         Some(ambient_agent_task_id.to_string())
     );
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert_eq!(
+        conversation.usage_metadata().billed_cost_in_cents(),
+        Some(3.2)
+    );
     assert!(conversation.usage_totals().has_usage);
 }
 
-/// A later server-metadata snapshot without the provider-cost field (legacy
-/// server or conversation) must not erase a known baseline, and usage
-/// evidence must be derived from the metadata's contents.
+/// Asynchronous GraphQL metadata snapshots can be stale relative to live stream accounting: a
+/// snapshot may seed or advance the billed total, an absent field keeps the known baseline, and
+/// a stale snapshot never regresses it.
 #[test]
 #[allow(deprecated)]
-fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
+fn server_metadata_snapshot_seeds_billed_total_without_regressing_it() {
     let conversation_data = api::ConversationData {
         tasks: vec![api::Task {
             id: "root".to_string(),
@@ -135,56 +178,32 @@ fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
         RestorationMode::Continue,
     )
     .expect("conversation should restore");
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert_eq!(conversation.usage_metadata().billed_cost_in_cents(), None);
+
+    let mut billed_snapshot = test_server_metadata("server-token", None);
+    billed_snapshot.usage.total_billed_cost_in_cents = Some(6.5);
+    conversation.set_server_metadata(billed_snapshot);
+    assert_eq!(
+        conversation.usage_metadata().billed_cost_in_cents(),
+        Some(6.5)
+    );
 
     let mut legacy_snapshot = test_server_metadata("server-token", None);
-    legacy_snapshot.usage.total_provider_cost_in_cents = None;
-    legacy_snapshot.usage.credits_spent = 2.0;
+    legacy_snapshot.usage.total_billed_cost_in_cents = None;
     conversation.set_server_metadata(legacy_snapshot);
-
-    let totals = conversation.usage_totals();
-    assert_eq!(totals.cost_in_cents, Some(3.2));
-    assert!(totals.has_usage);
-}
-
-/// Asynchronous GraphQL metadata snapshots can be stale relative to live
-/// stream accounting: a snapshot may seed or advance the known total but
-/// never regress it.
-#[test]
-#[allow(deprecated)]
-fn stale_server_metadata_snapshot_never_regresses_known_total() {
-    let conversation_data = api::ConversationData {
-        tasks: vec![api::Task {
-            id: "root".to_string(),
-            messages: vec![],
-            dependencies: None,
-            description: String::new(),
-            summary: String::new(),
-            server_data: String::new(),
-        }],
-        ordered_message_ids: vec![],
-    };
-    let mut conversation = convert_conversation_data_to_ai_conversation(
-        AIConversationId::new(),
-        &conversation_data,
-        test_server_metadata("server-token", None),
-        RestorationMode::Continue,
-    )
-    .expect("conversation should restore");
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
-
-    let mut newer_snapshot = test_server_metadata("server-token", None);
-    newer_snapshot.usage.total_provider_cost_in_cents = Some(4.4);
-    conversation.set_server_metadata(newer_snapshot);
-    assert_eq!(conversation.usage_totals().cost_in_cents, Some(4.4));
+    assert_eq!(
+        conversation.usage_metadata().billed_cost_in_cents(),
+        Some(6.5),
+        "an absent field must not erase a known billed total"
+    );
 
     let mut stale_snapshot = test_server_metadata("server-token", None);
-    stale_snapshot.usage.total_provider_cost_in_cents = Some(3.2);
+    stale_snapshot.usage.total_billed_cost_in_cents = Some(5.0);
     conversation.set_server_metadata(stale_snapshot);
     assert_eq!(
-        conversation.usage_totals().cost_in_cents,
-        Some(4.4),
-        "a stale snapshot must never regress the displayed total"
+        conversation.usage_metadata().billed_cost_in_cents(),
+        Some(6.5),
+        "a stale snapshot must never regress the billed total"
     );
 }
 
@@ -204,20 +223,17 @@ fn set_server_metadata_with_zero_usage_keeps_footer_usage_hidden() {
         }],
         ordered_message_ids: vec![],
     };
-    let mut zero_usage_metadata = test_server_metadata("server-token", None);
-    zero_usage_metadata.usage.total_provider_cost_in_cents = None;
-
     let conversation = convert_conversation_data_to_ai_conversation(
         AIConversationId::new(),
         &conversation_data,
-        zero_usage_metadata,
+        test_server_metadata("server-token", None),
         RestorationMode::Continue,
     )
     .expect("conversation should restore");
 
     let totals = conversation.usage_totals();
     assert!(!totals.has_usage);
-    assert_eq!(totals.cost_in_cents, None);
+    assert_eq!(totals.total_cost_in_cents(), None);
 }
 
 #[test]
@@ -238,6 +254,7 @@ fn test_convert_tool_call_result_to_input_transfer_control_snapshot() {
                                 cursor: "<|cursor|>".to_string(),
                                 is_alt_screen_active: false,
                                 is_preempted: false,
+                                activity: None,
                             },
                         ),
                     ),
@@ -415,6 +432,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -445,6 +463,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -475,6 +494,7 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -539,6 +559,7 @@ fn test_invoke_skill_arguments_round_trip() {
                         referenced_attachments: HashMap::new(),
                         mode: None,
                         intended_agent: Default::default(),
+                        ..Default::default()
                     }),
                 },
             )),
@@ -652,6 +673,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -854,6 +876,7 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -972,6 +995,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1043,6 +1067,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -1140,6 +1165,7 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req4".to_string(),
             timestamp: None,
@@ -1257,6 +1283,7 @@ fn test_user_query_mode_conversion() {
                 r#type: Some(api::user_query_mode::Type::Plan(())),
             }),
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1302,6 +1329,7 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: Some(api::UserQueryMode { r#type: None }),
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1347,6 +1375,7 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            ..Default::default()
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1421,6 +1450,7 @@ fn test_exchanges_grouped_by_request_id() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
         },
         // Message 2: Agent output with same request_id
@@ -1489,6 +1519,7 @@ fn test_exchanges_grouped_by_request_id() {
                                         cursor: String::new(),
                                         is_alt_screen_active: false,
                                         is_preempted: false,
+                                        activity: None,
                                     },
                                 ),
                             ),
@@ -1535,6 +1566,7 @@ fn test_exchanges_grouped_by_request_id() {
                                         cursor: String::new(),
                                         is_alt_screen_active: false,
                                         is_preempted: false,
+                                        activity: None,
                                     },
                                 ),
                             ),
@@ -1678,6 +1710,7 @@ fn test_multiple_create_documents_get_default_version() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1895,6 +1928,7 @@ fn test_create_then_edit_then_create_version_tracking() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                ..Default::default()
             })),
             request_id: "req1".to_string(),
             timestamp: None,

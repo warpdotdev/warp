@@ -68,7 +68,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     handle
         .inspect_err(|err| {
             report_error!(
-                anyhow::anyhow!("{err:#}").context("Failed to create single-instance mutex")
+                anyhow::Error::new(err.clone()).context("Failed to create single-instance mutex")
             );
         })
         .map(|handle| {
@@ -120,7 +120,7 @@ impl SingleInstanceManager {
             }
             Err(err) => {
                 report_error!(
-                    anyhow::anyhow!("{err:#}").context("Failed to initialize UriService Server")
+                    anyhow::Error::new(err).context("Failed to initialize UriService Server")
                 );
                 // If we failed to create a server, we can't receive URI requests so we drop the
                 // lock.

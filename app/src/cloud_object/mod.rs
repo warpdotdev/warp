@@ -282,9 +282,13 @@ pub trait CloudObject: Debug {
                 if ancestors.contains(&hashed_parent_id) {
                     return true;
                 }
-                ancestors.insert(hashed_parent_id.clone());
 
-                match cloud_model.get_by_uid(&hashed_parent_id) {
+                let parent = cloud_model.get_by_uid(&hashed_parent_id);
+
+                // Insert before checking parent to avoid infinite recursion in case of cycles.
+                ancestors.insert(hashed_parent_id);
+
+                match parent {
                     Some(parent) => parent.is_trashed_internal(cloud_model, ancestors),
                     None => {
                         // If the object has a parent, but the parent is not in CloudModel, assume
@@ -654,7 +658,7 @@ where
 
     fn conflicting_object_revision(&self) -> Option<Revision> {
         match &self.conflict_status {
-            ConflictStatus::ConflictingChanges { object } => Some(object.metadata.revision.clone()),
+            ConflictStatus::ConflictingChanges { object } => Some(object.metadata.revision),
             ConflictStatus::NoConflicts => None,
         }
     }
@@ -912,7 +916,6 @@ impl CloudObjectMetadataExt for CloudObjectMetadata {
         // Second, the time elapsed since the edit. For example, "just now" or "3 months ago".
         let time_ago_string = self
             .revision
-            .clone()
             .map(|r| format_approx_duration_from_now_utc(r.utc()));
 
         let full_string = match (editor_string, time_ago_string) {

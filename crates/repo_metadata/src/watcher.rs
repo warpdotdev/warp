@@ -14,6 +14,8 @@ use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use std::sync::Arc;
+
         use ignore::gitignore::Gitignore;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
@@ -328,7 +330,7 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directories(
         &mut self,
         directory_paths: Vec<StandardizedPath>,
-        gitignores: Vec<Gitignore>,
+        gitignores: Vec<Arc<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let futures: Vec<_> = directory_paths
@@ -351,7 +353,7 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directory(
         &mut self,
         directory_path: &StandardizedPath,
-        gitignores: Vec<Gitignore>,
+        gitignores: Vec<Arc<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let local_path = directory_path.to_local_path();

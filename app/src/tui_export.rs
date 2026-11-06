@@ -36,8 +36,9 @@ pub use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode, AIAgentText,
     AIAgentTextSection, AIAgentTodo, AIAgentTodoId, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, AgentOutputTable, AskUserQuestionResult, CancellationReason,
-    FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
-    RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
+    ChatGPTSubscriptionErrorAction, ChatGPTSubscriptionErrorActionKind, FileGlobV2Result,
+    GrepResult, ImageContext, MessageId, ReceivedMessageDisplay, RenderableAIError,
+    RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
     StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
     TodoOperation, UserQueryMode,
@@ -91,8 +92,10 @@ pub use crate::ai::blocklist::orchestration_event_streamer::{
     unregister_agent_event_consumer,
 };
 pub use crate::ai::blocklist::orchestration_topology::{
-    OrchestrationParticipantKind, OrderedOrchestrationDescendant, ResolvedOrchestrationParticipant,
-    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    LoadedSubtreeRollup, OrchestrationParticipantKind, OrderedOrchestrationDescendant,
+    ResolvedOrchestrationParticipant, aggregated_orchestrator_status,
+    child_conversations_in_pill_order, descendant_conversation_ids_in_spawn_order,
+    descendant_conversations_in_pill_order, loaded_subtree_rollup,
     orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
 };
@@ -102,8 +105,10 @@ pub use crate::ai::blocklist::telemetry::{
     RunAgentsCardDecision, run_agents_card_decision_event,
 };
 pub use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
-    failed_output_presentation, format_credits, should_show_failed_output_usage_notice,
+    CHATGPT_CONTINUED_WITH_WARP_CREDITS_TEXT, FAILED_OUTPUT_USAGE_NOTICE_TEXT,
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
+    chatgpt_subscription_message_with_links, failed_output_presentation, format_credits,
+    format_dollars, should_show_failed_output_usage_notice,
 };
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,
@@ -114,12 +119,13 @@ pub use crate::ai::blocklist::{
     QueuedQueryModel, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
-    block_context_from_terminal_model, inherit_child_agent_settings,
-    maybe_build_ai_query_upsert_event,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, block_context_from_terminal_model,
+    inherit_child_agent_settings, maybe_build_ai_query_upsert_event,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+    PreparedLocalOzChildLaunch, apply_child_agent_model_override,
+    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
 };
 pub use crate::ai::cloud_environments::{
     CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
@@ -154,8 +160,7 @@ pub use crate::ai::orchestration::{
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
-#[cfg(feature = "voice_input")]
-pub use crate::ai::request_usage_model::AIRequestUsageModel;
+pub use crate::ai::request_usage_model::{AIRequestUsageModel, BonusGrantType};
 pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
@@ -173,6 +178,7 @@ pub use crate::code_review::github_repo_model::GitHubRepoModel;
 pub use crate::completer::SessionContext;
 pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::persistence::model::ChargedUsageTotals;
 pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
@@ -181,13 +187,14 @@ pub use crate::search::slash_command_menu::static_commands::{
     SlashCommandKind, SlashCommandSurfaces,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
-pub use crate::server::ids::SyncId;
+pub use crate::server::ids::{ServerId, SyncId};
 pub use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "voice_input")]
 pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
+pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
 pub use crate::settings::{AISettingsChangedEvent, InputSettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
@@ -262,7 +269,8 @@ pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
     blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
     queue_tui_permission_action, register_tui_input_mode_test_settings,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    register_tui_session_view_test_singletons, set_tui_auth_secret_preference_for_test,
+    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
@@ -273,7 +281,22 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
-pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+pub use crate::workspaces::update_manager::TeamUpdateManager;
+pub use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
+    UserWorkspaces, UserWorkspacesEvent,
+};
+pub use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostType, ChargeUnit, UsageVisibilityGranularity,
+};
+
+pub fn format_usage_cost_cents(cents: f64) -> String {
+    crate::settings_view::format_cost_cents(cents)
+}
+
+pub fn format_usage_credits(credits: f64) -> String {
+    crate::settings_view::format_credits(credits)
+}
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(
@@ -312,20 +335,10 @@ pub fn tui_completion_context_has_exact_command(
         return true;
     }
 
-    #[cfg(feature = "completions_v2")]
-    {
-        completion_context
-            .command_registry()
-            .get_signature(command)
-            .is_some()
-    }
-    #[cfg(not(feature = "completions_v2"))]
-    {
-        completion_context
-            .command_registry()
-            .signature_from_line(command, case_sensitivity)
-            .is_some()
-    }
+    completion_context
+        .command_registry()
+        .signature_from_line(command, case_sensitivity)
+        .is_some()
 }
 
 /// Returns whether cloud conversation metadata failed to load.

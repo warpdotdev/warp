@@ -39,10 +39,10 @@ fn make_message_response(message_id: &str) -> ReadAgentMessageResponse {
 }
 
 fn http_status_read_error(status: u16) -> anyhow::Error {
-    anyhow::Error::new(HttpStatusError {
+    anyhow::Error::new(HttpStatusError::new(
         status,
-        body: format!("status {status} body"),
-    })
+        format!("status {status} body"),
+    ))
 }
 
 #[tokio::test]
@@ -68,6 +68,33 @@ async fn hydrator_reads_new_message_for_matching_run() {
     assert_eq!(hydrated.subject, "Need a redirect");
     assert_eq!(hydrated.message_body, "Switch to the failing test first.");
     assert_eq!(hydrated.addresses, vec!["child-run".to_string()]);
+}
+
+#[tokio::test]
+async fn hydrator_skips_already_delivered_message() {
+    // Another route can deliver a message before its `new_message` event arrives.
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_read_agent_message()
+        .with(eq("msg-123"))
+        .times(1)
+        .returning(|_| {
+            Ok(ReadAgentMessageResponse {
+                delivered_at: Some("2026-01-01T00:00:01Z".to_string()),
+                ..make_message_response("msg-123")
+            })
+        });
+
+    let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
+    let hydrator = MessageHydrator::new(ai_client);
+    let event = make_run_event(7, "new_message", "child-run", Some("msg-123"));
+
+    assert!(
+        hydrator
+            .hydrate_event_for_recipient(&event, "child-run")
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]

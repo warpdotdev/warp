@@ -662,7 +662,8 @@ impl BackingView for TerminalView {
             if !is_ambient_agent {
                 // Disable the item (rather than silently no-op) when the Manager does not yet
                 // have a session id (e.g. during ViewPending while the session is still setting up).
-                let has_session_link = Manager::as_ref(ctx).has_session_link(&self.view_id);
+                let has_session_link =
+                    Manager::as_ref(ctx).has_session_link(&self.view_id, shared_session_status);
                 items.push(
                     MenuItemFields::new("Copy link")
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })

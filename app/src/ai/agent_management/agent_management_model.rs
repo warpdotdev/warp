@@ -145,6 +145,7 @@ impl AgentNotificationsModel {
                 agent,
                 status,
                 session_context,
+                ..
             } => match status {
                 // When the agent resumes its work we can assume that the previous notification is stale.
                 CLIAgentSessionStatus::InProgress => {
@@ -206,7 +207,7 @@ impl AgentNotificationsModel {
                         ctx,
                     );
                 }
-                CLIAgentSessionStatus::Blocked { message } => {
+                CLIAgentSessionStatus::Blocked { message, .. } => {
                     let title = session_context
                         .display_title()
                         .unwrap_or_else(|| format!("{} needs attention", agent.display_name()));
@@ -217,6 +218,26 @@ impl AgentNotificationsModel {
                             .clone()
                             .unwrap_or_else(|| "Waiting for input.".to_owned()),
                         NotificationCategory::Request,
+                        NotificationSourceAgent::CLI {
+                            agent: *agent,
+                            is_ambient: metadata.is_ambient,
+                        },
+                        NotificationOrigin::CLISession(*terminal_view_id),
+                        *terminal_view_id,
+                        vec![],
+                        metadata.branch,
+                        ctx,
+                    );
+                }
+                CLIAgentSessionStatus::Cancelled => {
+                    let title = session_context
+                        .display_title()
+                        .unwrap_or_else(|| format!("{} cancelled", agent.display_name()));
+                    let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
+                    self.add_notification(
+                        title,
+                        "Cancelled by user.".to_owned(),
+                        NotificationCategory::Complete,
                         NotificationSourceAgent::CLI {
                             agent: *agent,
                             is_ambient: metadata.is_ambient,

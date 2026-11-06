@@ -101,8 +101,8 @@ fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
-pub use warp_core::SessionId;
 use warp_errors::report_error;
+pub use warp_terminal::model::session::{SessionId, get_local_hostname};
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -1029,7 +1029,11 @@ impl Session {
 
     pub fn home_dir(&self) -> Option<&str> {
         if cfg!(test) {
-            return warp_util::path::TEST_SESSION_HOME_DIR.as_deref();
+            return self
+                .info
+                .home_dir
+                .as_deref()
+                .or(warp_util::path::TEST_SESSION_HOME_DIR.as_deref());
         }
 
         self.info.home_dir.as_deref()
@@ -1478,7 +1482,7 @@ impl Session {
 
     #[cfg(windows)]
     async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
-        let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
+        let Some(powershell_command) = warp_util::path::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
             ));
@@ -1709,23 +1713,6 @@ impl Display for Session {
     }
 }
 
-/// Returns the hostname for the local machine where Warp is running.
-pub fn get_local_hostname() -> Result<String> {
-    cfg_if::cfg_if! {
-        if #[cfg(not(target_family = "wasm"))] {
-            use gethostname::gethostname;
-
-            gethostname()
-                .into_string()
-                .map_err(|os_string| {
-                    anyhow::anyhow!("Failed to convert local hostname OsString {os_string:?} into String.")
-                })
-        } else {
-            anyhow::bail!("Cannot get machine hostname from wasm")
-        }
-    }
-}
-
 #[cfg(any(test, feature = "test-util"))]
 pub mod testing {
     use super::command_executor::testing::TestCommandExecutor;
@@ -1868,6 +1855,17 @@ pub mod testing {
                 self.shell.version().clone(),
                 Some(shell_options),
                 self.shell.plugins().clone(),
+                self.shell.shell_path().clone(),
+            );
+            self
+        }
+
+        pub fn with_shell_plugins(mut self, shell_plugins: HashSet<String>) -> Self {
+            self.shell = Shell::new(
+                self.shell.shell_type(),
+                self.shell.version().clone(),
+                self.shell.options().clone(),
+                shell_plugins,
                 self.shell.shell_path().clone(),
             );
             self

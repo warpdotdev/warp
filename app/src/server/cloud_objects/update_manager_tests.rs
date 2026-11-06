@@ -4461,7 +4461,7 @@ fn test_create_object_online_success() {
         let last_editor_uid = "34jkaosdfj".to_string();
 
         // Clone for use in the closure
-        let revision_clone = revision.clone();
+        let revision_clone = revision;
         let metadata_ts_clone = metadata_ts;
 
         server_api

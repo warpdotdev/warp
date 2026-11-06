@@ -17,6 +17,30 @@ pub(crate) enum ThirdPartyHarnessTelemetryEvent {
         /// The originating needle from `runtime_error_patterns` that hit.
         pattern: String,
     },
+
+    /// One attempt in the harness exit escalation ladder driven by
+    /// `AgentDriver::run_harness`: the initial `/exit` request, a follow-up
+    /// retry (e.g. dismissing Claude's background-task confirmation), or a
+    /// final force-kill of the harness's process group. Fires on every
+    /// attempt, not just escalations, so the ratio of clean exits to
+    /// escalations is measurable.
+    ExitEscalation {
+        /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
+        harness: String,
+        /// `"exit"`, `"exit_followup"`, or `"force_kill"`.
+        method: &'static str,
+    },
+
+    /// A run the server requested over ACP was driven over a PTY instead because the
+    /// sandbox had no ACP adapter. Fires once per run at harness start, so the share of
+    /// runs that silently lose native streaming and attachments is measurable.
+    TransportFallback {
+        /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
+        harness: String,
+        /// `"no_sidecar"` or `"sidecar_without_adapter"`; see
+        /// [`super::TransportFallbackReason`].
+        reason: &'static str,
+    },
 }
 
 impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
@@ -32,6 +56,14 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
                     "pattern": pattern,
                 }))
             }
+            ThirdPartyHarnessTelemetryEvent::ExitEscalation { harness, method } => Some(json!({
+                "harness": harness,
+                "method": method,
+            })),
+            ThirdPartyHarnessTelemetryEvent::TransportFallback { harness, reason } => Some(json!({
+                "harness": harness,
+                "reason": reason,
+            })),
         }
     }
 
@@ -46,6 +78,8 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
     fn contains_ugc(&self) -> bool {
         match self {
             ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected { .. } => false,
+            ThirdPartyHarnessTelemetryEvent::ExitEscalation { .. } => false,
+            ThirdPartyHarnessTelemetryEvent::TransportFallback { .. } => false,
         }
     }
 
@@ -60,6 +94,12 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
             ThirdPartyHarnessTelemetryEventDiscriminants::RuntimeErrorDetected => {
                 "AmbientAgents.ThirdPartyHarness.RuntimeError.Detected"
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => {
+                "AmbientAgents.ThirdPartyHarness.Exit.Escalation"
+            }
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
+                "AmbientAgents.ThirdPartyHarness.Transport.Fallback"
+            }
         }
     }
 
@@ -69,12 +109,24 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
                 "Runtime output scanner detected a known failure substring in a third-party \
                  harness block."
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => {
+                "One attempt (initial exit, follow-up retry, or force-kill) in the harness \
+                 exit escalation ladder."
+            }
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
+                "A run requested over ACP was driven over a PTY because the sandbox had no \
+                 ACP adapter."
+            }
         }
     }
 
     fn enablement_state(&self) -> EnablementState {
         match self {
             ThirdPartyHarnessTelemetryEventDiscriminants::RuntimeErrorDetected => {
+                EnablementState::Always
+            }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => EnablementState::Always,
+            ThirdPartyHarnessTelemetryEventDiscriminants::TransportFallback => {
                 EnablementState::Always
             }
         }

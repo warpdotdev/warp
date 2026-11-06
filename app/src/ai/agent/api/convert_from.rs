@@ -1,12 +1,14 @@
 //! Conversions from MAA API types to application types.
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::agent::UnknownCitationTypeError;
 use ai::agent::action::ReadSkillRequest;
 use ai::agent::convert::ToolToAIAgentActionError;
 use ai::skills::{
-    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
+    ParsedSkill, SkillPathOrigin, skill_reference_from_api_skill_ref,
+    skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
@@ -21,10 +23,11 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
-    AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
-    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, SubagentCall,
-    SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType,
-    TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+    AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, BaseUserQuery,
+    CloneRepositoryURL, InvokeSkillUserQuery, MessageId, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest, SubagentCall, SubagentType,
+    SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType, TodoOperation,
+    UserQueryMode, WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -87,6 +90,7 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
             api::harness::Variant::OpenCode(_) => "opencode",
             api::harness::Variant::Gemini(_) => "gemini",
             api::harness::Variant::Codex(_) => "codex",
+            api::harness::Variant::Pi(_) => "pi",
         }
         .to_string(),
     )
@@ -113,6 +117,7 @@ fn convert_run_agents(
     skill_path_origin: &SkillPathOrigin,
 ) -> AIAgentActionType {
     let api::RunAgents {
+        metadata,
         summary,
         base_prompt,
         skills,
@@ -122,7 +127,8 @@ fn convert_run_agents(
         execution_mode,
         plan_id,
     } = run_agents;
-    AIAgentActionType::RunAgents(RunAgentsRequest {
+    AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+        metadata,
         summary,
         base_prompt,
         skills: skills
@@ -135,6 +141,7 @@ fn convert_run_agents(
         agent_run_configs: agent_run_configs
             .into_iter()
             .map(|config| RunAgentsAgentRunConfig {
+                metadata: config.metadata,
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
@@ -147,7 +154,7 @@ fn convert_run_agents(
         // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
         // before Accept. The proto does not carry it.
         harness_auth_secret_name: None,
-    })
+    }))
 }
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].
@@ -209,8 +216,8 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
         let citations = self
             .citations
             .iter()
-            .map(|citation| (*citation).clone().try_into())
-            .collect::<Result<Vec<AIAgentCitation>, UnknownCitationTypeError>>()?;
+            .filter_map(|citation| AIAgentCitation::try_from((*citation).clone()).ok())
+            .collect::<Vec<AIAgentCitation>>();
 
         match message {
             api::message::Message::AgentOutput(output) => Ok(MaybeAIAgentOutputMessage::Message(
@@ -591,7 +598,8 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             // Stage 2 plan-card config snapshot: hydrated separately by the
             // plan card's `AIDocumentModel` subscription, not via the
             // exchange/output stream. No client output message representation.
-            | api::message::Message::OrchestrationConfigSnapshot(_) => {
+            | api::message::Message::OrchestrationConfigSnapshot(_)
+            | api::message::Message::RequestMetadata(_) => {
                 Ok(MaybeAIAgentOutputMessage::NoClientRepresentation)
             }
         }
@@ -867,6 +875,7 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                     user_query_mode: convert_user_query_mode(uq.mode.as_ref()),
                     running_command: None,
                     intended_agent: Some(uq.intended_agent()),
+                    base: BaseUserQuery::from_message(uq),
                 });
             }
             api::message::Message::SystemQuery(sq) => {
@@ -894,6 +903,34 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         }
                         _ => {}
                     }
+                }
+            }
+            api::message::Message::InvokeSkill(invoke_skill) => {
+                if let Some(skill) = invoke_skill.skill.clone()
+                    && let Ok(skill) = ParsedSkill::try_from_api_with_origin(
+                        skill,
+                        &SkillPathOrigin::RestoredDisplayOnly,
+                    )
+                {
+                    inputs.push(AIAgentInput::InvokeSkill {
+                        context: Arc::new([]),
+                        skill,
+                        user_query: invoke_skill.user_query.as_ref().map(|query| {
+                            InvokeSkillUserQuery {
+                                query: query.query.clone(),
+                                referenced_attachments: query
+                                    .referenced_attachments
+                                    .iter()
+                                    .filter_map(|(key, attachment)| {
+                                        AIAgentAttachment::try_from(attachment.clone())
+                                            .ok()
+                                            .map(|attachment| (key.clone(), attachment))
+                                    })
+                                    .collect(),
+                                base: BaseUserQuery::from_message(query),
+                            }
+                        }),
+                    });
                 }
             }
             api::message::Message::ToolCallResult(tcr) => {

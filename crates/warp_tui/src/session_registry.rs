@@ -11,8 +11,9 @@ use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
-    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
-    TerminalSurfaceResult, oz_run_url,
+    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, TerminalManagerTrait, TerminalSurfaceResult,
+    UserWorkspaces, oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -438,6 +439,18 @@ impl TuiSessions {
                     .expect("the dispatching parent session must remain registered")
                     .view()
                     .window_id(ctx);
+                let team_context =
+                    UserWorkspaces::as_ref(ctx).team_context_for_window_operation(window_id);
+                if !request.request_team_scope.matches_scope(&team_context) {
+                    orchestration_for_events.update(ctx, |orchestration, ctx| {
+                        orchestration.fail_child_request(
+                            request,
+                            TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR.to_string(),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
                 let (session_id, session_view) = Self::create_local_terminal_session(
                     &sessions,
                     window_id,
@@ -457,6 +470,7 @@ impl TuiSessions {
                             task_id: *task_id,
                             conversation_name: conversation_name.clone(),
                         },
+                        &team_context,
                         ctx,
                     );
                 });
@@ -465,13 +479,33 @@ impl TuiSessions {
                 parent_session_id,
                 request,
                 prepared,
+                team_scope,
             } => {
+                let window_id = sessions
+                    .as_ref(ctx)
+                    .session(*parent_session_id)
+                    .expect("the dispatching parent session must remain registered")
+                    .view()
+                    .window_id(ctx);
+                let team_context =
+                    UserWorkspaces::as_ref(ctx).team_context_for_window_operation(window_id);
+                if !request.request_team_scope.matches_scope(&team_context) {
+                    orchestration_for_events.update(ctx, |orchestration, ctx| {
+                        orchestration.fail_child_request(
+                            request,
+                            TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR.to_string(),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
                 let child = Self::create_remote_child_session(&sessions, *parent_session_id, ctx);
                 orchestration_for_events.update(ctx, |orchestration, ctx| {
                     orchestration.register_remote_child_session(
                         child,
                         (**request).clone(),
                         (**prepared).clone(),
+                        *team_scope,
                         ctx,
                     );
                 });

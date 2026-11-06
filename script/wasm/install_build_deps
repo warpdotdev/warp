@@ -12,6 +12,8 @@ set -e
 # Make sure the wasm Rust toolchain target is available.
 rustup target add wasm32-unknown-unknown
 
+"$PWD"/script/install_cargo_binstall
+
 # Install cargo-managed dependencies required to build for wasm.
 # The wasm-bindgen version installed here must be kept in sync with the version
 # used in the project.

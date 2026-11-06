@@ -6,6 +6,7 @@ use warp::tui_export::{
     empty_env_recommendation_message, environment_snapshot, model_snapshot,
     should_show_auth_secret_picker,
 };
+use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
@@ -91,6 +92,7 @@ impl TuiOrchestrationBlock {
         app: &AppContext,
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
+        let team_context = (self.team_context_resolver)(app);
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let is_remote = state.execution_mode.is_remote();
         let mut entries: Vec<(&str, String)> = vec![(
@@ -127,7 +129,7 @@ impl TuiOrchestrationBlock {
             entries.push((
                 "Environment",
                 Self::label_for_id(
-                    &environment_snapshot(state, app),
+                    &environment_snapshot(state, &team_context, app),
                     &environment_id,
                     "Empty environment",
                 ),
@@ -155,6 +157,7 @@ impl TuiOrchestrationBlock {
 
     /// Renders the acceptance card body.
     fn render_acceptance(&self, app: &AppContext, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        let team_context = (self.team_context_resolver)(app);
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let mut column = TuiFlex::column();
 
@@ -168,6 +171,17 @@ impl TuiOrchestrationBlock {
             .finish(),
         );
         column.add_child(self.render_agent_identity_line(builder));
+        // Multi-level orchestration: the server may grant launched children
+        // the run_agents tool, so tell the approver up front. Same gate as
+        // the GUI card; copy per design review (trailing period, no glyph).
+        if FeatureFlag::MultiLevelOrchestration.is_enabled() {
+            column.add_child(
+                TuiText::new("These agents may start their own child agents.")
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish(),
+            );
+        }
         column.add_child(TuiText::new(" ").finish());
         column.add_child(self.render_metadata_line(app, builder));
 
@@ -177,7 +191,13 @@ impl TuiOrchestrationBlock {
                     .with_style(builder.error_text_style())
                     .finish(),
             );
-        } else if let Some(message) = empty_env_recommendation_message(&state.execution_mode, app) {
+        } else if let Some(message) = empty_env_recommendation_message(
+            &state.execution_mode,
+            environment_snapshot(state, &team_context, app)
+                .rows
+                .iter()
+                .any(|row| !row.id.is_empty()),
+        ) {
             column.add_child(
                 TuiText::new(message)
                     .with_style(builder.attention_glyph_style())

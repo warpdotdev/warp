@@ -35,6 +35,7 @@ use crate::ai::blocklist::agent_view::{
     ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::view_util::format_dollars;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::appearance::Appearance;
 use crate::changelog_model::{self, ChangelogModel};
@@ -54,9 +55,9 @@ use crate::ui_components::icon_with_status::{
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/platform/";
-const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
+const OZ_UPDATES_SECTION_HEADER: &str = "Latest updates";
 
-// The maximum number of Oz updates from the changelog rendered in-line in the 'What's new in Oz section'.
+// The maximum number of Warp Agent updates from the changelog rendered in-line in the 'Latest updates' section.
 const MAX_OZ_UPDATE_COUNT: usize = 4;
 
 const MAX_RECENT_CONVERSATION_COUNT: usize = 3;
@@ -406,7 +407,7 @@ impl View for AgentViewZeroStateBlock {
 
         let header_props = if self.origin.is_cloud_agent() {
             HeaderProps {
-                title: "New Oz cloud agent conversation".into(),
+                title: "New cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
                 icon: IconWithStatusVariant::OzAgent {
                     status: None,
@@ -425,7 +426,7 @@ impl View for AgentViewZeroStateBlock {
             }
 
             HeaderProps {
-                title: "New Oz agent conversation".into(),
+                title: "New Warp Agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
                 icon: IconWithStatusVariant::OzAgent {
                     status: None,
@@ -1224,9 +1225,11 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
     )
 }
 
-/// Renders the ambient credits banner showing free cloud credits.
+/// Renders the ambient credits banner showing free cloud credits, as dollars when `usage_cents`
+/// is given (a plan charged in cents whose grants carry a dollar value).
 pub fn render_ambient_credits_banner<A>(
     credits: i32,
+    usage_cents: Option<f64>,
     close_button_mouse_state: MouseStateHandle,
     dismiss_action: A,
     app: &AppContext,
@@ -1236,7 +1239,7 @@ where
 {
     let appearance = Appearance::as_ref(app);
     render_dismissible_promo_pill(
-        format!("{credits} free cloud agent credits"),
+        ambient_credits_banner_label(credits, usage_cents),
         appearance.theme().terminal_colors().normal.blue.into(),
         None,
         None,
@@ -1244,6 +1247,13 @@ where
         dismiss_action,
         app,
     )
+}
+
+fn ambient_credits_banner_label(credits: i32, usage_cents: Option<f64>) -> String {
+    match usage_cents {
+        Some(cents) => format!("{} free cloud agent usage", format_dollars(cents as f32)),
+        None => format!("{credits} free cloud agent credits"),
+    }
 }
 
 pub fn render_dismissible_promo_pill<A>(

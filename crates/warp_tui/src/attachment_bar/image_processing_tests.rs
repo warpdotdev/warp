@@ -91,6 +91,26 @@ fn classifies_clipboard_image_data_before_text() {
         ClipboardPasteContent::Image(_)
     ));
 }
+#[test]
+fn classifies_unsupported_clipboard_image_data_as_text() {
+    let content = ClipboardContent {
+        plain_text: "image fallback".to_owned(),
+        images: Some(vec![ImageData {
+            data: vec![0x49, 0x49, 0x2A, 0x00],
+            mime_type: "image/tiff".to_owned(),
+            filename: None,
+        }]),
+        ..Default::default()
+    };
+
+    let ClipboardPasteContent::Text(text) =
+        classify_clipboard_content(content, Path::new("/workspace"))
+    else {
+        panic!("unsupported clipboard image data should preserve text");
+    };
+
+    assert_eq!(text, "image fallback");
+}
 
 #[test]
 fn processes_valid_images_in_paste_order() {

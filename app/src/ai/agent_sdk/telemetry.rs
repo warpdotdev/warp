@@ -19,6 +19,8 @@ pub(super) enum CliTelemetryEvent {
     },
     /// Executing `warp agent run-ambient`
     AgentRunAmbient,
+    /// Executing `warp agent run-cloud-standby`
+    AgentRunCloudStandby,
     /// Executing `warp agent profile list`
     AgentProfileList,
     /// Executing `warp agent list`
@@ -45,6 +47,7 @@ pub(super) enum CliTelemetryEvent {
     EnvironmentGet,
     /// Executing `warp environment image list`
     EnvironmentImageList,
+    EnvironmentCheckout,
     /// Executing `warp mcp list`
     MCPList,
     /// Executing `warp model list`
@@ -76,15 +79,25 @@ pub(super) enum CliTelemetryEvent {
     /// Executing `warp run get <id> --conversation`
     RunConversationGet,
     /// Executing `warp run message watch`
-    RunMessageWatch { harness: &'static str },
+    RunMessageWatch {
+        harness: &'static str,
+    },
     /// Executing `warp run message send`
-    RunMessageSend { harness: &'static str },
+    RunMessageSend {
+        harness: &'static str,
+    },
     /// Executing `warp run message list`
-    RunMessageList { harness: &'static str },
+    RunMessageList {
+        harness: &'static str,
+    },
     /// Executing `warp run message read`
-    RunMessageRead { harness: &'static str },
+    RunMessageRead {
+        harness: &'static str,
+    },
     /// Executing `warp run message mark-delivered`
-    RunMessageMarkDelivered { harness: &'static str },
+    RunMessageMarkDelivered {
+        harness: &'static str,
+    },
     /// Executing `warp login`
     Login,
     /// Executing `warp logout`
@@ -142,11 +155,15 @@ pub(super) enum CliTelemetryEvent {
     /// Executing `warp harness-support ping`
     HarnessSupportPing,
     /// Executing `warp harness-support report-artifact`
-    HarnessSupportReportArtifact { artifact_type: &'static str },
+    HarnessSupportReportArtifact {
+        artifact_type: &'static str,
+    },
     /// Executing `warp harness-support notify-user`
     HarnessSupportNotifyUser,
     /// Executing `warp harness-support finish-task`
-    HarnessSupportFinishTask { success: bool },
+    HarnessSupportFinishTask {
+        success: bool,
+    },
     /// Executing `warp harness-support report-shutdown`
     HarnessSupportReportShutdown,
     /// Executing `warp runner list`
@@ -180,6 +197,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 "harness": harness,
             })),
             CliTelemetryEvent::AgentRunAmbient => None,
+            CliTelemetryEvent::AgentRunCloudStandby => None,
             CliTelemetryEvent::AgentProfileList => None,
             CliTelemetryEvent::AgentList => None,
             CliTelemetryEvent::AgentGet => None,
@@ -193,6 +211,7 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::EnvironmentUpdate => None,
             CliTelemetryEvent::EnvironmentGet => None,
             CliTelemetryEvent::EnvironmentImageList => None,
+            CliTelemetryEvent::EnvironmentCheckout => None,
             CliTelemetryEvent::MCPList => None,
             CliTelemetryEvent::ModelList => None,
             CliTelemetryEvent::MemoryStoreList => None,
@@ -280,6 +299,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
         match self {
             CliTelemetryEventDiscriminants::AgentRun => "CLI.Execute.Agent.Run",
             CliTelemetryEventDiscriminants::AgentRunAmbient => "CLI.Execute.Agent.RunAmbient",
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "CLI.Execute.Agent.RunCloudStandby"
+            }
             CliTelemetryEventDiscriminants::AgentProfileList => "CLI.Execute.Agent.Profile.List",
             CliTelemetryEventDiscriminants::AgentList => "CLI.Execute.Agent.List",
             CliTelemetryEventDiscriminants::AgentGet => "CLI.Execute.Agent.Get",
@@ -294,6 +316,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::EnvironmentGet => "CLI.Execute.Environment.Get",
             CliTelemetryEventDiscriminants::EnvironmentImageList => {
                 "CLI.Execute.Environment.Image.List"
+            }
+            CliTelemetryEventDiscriminants::EnvironmentCheckout => {
+                "CLI.Execute.EnvironmentCheckout"
             }
             CliTelemetryEventDiscriminants::MCPList => "CLI.Execute.MCP.List",
             CliTelemetryEventDiscriminants::ModelList => "CLI.Execute.Model.List",
@@ -390,6 +415,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::AgentRunAmbient => {
                 "Ran an ambient agent from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::AgentRunCloudStandby => {
+                "Prepared a pre-warmed cloud sandbox from the Warp CLI"
+            }
             CliTelemetryEventDiscriminants::AgentProfileList => {
                 "Listed agent profiles from the Warp CLI"
             }
@@ -416,6 +444,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::EnvironmentImageList => {
                 "Listed available base images from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::EnvironmentCheckout => {
+                "Prepared structured environment checkouts"
             }
             CliTelemetryEventDiscriminants::MCPList => "Listed MCP servers from the Warp CLI",
             CliTelemetryEventDiscriminants::ModelList => "Listed models from the Warp CLI",

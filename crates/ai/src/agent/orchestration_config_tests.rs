@@ -17,8 +17,23 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
     }
 }
 
+#[test]
+fn pi_cloud_config_survives_proto_round_trip() {
+    let config = make_config("anthropic/claude-opus-4-6", "pi", true);
+    let proto = config.to_proto();
+    assert!(matches!(
+        proto
+            .harness
+            .as_ref()
+            .and_then(|harness| harness.variant.as_ref()),
+        Some(api::harness::Variant::Pi(_))
+    ));
+    assert_eq!(OrchestrationConfig::from_proto(&proto), config);
+}
+
 fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
     RunAgentsRequest {
+        metadata: Default::default(),
         summary: "test".to_string(),
         base_prompt: "prompt".to_string(),
         skills: vec![],
@@ -35,6 +50,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             RunAgentsExecutionMode::Local
         },
         agent_run_configs: vec![RunAgentsAgentRunConfig {
+            metadata: Default::default(),
             name: "a".to_string(),
             prompt: String::new(),
             title: String::new(),

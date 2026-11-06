@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use futures::channel::oneshot;
+use line_ending::LineEnding;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
@@ -18,12 +19,104 @@ fn initialize_deps(app: &mut App) {
     initialize_settings_for_tests(app);
 }
 
+#[test]
+fn test_apply_v4a_final_bytes() {
+    use ai::agent::action::{AIAgentActionType, FileEdit};
+    use ai::diff_validation::{DiffType, ParsedDiff, V4AHunk, fuzzy_match_v4a_diffs};
+    use warp_multi_agent_api::message::tool_call::{ApplyFileDiffs, apply_file_diffs};
+
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../../crates/ai/src/diff_validation/testdata/blank_lines.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let hunk: V4AHunk = serde_json::from_value(fixture["dual"].clone()).unwrap();
+            let call = ApplyFileDiffs {
+                v4a_updates: vec![apply_file_diffs::V4aFileUpdate {
+                    file_path: "fixture.txt".into(),
+                    hunks: vec![apply_file_diffs::v4a_file_update::Hunk {
+                        change_context: hunk.change_context,
+                        pre_context: hunk.pre_context,
+                        old: hunk.old,
+                        new: hunk.new,
+                        post_context: hunk.post_context,
+                        line_data: hunk.line_data.map(|data| {
+                            apply_file_diffs::v4a_file_update::hunk::LineData {
+                                pre_context: data.pre_context,
+                                old: data.old,
+                                new: data.new,
+                                post_context: data.post_context,
+                            }
+                        }),
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let AIAgentActionType::RequestFileEdits { file_edits, .. } = call.into() else {
+                panic!("expected file edits");
+            };
+            let FileEdit::Edit(ParsedDiff::V4AEdit { hunks, .. }) = &file_edits[0] else {
+                panic!("expected V4A edit");
+            };
+            let initial = fixture["initial"].as_str().unwrap();
+            let diff = fuzzy_match_v4a_diffs("fixture.txt", hunks, None, initial);
+            let DiffType::Update { deltas, .. } = diff.diff_type else {
+                panic!("expected update");
+            };
+            let editor = mock_model(&mut app, initial, ContentVersion::new());
+            // LF fixtures must not inherit the platform default for empty buffers.
+            editor.update(&mut app, |editor, ctx| {
+                editor.buffer().update(ctx, |buffer, _| {
+                    buffer.set_line_ending_mode(LineEnding::LF);
+                });
+            });
+            layout_model(&mut app, &editor).await;
+            editor.update(&mut app, |editor, ctx| editor.apply_diffs(deltas, ctx));
+            editor.read(&app, |editor, ctx| {
+                assert_eq!(
+                    editor
+                        .content()
+                        .as_ref(ctx)
+                        .text_with_line_ending()
+                        .as_str(),
+                    fixture
+                        .get("gui_final")
+                        .unwrap_or(&fixture["final"])
+                        .as_str()
+                        .unwrap(),
+                    "{}",
+                    fixture["name"]
+                );
+            });
+        }
+    });
+}
+
 fn mock_model(app: &mut App, text: &str, version: ContentVersion) -> ModelHandle<CodeEditorModel> {
     app.add_model(|ctx| {
         let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(text).with_version(version);
         model.reset_content(state, ctx);
+        model.set_language_with_local_path(Path::new("/test.rs"), ctx);
+        model
+    })
+}
+
+/// Builds a `CodeEditorModel` that shares an existing `Buffer` rather than creating its own.
+/// Used to reproduce configurations where multiple editors point at the same underlying content
+/// (e.g. two views of the same open file), such as via `CodeEditorView::new`'s optional shared
+/// `Buffer` parameter.
+fn mock_model_with_buffer(
+    app: &mut App,
+    buffer: ModelHandle<Buffer>,
+) -> ModelHandle<CodeEditorModel> {
+    app.add_model(|ctx| {
+        let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
+        let mut model = CodeEditorModel::new(styles, None, false, Some(buffer), ctx);
         model.set_language_with_local_path(Path::new("/test.rs"), ctx);
         model
     })
@@ -54,6 +147,44 @@ fn mock_model_with_diff(
 async fn layout_model(app: &mut App, model: &ModelHandle<CodeEditorModel>) {
     app.read(|ctx| model.as_ref(ctx).render_state.as_ref(ctx).layout_complete())
         .await;
+}
+
+#[test]
+fn test_two_editors_sharing_a_buffer_both_lay_out_a_large_content_replace() {
+    // Regression test for APP-4844: `CodeEditorView::new` can pass an existing shared `Buffer`
+    // into `CodeEditorModel::new`, so two editors can point at the same underlying content (for
+    // example, two views of the same open file). Both editors independently subscribe to and
+    // clone the `ContentChanged` event's `EditDelta` emitted by a full content replace, so more
+    // than one clone of `new_lines` can be alive when either editor lays out. This exercises that
+    // configuration end to end: it must not panic, and both editors must lay out the new content
+    // correctly regardless of how many clones of the delta are alive when their layout runs.
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let shared_buffer = app.add_model(|_| Buffer::default());
+        let editor_a = mock_model_with_buffer(&mut app, shared_buffer.clone());
+        let editor_b = mock_model_with_buffer(&mut app, shared_buffer.clone());
+
+        let content = "line one\nline two\nline three\n".repeat(50);
+        shared_buffer.update(&mut app, |buffer, ctx| {
+            buffer.replace_all(content.clone(), ctx);
+        });
+
+        layout_model(&mut app, &editor_a).await;
+        layout_model(&mut app, &editor_b).await;
+
+        for editor in [&editor_a, &editor_b] {
+            editor.read(&app, |editor, ctx| {
+                let text = editor.content.as_ref(ctx).text().as_str().to_string();
+                assert!(
+                    text.contains("line three"),
+                    "expected replaced content, got: {text}"
+                );
+                assert_eq!(text.matches("line one").count(), 50);
+                assert!(editor.render_state.as_ref(ctx).blocks() > 1);
+            });
+        }
+    })
 }
 
 #[test]

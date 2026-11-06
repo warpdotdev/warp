@@ -1,4 +1,5 @@
 use chrono::{TimeZone as _, Utc};
+use warp_cli::scope::TeamSelection;
 
 use super::*;
 
@@ -155,6 +156,7 @@ fn update_request_omits_unset_fields_and_serializes_clears() {
 #[test]
 fn rejects_sort_for_json_output() {
     let args = AgentListArgs {
+        team_selection: TeamSelection { team: None },
         sort_by: Some(AgentSortByArg::Name),
         sort_order: None,
         json_output: JsonOutput { filter: None },
@@ -207,6 +209,7 @@ fn apply_secret_deltas_uses_secret_names() {
 
 fn create_args(name: &str) -> AgentCreateArgs {
     AgentCreateArgs {
+        team_selection: TeamSelection { team: None },
         name: name.to_string(),
         description: None,
         prompt: None,

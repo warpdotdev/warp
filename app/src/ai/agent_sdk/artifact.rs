@@ -153,7 +153,7 @@ async fn download_artifact(
 ) -> Result<DownloadArtifactOutput> {
     let artifact = get_artifact(ai_client, &args.artifact_uid).await?;
     let path = download_destination(&artifact, args.out);
-    download_artifact_bytes(server_api.http_client(), &artifact, &path).await?;
+    download_artifact_bytes(server_api.external_http_client(), &artifact, &path).await?;
     let path = std::path::absolute(&path).unwrap_or(path);
     Ok(DownloadArtifactOutput::new(&artifact, path))
 }

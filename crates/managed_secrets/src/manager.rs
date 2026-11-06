@@ -18,18 +18,66 @@ use crate::envelope::UploadKey;
 use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
 /// Singleton model for working with Warp-managed secrets.
-pub struct ManagedSecretManager {
-    client: Arc<dyn ManagedSecretsClient>,
+pub struct ManagedSecretManager<RequestScope> {
+    client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
     actor_provider: Arc<dyn ActorProvider>,
+}
+
+/// Converts task-scoped GraphQL secret values to managed secrets used by the agent.
+pub fn convert_task_secrets(
+    gql_secrets: HashMap<String, GqlManagedSecretValue>,
+) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
+    let mut secrets = HashMap::new();
+    for (name, gql_value) in gql_secrets {
+        let value = match gql_value {
+            GqlManagedSecretValue::ManagedSecretRawValue(raw) => {
+                ManagedSecretValue::raw_value(raw.value)
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicApiKeyValue(v) => {
+                ManagedSecretValue::anthropic_api_key(v.api_key)
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicBedrockAccessKeyValue(v) => {
+                ManagedSecretValue::anthropic_bedrock_access_key(
+                    v.aws_access_key_id,
+                    v.aws_secret_access_key,
+                    v.aws_session_token,
+                    v.aws_region,
+                )
+            }
+            GqlManagedSecretValue::ManagedSecretAnthropicBedrockApiKeyValue(v) => {
+                ManagedSecretValue::anthropic_bedrock_api_key(
+                    v.aws_bearer_token_bedrock,
+                    v.aws_region,
+                )
+            }
+            GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
+                ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
+            }
+            GqlManagedSecretValue::ManagedSecretLlmProviderApiKeyValue(v) => {
+                ManagedSecretValue::llm_provider_api_key(v.provider_id, v.api_key, v.base_url)
+            }
+            GqlManagedSecretValue::Unknown => {
+                return Err(anyhow::anyhow!(
+                    "Unknown secret value type for secret: {}",
+                    name
+                ));
+            }
+        };
+        secrets.insert(name, value);
+    }
+    Ok(secrets)
 }
 
 pub trait ActorProvider: Send + Sync + 'static {
     fn actor_uid(&self) -> Option<String>;
 }
 
-impl ManagedSecretManager {
+impl<RequestScope> ManagedSecretManager<RequestScope>
+where
+    RequestScope: Send + Sync + 'static,
+{
     pub fn new(
-        client: Arc<dyn ManagedSecretsClient>,
+        client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
         actor_provider: Arc<dyn ActorProvider>,
     ) -> Self {
         crate::envelope::init();
@@ -41,11 +89,12 @@ impl ManagedSecretManager {
 
     pub fn create_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
         value: ManagedSecretValue,
         description: Option<String>,
-    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<RequestScope> {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
@@ -57,7 +106,7 @@ impl ManagedSecretManager {
 
             // We retrieve all upload keys on demand. These should potentially be fetched and stored
             // ahead of time instead.
-            let configs = client.get_managed_secret_configs().await?;
+            let configs = client.get_managed_secret_configs(&request_scope).await?;
 
             let Some(actor) = actor_provider.actor_uid() else {
                 return Err(anyhow::anyhow!("No authenticated user"));
@@ -76,6 +125,7 @@ impl ManagedSecretManager {
 
             let managed_secret = client
                 .create_managed_secret(
+                    &request_scope,
                     owner,
                     name,
                     value.secret_type(),
@@ -89,27 +139,31 @@ impl ManagedSecretManager {
 
     pub fn delete_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
-    ) -> impl Future<Output = anyhow::Result<()>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<()>> + use<RequestScope> {
         let client = self.client.clone();
         async move {
             if !FeatureFlag::WarpManagedSecrets.is_enabled() {
                 return Err(anyhow::anyhow!("This feature is not enabled"));
             }
 
-            client.delete_managed_secret(owner, name).await?;
+            client
+                .delete_managed_secret(&request_scope, owner, name)
+                .await?;
             Ok(())
         }
     }
 
     pub fn update_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
         value: Option<ManagedSecretValue>,
         description: Option<String>,
-    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<RequestScope> {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
@@ -124,7 +178,7 @@ impl ManagedSecretManager {
             let encrypted_value = if let Some(value) = value {
                 // We retrieve all upload keys on demand. These should potentially be fetched and stored
                 // ahead of time instead.
-                let configs = client.get_managed_secret_configs().await?;
+                let configs = client.get_managed_secret_configs(&request_scope).await?;
 
                 let Some(actor) = actor_provider.actor_uid() else {
                     return Err(anyhow::anyhow!("No authenticated user"));
@@ -146,17 +200,34 @@ impl ManagedSecretManager {
             };
 
             let managed_secret = client
-                .update_managed_secret(owner, name, encrypted_value, description)
+                .update_managed_secret(&request_scope, owner, name, encrypted_value, description)
                 .await?;
             Ok(managed_secret)
         }
     }
 
     /// List all managed secrets accessible to the current user.
-    pub fn list_secrets(&self) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
+    pub fn list_secrets(
+        &self,
+        request_scope: Option<RequestScope>,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<RequestScope> {
         let client = self.client.clone();
         async move {
-            let secrets = client.list_secrets().await?;
+            let secrets = client.list_secrets(request_scope.as_ref()).await?;
+            Ok(secrets)
+        }
+    }
+
+    pub fn list_harness_auth_secrets(
+        &self,
+        request_scope: RequestScope,
+        harness: warp_graphql::ai::AgentHarness,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<RequestScope> {
+        let client = self.client.clone();
+        async move {
+            let secrets = client
+                .list_harness_auth_secrets(&request_scope, harness)
+                .await?;
             Ok(secrets)
         }
     }
@@ -167,58 +238,24 @@ impl ManagedSecretManager {
     pub fn get_task_secrets(
         &self,
         task_id: String,
-    ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<RequestScope>
+    {
         // Define and invoke an inner async function to simplify tracing instrumentation.
         #[tracing::instrument(name = "get_task_secrets", skip_all, err, fields(tags.cloud_agent = true))]
-        async fn inner(
-            client: Arc<dyn ManagedSecretsClient>,
+        async fn inner<RequestScope>(
+            client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
             task_id: String,
-        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
+        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>>
+        where
+            RequestScope: Send + Sync + 'static,
+        {
             // We only need the workload token for the duration of the request.
             let workload_token =
                 warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await?;
             let gql_secrets = client
                 .get_task_secrets(task_id, workload_token.token)
                 .await?;
-
-            // Convert GQL ManagedSecretValue to our ManagedSecretValue
-            let mut secrets = HashMap::new();
-            for (name, gql_value) in gql_secrets {
-                let value = match gql_value {
-                    GqlManagedSecretValue::ManagedSecretRawValue(raw) => {
-                        ManagedSecretValue::raw_value(raw.value)
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicApiKeyValue(v) => {
-                        ManagedSecretValue::anthropic_api_key(v.api_key)
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicBedrockAccessKeyValue(v) => {
-                        ManagedSecretValue::anthropic_bedrock_access_key(
-                            v.aws_access_key_id,
-                            v.aws_secret_access_key,
-                            // aws_session_token is now optional on the server.
-                            v.aws_session_token,
-                            v.aws_region,
-                        )
-                    }
-                    GqlManagedSecretValue::ManagedSecretAnthropicBedrockApiKeyValue(v) => {
-                        ManagedSecretValue::anthropic_bedrock_api_key(
-                            v.aws_bearer_token_bedrock,
-                            v.aws_region,
-                        )
-                    }
-                    GqlManagedSecretValue::ManagedSecretOpenAiApiKeyValue(v) => {
-                        ManagedSecretValue::openai_api_key(v.api_key, v.base_url)
-                    }
-                    GqlManagedSecretValue::Unknown => {
-                        return Err(anyhow::anyhow!(
-                            "Unknown secret value type for secret: {}",
-                            name
-                        ));
-                    }
-                };
-                secrets.insert(name, value);
-            }
-            Ok(secrets)
+            convert_task_secrets(gql_secrets)
         }
 
         inner(self.client.clone(), task_id)
@@ -227,10 +264,15 @@ impl ManagedSecretManager {
     /// Issue a short-lived OIDC identity token for the current task.
     pub fn issue_task_identity_token(
         &self,
+        request_scope: Option<RequestScope>,
         options: IdentityTokenOptions,
-    ) -> impl Future<Output = anyhow::Result<TaskIdentityToken>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<TaskIdentityToken>> + use<RequestScope> {
         let client = self.client.clone();
-        async move { client.issue_task_identity_token(options).await }
+        async move {
+            client
+                .issue_task_identity_token(request_scope.as_ref(), options)
+                .await
+        }
     }
 
     /// Issue a short-lived OIDC identity token in the JSON shape expected by
@@ -242,7 +284,7 @@ impl ManagedSecretManager {
         requested_duration: Duration,
     ) -> impl Future<
         Output = Result<GcpWorkloadIdentityFederationToken, GcpWorkloadIdentityFederationError>,
-    > + use<> {
+    > + use<RequestScope> {
         let client = self.client.clone();
         async move {
             match token_type.as_str() {
@@ -255,11 +297,14 @@ impl ManagedSecretManager {
             }
 
             match client
-                .issue_task_identity_token(IdentityTokenOptions {
-                    audience,
-                    requested_duration,
-                    subject_template: vec1!["principal".to_owned()],
-                })
+                .issue_task_identity_token(
+                    None,
+                    IdentityTokenOptions {
+                        audience,
+                        requested_duration,
+                        subject_template: vec1!["principal".to_owned()],
+                    },
+                )
                 .await
             {
                 Ok(token) => Ok(GcpWorkloadIdentityFederationToken::new(token, token_type)),
@@ -289,8 +334,14 @@ fn owner_public_key<'a>(
     }
 }
 
-impl Entity for ManagedSecretManager {
+impl<RequestScope> Entity for ManagedSecretManager<RequestScope>
+where
+    RequestScope: Send + Sync + 'static,
+{
     type Event = ();
 }
 
-impl SingletonEntity for ManagedSecretManager {}
+impl<RequestScope> SingletonEntity for ManagedSecretManager<RequestScope> where
+    RequestScope: Send + Sync + 'static
+{
+}

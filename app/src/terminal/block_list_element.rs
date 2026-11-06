@@ -38,14 +38,15 @@ use warpui::{
 };
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
-use super::blockgrid_renderer::GridRenderParams;
+use super::blockgrid_renderer::{BlockGridRenderer, GridRenderParams};
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
 use super::model::SecretHandle;
+use super::model::ansi::CursorShape;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
-use super::model::grid::grid_handler::{Link, TermMode};
+use super::model::grid::grid_handler::Link;
 use super::model::image_map::StoredImageMetadata;
 use super::model::mouse::{MouseAction, MouseButton, MouseState};
 use super::model::session::SessionId;
@@ -86,7 +87,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{SizeInfo, grid_renderer};
+use crate::terminal::{SizeInfo, grid_renderer, should_right_click_paste};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -1409,63 +1410,104 @@ impl BlockListElement {
         )
     }
 
-    fn right_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
-        if self.is_mouse_position_within_bounds(position) {
-            let position_in_terminal_view = self.position_in_terminal_view(position);
+    fn right_mouse_down(
+        &self,
+        position: Vector2F,
+        modifiers: &ModifiersState,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) -> bool {
+        if !self.is_mouse_position_within_bounds(position) {
+            return false;
+        }
 
-            if self.is_mouse_position_within_selection(position) {
-                ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
-                    BlockListMenuSource::RegularTextRightClick {
-                        position_in_terminal_view,
-                    },
+        let shift = modifiers.shift;
+        let position_in_terminal_view = self.position_in_terminal_view(position);
+
+        let blocklist_point = self.coord_to_point(
+            SnackbarPoint::within_snackbar(position),
+            ClampingMode::ClampToGridIfWithinBlock,
+        );
+
+        let (block_index, mouse_owned_by_running_app) = {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let block_index =
+                blocklist_point.and_then(|point| viewport.block_index_from_point(point));
+            let on_long_running_block = block_index
+                .and_then(|index| model.block_list().block_at(index))
+                .is_some_and(|block| block.is_active_and_long_running());
+            let mouse_owned_by_running_app =
+                on_long_running_block && !should_intercept_mouse(&model, shift, app);
+            (block_index, mouse_owned_by_running_app)
+        };
+
+        // When a long-running app underneath owns the mouse (mouse reporting enabled), forward
+        // the raw right-click to it instead of pasting or showing our own context menu, the same
+        // way left mouse down/up/drag/scroll do for this block under the same condition.
+        if mouse_owned_by_running_app {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let within_block = blocklist_point.and_then(|point| {
+                viewport
+                    .block_list_point_to_grid_point(point)
+                    .map(|within_block| point_from_first_visible_row(&viewport, within_block))
+            });
+            drop(model);
+
+            if let Some(grid_point) = within_block {
+                let mouse_state =
+                    MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers);
+                ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                    mouse_state.set_point(grid_point),
                 ));
                 return true;
             }
+        }
 
-            let blocklist_point = self.coord_to_point(
-                SnackbarPoint::within_snackbar(position),
-                ClampingMode::ClampToGridIfWithinBlock,
-            );
+        // A bare right-click pastes when the setting is enabled.
+        if should_right_click_paste(shift, app) {
+            ctx.dispatch_typed_action(TerminalAction::Paste);
+            return true;
+        }
 
-            let block_index = blocklist_point.and_then(|point| {
-                let model = self.model.lock();
-                let viewport = self.viewport_state_after_layout(model.block_list());
-                viewport.block_index_from_point(point)
-            });
-
-            let source = match block_index {
-                Some(index) => BlockListMenuSource::RegularBlockRightClick {
-                    block_index: index,
+        if self.is_mouse_position_within_selection(position) {
+            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
+                BlockListMenuSource::RegularTextRightClick {
                     position_in_terminal_view,
                 },
-                None => {
-                    let rich_content_view_id = blocklist_point.and_then(|point| {
-                        let model = self.model.lock();
-                        let viewport = self.viewport_state_after_layout(model.block_list());
-                        match viewport.block_height_item_from_point(point) {
-                            Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
-                            _ => None,
-                        }
-                    });
-                    match rich_content_view_id {
-                        Some(rich_content_view_id) => {
-                            BlockListMenuSource::RichContentBlockRightClick {
-                                rich_content_view_id,
-                                position_in_terminal_view,
-                            }
-                        }
-                        None => BlockListMenuSource::OutsideBlockRightClick {
-                            position_in_terminal_view,
-                        },
-                    }
-                }
-            };
-
-            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
-            true
-        } else {
-            false
+            ));
+            return true;
         }
+
+        let source = match block_index {
+            Some(index) => BlockListMenuSource::RegularBlockRightClick {
+                block_index: index,
+                position_in_terminal_view,
+            },
+            None => {
+                let rich_content_view_id = blocklist_point.and_then(|point| {
+                    let model = self.model.lock();
+                    let viewport = self.viewport_state_after_layout(model.block_list());
+                    match viewport.block_height_item_from_point(point) {
+                        Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
+                        _ => None,
+                    }
+                });
+                match rich_content_view_id {
+                    Some(rich_content_view_id) => BlockListMenuSource::RichContentBlockRightClick {
+                        rich_content_view_id,
+                        position_in_terminal_view,
+                    },
+                    None => BlockListMenuSource::OutsideBlockRightClick {
+                        position_in_terminal_view,
+                    },
+                }
+            }
+        };
+
+        ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
+        true
     }
 
     fn middle_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
@@ -2496,7 +2538,6 @@ impl BlockListElement {
             Self::draw_border_between_blocks(border_origin, block_grid_params, ctx);
         }
 
-        let cursor_visible = block.is_mode_set(TermMode::SHOW_CURSOR);
         let command_origin = if !block.should_hide_command_grid() {
             let prompt_height_offset = cell_size_height * block.padding_top().as_f64() as f32;
 
@@ -2582,7 +2623,7 @@ impl BlockListElement {
                 command_focused_range.as_ref(),
                 command_grid_properties,
                 block_grid_params,
-                cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
+                command_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
@@ -2591,11 +2632,7 @@ impl BlockListElement {
             // Only render the cursor in the command grid if the command grid is active and if it's
             // long running. This is to avoid jitter where a cursor just flickers while the pty is
             // initializing.
-            if block.is_active_and_long_running()
-                && block.is_command_grid_active()
-                // Check if the "hide cursor" escape sequence is present.
-                && block.is_mode_set(TermMode::SHOW_CURSOR)
-            {
+            if block.is_command_cursor_visible() {
                 block.prompt_and_command_grid().draw_cursor(
                     command_origin,
                     &block_grid_params.grid_render_params,
@@ -2685,15 +2722,13 @@ impl BlockListElement {
                 output_focused_range.as_ref(),
                 output_grid_properties,
                 block_grid_params,
-                cursor_visible.then(|| block.output_grid().cursor_style().shape),
+                output_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
             );
 
-            if block.is_active_and_long_running()
-            // Check if the "hide cursor" escape sequence is present.
-            && block.is_mode_set(TermMode::SHOW_CURSOR)
+            if block.is_output_cursor_visible()
             // Don't draw the Warp cursor when rich input is hiding
             // the CLI agent's cursor cell — agents like OpenCode and Codex
             // rely on Warp's cursor, so we suppress it here too.
@@ -3075,6 +3110,18 @@ impl BlockListElement {
     ) -> bool {
         false
     }
+}
+
+fn command_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_command_cursor_visible()
+        .then(|| block.prompt_and_command_grid().cursor_style().shape)
+}
+
+fn output_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_output_cursor_visible()
+        .then(|| block.output_grid().cursor_style().shape)
 }
 
 /// With a `WithinBlock<IndexPoint>`, the point will count rows with 0 starting with the beginning
@@ -4614,9 +4661,23 @@ impl Element for BlockListElement {
                 ctx,
                 app,
             ),
-            Event::RightMouseDown { position, .. } if !handled => {
-                self.right_mouse_down(*position, ctx)
-            }
+            Event::RightMouseDown {
+                position,
+                cmd,
+                shift,
+                ..
+            } if !handled => self.right_mouse_down(
+                *position,
+                &ModifiersState {
+                    alt: false,
+                    cmd: *cmd,
+                    shift: *shift,
+                    ctrl: false,
+                    func: false,
+                },
+                ctx,
+                app,
+            ),
             Event::LeftMouseUp {
                 position,
                 modifiers,

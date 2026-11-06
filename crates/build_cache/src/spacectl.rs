@@ -11,6 +11,7 @@
 //!    checks whether each mode supported by `spacectl` applies to the current directory
 //! 2. To set up caches, by running `spacectl cache mount --dry_run=false --mode=...`. This
 //!    configures *only* the requested cache modes
+use std::borrow::Cow;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,10 @@ pub struct MountOutput {
 pub struct Mount {
     #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub cache_path: PathBuf,
+    #[serde(default)]
+    pub mount_path: PathBuf,
     pub cache_hit: bool,
 }
 
@@ -57,6 +62,12 @@ pub struct Mount {
 pub struct DiskUsage {
     pub total: String,
     pub used: String,
+}
+pub(super) struct MountContext {
+    pub relative_cache_dir: PathBuf,
+    pub cache_root: PathBuf,
+    pub cwd: PathBuf,
+    pub stable_child_id: String,
 }
 
 /// Construct a `spacectl` command for detecting all cache modes that apply to
@@ -101,29 +112,33 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         repo_key = scope.repo_key().map(RepoCacheKey::as_str).unwrap_or(""),
         modes = tracing::field::Empty,
         dry_run,
-        relative_cache_dir = %relative_cache_dir.display(),
+        relative_cache_dir = %context.relative_cache_dir.display(),
+        stable_child_id = context.stable_child_id.as_str(),
         duration_ms = tracing::field::Empty,
         disk_usage_total = tracing::field::Empty,
         disk_usage_used = tracing::field::Empty,
+        mount_error = tracing::field::Empty,
+        // These fields are interpreted by `tracing-opentelemetry`:
+        // https://docs.rs/tracing-opentelemetry/0.33.0/tracing_opentelemetry/#special-fields
+        otel.status_code = tracing::field::Empty,
+        otel.status_description = tracing::field::Empty,
     )
 )]
 pub(super) async fn run_spacectl_mount<F, Fut>(
     scope: CacheScope,
     modes: Vec<String>,
     dry_run: bool,
-    relative_cache_dir: PathBuf,
-    cache_root: &Path,
-    cwd: &Path,
-    run_command: &mut F,
+    context: MountContext,
+    run_command: &F,
 ) -> CachePreparationReport
 where
-    F: FnMut(Command) -> Fut,
+    F: Fn(Command) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
 {
     let command = if dry_run {
-        detect_command(cache_root, cwd)
+        detect_command(&context.cache_root, &context.cwd)
     } else {
-        mount_command(cache_root, cwd, &modes)
+        mount_command(&context.cache_root, &context.cwd, &modes)
     };
     tracing::info!(?command, "Executing spacectl");
     let started = Instant::now();
@@ -161,7 +176,7 @@ where
             CachePreparationReport {
                 scope,
                 modes: selected_modes,
-                relative_cache_dir,
+                relative_cache_dir: context.relative_cache_dir,
                 response: Some(response),
                 error: None,
                 duration,
@@ -169,9 +184,31 @@ where
             }
         }
         Err(err) => {
-            tracing::error!(error = ?err);
-            failed_invocation(scope, modes, relative_cache_dir, err, duration)
+            let diagnostic = mount_error_diagnostic(&err);
+            let diagnostic: &str = diagnostic.as_ref();
+            span.record("mount_error", diagnostic);
+            span.record("otel.status_code", "ERROR");
+            span.record("otel.status_description", err.to_string());
+            tracing::error!(error = ?err, "spacectl cache mount failed");
+            failed_invocation(scope, modes, context.relative_cache_dir, err, duration)
         }
+    }
+}
+fn mount_error_diagnostic(error: &CacheSetupError) -> Cow<'_, str> {
+    match error {
+        CacheSetupError::NonzeroExit { stderr, .. } if !stderr.is_empty() => Cow::Borrowed(stderr),
+        CacheSetupError::NonzeroExit { exit_code, .. } => match exit_code {
+            Some(exit_code) => Cow::Owned(format!(
+                "spacectl exited unsuccessfully with exit code {exit_code}"
+            )),
+            None => Cow::Borrowed("spacectl exited unsuccessfully without an exit code"),
+        },
+        CacheSetupError::RootCreationFailed
+        | CacheSetupError::SpawnFailed
+        | CacheSetupError::JsonParseFailed
+        | CacheSetupError::Timeout
+        | CacheSetupError::EnvExportFailed
+        | CacheSetupError::PlanInvariantFailed => Cow::Owned(error.to_string()),
     }
 }
 

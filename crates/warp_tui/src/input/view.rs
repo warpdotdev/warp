@@ -27,6 +27,8 @@ use string_offset::{ByteOffset, CharOffset};
 use vim::vim::{MotionType, VimMode, VimModel, VimSubscriber as _};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
+#[cfg(feature = "voice_input")]
+use warp::tui_export::UserWorkspaces;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction, TuiUpArrowHistoryItemKind,
@@ -150,6 +152,8 @@ pub fn init(app: &mut AppContext) {
 /// Events emitted by [`TuiInputView`].
 #[derive(Debug, Clone)]
 pub enum TuiInputViewEvent {
+    /// Pointer interaction requested focus for the session's current input owner.
+    FocusRequested,
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
     /// The terminal delivered one complete bracketed-paste payload.
@@ -163,6 +167,7 @@ pub enum TuiInputViewEvent {
     AcceptedConversation(warp::tui_export::AgentConversationEntryId),
     /// The user selected a model menu item.
     AcceptedModel(LLMId),
+    AcceptedTeam(warp::tui_export::ServerId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
     /// The user advanced the explicit MCP installation flow.
@@ -338,7 +343,12 @@ impl TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         #[cfg(feature = "voice_input")]
-        let voice_input = ctx.add_model(|ctx| TuiVoiceInputModel::new(input_mode.clone(), ctx));
+        let voice_input = {
+            let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+            ctx.add_model(|ctx| {
+                TuiVoiceInputModel::new(input_mode.clone(), team_context_resolver, ctx)
+            })
+        };
         let vim_model = ctx.add_model(|_| VimModel::new());
         // Subscribe to vim events: VimSubscriber blanket impl (TuiInputView: VimHandler)
         // dispatches each VimEvent to the appropriate VimHandler method.
@@ -791,6 +801,17 @@ impl TypedActionView for TuiInputView {
     type Action = TuiInputAction;
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            action,
+            TuiInputAction::Editor(
+                TuiEditorAction::SelectionStartAt { .. }
+                    | TuiEditorAction::SelectionExtendTo { .. }
+                    | TuiEditorAction::SelectWordAt { .. }
+                    | TuiEditorAction::SelectLineAt { .. }
+            ) | TuiInputAction::SetCursor { .. }
+        ) {
+            ctx.emit(TuiInputViewEvent::FocusRequested);
+        }
         if self.handle_inline_menu_action(action, ctx) {
             return;
         }
@@ -1352,6 +1373,9 @@ impl TuiInputView {
             }
             TuiInlineMenuAccepted::Model(id) => {
                 ctx.emit(TuiInputViewEvent::AcceptedModel(id));
+            }
+            TuiInlineMenuAccepted::Team(team_uid) => {
+                ctx.emit(TuiInputViewEvent::AcceptedTeam(team_uid));
             }
             TuiInlineMenuAccepted::Mcp(action) => {
                 ctx.emit(TuiInputViewEvent::AcceptedMcp(action));

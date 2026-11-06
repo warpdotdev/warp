@@ -1,15 +1,21 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use mockall::predicate::eq;
-use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, ConversationDriver, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputStatus,
+    FinishedAIAgentOutput, MessageId, ReceivedMessageDisplay, Shared,
+};
 use crate::ai::agent_events::{
     AgentEventConsumerControlFlow, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
     agent_event_backoff, agent_event_failures_exceeded_threshold,
 };
+use crate::ai::llms::LLMId;
 use crate::persistence::ModelEvent;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::MockAIClient;
@@ -46,6 +52,350 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
+fn restored_observer_registration_hydrates_local_cursor() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0xc8);
+        let mut parent = AIConversation::new(true, false);
+        parent.set_task_id(parent_task_id);
+        parent.set_last_event_sequence(27);
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                parent_id,
+                warpui::EntityId::new(),
+                ctx,
+            );
+        });
+
+        streamer.read(&app, |streamer, _| {
+            let entry = streamer
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("Observer must re-register");
+            assert_eq!(entry.event_cursor, 27);
+            assert!(
+                entry.tracker.is_none(),
+                "tracker is initialized lazily by the family drain"
+            );
+        });
+    });
+}
+
+#[test]
+fn observer_placeholder_completion_creates_one_named_history_mapping() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0xd1);
+        let child_task_id = make_parent_task_id_for_test(0xd2);
+        let parent = {
+            let mut parent = AIConversation::new(true, false);
+            parent.set_task_id(parent_task_id);
+            parent
+        };
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+            history.set_active_conversation_id(parent_id, terminal_view_id, ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let mut child_task = make_ambient_task_with_task_id(child_task_id, Some(9));
+        child_task.parent_run_id = Some(parent_task_id.to_string());
+        child_task.title = "Research observer mapping".to_string();
+
+        streamer.update(&mut app, |streamer, ctx| {
+            let mut tracker = OrchestrationChildTracker::new(parent_task_id);
+            tracker.observe_child(
+                &child_task_id.to_string(),
+                ChildSignal::Started,
+                &HashSet::new(),
+                ctx,
+            );
+            streamer
+                .viewer_mode_orchestrators
+                .entry(parent_task_id)
+                .or_default()
+                .tracker = Some(tracker);
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Observer,
+                Ok(child_task.clone()),
+                ctx,
+            );
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Observer,
+                Ok(child_task.clone()),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            let child_id = history
+                .conversation_id_for_agent_id(&child_task_id.to_string())
+                .expect("Observer child run id must resolve for attribution");
+            assert_eq!(history.child_conversation_ids_of(&parent_id), &[child_id]);
+            let child = history.conversation(&child_id).unwrap();
+            assert_eq!(child.agent_name(), Some("Research observer mapping"));
+            assert_eq!(child.parent_conversation_id(), Some(parent_id));
+            assert!(child.is_remote_child());
+            assert!(!child.is_viewing_shared_session());
+        });
+    });
+}
+
+#[test]
+fn primary_placeholder_still_created_for_out_of_band_local_children() {
+    // A LOCAL child observed on this process's own (Primary) family stream
+    // was not necessarily launched by this process: it may have been
+    // created out-of-band (CLI/API) and executed on a different device,
+    // with no in-band conversation here.
+    use crate::ai::ambient_agents::ExecutionLocation;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0x38);
+        let child_task_id = make_parent_task_id_for_test(0x39);
+        let mut parent = AIConversation::new(false, false);
+        parent.set_task_id(parent_task_id);
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let mut child_task = make_ambient_task_with_task_id(child_task_id, Some(1));
+        child_task.execution_location = Some(ExecutionLocation::Local);
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Primary,
+                Ok(child_task),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            let child_id = history
+                .conversation_id_for_agent_id(&child_task_id.to_string())
+                .expect("an out-of-band LOCAL child must still get a placeholder on Primary");
+            assert!(history.conversation(&child_id).unwrap().is_remote_child());
+        });
+    });
+}
+
+#[test]
+fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
+    use crate::ai::blocklist::{StartAgentRequestId, finish_local_oz_child_conversation};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0x30);
+        let child_task_id = make_parent_task_id_for_test(0x31);
+        let mut parent = AIConversation::new(false, false);
+        parent.set_task_id(parent_task_id);
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+        });
+
+        let local_child_id = history_model.update(&mut app, |history, ctx| {
+            history.start_new_child_conversation(
+                terminal_view_id,
+                "local-child".to_string(),
+                parent_id,
+                Some(Harness::Oz),
+                false,
+                ctx,
+            )
+        });
+        // Drives the same helper `launch_local_no_harness_child` calls in
+        // production, so a regression there fails this test.
+        app.update(|ctx| {
+            finish_local_oz_child_conversation(
+                local_child_id,
+                terminal_view_id,
+                child_task_id,
+                StartAgentRequestId::from_raw_for_test(0),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.conversation_id_for_agent_id(&child_task_id.to_string()),
+                Some(local_child_id),
+                "run id must resolve immediately after the local launch"
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let child_task = make_ambient_task_with_task_id(child_task_id, Some(1));
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Primary,
+                Ok(child_task),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.child_conversation_ids_of(&parent_id),
+                &[local_child_id],
+                "a late child_agent_started must not add a second child conversation"
+            );
+            assert!(
+                !history
+                    .conversation(&local_child_id)
+                    .unwrap()
+                    .is_remote_child()
+            );
+        });
+    });
+}
+
+#[test]
+fn sse_placeholder_then_local_launch_converges_on_one_conversation() {
+    // The reverse race: the SSE `child_agent_started` placeholder fetch
+    // resolves before the local Oz launch creates its own conversation.
+    use crate::ai::ambient_agents::ExecutionLocation;
+    use crate::ai::blocklist::{StartAgentRequestId, finish_local_oz_child_conversation};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0x32);
+        let child_task_id = make_parent_task_id_for_test(0x33);
+        let mut parent = AIConversation::new(false, false);
+        parent.set_task_id(parent_task_id);
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let mut child_task = make_ambient_task_with_task_id(child_task_id, Some(1));
+        child_task.execution_location = Some(ExecutionLocation::Local);
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Primary,
+                Ok(child_task),
+                ctx,
+            );
+        });
+
+        let placeholder_id = history_model.read(&app, |history, _| {
+            history
+                .conversation_id_for_agent_id(&child_task_id.to_string())
+                .expect("the SSE placeholder must materialize before the local launch completes")
+        });
+
+        // The local Oz launch completes afterwards: its own conversation is
+        // created first, then `finish_local_oz_child_conversation` claims
+        // the run id, which discards the stale placeholder through the
+        // centralized guard in `assign_run_id_for_conversation`.
+        let local_child_id = history_model.update(&mut app, |history, ctx| {
+            history.start_new_child_conversation(
+                terminal_view_id,
+                "local-child".to_string(),
+                parent_id,
+                Some(Harness::Oz),
+                false,
+                ctx,
+            )
+        });
+        app.update(|ctx| {
+            finish_local_oz_child_conversation(
+                local_child_id,
+                terminal_view_id,
+                child_task_id,
+                StartAgentRequestId::from_raw_for_test(1),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.child_conversation_ids_of(&parent_id),
+                &[local_child_id],
+                "exactly one child conversation must remain after the local launch reclaims the run id"
+            );
+            assert!(history.conversation(&placeholder_id).is_none());
+        });
+    });
+}
+
+#[test]
 fn sse_backoff_zero_failures_uses_first_step() {
     // Defensive: 0 failures should still return a valid backoff.
     assert_eq!(
@@ -76,6 +426,18 @@ fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> Agent
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 1,
+    }
+}
+
+fn make_seq_event(
+    event_type: &str,
+    run_id: &str,
+    ref_id: Option<&str>,
+    sequence: i64,
+) -> AgentRunEvent {
+    AgentRunEvent {
+        sequence,
+        ..make_run_event(event_type, run_id, ref_id)
     }
 }
 
@@ -162,6 +524,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         autoexecute_override: None,
         last_event_sequence: Some(42),
         pinned: false,
+        use_warp_credits_instead_of_chatgpt: false,
     };
     let conversation =
         AIConversation::new_restored(AIConversationId::new(), vec![task], Some(data))
@@ -207,6 +570,8 @@ fn make_ambient_task_with_event_seq(
         is_sandbox_running: false,
         last_event_sequence,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -238,8 +603,10 @@ fn make_server_metadata_with_harness(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: None,
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -261,6 +628,39 @@ fn make_server_metadata_with_harness(
         server_conversation_token: ServerConversationToken::new("server-token".to_string()),
         artifacts: vec![],
     }
+}
+
+#[test]
+fn repeated_harness_fetch_attempts_share_one_in_flight_request() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let run_id = "550e8400-e29b-41d4-a716-446655440620";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(run_id.to_string());
+        let conversation_id = conversation.id();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(warpui::EntityId::new(), vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_get_ambient_agent_task()
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("fetch observed")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.spawn_task_harness_fetch_if_needed(conversation_id, ctx);
+            streamer.spawn_task_harness_fetch_if_needed(conversation_id, ctx);
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+    });
 }
 
 #[test]
@@ -1220,7 +1620,7 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 // viewer-mode ancestor SSE path: `conversation_status_from_lifecycle_event_type`,
 // `is_known_child`, the `register_viewer_mode_consumer` /
 // `unregister_viewer_mode_consumer` refcount, and the
-// `is_remote_run_view` flag-gated relaxation. These tests drive the
+// `is_remote_run_view` eligibility rule. These tests drive the
 // bookkeeping directly via pure-function calls or short App fixtures.
 
 #[test]
@@ -1337,6 +1737,43 @@ fn make_parent_task_id_for_test(byte: u8) -> AmbientAgentTaskId {
     let uuid = uuid::Uuid::from_bytes(bytes);
     let s = uuid.to_string();
     s.parse().expect("valid task id")
+}
+#[test]
+fn repeated_viewer_registration_starts_one_ancestor_seed_fetch() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut mock = MockAIClient::new();
+        mock.expect_list_ambient_agent_tasks()
+            .times(1)
+            .returning(|_, _, _| Err(anyhow::anyhow!("fetch observed")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let parent_task_id = make_parent_task_id_for_test(0xa0);
+        let placeholder_id = AIConversation::new(true, false).id();
+        let consumer_id = warpui::EntityId::new();
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                placeholder_id,
+                consumer_id,
+                ctx,
+            );
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                placeholder_id,
+                consumer_id,
+                ctx,
+            );
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+    });
 }
 
 #[test]
@@ -1890,6 +2327,45 @@ fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
 }
 
 #[test]
+fn repeated_ancestor_seed_results_do_not_rebroadcast_known_children() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let parent_task_id = make_parent_task_id_for_test(0xd4);
+        let child_task_id = make_parent_task_id_for_test(0xd5);
+        streamer.update(&mut app, |streamer, _| {
+            streamer
+                .viewer_mode_orchestrators
+                .entry(parent_task_id)
+                .or_default();
+        });
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
+                ctx,
+            );
+            streamer.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured_spawns.lock().as_slice(),
+            &[(parent_task_id, child_task_id.to_string())]
+        );
+    });
+}
+#[test]
 fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
     // Regression for the late-arriving-consumer arm of the same bug: the
     // shared-session viewer model often registers its viewer-mode consumer
@@ -2264,7 +2740,7 @@ fn restored_child_without_children_opens_self_run_id_stream() {
     });
 }
 
-// ---- wait_for_events parent registration (QUALITY-919) -------------------
+// ---- wait_for_events parent registration --------------------------------
 
 /// Builds a streamer wired to a mock `AIClient` whose `get_ambient_agent_task`
 /// must never be called. Used by the synchronous short-circuit tests to assert
@@ -2285,7 +2761,7 @@ fn streamer_with_no_fetch_expected(
 fn wait_registration_root_with_children_opens_ancestor_include_self_stream() {
     // The completion of the wait-time parent fetch installs server-recorded
     // children, advances the cursor, and opens the parent-family ancestor
-    // stream — exactly the not-parent -> parent transition QUALITY-919 adds.
+    // stream, completing the not-parent -> parent transition.
     App::test((), |mut app| async move {
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -2450,33 +2926,375 @@ fn wait_registration_fetch_error_does_not_register() {
     });
 }
 
+// ---- classify_family_event ----------------------------------------------
+
 #[test]
-fn register_parent_on_wait_flag_off_is_noop() {
-    // With the gating flag off, `register_parent_on_wait` does not fetch.
+fn classify_child_agent_started_on_self_is_child_started() {
+    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", Some("child-run"));
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ChildStarted {
+            child_run_id: "child-run".to_string(),
+        }
+    );
+}
+
+#[test]
+fn classify_child_agent_started_without_ref_id_is_opaque() {
+    // A discovery event with no child run id carries nothing actionable.
+    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", None);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::Opaque
+    );
+}
+
+#[test]
+fn classify_run_session_linked_on_child_is_session_linked() {
+    let event = make_run_event(EVENT_RUN_SESSION_LINKED, "child-run", Some("session-uuid"));
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ChildSessionLinked {
+            child_run_id: "child-run".to_string(),
+            session_uuid: "session-uuid".to_string(),
+        }
+    );
+}
+
+#[test]
+fn classify_run_in_progress_on_child_is_child_lifecycle() {
+    let event = make_run_event("run_in_progress", "child-run", None);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ChildLifecycle {
+            child_run_id: "child-run".to_string(),
+            kind: api::LifecycleEventType::InProgress,
+        }
+    );
+}
+
+#[test]
+fn classify_new_message_on_self_is_parent_self() {
+    let event = make_run_event("new_message", "parent-run", Some("msg-1"));
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ParentSelf(event.clone())
+    );
+}
+
+#[test]
+fn classify_lifecycle_on_self_is_parent_self() {
+    // The parent's own lifecycle events belong to the parent (ParentSelf),
+    // not the child tracker.
+    let event = make_run_event("run_in_progress", "parent-run", None);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ParentSelf(event.clone())
+    );
+}
+
+#[test]
+fn classify_unknown_type_is_opaque() {
+    let event = make_run_event("some_unknown_event", "child-run", None);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::Opaque
+    );
+}
+
+// ---- drain_family_events ------------------------------------------------
+
+#[test]
+fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
+    // A mixed family batch under Primary consumption routes discovery and
+    // lifecycle events to the tracker, delivers parent-self events through
+    // handle_event_batch, and advances the Primary cursor (local + server).
     App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let own_run_id = "550e8400-e29b-41d4-a716-446655440523";
+        let event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+
+        let parent_task_id = make_parent_task_id_for_test(0xf1);
+        let parent_run_id = parent_task_id.to_string();
+        let child_a = make_parent_task_id_for_test(0xf2).to_string();
+        let child_b = make_parent_task_id_for_test(0xf3).to_string();
+
         let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id(own_run_id.to_string());
+        conversation.set_run_id(parent_run_id.clone());
         let conversation_id = conversation.id();
         let terminal_view_id = warpui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.update_conversation_status(
-                terminal_view_id,
+        });
+
+        let mut mock = MockAIClient::new();
+        // Primary consumer is the authoritative server-cursor writer.
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let events = vec![
+            make_seq_event(
+                EVENT_CHILD_AGENT_STARTED,
+                &parent_run_id,
+                Some(&child_a),
+                10,
+            ),
+            make_seq_event("run_in_progress", &child_a, None, 11),
+            make_seq_event("new_message", &parent_run_id, Some("msg-1"), 12),
+            make_seq_event("some_unknown_event", &child_b, None, 13),
+        ];
+        let messages = vec![ReceivedMessageInput {
+            message_id: "msg-1".to_string(),
+            sender_agent_id: child_a.clone(),
+            addresses: vec![parent_run_id.clone()],
+            subject: "hello parent".to_string(),
+            message_body: "body".to_string(),
+        }];
+
+        streamer.update(&mut app, |me, ctx| {
+            let tracker = OrchestrationChildTracker::new(parent_task_id);
+            let tracker = me.drain_family_events(
                 conversation_id,
-                ConversationStatus::InProgress,
+                &parent_run_id,
+                FamilyDrainMode::Primary,
+                tracker,
+                0,
+                events,
+                messages,
                 ctx,
+            );
+            assert!(
+                tracker.is_awaiting_metadata(&child_a),
+                "ChildStarted / ChildLifecycle must route into the tracker"
+            );
+            assert_eq!(
+                tracker.metadata_fetch_dispatch_count(),
+                1,
+                "a Started followed by Lifecycle for the same run must fetch once"
+            );
+            assert!(
+                !tracker.is_awaiting_metadata(&child_b),
+                "an Opaque event must not touch the tracker"
             );
         });
 
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.update(&mut app, |me, ctx| {
-            me.register_parent_on_wait(conversation_id, ctx);
+        event_service.read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(conversation_id),
+                "ParentSelf inbox message must be delivered through handle_event_batch"
+            );
         });
-        poller.read(&app, |me, _| {
-            assert!(connected_filter(me, conversation_id).is_none());
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|c| c.last_event_sequence()),
+                Some(13),
+                "Primary cursor must advance to the batch max sequence"
+            );
+        });
+    });
+}
+
+#[test]
+fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_owner() {
+    // The owner's turns are authored by an external harness (e.g. an ACP agent), so nothing
+    // may be queued for native injection into it; the server wakes such runs itself. Child
+    // tracking, watched-run status fan-out, and the Primary cursor all still advance.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+
+        let parent_task_id = make_parent_task_id_for_test(0xf6);
+        let parent_run_id = parent_task_id.to_string();
+        let child = make_parent_task_id_for_test(0xf7).to_string();
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(parent_run_id.clone());
+        conversation.set_driver(ConversationDriver::ExternalHarness);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        // Child discovery kicks off placeholder / tracker metadata fetches in the background;
+        // they are not under test here.
+        mock.expect_get_ambient_agent_task()
+            .returning(|_| Err(anyhow::anyhow!("not under test")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let watched_statuses = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let watched_statuses = Rc::clone(&watched_statuses);
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
+                    run_id,
+                    status,
+                    ..
+                } = event
+                {
+                    watched_statuses
+                        .borrow_mut()
+                        .push((run_id.clone(), status.clone()));
+                }
+            });
+        });
+
+        // Non-terminal child lifecycle events only: a terminal one would also evict the child's
+        // cached task through `AgentConversationsModel`, which this fixture does not register.
+        let events = vec![
+            make_seq_event(EVENT_CHILD_AGENT_STARTED, &parent_run_id, Some(&child), 20),
+            make_seq_event("run_in_progress", &child, None, 21),
+            make_seq_event("new_message", &parent_run_id, Some("msg-1"), 22),
+            make_seq_event("run_blocked", &child, None, 23),
+        ];
+        let messages = vec![ReceivedMessageInput {
+            message_id: "msg-1".to_string(),
+            sender_agent_id: child.clone(),
+            addresses: vec![parent_run_id.clone()],
+            subject: "done".to_string(),
+            message_body: "body".to_string(),
+        }];
+
+        streamer.update(&mut app, |me, ctx| {
+            let tracker = OrchestrationChildTracker::new(parent_task_id);
+            let tracker = me.drain_family_events(
+                conversation_id,
+                &parent_run_id,
+                FamilyDrainMode::Primary,
+                tracker,
+                0,
+                events,
+                messages,
+                ctx,
+            );
+            assert!(
+                tracker.is_awaiting_metadata(&child),
+                "child discovery must still route into the tracker"
+            );
+        });
+
+        event_service.read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "neither the inbox message nor the child lifecycle may be queued for injection"
+            );
+        });
+        assert_eq!(
+            *watched_statuses.borrow(),
+            vec![
+                (child.clone(), ConversationStatus::InProgress),
+                (
+                    child.clone(),
+                    ConversationStatus::Blocked {
+                        blocked_action: String::new(),
+                    },
+                ),
+            ],
+            "watched-run status updates still reach the pill bar"
+        );
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|c| c.last_event_sequence()),
+                Some(23),
+                "the Primary cursor must still advance past the dropped events"
+            );
+        });
+    });
+}
+
+#[test]
+fn drain_family_events_observer_advances_cursor_without_server_push() {
+    // Observer routes child lifecycle to the tracker and persists the cursor
+    // locally, but must never push the server cursor. The mock has no
+    // expectation for `update_event_sequence_on_server`, so it panics if the
+    // Observer path attempts the push.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let parent_task_id = make_parent_task_id_for_test(0xf4);
+        let parent_run_id = parent_task_id.to_string();
+        let child = make_parent_task_id_for_test(0xf5).to_string();
+
+        // Viewer placeholder: a shared-session view (is_viewing_shared_session).
+        let placeholder = AIConversation::new(true, false);
+        let placeholder_id = placeholder.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![placeholder], ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let events = vec![
+            make_seq_event("run_in_progress", &child, None, 7),
+            make_seq_event("new_message", &parent_run_id, Some("msg-9"), 8),
+        ];
+
+        streamer.update(&mut app, |me, ctx| {
+            let tracker = OrchestrationChildTracker::new(parent_task_id);
+            let tracker = me.drain_family_events(
+                placeholder_id,
+                &parent_run_id,
+                FamilyDrainMode::Observer,
+                tracker,
+                0,
+                events,
+                Vec::new(),
+                ctx,
+            );
+            assert!(
+                tracker.is_awaiting_metadata(&child),
+                "child lifecycle must route into the Observer tracker"
+            );
+        });
+
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&placeholder_id)
+                    .and_then(|c| c.last_event_sequence()),
+                Some(8),
+                "Observer cursor must advance locally to the batch max sequence"
+            );
         });
     });
 }
@@ -2488,8 +3306,6 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
     // A child conversation must be eligible: with multi-level orchestration
     // a mid-tree node can have children of its own to discover.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
@@ -2509,46 +3325,19 @@ fn wait_registration_eligibility_child_conversation_is_eligible() {
 }
 
 #[test]
-fn wait_registration_eligibility_requires_the_flag() {
-    App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(false);
-
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let mut conversation = AIConversation::new(false, false);
-        conversation.set_run_id("550e8400-e29b-41d4-a716-446655440527".to_string());
-        let conversation_id = conversation.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-        });
-
-        let poller = streamer_with_no_fetch_expected(&mut app);
-        poller.read(&app, |me, ctx| {
-            assert!(!me.should_register_parent_on_wait(conversation_id, ctx));
-        });
-    });
-}
-
-#[test]
 fn wait_registration_eligibility_excludes_remote_run_views() {
     // A remote-child placeholder is a passive view of a run executing in
     // another process; that process owns the inbox and the registration.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
-        // `mark_conversation_as_remote_child` persists the conversation,
-        // which needs the settings + persistence singletons wired up.
-        crate::test_util::settings::initialize_history_persistence_for_tests(&mut app);
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id("550e8400-e29b-41d4-a716-446655440528".to_string());
+        conversation.mark_as_remote_child();
         let conversation_id = conversation.id();
         let terminal_view_id = warpui::EntityId::new();
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.mark_conversation_as_remote_child(conversation_id, ctx);
         });
 
         let poller = streamer_with_no_fetch_expected(&mut app);
@@ -2563,8 +3352,6 @@ fn wait_registration_eligibility_excludes_established_parents() {
     // Once the parent role exists (a watched child run_id), the live
     // ancestor stream discovers new children; no wait-time re-fetch.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440529";
@@ -2660,8 +3447,6 @@ fn register_parent_on_wait_already_parent_is_idempotent() {
     // A second call when the conversation is already a known parent must not
     // re-fetch or churn the open ancestor stream.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let own_run_id = "550e8400-e29b-41d4-a716-446655440525";
@@ -2710,8 +3495,6 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
     // No run_id yet means there is nothing to query the server with; the call
     // is a no-op and the next wait re-checks.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         // Intentionally leave run_id unset.
@@ -2735,5 +3518,111 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
         poller.read(&app, |me, _| {
             assert!(connected_filter(me, conversation_id).is_none());
         });
+    });
+}
+
+/// A finished exchange whose output echoes `message_id` in a `MessagesReceivedFromAgents` chunk.
+fn exchange_echoing_message(message_id: &str) -> AIAgentExchange {
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage::messages_received_from_agents(
+            MessageId::new("output-message".to_string()),
+            vec![ReceivedMessageDisplay {
+                message_id: message_id.to_string(),
+                sender_agent_id: "parent-run".to_string(),
+                addresses: vec!["child-run".to_string()],
+                subject: "subject".to_string(),
+                message_body: "body".to_string(),
+            }],
+        )],
+        ..Default::default()
+    };
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(output),
+            },
+        },
+        added_message_ids: Default::default(),
+        start_time: chrono::Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// Gives `conversation` one exchange that echoes `message_id`, then reports that exchange as
+/// updated `updates` times. The returned receiver sees every resulting delivery confirmation.
+fn report_echoed_message(
+    app: &mut App,
+    mut conversation: AIConversation,
+    message_id: &'static str,
+    updates: usize,
+) -> std::sync::mpsc::Receiver<String> {
+    let history_model =
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+    let exchange = exchange_echoing_message(message_id);
+    let exchange_id = exchange.id;
+    conversation.append_root_exchange_for_test(exchange);
+    let conversation_id = conversation.id();
+    history_model.update(app, |model, ctx| {
+        model.restore_conversations(warpui::EntityId::new(), vec![conversation], ctx);
+    });
+
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let mut mock = MockAIClient::new();
+    mock.expect_mark_message_delivered().returning(move |id| {
+        sender.send(id.to_string()).unwrap();
+        Ok(())
+    });
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+    let server_api = ServerApiProvider::new_for_test().get();
+    let streamer = app.add_singleton_model(|ctx| {
+        OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+    });
+
+    streamer.update(app, |me, ctx| {
+        for _ in 0..updates {
+            me.on_streaming_exchange_updated(conversation_id, exchange_id, ctx);
+        }
+    });
+    receiver
+}
+
+#[test]
+fn echoed_message_is_confirmed_delivered_once_across_repeated_exchange_updates() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(false, false), "message-1", 2);
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(5)),
+            Ok("message-1".to_string()),
+            "an echoed message must be confirmed delivered even though this streamer never hydrated it"
+        );
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "a second update of the same exchange must not confirm the same id again"
+        );
+    });
+}
+
+#[test]
+fn shared_session_viewer_does_not_confirm_delivery_for_echoed_messages() {
+    App::test((), |mut app| async move {
+        let receiver =
+            report_echoed_message(&mut app, AIConversation::new(true, false), "message-1", 1);
+
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+            "only the recipient's own process confirms delivery, never a viewer"
+        );
     });
 }

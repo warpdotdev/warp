@@ -163,6 +163,98 @@ fn download_success_message_includes_filename_and_directory() {
 }
 
 #[test]
+fn artifact_round_trips_all_variants() {
+    let artifacts = vec![
+        Artifact::Plan {
+            document_uid: "doc-1".to_string(),
+            notebook_uid: Some(NotebookId::from("0123456789abcdefABCDEF".to_string())),
+            title: Some("My plan".to_string()),
+        },
+        Artifact::Plan {
+            document_uid: "doc-2".to_string(),
+            notebook_uid: None,
+            title: None,
+        },
+        Artifact::PullRequest {
+            url: "https://github.com/warpdotdev/warp/pull/123".to_string(),
+            branch: "feature-branch".to_string(),
+            repo: Some("warp".to_string()),
+            number: Some(123),
+        },
+        Artifact::ExternalReference {
+            reference_type: "linear_issue".to_string(),
+            url: "https://linear.app/team/issue/ABC-1".to_string(),
+            title: Some("An issue".to_string()),
+            metadata: Some(serde_json::json!({"key": "value"})),
+        },
+        Artifact::ExternalReference {
+            reference_type: "linear_issue".to_string(),
+            url: "https://linear.app/team/issue/ABC-2".to_string(),
+            title: None,
+            metadata: None,
+        },
+        Artifact::Screenshot {
+            artifact_uid: "shot-1".to_string(),
+            mime_type: "image/png".to_string(),
+            description: Some("A screenshot".to_string()),
+        },
+        Artifact::File {
+            artifact_uid: "file-1".to_string(),
+            filepath: "outputs/report.txt".to_string(),
+            filename: "report.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            description: Some("Daily summary".to_string()),
+            size_bytes: Some(42),
+        },
+    ];
+    for artifact in artifacts {
+        let json = serde_json::to_value(&artifact).unwrap();
+        let deserialized: Artifact = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, artifact);
+    }
+}
+
+#[test]
+fn artifact_pull_request_derives_repo_and_number_on_deserialize() {
+    let artifact: Artifact = serde_json::from_str(
+        r#"{"artifact_type":"PULL_REQUEST","data":{"url":"https://github.com/warpdotdev/warp/pull/456","branch":"main"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        artifact,
+        Artifact::PullRequest {
+            url: "https://github.com/warpdotdev/warp/pull/456".to_string(),
+            branch: "main".to_string(),
+            repo: Some("warp".to_string()),
+            number: Some(456),
+        }
+    );
+}
+
+#[test]
+fn artifact_pull_request_without_github_url_has_no_repo_or_number() {
+    let artifact: Artifact = serde_json::from_str(
+        r#"{"artifact_type":"PULL_REQUEST","data":{"url":"https://example.com/pr/1","branch":"main"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        artifact,
+        Artifact::PullRequest {
+            url: "https://example.com/pr/1".to_string(),
+            branch: "main".to_string(),
+            repo: None,
+            number: None,
+        }
+    );
+}
+
+#[test]
+fn artifact_rejects_unknown_artifact_type() {
+    let result = serde_json::from_str::<Artifact>(r#"{"artifact_type":"UNKNOWN","data":{}}"#);
+    assert!(result.is_err());
+}
+
+#[test]
 fn converts_graphql_file_artifact() {
     let artifact = Artifact::try_from(warp_graphql::ai::AIConversationArtifact::FileArtifact(
         warp_graphql::ai::FileArtifact {

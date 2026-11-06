@@ -20,6 +20,7 @@ pub mod aws_credentials;
 pub(crate) mod bedrock_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
+pub mod chatgpt_subscription;
 #[cfg(any(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
@@ -31,6 +32,7 @@ pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
 pub mod credit_availability;
+pub(crate) mod custom_endpoints;
 pub(crate) mod custom_model_router_editor;
 pub(crate) mod custom_model_routers;
 pub(crate) mod document;
@@ -52,7 +54,9 @@ pub(crate) mod remote_agent_context;
 pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
+pub(crate) mod runner_display;
 pub(crate) mod skills;
+pub(crate) mod stored_screenshots;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tui_api_keys;
 pub(crate) mod voice;

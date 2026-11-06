@@ -62,7 +62,7 @@ impl Block {
         {
             *did_user_tag_in_agent = value;
             self.event_proxy
-                .send_terminal_event(Event::AgentTaggedInChanged {
+                .send_app_event(Event::AgentTaggedInChanged {
                     block_id,
                     is_tagged_in: value,
                 });

@@ -1,21 +1,608 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
-use mockito::{Matcher, Server};
-use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
+use mockito::{Matcher, Mock, Server};
+use serde_json::{Value, json};
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
+use warp_graphql::queries::execution_config::CodeForge;
+use warp_server_client::base_client::{
+    AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER,
+};
 
 use super::super::ServerApi;
 use super::{
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
-    ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
-    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
-    build_list_agent_runs_url, build_run_followup_url,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskId,
+    AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
+    ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
+    ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskGitCredentialsError,
+    TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
+    agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
+    build_run_followup_url, is_unknown_git_credential_schema_error,
 };
 use crate::notebooks::NotebookId;
+use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::upload_to_target;
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
+fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server.mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
+            .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
+            .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+            .with_status(200)
+            .with_body(r#"{"execution_id":42,"previews":[{"expires_at":"2026-10-22T18:00:00Z","port":3000}]}"#)
+            .expect(1)
+            .create()
+    };
+    let api = execution_bootstrap_server_api();
+    let response = block_on(api.list_run_previews(&task_id)).unwrap();
+    assert_eq!(response.execution_id, Some(42));
+    assert_eq!(response.previews.len(), 1);
+    request.assert();
+}
+
+#[test]
+fn list_run_previews_no_execution_and_older_server() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440001".parse().unwrap();
+    for (status, body) in [
+        (200, r#"{"previews":[]}"#),
+        (404, r#"{"error":"not found"}"#),
+    ] {
+        let request = {
+            let mut server = warp_core::channel::ChannelState::mock_server();
+            server
+                .mock(
+                    "GET",
+                    format!("/api/v1/agent/runs/{task_id}/previews").as_str(),
+                )
+                .with_status(status)
+                .with_body(body)
+                .expect(1)
+                .create()
+        };
+        let result = block_on(execution_bootstrap_server_api().list_run_previews(&task_id));
+        if status == 200 {
+            let response = result.unwrap();
+            assert_eq!(response.execution_id, None);
+            assert!(response.previews.is_empty());
+        } else {
+            assert!(result.is_err());
+        }
+        request.assert();
+    }
+}
+
+fn execution_bootstrap_response() -> Value {
+    json!({
+        "data": {
+            "task": {
+                "__typename": "TaskOutput",
+                "task": {
+                    "executionConfig": {
+                        "taskId": "task-one",
+                        "executionId": "1",
+                        "teamId": null,
+                        "conversationId": null,
+                        "parentRunId": null,
+                        "harness": "OZ",
+                        "modelId": null,
+                        "reasoningLevel": null,
+                        "profileId": null,
+                        "mcpServersJson": "{}",
+                        "skills": [],
+                        "factorySkillDirs": [],
+                        "computerUseEnabled": false,
+                        "computerUseModelId": null,
+                        "inferenceProviders": null,
+                        "repositories": [],
+                        "deferredRepositories": [{
+                            "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                            "ref": null, "cloneFrom": null, "preserveOrigin": true,
+                            "expectedSha": "0123456789abcdef0123456789abcdef01234567"
+                        }],
+                        "setupCommands": [],
+                        "providers": null,
+                        "sessionSharingAcls": [],
+                        "skipInitialTurn": false,
+                        "idleOnCompleteSeconds": null,
+                        "idleOnFailSeconds": null,
+                        "snapshotDisabled": false
+                    },
+                    "attachments": [{
+                        "fileId": "file-one",
+                        "filename": "file-one_test.txt",
+                        "downloadUrl": "https://example.com/file",
+                        "mimeType": "text/plain"
+                    }]
+                }
+            },
+            "taskSecrets": {
+                "__typename": "TaskSecretsOutput",
+                "secrets": [{
+                    "name": "API_KEY",
+                    "value": {"__typename": "ManagedSecretRawValue", "value": "secret"}
+                }]
+            }
+        }
+    })
+}
+
+fn mock_execution_bootstrap(
+    response: Value,
+    workload_token: &str,
+    supports_deferred_repositories: bool,
+) -> Mock {
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "ExecutionBootstrap".into(),
+        ))
+        .match_body(Matcher::PartialJson(json!({
+            "variables": {
+                "executionId": "1",
+                "supportsDeferredRepositories": supports_deferred_repositories,
+                "secretsInput": {"taskId": "task-one", "workloadToken": workload_token},
+                "taskInput": {"taskId": "task-one"}
+            }
+        })))
+        .match_request(move |request| {
+            let body: Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+            let query = body["query"].as_str().unwrap();
+            query.contains("deferredRepositories") == supports_deferred_repositories
+                && query.contains("expectedSha") == supports_deferred_repositories
+        })
+        .with_status(200)
+        .with_body(response.to_string())
+        .expect(1)
+        .create()
+}
+
+fn execution_bootstrap_server_api() -> ServerApi {
+    let api = ServerApi::new_for_test();
+    api.base_client
+        .set_ambient_workload_token_for_test("test-workload-token".to_owned(), None);
+    api
+}
+
+#[test]
+fn block_snapshot_resolves_url_before_deserializing_storage_bytes() {
+    let block =
+        super::SerializedBlock::new_for_test(b"command".to_vec(), b"\x1b[32moutput".to_vec());
+    let mut storage = Server::new();
+    let storage_request = storage
+        .mock("GET", "/block_snapshot.json")
+        .match_query(Matcher::Exact("X-Amz-Signature=test%2Bsignature".into()))
+        .match_header("x-warp-os-category", Matcher::Missing)
+        .with_status(200)
+        .with_body(block.to_json().unwrap())
+        .create();
+    let api_request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server.mock("GET", "/api/v1/agent/conversations/test-block-download/block-snapshot")
+            .match_query(Matcher::UrlEncoded("redirect".into(), "false".into()))
+            .with_status(200)
+            .with_body(json!({"url": format!("{}/block_snapshot.json?X-Amz-Signature=test%2Bsignature", storage.url())}).to_string())
+            .create()
+    };
+    let result = block_on(execution_bootstrap_server_api().get_block_snapshot(
+        super::ServerConversationToken::new("test-block-download".into()),
+    ))
+    .unwrap();
+    assert_eq!(result.stylized_command, block.stylized_command);
+    assert_eq!(result.stylized_output, block.stylized_output);
+    api_request.assert();
+    storage_request.assert();
+}
+
+#[test]
+fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
+    for supports_deferred_repositories in [false, true] {
+        let mut response = execution_bootstrap_response();
+        if !supports_deferred_repositories {
+            let config = &mut response["data"]["task"]["task"]["executionConfig"];
+            config["repositories"] = json!([{
+                "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                "ref": {"type": "COMMIT_SHA", "value": "0123456789abcdef0123456789abcdef01234567"},
+                "cloneFrom": {"codeForge": "GITHUB", "owner": "acme", "repo": "api"},
+                "preserveOrigin": true
+            }]);
+            config
+                .as_object_mut()
+                .unwrap()
+                .remove("deferredRepositories");
+        }
+        let request =
+            mock_execution_bootstrap(response, "token-success", supports_deferred_repositories);
+        let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+            "task-one",
+            "1",
+            "token-success".into(),
+            supports_deferred_repositories,
+        ))
+        .unwrap();
+        assert_eq!(data.config.task_id.inner(), "task-one");
+        assert_eq!(data.config.execution_id.inner(), "1");
+        if supports_deferred_repositories {
+            assert!(data.config.repositories.is_empty());
+            let deferred_repositories = data.config.deferred_repositories.unwrap();
+            assert_eq!(deferred_repositories.len(), 1);
+            assert_eq!(deferred_repositories[0].forge, CodeForge::GitLab,);
+            assert_eq!(deferred_repositories[0].owner, "platform/backend");
+            assert_eq!(deferred_repositories[0].name, "api");
+            assert_eq!(
+                deferred_repositories[0].expected_sha.as_deref(),
+                Some("0123456789abcdef0123456789abcdef01234567")
+            );
+        } else {
+            assert!(data.config.deferred_repositories.is_none());
+            assert_eq!(data.config.repositories.len(), 1);
+            assert_eq!(data.config.repositories[0].forge, CodeForge::GitLab);
+            assert_eq!(data.config.repositories[0].owner, "platform/backend");
+            assert_eq!(data.config.repositories[0].name, "api");
+            assert_eq!(
+                data.config.repositories[0].ref_.as_ref().unwrap().value,
+                "0123456789abcdef0123456789abcdef01234567"
+            );
+            assert_eq!(
+                data.config.repositories[0]
+                    .clone_from
+                    .as_ref()
+                    .unwrap()
+                    .code_forge,
+                CodeForge::GitHub
+            );
+            assert!(data.config.repositories[0].preserve_origin);
+            assert!(data.config.repositories[0].expected_sha.is_none());
+        }
+        assert!(data.secrets.unwrap().contains_key("API_KEY"));
+        assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+        request.assert();
+    }
+}
+
+#[test]
+fn execution_bootstrap_preserves_secret_errors_with_task_configuration() {
+    let mut response = execution_bootstrap_response();
+    response["data"]["taskSecrets"] = json!({
+        "__typename": "UserFacingError",
+        "error": {"__typename": "InvalidSecretError", "message": "Unable to access task secrets"},
+        "responseContext": {"serverVersion": null}
+    });
+    let request = mock_execution_bootstrap(response, "token-errors", false);
+    let data = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+        "task-one",
+        "1",
+        "token-errors".into(),
+        false,
+    ))
+    .unwrap();
+    assert_eq!(data.config.execution_id.inner(), "1");
+    assert_eq!(
+        data.secrets.unwrap_err().to_string(),
+        "Unable to access task secrets"
+    );
+    assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+    request.assert();
+}
+
+#[test]
+fn execution_bootstrap_rejects_configuration_errors() {
+    let mut response = execution_bootstrap_response();
+    response["data"]["task"] = json!({
+        "__typename": "UserFacingError",
+        "error": {"__typename": "ResourceUnavailableError", "message": "Required repository is unavailable"},
+        "responseContext": {"serverVersion": null}
+    });
+    let request = mock_execution_bootstrap(response, "token-config-error", false);
+    let error = block_on(execution_bootstrap_server_api().get_execution_bootstrap(
+        "task-one",
+        "1",
+        "token-config-error".into(),
+        false,
+    ))
+    .err()
+    .expect("configuration errors must abort bootstrap");
+    assert_eq!(error.to_string(), "Required repository is unavailable");
+    request.assert();
+}
+
+fn mock_git_credentials(input: Value, response: Value, operation: &str) -> Mock {
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded("op".into(), operation.into()))
+        .match_request(move |request| {
+            let body: Value = serde_json::from_slice(request.body().unwrap()).unwrap();
+            body["variables"]["input"] == input
+        })
+        .with_status(200)
+        .with_body(response.to_string())
+        .expect(1)
+        .create()
+}
+
+#[test]
+fn git_credentials_keep_repository_scope_for_bootstrap_and_partial_refresh() {
+    for use_factory_repositories in [false, true] {
+        for accepts_partial_refresh in [false, true] {
+            let mut input = json!({
+                "taskId": "task-one",
+                "workloadToken": "token-request",
+                "acceptsPartialRefresh": accepts_partial_refresh
+            });
+            if use_factory_repositories {
+                input["useFactoryRepositories"] = json!(true);
+            }
+            let request = mock_git_credentials(
+                input,
+                json!({"data": {"taskGitCredentials": {
+                    "__typename": "TaskGitCredentialsOutput",
+                    "credentials": [],
+                    "failedHosts": []
+                }}}),
+                "TaskGitCredentials",
+            );
+            let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+                "task-one".into(),
+                "token-request".into(),
+                accepts_partial_refresh,
+                use_factory_repositories,
+            ))
+            .unwrap();
+            assert!(response.credentials.is_empty());
+            assert!(response.failed_hosts.is_empty());
+            request.assert();
+        }
+    }
+}
+
+#[test]
+fn factory_git_credentials_do_not_fall_back_after_schema_errors() {
+    let request = mock_git_credentials(
+        json!({
+            "taskId": "task-one",
+            "workloadToken": "token-request",
+            "acceptsPartialRefresh": false,
+            "useFactoryRepositories": true
+        }),
+        json!({"errors": [{
+            "message": "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        }]}),
+        "TaskGitCredentials",
+    );
+    let mut server = warp_core::channel::ChannelState::mock_server();
+    let fallback = server
+        .mock("POST", "/graphql/v2")
+        .match_query(Matcher::UrlEncoded(
+            "op".into(),
+            "TaskGitCredentialsLegacy".into(),
+        ))
+        .expect(0)
+        .create();
+
+    let error = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+        "task-one".into(),
+        "token-request".into(),
+        false,
+        true,
+    ))
+    .err()
+    .expect("Factory credential scope must not fall back after schema errors");
+    let TaskGitCredentialsError::Request(error) = error else {
+        panic!("expected the credential schema request error");
+    };
+    assert!(error.to_string().contains("failedHosts"));
+    request.assert();
+    fallback.assert();
+}
+
+#[test]
+fn legacy_git_credentials_keep_partial_refresh_schema_fallback() {
+    let request = mock_git_credentials(
+        json!({
+            "taskId": "task-one",
+            "workloadToken": "token-request",
+            "acceptsPartialRefresh": true
+        }),
+        json!({"errors": [{
+            "message": "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        }]}),
+        "TaskGitCredentials",
+    );
+    let fallback = mock_git_credentials(
+        json!({"taskId": "task-one", "workloadToken": "token-request"}),
+        json!({"data": {"taskGitCredentials": {
+            "__typename": "TaskGitCredentialsOutput",
+            "credentials": []
+        }}}),
+        "TaskGitCredentialsLegacy",
+    );
+
+    let response = block_on(execution_bootstrap_server_api().get_task_git_credentials(
+        "task-one".into(),
+        "token-request".into(),
+        true,
+        false,
+    ))
+    .unwrap();
+    assert!(response.credentials.is_empty());
+    request.assert();
+    fallback.assert();
+}
+
+#[test]
+fn task_status_message_input_preserves_full_platform_error() {
+    let input = agent_task_status_message_input(TaskStatusUpdate {
+        message: "Repository access failed.".to_string(),
+        error_code: Some(PlatformErrorCode::ResourceUnavailable),
+        platform_error: Some(Box::new(PlatformErrorInfo {
+            error_message: Some("GitHub is temporarily unavailable.".to_string()),
+            code: PlatformErrorCode::ResourceUnavailable,
+            http_status: Some(503),
+            user_facing_messages: std::collections::BTreeMap::from([(
+                PlatformErrorMessageFormat::PlainText,
+                "GitHub is temporarily unavailable.".to_string(),
+            )]),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            retryable: true,
+            is_user_error: Some(false),
+            metadata: std::collections::BTreeMap::from([(
+                "provider".to_string(),
+                "github".to_string(),
+            )]),
+            debug: Some("request-id=dogfood-only".to_string()),
+            metrics_category: Some("dependency_unavailable".to_string()),
+            trace_id: Some("0123456789abcdef".to_string()),
+        })),
+    });
+    let error = input.error.unwrap();
+
+    assert_eq!(
+        error.error_message.as_deref(),
+        Some("GitHub is temporarily unavailable.")
+    );
+    assert_eq!(error.code, PlatformErrorCode::ResourceUnavailable);
+    assert_eq!(error.http_status, Some(503));
+    let messages = error.user_facing_messages.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].format, PlatformErrorMessageFormat::PlainText);
+    assert_eq!(messages[0].message, "GitHub is temporarily unavailable.");
+    assert_eq!(
+        error.detail.as_deref(),
+        Some("Repository access could not be resolved.")
+    );
+    assert!(error.retryable);
+    assert_eq!(error.is_user_error, Some(false));
+    assert_eq!(error.metadata[0].key, "provider");
+    assert_eq!(error.metadata[0].value, "github");
+    assert_eq!(error.debug.as_deref(), Some("request-id=dogfood-only"));
+    assert_eq!(
+        error.metrics_category.as_deref(),
+        Some("dependency_unavailable")
+    );
+    assert_eq!(error.trace_id.as_deref(), Some("0123456789abcdef"));
+}
+
+#[test]
+fn list_agents_sends_selected_team_header() {
+    let team_uid = ServerId::from(7);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents = block_on(server_api.list_agents(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(agents.is_empty());
+}
+
+#[test]
+fn create_agent_sends_selected_team_header() {
+    let team_uid = ServerId::from(8);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("POST", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(
+                r#"{"uid":"agent-1","name":"catalog-agent","description":null,"available":true,"created_at":"2026-09-04T00:00:00Z","secrets":[],"skills":[],"base_model":null,"environment_id":null}"#,
+            )
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+    let request = CreateAgentRequest {
+        name: "catalog-agent".to_string(),
+        description: None,
+        prompt: None,
+        secrets: vec![],
+        skills: vec![],
+        base_model: None,
+        environment_id: None,
+    };
+
+    let agent =
+        block_on(server_api.create_agent(request, request_scope_for_team(team_uid))).unwrap();
+
+    assert_eq!(agent.uid, "agent-1");
+}
+
+#[test]
+fn list_skills_sends_selected_team_header() {
+    let team_uid = ServerId::from(9);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let skills = block_on(server_api.list_skills(None, request_scope_for_team(team_uid))).unwrap();
+
+    assert!(skills.is_empty());
+}
+
+#[test]
+fn list_memory_stores_sends_selected_team_header() {
+    let team_uid = ServerId::from(10);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/memory_stores")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"memory_stores":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let stores = block_on(server_api.list_memory_stores(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(stores.is_empty());
+}
+
+#[test]
+fn list_agents_omits_team_header_for_personal_scope() {
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents =
+        block_on(server_api.list_agents(RequestTeamScope::from_scope(&TeamlessScopeForTest)))
+            .unwrap();
+
+    assert!(agents.is_empty());
+}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
@@ -42,8 +629,78 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 }
 
 #[test]
+fn list_agent_runs_sends_selected_team_header() {
+    let team_uid = ServerId::from(123);
+    let scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
+}
+
+#[test]
+fn list_agent_runs_omits_team_header_for_teamless_scope() {
+    let scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
+}
+
+#[test]
+fn spawn_agent_request_serializes_explicit_personal_ownership() {
+    let request = SpawnAgentRequest {
+        metadata: Default::default(),
+        prompt: Some("hello".to_string()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: Some(false),
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        value.get("team").and_then(|value| value.as_bool()),
+        Some(false)
+    );
+}
+
+#[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
@@ -77,6 +734,27 @@ fn connected_self_hosted_workers_path_uses_public_api_route() {
         CONNECTED_SELF_HOSTED_WORKERS_PATH,
         "agent/connected-self-hosted-workers"
     );
+}
+
+#[test]
+fn list_connected_self_hosted_workers_sends_selected_team_header() {
+    let team_uid = ServerId::from(124);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/connected-self-hosted-workers")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"workers":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let response =
+        block_on(server_api.list_connected_self_hosted_workers(request_scope_for_team(team_uid)))
+            .unwrap();
+
+    assert!(response.workers.is_empty());
 }
 
 #[test]
@@ -122,6 +800,7 @@ fn deserialize_connected_self_hosted_workers_response() {
 #[test]
 fn spawn_agent_request_omits_prompt_when_none() {
     let request = SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,
         config: None,
@@ -777,6 +1456,31 @@ fn test_deserialize_list_tasks_corrupted_json_in_middle() {
 }
 
 #[test]
+fn test_deserialize_list_runs_null_returns_empty() {
+    let response: ListRunsResponse = serde_json::from_str(
+        r#"{
+            "as_of": "2026-10-20T20:19:11.750Z",
+            "page_info": {"has_next_page": false},
+            "runs": null,
+            "team_uid": null
+        }"#,
+    )
+    .unwrap();
+
+    assert!(response.runs.is_empty());
+}
+
+#[test]
+fn test_deserialize_list_runs_rejects_non_array() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{"runs": {}}"#).is_err());
+}
+
+#[test]
+fn test_deserialize_list_runs_requires_runs_field() {
+    assert!(serde_json::from_str::<ListRunsResponse>(r#"{}"#).is_err());
+}
+
+#[test]
 fn test_deserialize_list_tasks_empty_tasks_array() {
     // Empty tasks array should work fine
     let json = r#"{
@@ -1290,4 +1994,21 @@ fn upload_url_fallback_is_uploaded_as_a_put_with_its_content_type() {
     );
 
     storage.assert();
+}
+
+#[test]
+fn unknown_git_credential_schema_error_matches_undeployed_partial_refresh_fields() {
+    assert!(is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        ))
+    ));
+    assert!(is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Unknown argument \"acceptsPartialRefresh\" on field \"taskGitCredentials\""
+        ))
+    ));
+    assert!(!is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!("Failed to fetch task git credentials"))
+    ));
 }

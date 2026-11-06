@@ -9,7 +9,7 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, ActiveSession, Appearance, BlocklistAIActionModel,
     BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionHandle,
     GetRelevantFilesController, ModelEventDispatcher, Sessions, TerminalManagerTrait,
-    TerminalModel, TerminalSurfaceInit, TranscriptScope, TuiOnboardingMarkers,
+    TerminalModel, TerminalSurfaceInit, TranscriptScope, TuiOnboardingMarkers, UserWorkspaces,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::semantic_selection::SemanticSelection;
@@ -131,6 +131,7 @@ pub(crate) fn add_test_action_model_and_events(
             &dispatcher,
             get_relevant_files,
             terminal_surface_id,
+            UserWorkspaces::teamless_context_resolver_for_test(),
             ctx,
         )
     });

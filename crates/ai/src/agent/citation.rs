@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use warp_errors::{ReportErrorLogMode, report_error};
 use warp_multi_agent_api as api;
 
 /// A citation listed in an AI response.
@@ -71,7 +72,17 @@ impl TryFrom<api::Citation> for AIAgentCitation {
             api::DocumentType::WebPage => Ok(AIAgentCitation::WebPage {
                 url: citation.document_id,
             }),
-            api::DocumentType::Unknown => Err(UnknownCitationTypeError),
+            api::DocumentType::Unknown => {
+                report_error!(
+                    "Citation has an unrecognized document type; dropping it",
+                    extra: {
+                        "document_type" => %citation.document_type,
+                        "document_id_len" => %citation.document_id.len(),
+                    },
+                    ReportErrorLogMode::OncePerRun
+                );
+                Err(UnknownCitationTypeError)
+            }
         }
     }
 }

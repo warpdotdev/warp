@@ -21,17 +21,6 @@ fn with_flow_version(mut payload: Value) -> Value {
     payload
 }
 
-/// Adds the REV-1939 `experiment_arm` key to a payload when the event carries
-/// an arm. Absent (rather than `null`) for events outside the arm experiment.
-fn with_experiment_arm(mut payload: Value, experiment_arm: &Option<String>) -> Value {
-    if let Some(experiment_arm) = experiment_arm
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("experiment_arm".to_string(), json!(experiment_arm));
-    }
-    payload
-}
-
 /// Telemetry events for the onboarding flow.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
@@ -42,11 +31,12 @@ pub enum OnboardingEvent {
     /// A specific slide was viewed.
     SlideViewed {
         slide_name: String,
-        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
-        experiment_arm: Option<String>,
     },
     /// A setting was changed during onboarding.
-    SettingChanged { setting: String, value: String },
+    SettingChanged {
+        setting: String,
+        value: String,
+    },
     /// The onboarding slides were completed.
     OnboardingSlidesCompleted {
         intention: String,
@@ -64,11 +54,15 @@ pub enum OnboardingEvent {
     /// The user selected a folder.
     FolderSelected,
     /// A callout was displayed.
-    CalloutDisplayed { callout: String },
+    CalloutDisplayed {
+        callout: String,
+    },
     /// The user clicked next on a callout.
     CalloutNext,
     /// The user completed the callout flow.
-    CalloutCompleted { completion_type: String },
+    CalloutCompleted {
+        completion_type: String,
+    },
     /// The user navigated to the next slide.
     SlideNavigatedNext,
     /// The user navigated to the previous slide.
@@ -88,8 +82,6 @@ pub enum OnboardingEvent {
         slide_name: String,
         action: String,
         account_class: Option<String>,
-        /// The REV-1939 offer arm, set only for "choose how to start" actions.
-        experiment_arm: Option<String>,
     },
     OnboardingAuthCompleted {
         account_class: String,
@@ -100,19 +92,13 @@ pub enum OnboardingEvent {
     OnboardingUpgradeStarted {
         source_slide: String,
         account_class: String,
-        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
-        experiment_arm: Option<String>,
     },
     OnboardingUpgradeCompleted {
         source_slide: String,
         account_class: String,
-        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
-        experiment_arm: Option<String>,
     },
     OnboardingCompleted {
         completion_type: String,
-        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
-        experiment_arm: Option<String>,
     },
 }
 
@@ -152,15 +138,9 @@ impl TelemetryEvent for OnboardingEvent {
                     "entrypoint": "native_app",
                 })
             }),
-            OnboardingEvent::SlideViewed {
-                slide_name,
-                experiment_arm,
-            } => Some(with_experiment_arm(
-                with_flow_version(json!({
-                    "slide_name": slide_name,
-                })),
-                experiment_arm,
-            )),
+            OnboardingEvent::SlideViewed { slide_name } => Some(with_flow_version(json!({
+                "slide_name": slide_name,
+            }))),
             OnboardingEvent::SettingChanged { setting, value } => Some(with_flow_version(json!({
                 "setting": setting,
                 "value": value,
@@ -199,7 +179,6 @@ impl TelemetryEvent for OnboardingEvent {
                 slide_name,
                 action,
                 account_class,
-                experiment_arm,
             } => {
                 let mut payload = json!({
                     "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
@@ -211,7 +190,7 @@ impl TelemetryEvent for OnboardingEvent {
                 {
                     object.insert("account_class".to_string(), json!(account_class));
                 }
-                Some(with_experiment_arm(payload, experiment_arm))
+                Some(payload)
             }
             OnboardingEvent::OnboardingAuthCompleted {
                 account_class,
@@ -228,37 +207,23 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::OnboardingUpgradeStarted {
                 source_slide,
                 account_class,
-                experiment_arm,
-            } => Some(with_experiment_arm(
-                json!({
-                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
-                    "source_slide": source_slide,
-                    "account_class": account_class,
-                }),
-                experiment_arm,
-            )),
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "source_slide": source_slide,
+                "account_class": account_class,
+            })),
             OnboardingEvent::OnboardingUpgradeCompleted {
                 source_slide,
                 account_class,
-                experiment_arm,
-            } => Some(with_experiment_arm(
-                json!({
-                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
-                    "source_slide": source_slide,
-                    "account_class": account_class,
-                }),
-                experiment_arm,
-            )),
-            OnboardingEvent::OnboardingCompleted {
-                completion_type,
-                experiment_arm,
-            } => Some(with_experiment_arm(
-                json!({
-                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
-                    "completion_type": completion_type,
-                }),
-                experiment_arm,
-            )),
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "source_slide": source_slide,
+                "account_class": account_class,
+            })),
+            OnboardingEvent::OnboardingCompleted { completion_type } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "completion_type": completion_type,
+            })),
         }
     }
 

@@ -329,7 +329,7 @@ fn mcp_result_success_with_json_text_content_returns_parsed_tree() {
     };
 
     let json_str = r#"{"status": "ok", "value": 7}"#;
-    let content = vec![rmcp::model::Content::text(json_str)];
+    let content = vec![rmcp::model::ContentBlock::text(json_str)];
     let result = rmcp::model::CallToolResult::success(content);
     let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
 
@@ -348,7 +348,7 @@ fn mcp_result_success_with_non_json_text_returns_string_tree() {
     };
 
     let plain_text = "just some plain text output";
-    let content = vec![rmcp::model::Content::text(plain_text)];
+    let content = vec![rmcp::model::ContentBlock::text(plain_text)];
     let result = rmcp::model::CallToolResult::success(content);
     let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
 

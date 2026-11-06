@@ -69,6 +69,7 @@ use crate::workspace::view::{
     OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
     TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Default)]
 struct MouseStateHandles {
@@ -1250,9 +1251,11 @@ impl LeftPanelView {
             && self.active_view_availability(ctx) == ToolPanelAvailability::Available;
         let window_id = ctx.window_id();
         let view_id = self.conversation_list_view.id();
-        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+        let team_context_resolver =
+            UserWorkspaces::team_context_resolver(self.conversation_list_view.downgrade());
+        AgentConversationsModel::handle(ctx).update(ctx, move |model, ctx| {
             if is_now_open && is_available {
-                model.register_view_open(window_id, view_id, ctx);
+                model.register_view_open(window_id, view_id, team_context_resolver, ctx);
             } else {
                 model.register_view_closed(window_id, view_id, ctx);
             }

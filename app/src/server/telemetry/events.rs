@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use session_sharing_protocol::common::{ParticipantId, Role, SessionId as SharedSessionId};
 use session_sharing_protocol::sharer::{SessionEndedReason, SessionSourceType};
@@ -11,6 +11,7 @@ use warp_core::interval_timer::TimingDataPoint;
 use warp_core::telemetry::{
     EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
 };
+pub use warp_terminal::ImageProtocol;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome};
 use warpui::rendering::ThinStrokes;
@@ -57,7 +58,6 @@ use crate::settings::import::config::ParsedTerminalSetting;
 use crate::settings::import::model::TerminalType;
 use crate::settings_view::TeamsInviteOption;
 use crate::tab::TabTelemetryAction;
-use crate::terminal::ShareBlockType;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
@@ -74,6 +74,7 @@ use crate::terminal::view::{
     BlockEntity, BlockSelectionDetails, NotificationsDiscoveryBannerAction,
     NotificationsErrorBannerAction, NotificationsTrigger, PromptPart,
 };
+use crate::terminal::{CLIAgent, ShareBlockType};
 use crate::tips::WelcomeTipFeature;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
@@ -437,6 +438,8 @@ pub enum FileTreeSource {
     ForceOpened,
     /// Opened from the CLI agent view footer (e.g., Claude Code).
     CLIAgentView,
+    /// Opened from the File explorer chip in Warp's own agent input toolbelt.
+    AgentToolbelt,
 }
 
 #[cfg(feature = "local_fs")]
@@ -448,29 +451,6 @@ pub enum CodePanelsFileOpenEntrypoint {
     GlobalSearch,
 }
 
-/// The CLI agent being used (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum CLIAgentType {
-    Claude,
-    Gemini,
-    Codex,
-    Amp,
-    Droid,
-    OpenCode,
-    Copilot,
-    Pi,
-    OhMyPi,
-    Auggie,
-    Cursor,
-    Goose,
-    Hermes,
-    Vibe,
-    Antigravity,
-    /// Warp's own headless TUI, targeted by the code review panel as a CLI-agent-equivalent destination.
-    WarpTui,
-    Unknown,
-}
-
 /// The kind of plugin chip shown or dismissed (for telemetry purposes).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -480,22 +460,29 @@ pub enum PluginChipTelemetryKind {
 }
 
 /// Identifies the agent variant that triggered a notification (for telemetry purposes).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationAgentVariant {
     /// Warp's built-in agent (Oz).
     Oz,
     /// A CLI agent (e.g., Claude Code, Gemini CLI, etc.).
-    CLIAgent(CLIAgentType),
+    CLIAgent(#[serde(serialize_with = "serialize_cli_agent_telemetry_name")] CLIAgent),
 }
 
 impl From<NotificationSourceAgent> for NotificationAgentVariant {
     fn from(agent: NotificationSourceAgent) -> Self {
         match agent {
             NotificationSourceAgent::Oz { .. } => Self::Oz,
-            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent.into()),
+            NotificationSourceAgent::CLI { agent, .. } => Self::CLIAgent(agent),
         }
     }
+}
+
+fn serialize_cli_agent_telemetry_name<S: Serializer>(
+    agent: &CLIAgent,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(agent.telemetry_name())
 }
 
 /// The action taken on a plugin chip (for telemetry purposes).
@@ -525,7 +512,6 @@ pub enum CommandSearchResultType {
     Workflow,
     OpenWarpAI,
     TranslateUsingWarpAI,
-    Notebook,
     EnvVarCollection,
     ViewInWarpDrive,
     AIQuery,
@@ -538,7 +524,6 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
         match action {
             AcceptHistory(_) | ExecuteHistory(_) => Self::History,
             AcceptWorkflow(_) => Self::Workflow,
-            AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
             OpenWarpAI => Self::OpenWarpAI,
             TranslateUsingWarpAI => Self::TranslateUsingWarpAI,
@@ -970,12 +955,6 @@ pub enum AgentModeCitation {
     },
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-pub enum ImageProtocol {
-    Kitty,
-    ITerm,
-}
-
 #[derive(Clone, Copy, Debug, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum InputUXChangeOrigin {
@@ -1003,6 +982,7 @@ pub enum AIAgentInput {
     EventsFromAgents { event_count: usize },
     PassiveSuggestionResult,
     OrchestrationConfigUpdate,
+    AgentWake,
 }
 
 impl From<FullAIAgentInput> for AIAgentInput {
@@ -1043,6 +1023,7 @@ impl From<FullAIAgentInput> for AIAgentInput {
             },
             FullAIAgentInput::PassiveSuggestionResult { .. } => Self::PassiveSuggestionResult,
             FullAIAgentInput::OrchestrationConfigUpdate { .. } => Self::OrchestrationConfigUpdate,
+            FullAIAgentInput::AgentWake => Self::AgentWake,
         }
     }
 }
@@ -1166,7 +1147,9 @@ pub enum LoginEventSource {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TelemetryQueuedQueryOrigin {
+    LocalSteering,
     InitialCloudMode,
+    SharedSessionInjection,
     QueueSlashCommand,
     AutoQueueToggle,
     LrcAutoQueue,
@@ -1178,7 +1161,9 @@ pub enum TelemetryQueuedQueryOrigin {
 impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
     fn from(origin: QueuedQueryOrigin) -> Self {
         match origin {
+            QueuedQueryOrigin::LocalSteering => Self::LocalSteering,
             QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
+            QueuedQueryOrigin::SharedSessionInjection => Self::SharedSessionInjection,
             QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,
             QueuedQueryOrigin::AutoQueueToggle => Self::AutoQueueToggle,
             QueuedQueryOrigin::LrcAutoQueue => Self::LrcAutoQueue,
@@ -1230,6 +1215,35 @@ pub enum CLISubagentControlState {
     AgentTaggedIn,
     AgentTaggedOut,
 }
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellRecoveryOutcome {
+    Started,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellExitDetection {
+    ExitCode,
+    Signal,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentShellRecoveryFailureClass {
+    EventLoopJoin,
+    PtySpawn,
+    BootstrapTimeout,
+    ReplacementShellExit,
+    /// The terminal's shell starter (e.g. a Docker sandbox) cannot produce a replacement shell.
+    Unsupported,
+    SharedSessionRebind,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteCodebaseIndexStatusTelemetrySource {
@@ -1829,7 +1843,7 @@ pub enum TelemetryEvent {
         source: FileTreeSource,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
-        cli_agent: Option<CLIAgentType>,
+        cli_agent: Option<CLIAgent>,
     },
     /// User attached a file or directory as context from the file tree
     FileTreeItemAttachedAsContext {
@@ -2086,17 +2100,20 @@ pub enum TelemetryEvent {
     /// This is emitted at the start of the attempt (immediately on click),
     /// before binding the loopback callback server or opening the browser.
     /// It is always followed by a `SuperGrokSubscriptionConnectFinished`
-    /// (success or a short stable error code on failure).
+    /// (success, cancellation, or a short stable error code on failure).
     SuperGrokSubscriptionConnectInitiated,
 
-    /// Outcome (success or failure) of the user attempting to connect their
-    /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
+    /// Outcome (success, cancellation, or failure) of the user attempting to
+    /// connect their SuperGrok / xAI subscription via the OAuth flow in AI
+    /// settings.
     ///
-    /// On failure, `error` contains a short stable error *code* (e.g.
-    /// "bind_failed", "oauth_failed"). The full error chain/body is emitted
-    /// via `safe_error!` at the call site (only the code goes into telemetry).
+    /// On failure or cancellation, `error` contains a short stable error
+    /// *code* (e.g. "bind_failed", "oauth_failed", "cancelled"). The full
+    /// error chain/body is emitted via `safe_error!` at the call site (only
+    /// the code goes into telemetry).
     SuperGrokSubscriptionConnectFinished {
-        /// Short stable error code on failure (e.g. "bind_failed"); absent on success.
+        /// Short stable error code on failure or cancellation (e.g.
+        /// "bind_failed", "cancelled"); absent on success.
         error: Option<String>,
     },
 
@@ -2175,6 +2192,15 @@ pub enum TelemetryEvent {
         /// Platform-specific memory breakdown (JSON object with keys that
         /// vary by OS).  See `memory_footprint::memory_breakdown()`.
         memory_breakdown: serde_json::Value,
+    },
+    /// Emitted when the OS memory footprint crossed `MEMORY_USAGE_WARNING_THRESHOLD_BYTES` but had
+    /// already dropped back under it by the time we re-checked on the next poll tick, so the spike
+    /// looks transient rather than sustained.
+    TransientMemorySpike {
+        /// The OS footprint, not RSS.
+        triggering_footprint_bytes: u64,
+        /// The OS footprint, not RSS, at confirmation time.
+        confirmation_footprint_bytes: u64,
     },
     EnvVarCollectionInvoked(EnvVarTelemetryMetadata),
     EnvVarWorkflowParameterization(EnvVarTelemetryMetadata),
@@ -2616,74 +2642,84 @@ pub enum TelemetryEvent {
         command: String,
         server_output_id: Option<ServerOutputId>,
     },
+    CloudAgentShellRecovery {
+        outcome: CloudAgentShellRecoveryOutcome,
+        detection: CloudAgentShellExitDetection,
+        status_available: bool,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        duration_ms: Option<u32>,
+        used_fallback_directory: Option<bool>,
+        failure_class: Option<CloudAgentShellRecoveryFailureClass>,
+    },
     /// Emitted when the user uses voice input from the CLI agent footer.
     CLIAgentToolbarVoiceInputUsed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the user attaches an image from the CLI agent footer.
     CLIAgentToolbarImageAttached {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the CLI agent footer is shown.
     CLIAgentToolbarShown {
         /// The CLI agent being shown.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when the user opens the CLI agent rich input editor.
     CLIAgentRichInputOpened {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// How the editor was opened (Ctrl-G or footer button).
         entrypoint: CLIAgentInputEntrypoint,
     },
     /// Emitted when the CLI agent rich input editor is closed.
     CLIAgentRichInputClosed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Why the editor was closed.
         reason: CLIAgentRichInputCloseReason,
     },
     /// Emitted when the user submits a prompt via the CLI agent rich input editor.
     CLIAgentRichInputSubmitted {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Length of the submitted prompt in characters.
         prompt_length: usize,
     },
     /// Emitted when the user clicks a plugin chip (install, update, or instructions).
     CLIAgentPluginChipClicked {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// The specific action taken.
         action: PluginChipTelemetryAction,
     },
     /// Emitted when the user dismisses the plugin chip.
     CLIAgentPluginChipDismissed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was the install or update chip.
         chip_kind: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update succeeds.
     CLIAgentPluginOperationSucceeded {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when auto plugin install or update fails.
     CLIAgentPluginOperationFailed {
         /// The CLI agent being used.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
         /// Whether this was an install or update operation.
         operation: PluginChipTelemetryKind,
     },
     /// Emitted when a CLI agent plugin is first recognized (SessionStart event received).
     CLIAgentPluginDetected {
         /// The CLI agent whose plugin was detected.
-        cli_agent: CLIAgentType,
+        cli_agent: CLIAgent,
     },
     /// Emitted when an agent notification is shown (toast or mailbox notification).
     AgentNotificationShown {
@@ -2751,6 +2787,13 @@ pub enum TelemetryEvent {
         client_conversation_id: AIConversationId,
         server_conversation_id: Option<String>,
         ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    },
+    /// Emitted when computer use is enabled for a cloud agent run but the host cannot provide it
+    /// (e.g. no display), so the run's requests omit the computer-use tools. At most once per run.
+    ComputerUseUnavailable {
+        ambient_agent_task_id: AmbientAgentTaskId,
+        /// Whether the client is running inside a sandbox (a Warp-hosted cloud agent).
+        sandboxed: bool,
     },
     /// Emitted when a warp://linear deeplink is opened.
     LinearIssueLinkOpened,
@@ -3049,9 +3092,11 @@ impl TelemetryEvent {
                 source,
                 is_code_mode_v2,
                 cli_agent,
-            } => Some(
-                json!({"source": source, "is_code_mode_v2": is_code_mode_v2, "cli_agent": cli_agent}),
-            ),
+            } => Some(json!({
+                "source": source,
+                "is_code_mode_v2": is_code_mode_v2,
+                "cli_agent": cli_agent.map(|agent| agent.telemetry_name()),
+            })),
             TelemetryEvent::FileTreeItemAttachedAsContext { is_directory } => {
                 Some(json!({"is_directory": is_directory}))
             }
@@ -3701,6 +3746,13 @@ impl TelemetryEvent {
             } => Some(json!({
                 "total_application_usage_bytes": total_application_usage_bytes,
                 "memory_breakdown": memory_breakdown,
+            })),
+            TelemetryEvent::TransientMemorySpike {
+                triggering_footprint_bytes,
+                confirmation_footprint_bytes,
+            } => Some(json!({
+                "triggering_footprint_bytes": triggering_footprint_bytes,
+                "confirmation_footprint_bytes": confirmation_footprint_bytes,
             })),
             TelemetryEvent::EnvVarCollectionInvoked(metadata) => Some(json!(metadata)),
             TelemetryEvent::EnvVarWorkflowParameterization(metadata) => Some(json!(metadata)),
@@ -4529,60 +4581,79 @@ impl TelemetryEvent {
                 "command": command,
                 "server_output_id": server_output_id,
             })),
+            TelemetryEvent::CloudAgentShellRecovery {
+                outcome,
+                detection,
+                status_available,
+                exit_code,
+                signal,
+                duration_ms,
+                used_fallback_directory,
+                failure_class,
+            } => Some(json!({
+                "outcome": outcome,
+                "detection": detection,
+                "status_available": status_available,
+                "exit_code": exit_code,
+                "signal": signal,
+                "duration_ms": duration_ms,
+                "used_fallback_directory": used_fallback_directory,
+                "failure_class": failure_class,
+            })),
             TelemetryEvent::CLIAgentToolbarVoiceInputUsed { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentToolbarImageAttached { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentToolbarShown { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::CLIAgentRichInputOpened {
                 cli_agent,
                 entrypoint,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "entrypoint": entrypoint,
             })),
             TelemetryEvent::CLIAgentRichInputClosed { cli_agent, reason } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "reason": reason,
             })),
             TelemetryEvent::CLIAgentRichInputSubmitted {
                 cli_agent,
                 prompt_length,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "prompt_length": prompt_length,
             })),
             TelemetryEvent::CLIAgentPluginChipClicked { cli_agent, action } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "action": action,
             })),
             TelemetryEvent::CLIAgentPluginChipDismissed {
                 cli_agent,
                 chip_kind,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "chip_kind": chip_kind,
             })),
             TelemetryEvent::CLIAgentPluginOperationSucceeded {
                 cli_agent,
                 operation,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "operation": operation,
             })),
             TelemetryEvent::CLIAgentPluginOperationFailed {
                 cli_agent,
                 operation,
             } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
                 "operation": operation,
             })),
             TelemetryEvent::CLIAgentPluginDetected { cli_agent } => Some(json!({
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.telemetry_name(),
             })),
             TelemetryEvent::AgentNotificationShown { agent_variant } => Some(json!({
                 "agent_variant": agent_variant,
@@ -4640,6 +4711,14 @@ impl TelemetryEvent {
                 "client_conversation_id": client_conversation_id,
                 "server_conversation_id": server_conversation_id,
                 "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
+            })),
+            TelemetryEvent::ComputerUseUnavailable {
+                ambient_agent_task_id,
+                sandboxed,
+            } => Some(json!({
+                "ambient_agent_task_id": ambient_agent_task_id.to_string(),
+                "sandboxed": sandboxed,
+                "os": std::env::consts::OS,
             })),
             TelemetryEvent::LoginButtonClicked { source }
             | TelemetryEvent::LoginLaterButtonClicked { source }
@@ -4968,6 +5047,7 @@ impl TelemetryEvent {
             | TelemetryEvent::ResourceUsageStats { .. }
             | TelemetryEvent::MemoryUsageStats { .. }
             | TelemetryEvent::MemoryUsageHigh { .. }
+            | TelemetryEvent::TransientMemorySpike { .. }
             | TelemetryEvent::EnvVarCollectionInvoked(_)
             | TelemetryEvent::EnvVarWorkflowParameterization(_)
             | TelemetryEvent::CompletedSettingsImport { .. }
@@ -5084,6 +5164,7 @@ impl TelemetryEvent {
             | TelemetryEvent::AgentTipShown { .. }
             | TelemetryEvent::AgentTipClicked { .. }
             | TelemetryEvent::ToggleShowAgentTips { .. }
+            | TelemetryEvent::CloudAgentShellRecovery { .. }
             | TelemetryEvent::CLIAgentToolbarVoiceInputUsed { .. }
             | TelemetryEvent::CLIAgentToolbarImageAttached { .. }
             | TelemetryEvent::CLIAgentToolbarShown { .. }
@@ -5106,6 +5187,7 @@ impl TelemetryEvent {
             | TelemetryEvent::CloudAgentCapacityModalUpgradeClicked
             | TelemetryEvent::ComputerUseApproved { .. }
             | TelemetryEvent::ComputerUseCancelled { .. }
+            | TelemetryEvent::ComputerUseUnavailable { .. }
             | TelemetryEvent::RemoteServerBinaryCheck { .. }
             | TelemetryEvent::RemoteServerInstallation { .. }
             | TelemetryEvent::RemoteServerInitialization { .. }
@@ -5480,6 +5562,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 channels: vec![Channel::Local, Channel::Dev],
             },
             Self::MemoryUsageHigh => EnablementState::Always,
+            Self::TransientMemorySpike => EnablementState::Always,
             Self::AgentModeClickedEntrypoint
             | Self::AgentModeAttachedBlockContext
             | Self::AgentModeToggleAutoDetectionSetting
@@ -5621,6 +5704,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::DetectedIsolationPlatform { .. } => EnablementState::Always,
             Self::AgentExitedShellProcess { .. } => EnablementState::Always,
+            Self::CloudAgentShellRecovery { .. } => {
+                EnablementState::Flag(FeatureFlag::CloudAgentShellRespawn)
+            }
             Self::CLIAgentToolbarVoiceInputUsed { .. } => EnablementState::Always,
             Self::CLIAgentToolbarImageAttached { .. } => EnablementState::Always,
             Self::CLIAgentToolbarShown { .. } => EnablementState::Always,
@@ -5648,7 +5734,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::CloudAgentCapacityModalUpgradeClicked => {
                 EnablementState::Flag(FeatureFlag::CloudMode)
             }
-            Self::ComputerUseApproved | Self::ComputerUseCancelled => {
+            Self::ComputerUseApproved
+            | Self::ComputerUseCancelled
+            | Self::ComputerUseUnavailable => {
                 EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
             }
             Self::RemoteServerBinaryCheck
@@ -5977,6 +6065,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ResourceUsageStats => "perf_metrics.resource_usage",
             Self::MemoryUsageStats => "perf_metrics.memory_usage",
             Self::MemoryUsageHigh => "perf_metrics.memory_usage_high",
+            Self::TransientMemorySpike => "perf_metrics.transient_memory_spike",
             Self::AgentModeToggleAutoDetectionSetting => "AgentMode.ToggleAutoDetectionSetting",
             Self::AgentModePotentialAutoDetectionFalsePositive => {
                 "AgentMode.PotentialAutoDetectionFalsePositive"
@@ -6175,6 +6264,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentTipClicked => "AgentTip Clicked",
             Self::ToggleShowAgentTips => "Toggle Show Agent Tips",
             Self::AgentExitedShellProcess => "AgentMode.ExitedShellProcess",
+            Self::CloudAgentShellRecovery { .. } => "AgentMode.CloudShellRecovery",
             Self::CLIAgentToolbarVoiceInputUsed { .. } => "CLIAgentFooter.VoiceInputUsed",
             Self::CLIAgentToolbarImageAttached { .. } => "CLIAgentFooter.ImageAttached",
             Self::CLIAgentToolbarShown { .. } => "CLIAgentFooter.Shown",
@@ -6199,6 +6289,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::ComputerUseApproved => "ComputerUse.Approved",
             Self::ComputerUseCancelled => "ComputerUse.Cancelled",
+            Self::ComputerUseUnavailable => "ComputerUse.Unavailable",
         }
     }
 
@@ -6690,6 +6781,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MemoryUsageHigh => {
                 "Total application memory usage exceeded a significant threshold"
             }
+            Self::TransientMemorySpike => {
+                "Application memory usage briefly crossed the excessive-usage threshold but \
+                 dropped back under it before being reported as high"
+            }
             Self::AgentModeToggleAutoDetectionSetting => {
                 "Toggled the setting that enables or disables natural language auto-detection in the input. "
             }
@@ -6973,6 +7068,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentExitedShellProcess => {
                 "An agent-requested command caused the shell process to exit"
             }
+            Self::CloudAgentShellRecovery { .. } => {
+                "A cloud agent persistent shell recovery changed state"
+            }
             Self::CLIAgentToolbarVoiceInputUsed { .. } => {
                 "User used voice input from the CLI agent footer"
             }
@@ -7023,6 +7121,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "A RequestComputerUse action was approved (manually or auto-executed)"
             }
             Self::ComputerUseCancelled => "A RequestComputerUse action was cancelled/rejected",
+            Self::ComputerUseUnavailable => {
+                "Computer use was enabled for a cloud agent run but unavailable on the host"
+            }
             Self::RemoteServerBinaryCheck => {
                 "Remote server binary check completed (found, not found, or error)"
             }

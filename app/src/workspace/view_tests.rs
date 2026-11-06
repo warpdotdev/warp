@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -47,6 +48,7 @@ use crate::cloud_object::model::view::CloudViewModel;
 use crate::context_chips::prompt::Prompt;
 use crate::editor::Event;
 use crate::gpu_state::GPUState;
+use crate::menu::MenuAction;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
@@ -59,6 +61,8 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::{MockTeamClient, TeamClient};
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
@@ -91,6 +95,10 @@ use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
 pub(crate) fn initialize_app(app: &mut App) {
+    initialize_app_with_team_client(app, Arc::new(MockTeamClient::new()));
+}
+
+pub(crate) fn initialize_app_with_team_client(app: &mut App, team_client: Arc<dyn TeamClient>) {
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -103,10 +111,18 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| AutoupdateState::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
+    app.add_singleton_model(|_| crate::tab::TabShortcutModifierState::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(CloudEnvironmentCatalog::new);
-    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            team_client,
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            ctx,
+        )
+    });
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -270,6 +286,31 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
 }
 
 #[test]
+fn test_team_navigation_mode() {
+    assert_eq!(
+        team_navigation_mode(true, true, true, false),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, true),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, false),
+        TeamNavigationMode::Hidden
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, true),
+        TeamNavigationMode::BrowseTeams
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, false),
+        TeamNavigationMode::Hidden
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
 fn test_open_new_window_for_team_reuses_existing_team_window() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -291,9 +332,16 @@ fn test_open_new_window_for_team_reuses_existing_team_window() {
         });
 
         assert_eq!(app.window_ids().len(), initial_window_count);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.windows().last_window_shown_and_focused_for_test(),
+                Some(existing_team_window_id)
+            );
+        });
     });
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_open_new_window_for_team_creates_window_when_team_has_none() {
     App::test((), |mut app| async move {
@@ -319,6 +367,127 @@ fn test_open_new_window_for_team_creates_window_when_team_has_none() {
                 1
             );
         });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+fn register_window_team(app: &mut App, window_id: WindowId, team_uid: ServerId) {
+    app.update(|ctx| {
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team_uid), ctx);
+        });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+fn pane_group_ids(workspace: &ViewHandle<Workspace>, app: &App) -> Vec<EntityId> {
+    workspace.read(app, |workspace, _| {
+        workspace
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_group.id())
+            .collect()
+    })
+}
+
+#[cfg(target_family = "wasm")]
+#[test]
+fn test_open_new_window_for_team_rebinds_current_window_without_creating() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let current_team_uid: ServerId = 123.into();
+        let next_team_uid: ServerId = 456.into();
+        register_window_team(&mut app, window_id, current_team_uid);
+
+        let team_changes = Rc::new(Cell::new(0));
+        let team_changes_for_subscription = team_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id: changed }
+                        if *changed == window_id
+                ) {
+                    team_changes_for_subscription.set(team_changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let initial_window_count = app.window_ids().len();
+        let initial_pane_group_ids = pane_group_ids(&workspace, &app);
+        assert!(!initial_pane_group_ids.is_empty());
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::OpenNewWindowForTeam {
+                    team_uid: next_team_uid,
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+        assert_eq!(pane_group_ids(&workspace, &app), initial_pane_group_ids);
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(next_team_uid)
+            );
+        });
+        assert_eq!(team_changes.get(), 1);
+    });
+}
+
+#[cfg(target_family = "wasm")]
+#[test]
+fn test_open_new_window_for_team_same_team_is_noop() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        register_window_team(&mut app, window_id, team_uid);
+
+        let team_changes = Rc::new(Cell::new(0));
+        let team_changes_for_subscription = team_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    team_changes_for_subscription.set(team_changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let initial_window_count = app.window_ids().len();
+        let initial_pane_group_ids = pane_group_ids(&workspace, &app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+        assert_eq!(pane_group_ids(&workspace, &app), initial_pane_group_ids);
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(team_uid)
+            );
+        });
+        assert_eq!(team_changes.get(), 0);
     });
 }
 
@@ -681,6 +850,7 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
     use warpui::EntityId;
 
     use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
+    use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -721,21 +891,23 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
             });
 
             // Source's explicit selection = M (differs from its profile default D).
+            let scope = TeamlessScopeForTest;
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_preferred_agent_mode_llm(&m, source_id, ctx);
+                prefs.update_preferred_agent_mode_llm(&scope, &m, source_id, ctx);
             });
         });
 
         // Preconditions: source resolves to M; destination's current default is M.
         app.update(|ctx| {
+            let scope = TeamlessScopeForTest;
             let prefs = LLMPreferences::as_ref(ctx);
             assert_eq!(
-                prefs.get_active_base_model(ctx, Some(source_id)).id,
+                prefs.get_active_base_model(&scope, ctx, Some(source_id)).id,
                 m,
                 "source pane should resolve to its explicit selection"
             );
             assert_eq!(
-                prefs.get_active_base_model(ctx, Some(new_id)).id,
+                prefs.get_active_base_model(&scope, ctx, Some(new_id)).id,
                 m,
                 "destination pane's current profile default should be M"
             );
@@ -747,9 +919,10 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
         });
 
         app.update(|ctx| {
+            let scope = TeamlessScopeForTest;
             assert_eq!(
                 LLMPreferences::as_ref(ctx)
-                    .get_active_base_model(ctx, Some(new_id))
+                    .get_active_base_model(&scope, ctx, Some(new_id))
                     .id,
                 m,
                 "destination pane must retain the source's explicit selection, not the source profile default"
@@ -1067,6 +1240,114 @@ fn test_open_file_with_target_event_preserves_requested_line() {
     });
 }
 
+/// Pressing the Markdown display mode shortcut should swap a Markdown file between its raw code
+/// pane and its rendered pane, and should be left unhandled by a code pane showing any other file.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_markdown_toggle_shortcut_switches_between_raw_and_rendered_panes() {
+    use warpui::keymap::Keystroke;
+
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::notebooks::file::TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        app.update(crate::code::view::init);
+        app.update(crate::notebooks::file::init);
+        let workspace = mock_workspace(&mut app);
+        let window_id = app.read(|ctx| workspace.window_id(ctx));
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+        let code_path = temp_dir.path().join("main.rs");
+        std::fs::write(&code_path, "fn main() {}\n").expect("failed to write code file");
+        let keystroke = Keystroke::parse(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING).unwrap();
+
+        let open_in_code_editor = |app: &mut App, path: &std::path::Path| {
+            workspace.update(app, |workspace, ctx| {
+                let pane_group = workspace.active_tab_pane_group().clone();
+                workspace.handle_file_tree_event(
+                    pane_group,
+                    &crate::pane_group::Event::OpenFileWithTarget {
+                        path: path.to_path_buf(),
+                        target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                        line_col: None,
+                    },
+                    ctx,
+                );
+            });
+        };
+        // The ids of the views backing the code panes and rendered file panes, respectively.
+        let pane_view_ids = |app: &App| {
+            workspace.read(app, |workspace, ctx| {
+                let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+                (
+                    pane_group
+                        .code_panes(ctx)
+                        .map(|(_, view)| view.id())
+                        .collect_vec(),
+                    pane_group
+                        .file_notebook_panes(ctx)
+                        .map(|(_, view)| view.id())
+                        .collect_vec(),
+                )
+            })
+        };
+
+        // Sends the keystroke the way a real key press is routed: through the focused view and its
+        // ancestors, so a binding on the focused editor would take precedence over the pane's.
+        // Returns whether it was handled, after checking that focus is on a view inside `pane`.
+        let press_shortcut_in_focused_child_of = |app: &mut App, pane: EntityId| {
+            let responder_chain = app.read(|ctx| {
+                let focused = ctx
+                    .focused_view_id(window_id)
+                    .expect("a view should be focused");
+                ctx.view_ancestors(window_id, focused)
+            });
+            assert!(
+                responder_chain.contains(&pane) && responder_chain.last() != Some(&pane),
+                "focus should be on a child of the pane"
+            );
+            app.dispatch_keystroke(window_id, &responder_chain, &keystroke, false)
+                .unwrap()
+        };
+
+        open_in_code_editor(&mut app, &markdown_path);
+        let (code_views, file_views) = pane_view_ids(&app);
+        assert_eq!((code_views.len(), file_views.len()), (1, 0));
+
+        // Raw -> rendered.
+        assert!(press_shortcut_in_focused_child_of(&mut app, code_views[0]));
+        let (code_views, file_views) = pane_view_ids(&app);
+        assert_eq!((code_views.len(), file_views.len()), (0, 1));
+
+        // Rendered -> raw.
+        assert!(press_shortcut_in_focused_child_of(&mut app, file_views[0]));
+        let (code_views, file_views) = pane_view_ids(&app);
+        assert_eq!((code_views.len(), file_views.len()), (1, 0));
+
+        // A code pane showing a file with no rendered view leaves the keystroke unhandled.
+        open_in_code_editor(&mut app, &code_path);
+        let (all_code_views, _) = pane_view_ids(&app);
+        let non_markdown_views = all_code_views
+            .into_iter()
+            .filter(|id| !code_views.contains(id))
+            .collect_vec();
+        assert_eq!(non_markdown_views.len(), 1);
+        assert!(!press_shortcut_in_focused_child_of(
+            &mut app,
+            non_markdown_views[0]
+        ));
+        let (code_views, file_views) = pane_view_ids(&app);
+        assert_eq!((code_views.len(), file_views.len()), (2, 0));
+    });
+}
+
 /// Regression test for the raw-code toggle: the notebook-viewer target used to
 /// drop the `CodeSource` outright, so the raw view always started at line 1.
 #[cfg(feature = "local_fs")]
@@ -1240,7 +1521,7 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
 }
 
 // Creates a workspace as a viewer of a shared session.
-fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
+pub(crate) fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
     // Create the workspace as a session-sharing sharer.
     let global_resource_handles = GlobalResourceHandles::mock(app);
 
@@ -1646,6 +1927,181 @@ fn test_set_active_tab_color() {
 }
 
 #[test]
+fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let inactive = 0;
+            workspace.tabs[inactive].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[inactive].in_multi_selection = true;
+            workspace.tabs[active].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an uncolored active tab should start at red"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "red should advance to green"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Yellow),
+                "green should advance to yellow"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "yellow should advance to blue"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "blue should advance to magenta"
+            );
+            workspace.tabs[active].default_directory_color = Some(AnsiColorIdentifier::Yellow);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan),
+                "magenta should advance to cyan"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Cleared,
+                "cyan should advance to an explicit clear"
+            );
+            assert_eq!(
+                workspace.tabs[active].color(),
+                None,
+                "an explicit clear should suppress the directory-derived color"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "the invocation after an explicit clear should restart at red"
+            );
+
+            assert_eq!(
+                workspace.tabs[inactive].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the inactive tab should not change"
+            );
+            assert!(workspace.tabs[inactive].in_multi_selection);
+            assert!(workspace.tabs[active].in_multi_selection);
+
+            workspace.tabs[active].selected_color = SelectedTabColor::Unset;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "a directory-derived yellow should advance to blue"
+            );
+
+            workspace.active_tab_index = workspace.tabs.len();
+            let active_selection = workspace.tabs[active].selected_color;
+            let inactive_selection = workspace.tabs[inactive].selected_color;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            workspace.active_tab_index = active;
+            assert_eq!(workspace.tabs[active].selected_color, active_selection);
+            assert_eq!(workspace.tabs[inactive].selected_color, inactive_selection);
+        });
+    });
+}
+
+#[test]
+fn test_cycle_active_tab_color_mutates_group_color_without_member_overrides() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let grouped_sibling = active - 1;
+            let unrelated = 0;
+
+            let mut group = TabGroup::new();
+            let group_id = group.id;
+            group.color = SelectedTabColor::Color(AnsiColorIdentifier::Yellow);
+            workspace.tab_groups.insert(group_id, group);
+            let mut unrelated_group = TabGroup::new();
+            let unrelated_group_id = unrelated_group.id;
+            unrelated_group.color = SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace
+                .tab_groups
+                .insert(unrelated_group_id, unrelated_group);
+            workspace.tabs[active].group_id = Some(group_id);
+            workspace.tabs[grouped_sibling].group_id = Some(group_id);
+            workspace.tabs[active].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[grouped_sibling].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Green);
+            workspace.tabs[unrelated].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Red);
+            workspace.tabs[active].in_multi_selection = true;
+            workspace.tabs[unrelated].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "the active tab's group should advance from yellow to blue"
+            );
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the active member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[grouped_sibling].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "the sibling member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[unrelated].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an unrelated tab should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tab_groups[&unrelated_group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "an unrelated group should remain unchanged"
+            );
+            assert!(workspace.tabs[active].in_multi_selection);
+            assert!(workspace.tabs[unrelated].in_multi_selection);
+
+            workspace.tab_groups.get_mut(&group_id).unwrap().color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Cleared,
+                "cyan should explicitly clear the group color"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_workspace_sessions_retrieves_tabs() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1677,6 +2133,41 @@ fn test_workspace_sessions_retrieves_tabs() {
                     .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
             );
         });
+    });
+}
+
+#[test]
+fn ctrl_t_action_forwards_to_pty_when_no_external_widget_detected() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _flag = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
+        let workspace = mock_workspace(&mut app);
+
+        let terminal_view = workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .active_session_view(ctx)
+                .expect("mock_workspace should have an active session")
+        });
+
+        let pty_writes: std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>> = Default::default();
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal_view, move |_, event, _| {
+                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::TriggerExternalCtrlTFileSearch, ctx);
+        });
+
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![vec![0x14]],
+            "ctrl-t must be forwarded to the pty as a plain keystroke when no external widget is detected"
+        );
     });
 }
 
@@ -2058,6 +2549,164 @@ fn test_close_other_tabs_confirmation_dialog() {
             );
             assert_eq!(workspace.tab_count(), 1);
             assert_eq!(workspace.get_pane_group_view(0).unwrap().id(), last_tab_id);
+        });
+    });
+}
+
+#[test]
+fn test_save_current_tab_as_new_config_ignores_stale_tab_index() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 1..6 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            workspace.close_other_tabs(5, true, ctx);
+            workspace.handle_action(&WorkspaceAction::SaveCurrentTabAsNewConfig(5), ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+        });
+    });
+}
+
+#[test]
+fn test_closing_tab_context_menu_restores_active_tab_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (window_id, menu) = workspace.update(&mut app, |workspace, ctx| {
+            workspace.toggle_tab_right_click_menu(
+                0,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
+            (ctx.window_id(), workspace.tab_right_click_menu.clone())
+        });
+        assert_eq!(app.focused_view_id(window_id), Some(menu.id()));
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.handle_action(&MenuAction::Close(false), ctx);
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
+            assert!(
+                workspace
+                    .active_tab_pane_group()
+                    .is_self_or_child_focused(ctx)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_tab_context_menu_preserves_editor_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let menu = workspace.update(&mut app, |workspace, ctx| {
+            workspace.toggle_tab_right_click_menu(
+                0,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
+            workspace.tab_right_click_menu.clone()
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename tab", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
+            assert_eq!(
+                workspace.current_workspace_state.tab_being_renamed(),
+                Some(0)
+            );
+            assert!(workspace.tab_rename_editor.is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_pane_context_menu_preserves_editor_focus() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let (menu, locator) = workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            let locator = PaneViewLocator {
+                pane_group_id: pane_group.id(),
+                pane_id: pane_group.as_ref(ctx).pane_id_from_index(0).unwrap(),
+            };
+            workspace.toggle_vertical_tabs_pane_context_menu(
+                0,
+                VerticalTabsPaneContextMenuTarget::ClickedPane(locator),
+                Vector2F::zero(),
+                ctx,
+            );
+            (workspace.tab_right_click_menu.clone(), locator)
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename pane", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_right_click_menu.is_none());
+            assert_eq!(
+                workspace.current_workspace_state.pane_being_renamed(),
+                Some(locator)
+            );
+            assert!(workspace.pane_rename_editor.is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_selecting_rename_from_tab_group_context_menu_preserves_editor_focus() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let menu = workspace.update(&mut app, |workspace, ctx| {
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.toggle_tab_group_right_click_menu(
+                group_id,
+                TabContextMenuAnchor::Pointer(Vector2F::zero()),
+                ctx,
+            );
+            workspace.tab_right_click_menu.clone()
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.set_selected_by_name("Rename", ctx));
+            menu.handle_action(&MenuAction::Enter, ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.show_tab_group_right_click_menu.is_none());
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_any_tab_group_being_renamed()
+            );
+            assert!(workspace.tab_group_rename_editor.is_focused(ctx));
         });
     });
 }
@@ -4841,6 +5490,336 @@ fn test_tools_panel_warp_drive_toggle_updates_available_views() {
                 workspace.left_panel_view.as_ref(ctx).active_view(),
                 ToolPanelView::WarpDrive,
                 "Warp Drive should be selectable again after re-enabling"
+            );
+        });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+mod simplified_wasm_tab_bar {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use warpui::{AppContext, View, ViewContext};
+
+    use super::*;
+    use crate::ai::agent::api::ServerConversationToken;
+    use crate::ai::agent::conversation::{
+        AIAgentHarness, AIConversation, ServerAIConversationMetadata,
+    };
+    use crate::ai::ambient_agents::task::TaskPrincipalInfo;
+    use crate::ai::ambient_agents::{
+        AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    };
+    use crate::ai::blocklist::history_model::CloudConversationData;
+    use crate::auth::user::TEST_USER_UID;
+    use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+    use crate::persistence::model::ConversationUsageMetadata;
+    use crate::server::ids::ServerId;
+
+    fn mock_workspace_from_cloud_conversation(app: &mut App) -> ViewHandle<Workspace> {
+        let global_resource_handles = GlobalResourceHandles::mock(app);
+        let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            Workspace::new(
+                global_resource_handles,
+                None,
+                NewWorkspaceSource::FromCloudConversationId {
+                    conversation_id: ServerConversationToken::new("test-server-token".to_string()),
+                },
+                ctx,
+            )
+        });
+        workspace
+    }
+
+    fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
+        Uuid::new_v4().to_string().parse().unwrap()
+    }
+
+    fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
+        let now = Utc::now();
+        AmbientAgentTask {
+            task_id,
+            parent_run_id: None,
+            title: "Owned task".to_string(),
+            state: AmbientAgentTaskState::Succeeded,
+            prompt: "test".to_string(),
+            created_at: now,
+            started_at: Some(now),
+            updated_at: now,
+            run_time: Some("PT1S".parse().unwrap()),
+            status_message: None,
+            source: Some(AgentSource::CloudMode),
+            execution_location: None,
+            session_id: None,
+            session_link: None,
+            executor: None,
+            creator: Some(TaskPrincipalInfo {
+                creator_type: "USER".to_string(),
+                uid: TEST_USER_UID.to_string(),
+                display_name: None,
+            }),
+            conversation_id: None,
+            request_usage: None,
+            is_sandbox_running: false,
+            agent_config_snapshot: None,
+            artifacts: vec![],
+            last_event_sequence: None,
+            children: vec![],
+            debug_agent_available: false,
+            scope: None,
+        }
+    }
+
+    fn mock_server_metadata() -> ServerMetadata {
+        ServerMetadata {
+            uid: ServerId::default(),
+            revision: Revision::now(),
+            metadata_last_updated_ts: Utc::now().into(),
+            trashed_ts: None,
+            folder_id: None,
+            is_welcome_object: false,
+            creator_uid: None,
+            last_editor_uid: None,
+            current_editor_uid: None,
+        }
+    }
+
+    fn mock_server_permissions() -> ServerPermissions {
+        ServerPermissions {
+            space: Owner::mock_current_user(),
+            guests: Vec::new(),
+            anyone_link_sharing: None,
+            permissions_last_updated_ts: Utc::now().into(),
+        }
+    }
+
+    fn test_server_conversation_metadata(
+        task_id: Option<AmbientAgentTaskId>,
+    ) -> ServerAIConversationMetadata {
+        ServerAIConversationMetadata {
+            title: "Restored cloud conversation".to_string(),
+            working_directory: None,
+            harness: AIAgentHarness::Oz,
+            usage: ConversationUsageMetadata {
+                was_summarized: false,
+                context_window_usage: 0.0,
+                credits_spent: 0.0,
+                platform_credits_spent: 0.0,
+                credits_spent_for_last_block: None,
+                charged_usage_for_last_block: None,
+                total_charged_usage: None,
+                token_usage: vec![],
+                tool_usage_metadata: Default::default(),
+                context_window_segments: Vec::new(),
+            },
+            metadata: mock_server_metadata(),
+            creator: None,
+            permissions: mock_server_permissions(),
+            ambient_agent_task_id: task_id,
+            server_conversation_token: ServerConversationToken::new(
+                "test-server-token".to_string(),
+            ),
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn cloud_conversation_with_ambient_task(task_id: AmbientAgentTaskId) -> CloudConversationData {
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_task_id(task_id);
+        conversation.set_server_metadata(test_server_conversation_metadata(Some(task_id)));
+        CloudConversationData::Oz(Box::new(conversation))
+    }
+
+    fn restore_owned_handoff_cloud_cloud_pane(
+        workspace: &mut Workspace,
+        ctx: &mut ViewContext<Workspace>,
+    ) -> AmbientAgentTaskId {
+        let task_id = new_ambient_agent_task_id();
+        AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+            model.insert_task_for_test(ambient_agent_task_for_current_user(task_id));
+        });
+        workspace.active_tab_pane_group().update(ctx, |panes, ctx| {
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+        });
+        task_id
+    }
+
+    fn assert_owned_handoff_restore_is_chrome_hostile(workspace: &Workspace, ctx: &AppContext) {
+        let terminal_view = workspace
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .focused_session_view(ctx)
+            .expect("restored pane should have an active terminal view");
+        let model = terminal_view.as_ref(ctx).model.lock();
+        assert!(!model.is_conversation_transcript_viewer());
+        assert!(matches!(
+            model.shared_session_status(),
+            SharedSessionStatus::NotShared
+        ));
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_none_for_empty_workspace() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.read(&app, |workspace, ctx| {
+                assert!(!workspace.opened_from_content_deep_link);
+                assert_eq!(workspace.get_simplified_wasm_tab_bar_content(ctx), None);
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_some_for_shared_session_viewer() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace_viewing_shared_session(&mut app);
+            workspace.read(&app, |workspace, ctx| {
+                assert!(workspace.opened_from_content_deep_link);
+                assert!(matches!(
+                    workspace.get_simplified_wasm_tab_bar_content(ctx),
+                    Some(SimplifiedWasmTabBarContent::SharedSession { .. })
+                ));
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_some_for_drive_object_without_deep_link() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                assert!(!workspace.opened_from_content_deep_link);
+                workspace.active_tab_pane_group().update(ctx, |panes, ctx| {
+                    panes.add_pane_with_direction(
+                        Direction::Right,
+                        NotebookPane::new(ctx.add_typed_action_view(NotebookView::new), ctx),
+                        true,
+                        ctx,
+                    );
+                });
+                assert!(
+                    workspace
+                        .active_tab_pane_group()
+                        .as_ref(ctx)
+                        .focused_pane_id(ctx)
+                        .is_warp_drive_object_pane()
+                );
+                assert_eq!(
+                    workspace.get_simplified_wasm_tab_bar_content(ctx),
+                    Some(SimplifiedWasmTabBarContent::WarpDriveObject)
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_none_after_owned_handoff_restore_without_deep_link() {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                restore_owned_handoff_cloud_cloud_pane(workspace, ctx);
+                assert!(!workspace.opened_from_content_deep_link);
+                assert_owned_handoff_restore_is_chrome_hostile(workspace, ctx);
+                assert_eq!(workspace.get_simplified_wasm_tab_bar_content(ctx), None);
+                assert!(
+                    !workspace
+                        .keymap_context(ctx)
+                        .set
+                        .contains("Workspace_CloudConversationWebViewer")
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_stays_some_after_owned_handoff_cloud_cloud_restore() {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace_from_cloud_conversation(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+            let task_id = restore_owned_handoff_cloud_cloud_pane(workspace, ctx);
+            assert!(workspace.opened_from_content_deep_link);
+            assert_owned_handoff_restore_is_chrome_hostile(workspace, ctx);
+            assert_eq!(
+                workspace.get_simplified_wasm_tab_bar_content(ctx),
+                Some(SimplifiedWasmTabBarContent::ConversationTranscript {
+                    task_id: Some(task_id),
+                })
+            );
+            assert!(
+                workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_CloudConversationWebViewer"),
+                "deep-linked conversation viewers must keep the web-viewer context so the command palette stays disabled"
+            );
+        });
+        });
+    }
+}
+
+/// Regression test for #14241.
+///
+/// Creating a tab group opens the inline name editor and also spawns a terminal. About
+/// a second later that terminal's bootstrap block becomes visible and takes focus, which
+/// blurs the editor while the user is still typing. Blur used to be treated as
+/// confirmation, so whatever fragment had been typed became the group's name — and was
+/// persisted.
+///
+/// A rename the user never finished must not be committed.
+#[test]
+fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be assigned to the new group");
+            assert_eq!(workspace.tab_groups[&group_id].name, None);
+
+            workspace.rename_tab_group(group_id, ctx);
+
+            // The user gets three characters in before the terminal is ready.
+            workspace
+                .tab_group_rename_editor
+                .update(ctx, |editor, ctx| {
+                    editor.clear_buffer_and_reset_undo_stack(ctx);
+                    editor.user_insert("Bui", ctx);
+                });
+
+            // The auto-created terminal takes focus; the editor blurs with no user intent
+            // to finish.
+            workspace.handle_tab_group_rename_editor_event(&EditorEvent::Blurred, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].name, None,
+                "a rename interrupted by the terminal stealing focus must not be committed"
             );
         });
     });

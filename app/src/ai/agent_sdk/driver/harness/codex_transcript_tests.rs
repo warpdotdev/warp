@@ -5,7 +5,7 @@ use anyhow::Result;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use super::super::claude_transcript::read_jsonl;
+use super::super::transcript_persistence::read_jsonl_capture;
 use super::*;
 
 /// Walk `sessions_root` for `session_id`'s rollout and assemble an envelope.
@@ -16,7 +16,7 @@ fn read_envelope(
     let Some(path) = find_session_file(sessions_root, session_id) else {
         return Ok(None);
     };
-    let entries = read_jsonl(&path)?;
+    let entries = read_jsonl_capture(&path)?.entries;
     let meta = parse_session_meta(entries.first()).unwrap_or_default();
     Ok(Some(CodexTranscriptEnvelope::new(
         session_id, meta, entries,

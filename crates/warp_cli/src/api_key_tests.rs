@@ -20,6 +20,11 @@ fn parse_command(argv: &[&str]) -> ApiKeyCommand {
         .expect("parse succeeds")
         .command
 }
+fn parse_command_err(argv: &[&str]) -> clap::Error {
+    let mut full = vec!["test"];
+    full.extend_from_slice(argv);
+    TestApiKey::try_parse_from(full).expect_err("parse fails")
+}
 
 fn parse_create(argv: &[&str]) -> CreateApiKeyArgs {
     let mut full = vec!["test"];
@@ -36,6 +41,56 @@ fn parse_create_err(argv: &[&str]) -> clap::Error {
 }
 
 #[test]
+fn list_accepts_explicit_team_selection() {
+    let command = parse_command(&["list", "--team=team-uid"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+    assert_eq!(
+        args.scope.team_selection.team,
+        Some(Some("team-uid".to_string()))
+    );
+}
+
+#[test]
+fn list_accepts_bare_team_selection() {
+    let command = parse_command(&["list", "--team"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+    assert_eq!(args.scope.team_selection.team, Some(None));
+}
+
+#[test]
+fn list_defaults_to_all_scopes() {
+    let command = parse_command(&["list"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert_eq!(args.scope.team_selection.team, None);
+    assert!(!args.scope.personal);
+}
+
+#[test]
+fn list_accepts_personal_selection() {
+    let command = parse_command(&["list", "--personal"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert!(args.scope.personal);
+    assert_eq!(args.scope.team_selection.team, None);
+}
+
+#[test]
+fn list_rejects_team_and_personal_selection() {
+    let err = parse_command_err(&["list", "--team", "--personal"]);
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn create_requires_expiration_decision() {
     let err = parse_create_err(&["ci-key"]);
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -49,8 +104,16 @@ fn create_rejects_multiple_expiration_decisions() {
 
 #[test]
 fn create_accepts_expires_in() {
-    let args = parse_create(&["ci-key", "--expires-in", "30d", "--agent", "agent-123"]);
+    let args = parse_create(&[
+        "ci-key",
+        "--team=team-uid",
+        "--expires-in",
+        "30d",
+        "--agent",
+        "agent-123",
+    ]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
     assert_eq!(args.agent_uid.as_deref(), Some("agent-123"));
     assert!(args.expiration.expires_in.is_some());
     assert!(args.expiration.expires_at.is_none());
@@ -59,8 +122,9 @@ fn create_accepts_expires_in() {
 
 #[test]
 fn create_accepts_no_expiration() {
-    let args = parse_create(&["ci-key", "--no-expiration"]);
+    let args = parse_create(&["ci-key", "--team", "--no-expiration"]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, Some(None));
     assert!(args.expiration.expires_in.is_none());
     assert!(args.expiration.expires_at.is_none());
     assert!(args.expiration.no_expiration);
@@ -70,6 +134,7 @@ fn create_accepts_no_expiration() {
 fn create_accepts_rfc3339_expiration() {
     let args = parse_create(&["ci-key", "--expires-at", "2026-06-01T12:00:00Z"]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, None);
     assert!(args.expiration.expires_in.is_none());
     assert!(args.expiration.expires_at.is_some());
     assert!(!args.expiration.no_expiration);
@@ -84,4 +149,11 @@ fn delete_is_alias_for_expire() {
 
     assert_eq!(args.key_uid, "deploy-key");
     assert!(args.force);
+}
+
+#[test]
+fn expire_rejects_team_selection() {
+    let err = parse_command_err(&["expire", "deploy-key", "--team=team-uid"]);
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 }

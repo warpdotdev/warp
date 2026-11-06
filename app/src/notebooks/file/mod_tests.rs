@@ -12,10 +12,14 @@ use warp_core::ui::appearance::Appearance;
 use warp_editor::render::model::BlockItem;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, View};
 
-use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
+use super::{
+    FileNotebookAction, FileNotebookView, FileState, MarkdownDisplayMode, SourceFile,
+    TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING,
+};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -362,6 +366,85 @@ fn test_file_notebook_mermaid_blocks_default_to_rendered() {
     });
 }
 
+/// APP-5243: retrying and then discarding a failed open must not panic, and each attempt must
+/// release the file state it opened rather than stacking it on the shared [`FileModel`].
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_reload_and_discard_after_failed_open() {
+    use warpui::TypedActionView;
+
+    /// Opens the notebook's current file and waits for the read to settle.
+    async fn await_open(
+        app: &mut warpui::App,
+        handle: &warpui::ViewHandle<FileNotebookView>,
+        open: impl FnOnce(&mut FileNotebookView, &mut warpui::ViewContext<FileNotebookView>),
+    ) -> warp_util::file::FileId {
+        let (file_id, future) = handle.update(app, |file_notebook, ctx| {
+            open(file_notebook, ctx);
+            let file_id = file_notebook.file_id.expect("File should have a file_id");
+            let future_handle = FileModel::as_ref(ctx)
+                .get_future_handle(file_id)
+                .expect("Loading future should be present");
+            (file_id, ctx.await_spawned_future(future_handle.future_id()))
+        });
+        future.await;
+        file_id
+    }
+
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        // A path that cannot be read, mirroring the `Could not read ...` treatment the reporter hit.
+        let first_id = await_open(&mut app, &handle, |view, ctx| {
+            view.open_local("app-5243-does-not-exist.md", None, ctx)
+        })
+        .await;
+
+        handle.read(&app, |view, _| {
+            assert!(
+                matches!(view.file_state, FileState::Error(_)),
+                "expected an error state, got {:?}",
+                view.file_state
+            );
+        });
+
+        // "Try again" in the error treatment.
+        let second_id = await_open(&mut app, &handle, |view, ctx| {
+            view.handle_action(&FileNotebookAction::ReloadFile, ctx)
+        })
+        .await;
+
+        assert_ne!(first_id, second_id, "reload should open a fresh file id");
+        app.read(|ctx| {
+            assert!(
+                FileModel::as_ref(ctx).file_path(first_id).is_none(),
+                "reload should release the previous file id"
+            );
+        });
+        handle.read(&app, |view, _| {
+            assert!(
+                matches!(view.file_state, FileState::Error(_)),
+                "expected an error state after reload, got {:?}",
+                view.file_state
+            );
+        });
+
+        // Discarding the pane for good. Releasing is idempotent, so every teardown path can run it.
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.release_file_model(ctx);
+            file_notebook.release_file_model(ctx);
+            assert!(file_notebook.file_id.is_none());
+        });
+        app.read(|ctx| {
+            assert!(
+                FileModel::as_ref(ctx).file_path(second_id).is_none(),
+                "discarding the pane should release the open file id"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_markdown_file_detection() {
     assert!(is_markdown_file("README.md"));
@@ -395,5 +478,87 @@ fn test_file_notebook_mermaid_context_menu_does_not_show_copy_image() {
             let item_names = file_notebook.context_menu.item_names(ctx);
             assert!(!item_names.contains(&"Copy image"));
         });
+    });
+}
+
+#[test]
+fn test_markdown_toggle_shortcut_only_handled_for_toggleable_files() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.update(super::init);
+        let (window_id, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        let keystroke = Keystroke::parse(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING).unwrap();
+        let press_shortcut = |app: &App| {
+            app.dispatch_keystroke(window_id, &[handle.id()], &keystroke, false)
+                .unwrap()
+        };
+
+        assert!(
+            !press_shortcut(&app),
+            "a pane with no file has no raw view to switch to"
+        );
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_local("../README.md", Some(session.clone()), ctx);
+        });
+        assert!(
+            press_shortcut(&app),
+            "a rendered Markdown file should be toggleable from the keyboard"
+        );
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_local("../Cargo.toml", Some(session), ctx);
+        });
+        assert!(
+            !press_shortcut(&app),
+            "a file without a Rendered/Raw toggle should not respond to the shortcut"
+        );
+    });
+}
+
+#[test]
+fn test_markdown_toggle_shortcut_follows_jupyter_notebook_rendering_flag() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.update(super::init);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.ipynb");
+        std::fs::write(
+            &path,
+            r##"{
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {"language_info": {"name": "python"}},
+                "cells": [{"cell_type": "markdown", "source": ["# Notebook heading"]}]
+            }"##,
+        )
+        .unwrap();
+
+        let (window_id, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_local(&path, Some(session), ctx);
+        });
+        let keystroke = Keystroke::parse(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING).unwrap();
+        let press_shortcut = |app: &App| {
+            app.dispatch_keystroke(window_id, &[handle.id()], &keystroke, false)
+                .unwrap()
+        };
+
+        {
+            let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+            assert!(
+                !press_shortcut(&app),
+                "a notebook has no Rendered/Raw toggle while notebook rendering is disabled"
+            );
+        }
+
+        let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+        assert!(
+            press_shortcut(&app),
+            "a rendered notebook should be toggleable from the keyboard"
+        );
     });
 }

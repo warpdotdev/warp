@@ -115,6 +115,7 @@ impl LoopbackOAuthReceiver {
                 Ok(CallbackResult::Success {
                     code: code.clone(),
                     csrf_token: state.clone(),
+                    issuer: query.get("iss").cloned(),
                 })
             } else {
                 Ok(CallbackResult::Error {

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::json;
 use serde_with::SerializeDisplay;
 use strum_macros::{EnumDiscriminants, EnumIter};
@@ -9,7 +9,7 @@ use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
 use crate::code_review::diff_state::{BackendOrigin, DiffMode, DiffOperation};
 use crate::features::FeatureFlag;
-use crate::server::telemetry::CLIAgentType;
+use crate::terminal::CLIAgent;
 use crate::view_components::find::FindDirection;
 
 /// Identifies which git button the user clicked in the code review header.
@@ -188,7 +188,8 @@ pub enum CodeReviewTelemetryEvent {
         entrypoint: CodeReviewPaneEntrypoint,
         is_code_mode_v2: bool,
         /// The CLI agent type if opened from a CLI agent footer (e.g., Claude Code).
-        cli_agent: Option<CLIAgentType>,
+        #[serde(serialize_with = "serialize_optional_cli_agent_telemetry_name")]
+        cli_agent: Option<CLIAgent>,
     },
     /// Emitted when a user adds content to AI context from code review.
     AddToContext {
@@ -342,6 +343,15 @@ pub enum CodeReviewTelemetryEvent {
     },
 }
 
+fn serialize_optional_cli_agent_telemetry_name<S: Serializer>(
+    agent: &Option<CLIAgent>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    agent
+        .map(|agent| agent.telemetry_name())
+        .serialize(serializer)
+}
+
 impl TelemetryEvent for CodeReviewTelemetryEvent {
     fn name(&self) -> &'static str {
         CodeReviewTelemetryEventDiscriminants::from(self).name()
@@ -358,7 +368,7 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 "is_local": is_local,
                 "entrypoint": entrypoint,
                 "is_code_mode_v2": is_code_mode_v2,
-                "agent_name": cli_agent,
+                "agent_name": cli_agent.map(|agent| agent.telemetry_name()),
             })),
             CodeReviewTelemetryEvent::AddToContext {
                 is_local,

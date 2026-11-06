@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
@@ -11,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -37,6 +38,141 @@ impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.to_possible_value().expect("no values are skipped");
         f.write_str(value.get_name())
+    }
+}
+
+/// Source-control provider for a repository checkout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RepositoryForge {
+    #[serde(rename = "GITHUB")]
+    GitHub,
+    #[serde(rename = "GITLAB")]
+    GitLab,
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
+}
+/// Server-supplied repository HEAD used to prepare an agent run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RepositoryHeadRef {
+    CommitSha(String),
+    Branch(String),
+}
+
+impl RepositoryHeadRef {
+    pub fn value(&self) -> &str {
+        match self {
+            Self::CommitSha(value) | Self::Branch(value) => value,
+        }
+    }
+}
+
+/// Canonical repository identity used by server-owned preparation instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryIdentity {
+    pub code_forge: RepositoryForge,
+    #[serde(rename = "owner")]
+    pub repo_owner: String,
+    #[serde(rename = "repo")]
+    pub repo_name: String,
+}
+
+impl RepositoryIdentity {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
+        (
+            self.code_forge,
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.repo_owner.is_empty() || self.repo_owner.trim() != self.repo_owner {
+            return Err(
+                "repo_owner must not be empty or contain surrounding whitespace".to_string(),
+            );
+        }
+        if self.repo_name.is_empty() || self.repo_name.trim() != self.repo_name {
+            return Err(
+                "repo_name must not be empty or contain surrounding whitespace".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Server-supplied repository preparation override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryPreparationOverride {
+    pub code_forge: RepositoryForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head: RepositoryHeadRef,
+    pub clone_from: Option<RepositoryIdentity>,
+    #[serde(default)]
+    pub preserve_origin: bool,
+}
+
+impl RepositoryPreparationOverride {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
+        (
+            self.code_forge,
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        RepositoryIdentity {
+            code_forge: self.code_forge,
+            repo_owner: self.repo_owner.clone(),
+            repo_name: self.repo_name.clone(),
+        }
+        .validate()?;
+        if let Some(clone_from) = &self.clone_from {
+            clone_from.validate()?;
+        }
+        match &self.head {
+            RepositoryHeadRef::CommitSha(commit_sha) => {
+                if commit_sha.len() != 40
+                    || !commit_sha
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(
+                        "commit SHA must be an exact 40-character lowercase hexadecimal SHA"
+                            .to_string(),
+                    );
+                }
+            }
+            RepositoryHeadRef::Branch(branch) => {
+                if branch.is_empty() || branch.trim() != branch {
+                    return Err(
+                        "branch must not be empty or contain surrounding whitespace".to_string()
+                    );
+                }
+            }
+        }
+        if self.clone_from.is_some() && !self.preserve_origin {
+            return Err("clone_from requires preserve_origin".to_string());
+        }
+        if self.preserve_origin && self.clone_from.is_none() {
+            return Err("preserve_origin requires clone_from".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RepositoryPreparationOverride {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let preparation_override = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository preparation override JSON: {error}"))?;
+        preparation_override.validate()?;
+        Ok(preparation_override)
     }
 }
 
@@ -126,12 +262,13 @@ impl HiddenComputerUseArgs {
         }
     }
 }
-const HARNESS_VALUE_VARIANTS: [Harness; 5] = [
+const HARNESS_VALUE_VARIANTS: [Harness; 6] = [
     Harness::Oz,
     Harness::Claude,
     Harness::OpenCode,
     Harness::Gemini,
     Harness::Codex,
+    Harness::Pi,
 ];
 
 /// The execution harness for an agent run.
@@ -149,6 +286,7 @@ pub enum Harness {
     Gemini,
     /// Delegate to the `codex` CLI.
     Codex,
+    Pi,
     /// A harness produced by a newer client/server that this client doesn't
     /// recognize. Surfaced via deserialization fallbacks (e.g. unknown GraphQL
     /// enum values, unknown `harness_type` strings); never selectable from the
@@ -175,6 +313,7 @@ impl ValueEnum for Harness {
                 .help("Delegate to the `opencode` CLI"),
             Harness::Gemini => PossibleValue::new("gemini").help("Delegate to the `gemini` CLI"),
             Harness::Codex => PossibleValue::new("codex").help("Delegate to the `codex` CLI"),
+            Harness::Pi => PossibleValue::new("pi"),
             Harness::Unknown => return None,
         };
         if !self.should_display_in_help_text() {
@@ -193,7 +332,9 @@ impl Harness {
     pub fn parse_local_child_harness(value: &str) -> Option<Self> {
         match Self::parse_orchestration_harness(value) {
             Some(harness @ (Self::Claude | Self::OpenCode | Self::Codex)) => Some(harness),
-            Some(Self::Oz) | Some(Self::Gemini) | Some(Self::Unknown) | None => None,
+            Some(Self::Oz) | Some(Self::Gemini) | Some(Self::Pi) | Some(Self::Unknown) | None => {
+                None
+            }
         }
     }
 
@@ -210,17 +351,18 @@ impl Harness {
     pub fn should_display_in_help_text(self) -> bool {
         match self {
             Self::Oz | Self::Claude | Self::Codex => true,
-            Self::OpenCode | Self::Gemini | Self::Unknown => false,
+            Self::OpenCode | Self::Gemini | Self::Pi | Self::Unknown => false,
         }
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Oz => "Oz",
+            Self::Oz => "Warp Agent",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini CLI",
             Self::Codex => "Codex",
+            Self::Pi => "Pi",
             Self::Unknown => "Unknown",
         }
     }
@@ -239,6 +381,7 @@ impl Harness {
             "opencode" => Some(Harness::OpenCode),
             "gemini" => Some(Harness::Gemini),
             "codex" => Some(Harness::Codex),
+            "pi" => Some(Harness::Pi),
             "unknown" => Some(Harness::Unknown),
             _ => None,
         }
@@ -256,6 +399,7 @@ impl Harness {
             Harness::OpenCode => "opencode",
             Harness::Gemini => "gemini",
             Harness::Codex => "codex",
+            Harness::Pi => "pi",
             Harness::Unknown => "unknown",
         }
     }
@@ -265,6 +409,16 @@ impl fmt::Display for Harness {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.config_name())
     }
+}
+
+/// How the agent driver talks to a third-party harness.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, ValueEnum)]
+pub enum HarnessTransport {
+    /// Run the harness CLI interactively inside the driver's terminal session.
+    #[default]
+    Pty,
+    /// Spawn the harness as a child process and drive it over the Agent Client Protocol.
+    Acp,
 }
 
 #[cfg(test)]
@@ -281,10 +435,12 @@ pub enum AgentProfileCommand {
 /// Agent-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentCommand {
-    /// Run a new Oz agent.
+    /// Run a new Warp Agent.
     Run(RunAgentArgs),
-    /// Dispatch an Oz agent that runs remotely.
+    /// Dispatch a cloud agent.
     RunCloud(RunCloudArgs),
+    /// Prepare a pre-warmed sandbox and wait for it to be claimed.
+    RunCloudStandby(RunCloudStandbyArgs),
     /// Manage agent profiles.
     #[command(subcommand)]
     Profile(AgentProfileCommand),
@@ -307,6 +463,7 @@ impl AgentCommand {
         match self {
             AgentCommand::Run(_) => "agent run",
             AgentCommand::RunCloud(_) => "agent run-cloud",
+            AgentCommand::RunCloudStandby(_) => "agent run-cloud-standby",
             AgentCommand::Profile(_) => "agent profile",
             AgentCommand::List(_) => "agent list",
             AgentCommand::Get(_) => "agent get",
@@ -316,6 +473,21 @@ impl AgentCommand {
             AgentCommand::Skills(_) => "agent skills",
         }
     }
+}
+
+/// Identifies the allocated sandbox to prepare without starting an agent task.
+#[derive(Debug, Clone, Args)]
+pub struct RunCloudStandbyArgs {
+    /// UID of the pre-warmed sandbox row this container was allocated for.
+    #[arg(long = "standby-id", value_name = "ID")]
+    pub standby_id: String,
+    /// Override the pre-warmed sandbox control origin.
+    #[arg(
+        long = "prewarmed-sandbox-control-url",
+        hide = true,
+        env = "WARP_PREWARMED_SANDBOX_CONTROL_URL"
+    )]
+    pub prewarmed_sandbox_control_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -331,6 +503,8 @@ impl AgentCommand {
 pub struct RunAgentArgs {
     #[command(flatten)]
     pub prompt_arg: PromptArg,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,
@@ -418,12 +592,13 @@ pub struct RunAgentArgs {
     #[arg(
         long = "idle-on-fail",
         value_name = "DURATION",
-        env = "OZ_IDLE_ON_FAIL",
         num_args = 0..=1,
         default_missing_value = "15m",
         hide = true
     )]
     pub idle_on_fail: Option<humantime::Duration>,
+    #[arg(long = "legacy-idle-on-fail-env", env = "OZ_IDLE_ON_FAIL", hide = true)]
+    pub idle_on_fail_env: Option<humantime::Duration>,
 
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
@@ -434,6 +609,14 @@ pub struct RunAgentArgs {
     /// accepting the compatibility shape until all producers have been updated.
     #[arg(long = "task-id", hide = true, conflicts_with_all = ["prompt", "saved_prompt", "file"])]
     pub task_id: Option<String>,
+    /// Execution whose server-owned settings configure this task launch.
+    #[arg(
+        long = "execution-id",
+        env = "WARP_EXECUTION_ID",
+        hide = true,
+        requires = "task_id"
+    )]
+    pub execution_id: Option<String>,
 
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]
@@ -471,10 +654,24 @@ pub struct RunAgentArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
+    /// "oz" (default) uses Warp Agent.
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
+
+    /// How to drive a third-party harness. Unset means the harness's interactive CLI runs in the
+    /// terminal session; `acp` drives the harness over the Agent Client Protocol instead. Has no
+    /// effect on the `oz` harness.
+    ///
+    /// Cloud workers set this through `WARP_HARNESS_TRANSPORT` rather than the flag, so a pinned
+    /// CLI predating this option ignores it instead of rejecting an unknown argument.
+    #[arg(
+        long = "harness-transport",
+        value_name = "TRANSPORT",
+        env = "WARP_HARNESS_TRANSPORT",
+        hide = true
+    )]
+    pub harness_transport: Option<HarnessTransport>,
 
     /// Skip the initial LLM turn for this run. Used by the empty-prompt cloud-handoff
     /// path so the cloud agent comes up ready for follow-up without hallucinating a
@@ -493,9 +690,27 @@ pub struct RunAgentArgs {
 
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
+
+    /// Repository preparation override supplied by the server for this task.
+    #[arg(
+        long = "repository-head-override-json",
+        value_name = "JSON",
+        action = clap::ArgAction::Append,
+        requires = "task_id",
+        hide = true
+    )]
+    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
+
+    /// Remove the origin remote from environment repositories after setup.
+    #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
+    pub remove_repository_origins: bool,
 }
 
 impl RunAgentArgs {
+    pub fn effective_idle_on_fail(&self) -> Option<humantime::Duration> {
+        self.idle_on_fail.or(self.idle_on_fail_env)
+    }
+
     /// Combine `mcp_specs` with legacy `mcp_servers` (UUIDs) into a single list.
     pub fn all_mcp_specs(&self) -> Vec<MCPSpec> {
         let mut specs = self.mcp_specs.clone();
@@ -559,6 +774,23 @@ pub struct RunCloudArgs {
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
 
+    /// Title for this agent task and its conversation.
+    ///
+    /// Unlike `--name`, which sets the agent configuration name, `--title`
+    /// controls the task and conversation title shown for the run. When
+    /// spawning a factory sibling, pass the child task title here.
+    #[arg(long = "title", value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Run ID of the parent run that is spawning this run.
+    ///
+    /// Setting this makes the new run an orchestration child of the given
+    /// parent: it inherits the parent's lineage (depth, root run) and scope,
+    /// is attributed to the ORCHESTRATION source, and is tracked on the parent
+    /// run. Pass the current run ID when a factory foreman spawns a sibling.
+    #[arg(long = "parent-run-id", value_name = "RUN_ID")]
+    pub parent_run_id: Option<String>,
+
     /// MCP servers to start before executing the agent.
     ///
     /// Can be specified as:
@@ -605,7 +837,7 @@ pub struct RunCloudArgs {
 
     /// Path to a file to attach to the agent query.
     ///
-    /// Can be specified multiple times to attach multiple files (maximum 5).
+    /// Can be specified multiple times to attach multiple files (maximum 25).
     ///
     /// Example: --attach file1.png --attach file2.txt
     #[arg(
@@ -681,6 +913,8 @@ pub enum AgentSortByArg {
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<AgentSortByArg>,
@@ -708,6 +942,8 @@ pub struct AgentGetArgs {
 /// Arguments for creating a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentCreateArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the agent.
     #[arg(long = "name", short = 'n')]
     pub name: String,
@@ -853,6 +1089,8 @@ pub struct AgentDeleteArgs {
 /// Arguments for listing available agent skills.
 #[derive(Debug, Clone, Args)]
 pub struct ListAgentSkillsArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// List skills from a specific GitHub repository.
     ///
     /// Format: `owner/repo` or `https://github.com/owner/repo`

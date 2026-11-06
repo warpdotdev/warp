@@ -2,16 +2,15 @@
 
 use ai::agent::action::RunAgentsExecutionMode;
 use warp_cli::agent::Harness;
-use warpui::AppContext;
+use warpui::{AppContext, SingletonEntity as _};
 
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::local_harness_setup::{
     LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
-use crate::cloud_object::CloudObjectLookup as _;
 
 /// Whether a harness's local setup allows selecting it: always true for
 /// Cloud, otherwise requires the local CLI to be installed and the
@@ -22,14 +21,14 @@ pub(crate) fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> 
 }
 
 /// Whether a harness can be confirmed as the run-wide harness: excludes
-/// Gemini (not yet supported for multi-agent runs), product-disabled
-/// local harnesses, and local harnesses whose CLI setup is not ready.
+/// Gemini, local Pi, product-disabled local harnesses, and local harnesses whose CLI setup
+/// is not ready.
 /// Both frontends must filter/disable identically through this predicate.
 // Only the TUI consumes this predicate directly (via `tui_export`); the
 // GUI filters through the harness snapshot builder, which mirrors it.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn harness_is_selectable(harness: Harness, is_local: bool) -> bool {
-    if harness == Harness::Gemini {
+    if harness == Harness::Gemini || (is_local && harness == Harness::Pi) {
         return false;
     }
     if is_local && !local_harness_is_product_enabled(harness) {
@@ -83,6 +82,14 @@ pub fn accept_disabled_reason_with_auth(
     state: &OrchestrationConfigState,
     ctx: &AppContext,
 ) -> Option<String> {
+    if Harness::parse_orchestration_harness(&state.harness_type) == Some(Harness::Pi) {
+        if !state.execution_mode.is_remote() {
+            return Some("Pi child agents require Cloud execution.".to_string());
+        }
+        if !HarnessAvailabilityModel::as_ref(ctx).is_harness_enabled(Harness::Pi) {
+            return Some("The pi harness is not available.".to_string());
+        }
+    }
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
@@ -109,7 +116,7 @@ pub fn accept_disabled_reason_with_auth(
 /// environment selected. `None` when not applicable.
 pub fn empty_env_recommendation_message(
     execution_mode: &RunAgentsExecutionMode,
-    app: &AppContext,
+    has_visible_environment: bool,
 ) -> Option<String> {
     let RunAgentsExecutionMode::Remote {
         environment_id,
@@ -125,8 +132,7 @@ pub fn empty_env_recommendation_message(
     if !worker_host.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST) {
         return None;
     }
-    let env_count = CloudAmbientAgentEnvironment::get_all(app).len();
-    Some(if env_count > 0 {
+    Some(if has_visible_environment {
         "We recommend selecting an environment for cloud agents.".to_string()
     } else {
         "We recommend creating an environment for cloud agents.".to_string()

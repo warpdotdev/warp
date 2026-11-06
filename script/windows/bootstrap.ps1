@@ -165,7 +165,7 @@ if (-not $gitBinDir) {
 Add-DirectoryToPathIfPresent $gitBinDir
 
 # Some Rust build scripts depend on Unix patch.exe, which ships with Git for Windows.
-$gitUsrBinDir = Join-Path (Split-Path -Parent $gitBinDir) 'usr\bin'
+$gitUsrBinDir = Join-Path (Split-Path -Path $gitBinDir -Parent) 'usr\bin'
 Add-DirectoryToPathIfPresent $gitUsrBinDir
 
 function Resolve-CommonSkillsScript {

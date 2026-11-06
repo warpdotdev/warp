@@ -212,12 +212,11 @@ mod full_text_searcher {
         }
 
         fn rebuild_search_index(&mut self) -> Result<(), anyhow::Error> {
-            self.clear_search_index();
             let documents = self.configs.keys().map(|name| LaunchConfigDocument {
                 name: name.clone(),
                 name_id: name.clone(),
             });
-            self.searcher.build_index_async(documents)
+            self.searcher.rebuild_index_async(documents)
         }
 
         fn clear_search_index(&mut self) {

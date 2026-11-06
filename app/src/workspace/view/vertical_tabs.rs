@@ -1,7 +1,7 @@
 pub mod telemetry;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -21,11 +21,11 @@ use warpui::elements::{
     Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
     Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
-    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
-    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
-    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
-    resizable_state_handle,
+    Flex, Highlight, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Stack, Text, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -55,7 +55,10 @@ use crate::pane_group::{
     CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
 };
 use crate::safe_triangle::SafeTriangle;
-use crate::tab::{SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, tab_position_id};
+use crate::tab::{
+    SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, reveals_tab_shortcut_hints,
+    tab_activate_binding_name, tab_position_id,
+};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
@@ -408,6 +411,7 @@ fn render_pane_row_element(
         pane_rename_editor: _,
         is_pinned,
         container_is_hovered,
+        shortcut_hint_binding_name: _,
     } = props;
     let is_selected = is_active_tab && is_focused;
     let show_pin = FeatureFlag::PinnedTabs.is_enabled() && is_pinned && !container_is_hovered;
@@ -853,6 +857,7 @@ struct PaneProps<'a> {
     /// True when the tab container containing this pane is hovered.
     /// The pin icon is hidden when a tab is hovered.
     container_is_hovered: bool,
+    shortcut_hint_binding_name: Option<&'static str>,
 }
 
 struct PaneRowState {
@@ -1051,7 +1056,7 @@ fn normalize_summary_text(text: &str) -> Option<String> {
 
 /// Returns the conversation status for a terminal pane, used to render the per-line status
 /// pill prefix in Summary mode. Mirrors the status sources used by `render_detail_status_pill`
-/// in the detail sidecar — CLI agent sessions with rich status, Oz agent conversations, or
+/// in the detail sidecar — CLI agent sessions with rich status, Warp Agent conversations, or
 /// ambient agent sessions. Returns `None` for plain terminals or conversations without status.
 fn summary_conversation_status_for_terminal(
     terminal_view: &TerminalView,
@@ -1161,12 +1166,18 @@ impl VerticalTabsPanelState {
         });
     }
 
-    /// Returns the indices (in original order) of tab groups that have at least
-    /// one pane matching the current search query. Returns all indices when the
-    /// query is empty.
+    /// Returns the indices (in original order) of tabs that match the current
+    /// search query, either through their own text or by belonging to a tab
+    /// group whose displayed name matches. Returns all indices when the query
+    /// is empty.
+    ///
+    /// This drives tab cycling under an active search, so it must admit exactly
+    /// the tabs `render_groups` renders — otherwise the panel would show tabs
+    /// the next/previous-tab keybindings refuse to visit.
     pub(super) fn matching_tab_indices(
         &self,
         tabs: &[TabData],
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         active_tab_index: usize,
         app: &AppContext,
     ) -> Vec<usize> {
@@ -1174,6 +1185,7 @@ impl VerticalTabsPanelState {
             return (0..tabs.len()).collect();
         }
         let query_lower = self.search_query.to_lowercase();
+        let matched_groups = matched_group_ids(tab_groups, &query_lower);
         let resolved_mode = resolve_vertical_tabs_mode(app);
         let display_granularity = match resolved_mode {
             VerticalTabsResolvedMode::Panes => VerticalTabsDisplayGranularity::Panes,
@@ -1184,6 +1196,10 @@ impl VerticalTabsPanelState {
         tabs.iter()
             .enumerate()
             .filter(|(tab_index, tab)| {
+                // A group-name match admits every member, regardless of its own text.
+                if tab_admitted_by_group_name(tab.group_id, &matched_groups) {
+                    return true;
+                }
                 let pane_group = tab.pane_group.as_ref(app);
                 let visible_pane_ids = pane_group.visible_pane_ids();
                 match resolved_mode {
@@ -1235,6 +1251,7 @@ impl VerticalTabsPanelState {
                                 None,
                                 tab.pinned,
                                 false,
+                                None,
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -1782,7 +1799,7 @@ fn render_groups(
             .collect()
     } else {
         let query_lower = query.to_lowercase();
-        workspace
+        let own_matches: Vec<(usize, Option<Vec<PaneId>>)> = workspace
             .tabs
             .iter()
             .enumerate()
@@ -1842,6 +1859,7 @@ fn render_groups(
                                     None,
                                     tab.pinned,
                                     false,
+                                    None,
                                     app,
                                 )
                                 .is_some_and(|props| {
@@ -1873,6 +1891,7 @@ fn render_groups(
                                 None,
                                 tab.pinned,
                                 false,
+                                None,
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -1883,7 +1902,15 @@ fn render_groups(
                     }
                 }
             })
-            .collect()
+            .collect();
+
+        // A query matching a group's name reveals every tab under that group,
+        // even members whose own text does not match.
+        let matched_groups = matched_group_ids(&workspace.tab_groups, &query_lower);
+        let tab_group_ids: Vec<Option<TabGroupId>> =
+            workspace.tabs.iter().map(|tab| tab.group_id).collect();
+
+        merge_group_name_matches(&tab_group_ids, &matched_groups, own_matches)
     };
 
     if visible_tabs.is_empty() {
@@ -1931,7 +1958,14 @@ fn render_groups(
                 .get(&gid)
                 .map(|group| (gid, group.clone()))
         }) {
-            Some((group_id, group)) => {
+            Some((group_id, mut group)) => {
+                // While a search is active, render every surviving group
+                // expanded so its matches are visible without a click. This
+                // only mutates the local clone — the stored `collapsed` flag is
+                // untouched, so clearing the query restores the real state.
+                if !query.is_empty() {
+                    group.collapsed = false;
+                }
                 // Members are a contiguous subslice of `visible_tabs`.
                 let run_len = visible_tabs[i..]
                     .iter()
@@ -2232,6 +2266,7 @@ fn render_tab_group_internal(
                     None,
                     tab.pinned,
                     group_state.is_hovered(),
+                    tab_activate_binding_name(tab_index, workspace.tabs.len()),
                     app,
                 ) else {
                     return Empty::new().finish();
@@ -2291,6 +2326,7 @@ fn render_tab_group_internal(
                     is_pane_being_renamed.then_some(workspace.pane_rename_editor.clone()),
                     tab.pinned,
                     group_state.is_hovered(),
+                    tab_activate_binding_name(tab_index, workspace.tabs.len()),
                     app,
                 ) else {
                     continue;
@@ -2739,6 +2775,7 @@ fn render_tab_group_header_icon_button(
 #[allow(clippy::too_many_arguments)]
 fn render_grouped_tabs_header(
     group: &TabGroup,
+    search_query: &str,
     member_count: usize,
     mouse_states: &TabGroupMouseStates,
     is_collapsed: bool,
@@ -2747,9 +2784,9 @@ fn render_grouped_tabs_header(
     is_being_renamed: bool,
     rename_editor: Option<&ViewHandle<EditorView>>,
     collapsed_member_kinds: Option<&[SummaryPaneKind]>,
-    app: &AppContext,
+    ctx: &AppContext,
 ) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
+    let appearance = Appearance::as_ref(ctx);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
     let main_text_color = theme.main_text_color(theme.background());
@@ -2787,15 +2824,17 @@ fn render_grouped_tabs_header(
 
     let title_element: Box<dyn Element> =
         if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
-            render_inline_tab_rename_editor(editor, appearance, app)
+            render_inline_tab_rename_editor(editor, appearance, ctx)
         } else {
-            let title_text = group
-                .name
-                .clone()
-                .unwrap_or_else(|| "New Group".to_string());
+            let title_text = group_display_name(group);
+            let highlight_indices = group_name_highlight_indices(&title_text, search_query);
             Text::new_inline(title_text, font_family, 12.)
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(main_text_color.into())
+                .with_single_highlight(
+                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                    highlight_indices,
+                )
                 .finish()
         };
     let subtitle_text = if member_count == 1 {
@@ -3014,6 +3053,7 @@ fn render_grouped_tab_container(
             is_collapsed.then(|| workspace.compute_group_member_kinds(group.id, app));
         let header = render_grouped_tabs_header(
             &group,
+            &state.search_query,
             member_count,
             &mouse_states,
             is_collapsed,
@@ -3427,6 +3467,24 @@ fn render_synced_inputs_indicator() -> Box<dyn Element> {
     .finish()
 }
 
+/// Resolves the switch-to-tab shortcut label for a row while the reveal
+/// modifier is held. Returns `None` when no hint should be shown.
+fn shortcut_hint_label(props: &PaneProps<'_>, app: &AppContext) -> Option<String> {
+    if !reveals_tab_shortcut_hints(app) {
+        return None;
+    }
+    keybinding_name_to_display_string(props.shortcut_hint_binding_name?, app)
+}
+
+/// Inline label showing the switch-to-tab keyboard shortcut, mirroring the
+/// horizontal tab bar's `TabComponent::render_shortcut_hint`.
+fn render_shortcut_hint(label: &str, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Text::new_inline(label.to_string(), appearance.ui_font_family(), 12.)
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish()
+}
+
 /// Row title line with its trailing indicators — the synchronized-inputs link
 /// icon followed by the unread-activity dot — pinned to the right edge. Returns
 /// `title` untouched when the row has no indicator to show.
@@ -3434,9 +3492,10 @@ fn render_row_title_line(
     title: Box<dyn Element>,
     shows_synced_inputs: bool,
     shows_activity_indicator: bool,
+    shortcut_hint: Option<Box<dyn Element>>,
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
-    if !shows_synced_inputs && !shows_activity_indicator {
+    if !shows_synced_inputs && !shows_activity_indicator && shortcut_hint.is_none() {
         return title;
     }
 
@@ -3449,6 +3508,9 @@ fn render_row_title_line(
     }
     if shows_activity_indicator {
         indicators.add_child(render_title_indicator(theme));
+    }
+    if let Some(hint) = shortcut_hint {
+        indicators.add_child(hint);
     }
 
     Flex::row()
@@ -3521,6 +3583,13 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         if has_indicator {
             title_row.add_child(
                 Container::new(render_title_indicator(theme))
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
+        if let Some(label) = shortcut_hint_label(&props, app) {
+            title_row.add_child(
+                Container::new(render_shortcut_hint(&label, appearance))
                     .with_margin_left(4.)
                     .finish(),
             );
@@ -3867,6 +3936,7 @@ impl<'a> PaneProps<'a> {
         pane_rename_editor: Option<ViewHandle<EditorView>>,
         is_pinned: bool,
         container_is_hovered: bool,
+        shortcut_hint_binding_name: Option<&'static str>,
         app: &AppContext,
     ) -> Option<Self> {
         let pane = pane_group.pane_by_id(pane_id)?;
@@ -3921,6 +3991,7 @@ impl<'a> PaneProps<'a> {
             pane_rename_editor,
             is_pinned,
             container_is_hovered,
+            shortcut_hint_binding_name,
         })
     }
 
@@ -4007,6 +4078,102 @@ fn should_show_tab_group_header(
     visible_pane_count: usize,
 ) -> bool {
     has_custom_title || is_being_renamed || visible_pane_count > 1
+}
+
+/// Header text for a tab group the user has never named.
+const UNTITLED_GROUP_NAME: &str = "New Group";
+
+/// The group title as displayed in the panel header, including the fallback
+/// used for a group the user has never named. Search matches against this so a
+/// query matches what is actually on screen.
+fn group_display_name(group: &TabGroup) -> String {
+    group
+        .name
+        .clone()
+        .unwrap_or_else(|| UNTITLED_GROUP_NAME.to_string())
+}
+
+fn group_name_highlight_indices(text: &str, query: &str) -> Vec<usize> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let text_lower = text.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let matches: Vec<_> = text_lower
+        .char_indices()
+        .filter(|(start, _)| text_lower[*start..].starts_with(&query_lower))
+        .map(|(start, _)| start..start + query_lower.len())
+        .collect();
+    let mut indices = Vec::new();
+    let mut offset = 0;
+    // Lowercasing can expand a character, so match bytes must map back to original char indices.
+    for (index, character) in text.chars().enumerate() {
+        let end = offset + character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if matches
+            .iter()
+            .any(|range| range.start < end && offset < range.end)
+        {
+            indices.push(index);
+        }
+        offset = end;
+    }
+    indices
+}
+
+/// Returns the ids of tab groups whose displayed name contains `query_lower`.
+fn matched_group_ids(
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    query_lower: &str,
+) -> HashSet<TabGroupId> {
+    tab_groups
+        .iter()
+        .filter(|(_, group)| {
+            group_display_name(group)
+                .to_lowercase()
+                .contains(query_lower)
+        })
+        .map(|(group_id, _)| *group_id)
+        .collect()
+}
+
+/// Whether a tab is admitted by its group's name matching the query, rather
+/// than by its own text. Ungrouped tabs are never admitted this way.
+fn tab_admitted_by_group_name(
+    group_id: Option<TabGroupId>,
+    matched_groups: &HashSet<TabGroupId>,
+) -> bool {
+    group_id.is_some_and(|id| matched_groups.contains(&id))
+}
+
+/// Merges text matches with members of name-matched tab groups while preserving tab order.
+/// Members admitted by group name use `None` so the full tab is shown.
+fn merge_group_name_matches(
+    tab_group_ids: &[Option<TabGroupId>],
+    matched_groups: &HashSet<TabGroupId>,
+    own_matches: Vec<(usize, Option<Vec<PaneId>>)>,
+) -> Vec<(usize, Option<Vec<PaneId>>)> {
+    if matched_groups.is_empty() {
+        return own_matches;
+    }
+
+    let mut merged: Vec<(usize, Option<Vec<PaneId>>)> = Vec::with_capacity(own_matches.len());
+    let mut own_matches = own_matches.into_iter().peekable();
+
+    for (tab_index, group_id) in tab_group_ids.iter().enumerate() {
+        let in_matched_group = tab_admitted_by_group_name(*group_id, matched_groups);
+        let own_match = own_matches.next_if(|(index, _)| *index == tab_index);
+
+        match (in_matched_group, own_match) {
+            // The group name matched, so the whole tab is shown regardless of
+            // whether it also matched on its own text.
+            (true, _) => merged.push((tab_index, None)),
+            (false, Some(own_match)) => merged.push(own_match),
+            (false, None) => {}
+        }
+    }
+
+    merged
 }
 
 fn search_fragments_contain_query(fragments: &[String], query_lower: &str) -> bool {
@@ -4157,7 +4324,7 @@ fn terminal_kind_badge_label(is_oz_agent: bool, cli_agent: Option<CLIAgent>) -> 
     if let Some(cli_agent) = cli_agent {
         cli_agent.display_name().to_string()
     } else if is_oz_agent {
-        "Oz".to_string()
+        "Warp Agent".to_string()
     } else {
         "Terminal".to_string()
     }
@@ -4484,6 +4651,7 @@ fn render_terminal_row_content(
         first_line,
         row_shows_synced_inputs_indicator(props, app),
         has_unread_activity(&props.typed, app),
+        shortcut_hint_label(props, app).map(|label| render_shortcut_hint(&label, appearance)),
         theme,
     );
 
@@ -4774,6 +4942,7 @@ fn render_summary_tab_item(
         title_region.finish(),
         row_shows_synced_inputs_indicator(&props, app),
         summary.has_unread_activity,
+        shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance)),
         theme,
     ));
 
@@ -5252,7 +5421,7 @@ fn render_terminal_primary_line_for_view(
 
 /// Primary line for terminal pane rows. Precedence:
 /// 1. CLI agent session with plugin data (query/summary) + status
-/// 2. Oz agent conversation title + status
+/// 2. Warp Agent conversation title + status
 /// 3. Terminal title
 fn render_terminal_primary_line(
     primary_line: TerminalPrimaryLineData,
@@ -6757,6 +6926,7 @@ fn detail_pane_props<'a>(
         None,
         false,
         false,
+        None,
         app,
     )
 }
@@ -7360,6 +7530,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         title_element,
         row_shows_synced_inputs_indicator(&props, app),
         has_indicator,
+        shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance)),
         theme,
     );
 

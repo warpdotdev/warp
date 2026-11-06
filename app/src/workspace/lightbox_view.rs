@@ -142,25 +142,32 @@ impl View for LightboxView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
 
-        // Determine the native pixel size of the current image by querying the
-        // asset cache. This will be `Some` once the image bytes have been fully
-        // loaded and decoded.
-        let current_image_native_size =
-            self.params
-                .images
-                .get(self.current_index)
-                .and_then(|img| match &img.source {
-                    lightbox::LightboxImageSource::Resolved { asset_source } => {
-                        let asset_cache = AssetCache::as_ref(app);
-                        match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
-                            AssetState::Loaded { data } => data
-                                .image_size()
-                                .map(|size| Vector2F::new(size.x() as f32, size.y() as f32)),
-                            _ => None,
+        // Determine the load state of the current image by querying the asset
+        // cache. The image renders once its bytes have been fully loaded and
+        // decoded; a failed fetch or decode surfaces as an error state.
+        let current_image_state = self
+            .params
+            .images
+            .get(self.current_index)
+            .map(|img| match &img.source {
+                lightbox::LightboxImageSource::Resolved { asset_source } => {
+                    let asset_cache = AssetCache::as_ref(app);
+                    match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
+                        AssetState::Loaded { data } => data
+                            .image_size()
+                            .map(|size| lightbox::CurrentImageState::Loaded {
+                                native_size: Vector2F::new(size.x() as f32, size.y() as f32),
+                            })
+                            .unwrap_or(lightbox::CurrentImageState::Failed),
+                        AssetState::FailedToLoad(_) => lightbox::CurrentImageState::Failed,
+                        AssetState::Loading { .. } | AssetState::Evicted => {
+                            lightbox::CurrentImageState::Loading
                         }
                     }
-                    lightbox::LightboxImageSource::Loading => None,
-                });
+                }
+                lightbox::LightboxImageSource::Loading => lightbox::CurrentImageState::Loading,
+            })
+            .unwrap_or(lightbox::CurrentImageState::Loading);
 
         self.lightbox.render(
             appearance,
@@ -170,7 +177,7 @@ impl View for LightboxView {
                 on_dismiss: Arc::new(|ctx, _| {
                     ctx.dispatch_typed_action(LightboxViewAction::Dismiss);
                 }),
-                current_image_native_size,
+                current_image_state,
                 options: lightbox::Options {
                     dismiss_keystroke: Keystroke::parse("escape").ok(),
                     on_navigate: Some(Arc::new(|direction, ctx, _| match direction {

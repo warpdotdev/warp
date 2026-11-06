@@ -1,4 +1,29 @@
+use prost::Message as _;
+use warp_terminal::event::ObservedExitStatus;
+
 use super::*;
+#[test]
+fn terminal_busy_is_a_recoverable_serialized_tool_error() {
+    let result = RequestCommandOutputResult::TerminalBusy {
+        command: "ls".into(),
+        block_id: "running-command".to_owned().into(),
+    };
+    let action_result = AIAgentActionResultType::RequestCommandOutput(result.clone());
+    assert!(action_result.is_failed());
+    assert!(!action_result.is_successful());
+    assert!(!action_result.is_cancelled());
+    assert!(action_result.should_trigger_request_upon_completion());
+    assert!(result.to_string().contains("not started"));
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) =
+        api::request::input::tool_call_result::Result::try_from(result).unwrap()
+    else {
+        panic!("expected run-shell result");
+    };
+    assert_eq!(result.command, "ls");
+    assert!(matches!(result.result,
+        Some(api::run_shell_command_result::Result::TerminalBusy(busy))
+            if busy.running_command_id == "running-command"));
+}
 
 #[test]
 fn read_files_partial_success_converts_failed_files() {
@@ -61,4 +86,92 @@ fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {
         success.answers[1].answer,
         Some(AskUserQuestionAnswer::Skipped(()))
     ));
+}
+
+fn converted_recovered_command(
+    status: ObservedExitStatus,
+    output: &str,
+) -> api::ShellCommandFinished {
+    let converted = api::request::input::tool_call_result::Result::try_from(
+        RequestCommandOutputResult::ShellRecovered {
+            block_id: BlockId::new(),
+            command: "exit".to_owned(),
+            output: output.to_owned(),
+            status,
+            restored_working_directory: "/home/agent".to_owned(),
+            used_fallback_directory: false,
+            start_ts: None,
+            completed_ts: None,
+        },
+    )
+    .expect("recovered result should convert");
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) = converted else {
+        panic!("expected run shell command result");
+    };
+    let Some(api::run_shell_command_result::Result::CommandFinished(result)) = result.result else {
+        panic!("expected completed shell command");
+    };
+    result
+}
+fn converted_read_recovered_command(
+    status: ObservedExitStatus,
+    output: &str,
+) -> api::ShellCommandFinished {
+    let converted = api::request::input::tool_call_result::Result::try_from(
+        ReadShellCommandOutputResult::ShellRecovered {
+            block_id: BlockId::new(),
+            command: "exit".to_owned(),
+            output: output.to_owned(),
+            status,
+            start_ts: None,
+            completed_ts: None,
+        },
+    )
+    .expect("recovered read result should convert");
+    let api::request::input::tool_call_result::Result::ReadShellCommandOutput(result) = converted
+    else {
+        panic!("expected read shell command result");
+    };
+    let Some(api::read_shell_command_output_result::Result::CommandFinished(result)) =
+        result.result
+    else {
+        panic!("expected completed shell command");
+    };
+    result
+}
+
+#[test]
+fn recovered_signal_and_unavailable_never_report_success_on_the_wire() {
+    for (status, expected_exit_code) in [
+        (ObservedExitStatus::Signal(9), 137),
+        (ObservedExitStatus::Unavailable, 1),
+    ] {
+        for result in [
+            converted_recovered_command(status, ""),
+            converted_read_recovered_command(status, ""),
+        ] {
+            assert_eq!(result.exit_code, expected_exit_code);
+        }
+    }
+}
+
+#[test]
+fn recovered_nonzero_exit_code_is_serialized() {
+    let result = converted_recovered_command(ObservedExitStatus::Code(42), "");
+
+    assert_eq!(result.exit_code, 42);
+    assert!(
+        result
+            .encode_to_vec()
+            .windows(2)
+            .any(|bytes| bytes == [0x10, 42])
+    );
+    let read_result = converted_read_recovered_command(ObservedExitStatus::Code(42), "");
+    assert_eq!(read_result.exit_code, 42);
+    assert!(
+        read_result
+            .encode_to_vec()
+            .windows(2)
+            .any(|bytes| bytes == [0x10, 42])
+    );
 }

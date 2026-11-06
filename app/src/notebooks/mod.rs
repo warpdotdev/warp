@@ -107,7 +107,7 @@ impl CloudModelType for CloudNotebookModel {
             // a snapshot to update at a moment in time.
             model: notebook.model().clone().into(),
             id: notebook.id,
-            revision: revision_ts.or_else(|| notebook.metadata.revision.clone()),
+            revision: revision_ts.or(notebook.metadata.revision),
         }
     }
 

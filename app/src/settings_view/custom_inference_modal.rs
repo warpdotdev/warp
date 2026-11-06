@@ -1,7 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema};
-use url::Url;
+use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema, validate_custom_endpoint_url};
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
@@ -1082,17 +1079,7 @@ fn validate_url(url: &str) -> Result<(), &'static str> {
     if url.trim().is_empty() {
         return Ok(());
     }
-    let parsed = Url::parse(url).map_err(|_| "Invalid URL")?;
-    if parsed.scheme() != "https" {
-        return Err("URL must use HTTPS");
-    }
-    let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) else {
-        return Err("URL must include a host");
-    };
-    if is_restricted_host(host) {
-        return Err("URL must not use a local or private host");
-    }
-    Ok(())
+    validate_custom_endpoint_url(url)
 }
 
 fn is_endpoint_form_valid(name: &str, url: &str, api_key: &str, has_models: bool) -> bool {
@@ -1103,46 +1090,6 @@ fn is_endpoint_form_valid(name: &str, url: &str, api_key: &str, has_models: bool
         && validate_url(url).is_ok()
 }
 
-fn is_restricted_host(host: &str) -> bool {
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    host.parse::<IpAddr>().is_ok_and(is_restricted_ip)
-}
-
-fn is_restricted_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_restricted_ipv4(ip),
-        IpAddr::V6(ip) => is_restricted_ipv6(ip),
-    }
-}
-
-fn is_restricted_ipv4(ip: Ipv4Addr) -> bool {
-    ip.is_loopback() || ip.is_unspecified() || ip.is_private() || ip.is_link_local()
-}
-
-fn is_restricted_ipv6(ip: Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() || is_ipv6_unique_local(ip) || is_ipv6_link_local(ip)
-    {
-        return true;
-    }
-    if let Some(ipv4) = ip.to_ipv4_mapped() {
-        return is_restricted_ipv4(ipv4);
-    }
-    false
-}
-
-fn is_ipv6_unique_local(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xfe00 == 0xfc00
-}
-
-fn is_ipv6_link_local(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xffc0 == 0xfe80
-}
 impl TypedActionView for CustomEndpointModal {
     type Action = CustomEndpointModalAction;
 

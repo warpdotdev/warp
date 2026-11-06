@@ -8,7 +8,9 @@ use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
+use warp_multi_agent_api::StoredScreenshotRef;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
+use warp_terminal::event::ObservedExitStatus;
 use warp_terminal::model::BlockId;
 
 use crate::agent::FileLocations;
@@ -131,10 +133,16 @@ impl AIAgentActionResultType {
                 RequestCommandOutputResult::Completed { command, .. },
             )
             | AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::ShellRecovered { command, .. },
+            )
+            | AIAgentActionResultType::RequestCommandOutput(
                 RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. },
             )
             | AIAgentActionResultType::ReadShellCommandOutput(
                 ReadShellCommandOutputResult::CommandFinished { command, .. },
+            )
+            | AIAgentActionResultType::ReadShellCommandOutput(
+                ReadShellCommandOutputResult::ShellRecovered { command, .. },
             )
             | AIAgentActionResultType::ReadShellCommandOutput(
                 ReadShellCommandOutputResult::LongRunningCommandSnapshot { command, .. },
@@ -187,6 +195,63 @@ impl Display for AIAgentActionResultType {
     }
 }
 
+/// Evidence, collected by the client while an agent monitors a long-running
+/// command, that the command is still doing work.
+///
+/// A command that redirects its output to a file, suppresses it entirely, or
+/// computes silently is indistinguishable from a hung one when judged from the
+/// terminal grid alone. Process-tree activity gives the agent something to look
+/// at besides the grid before deciding to cancel.
+///
+/// Best-effort: built only when the sampler actually took a reading, so every
+/// value carried here is a real measurement, including zeros. When nothing was
+/// collected, no `LrcActivity` exists at all — there is no in-band "signals
+/// unavailable" marker.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcActivity {
+    /// Time since the process tree last showed activity — CPU accrual, I/O
+    /// writes, or a change in the set of live processes.
+    ///
+    /// This is derived from a fixed-rate sampler rather than from the interval
+    /// between agent polls, so it stays accurate no matter how far apart the
+    /// agent's reads are.
+    pub since_last_activity: Option<Duration>,
+
+    /// Present whenever the process tree was actually inspected, including when
+    /// every reading in it is zero: an exited tree is a real answer. Optional
+    /// only for restoring conversations recorded by other client versions;
+    /// reports built by this client always populate it.
+    pub process: Option<LrcProcessActivity>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcProcessActivity {
+    /// CPU time consumed across the command's process tree since the previous
+    /// snapshot.
+    pub cpu_time_delta: Duration,
+
+    /// Coarse aggregate state of the process tree.
+    pub state: LrcProcessState,
+
+    pub live_process_count: u32,
+
+    /// Bytes written by the process tree since the previous snapshot, where the
+    /// OS reports it.
+    pub io_write_bytes_delta: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub enum LrcProcessState {
+    Running,
+    Sleeping,
+    /// Blocked in uninterruptible I/O, which is real progress rather than a hang.
+    DiskWait,
+    Stopped,
+    Zombie,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum RequestCommandOutputResult {
     Completed {
@@ -203,12 +268,25 @@ pub enum RequestCommandOutputResult {
         grid_contents: String,
         cursor: String,
         is_alt_screen_active: bool,
+        activity: Option<LrcActivity>,
+    },
+    ShellRecovered {
+        block_id: BlockId,
+        command: String,
+        output: String,
+        status: ObservedExitStatus,
+        restored_working_directory: String,
+        used_fallback_directory: bool,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     /// A running command canceled via ctrl-c
     /// would have Completed result with exit code 130.
     CancelledBeforeExecution,
     /// The command was denied because it was present on the denylist.
     Denylisted { command: String },
+    /// The requested command was not started because another command owns the terminal.
+    TerminalBusy { command: String, block_id: BlockId },
 }
 
 impl RequestCommandOutputResult {
@@ -216,14 +294,19 @@ impl RequestCommandOutputResult {
         match self {
             Self::Completed { exit_code, .. } => exit_code.was_successful(),
             Self::LongRunningCommandSnapshot { .. } => true,
-            Self::CancelledBeforeExecution | Self::Denylisted { .. } => false,
+            Self::ShellRecovered { .. }
+            | Self::CancelledBeforeExecution
+            | Self::Denylisted { .. }
+            | Self::TerminalBusy { .. } => false,
         }
     }
 
     pub fn failed(&self) -> bool {
         match self {
             Self::Completed { exit_code, .. } => !exit_code.was_successful(),
-            Self::Denylisted { .. } => true,
+            Self::ShellRecovered { .. } | Self::Denylisted { .. } | Self::TerminalBusy { .. } => {
+                true
+            }
             Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
         }
     }
@@ -249,11 +332,23 @@ impl Display for RequestCommandOutputResult {
             RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. } => {
                 write!(f, "Command '{command}' is long-running")
             }
+            RequestCommandOutputResult::ShellRecovered {
+                command, status, ..
+            } => write!(
+                f,
+                "Command '{command}' terminated the persistent cloud shell ({status})"
+            ),
             RequestCommandOutputResult::CancelledBeforeExecution => {
                 write!(f, "Command output cancelled")
             }
             RequestCommandOutputResult::Denylisted { .. } => {
                 write!(f, "Command output was on denylist")
+            }
+            RequestCommandOutputResult::TerminalBusy { block_id, .. } => {
+                write!(
+                    f,
+                    "Command was not started: terminal is busy running command {block_id}"
+                )
             }
         }
     }
@@ -272,6 +367,7 @@ pub enum WriteToLongRunningShellCommandResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,
@@ -588,6 +684,15 @@ pub enum ReadShellCommandOutputResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
+    },
+    ShellRecovered {
+        command: String,
+        block_id: BlockId,
+        output: String,
+        status: ObservedExitStatus,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -607,6 +712,12 @@ impl Display for ReadShellCommandOutputResult {
             }
             ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. } => {
                 write!(f, "Sent snapshot of long-running shell command to agent")
+            }
+            ReadShellCommandOutputResult::ShellRecovered { output, status, .. } => {
+                write!(
+                    f,
+                    "Shell command terminated the persistent shell ({status}):\n{output}"
+                )
             }
             ReadShellCommandOutputResult::Cancelled => {
                 write!(f, "Read shell command output cancelled")
@@ -819,7 +930,7 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { .. }
                 | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
             )
-            | Self::UseComputer(UseComputerResult::Success(_))
+            | Self::UseComputer(UseComputerResult::Success { .. })
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::StartRecording(StartRecordingResult::Success(_))
@@ -858,6 +969,9 @@ impl AIAgentActionResultType {
             | Self::ReadDocuments(ReadDocumentsResult::Error(_))
             | Self::EditDocuments(EditDocumentsResult::Error(_))
             | Self::CreateDocuments(CreateDocumentsResult::Error(_))
+            | Self::ReadShellCommandOutput(ReadShellCommandOutputResult::ShellRecovered {
+                ..
+            })
             | Self::UseComputer(UseComputerResult::Error(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Error { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Error(_))
@@ -1146,16 +1260,57 @@ impl Display for ReadSkillResult {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseComputerResult {
-    /// Computer use succeeded, with one result per requested action.
-    Success(computer_use::ActionResult),
+    /// Computer use succeeded. Mirrors the wire `Success` message.
+    Success {
+        screenshot: Option<ScreenshotSource>,
+        cursor_position: Option<computer_use::Vector2I>,
+        /// The on-screen windows, refreshed after the actions ran, so the caller always has a
+        /// fresh list to target next. Empty on platforms without window enumeration.
+        windows: Vec<computer_use::WindowInfo>,
+        /// Metadata about the captured window, populated only when a window target was
+        /// screenshotted, so window-local coordinates map onto the screenshot image.
+        captured_window: Option<computer_use::CapturedWindow>,
+    },
     Error(String),
     Cancelled,
+}
+
+/// Where a computer-use screenshot's bytes live, mirroring the wire's
+/// `RawImage.source` oneof.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotSource {
+    /// The bytes are inline on the client.
+    Inline(computer_use::Screenshot),
+    /// The bytes live in Warp-managed object storage and must be fetched via a
+    /// signed URL.
+    Stored {
+        stored_ref: StoredScreenshotRef,
+        /// MIME type of the stored image (e.g. "image/png").
+        mime_type: String,
+        /// The width of the stored image, in pixels.
+        width: i32,
+        /// The height of the stored image, in pixels.
+        height: i32,
+    },
+}
+
+impl UseComputerResult {
+    /// Builds a success result from a locally captured action result, whose
+    /// screenshot bytes (if any) are inline.
+    pub fn success(result: computer_use::ActionResult) -> Self {
+        Self::Success {
+            screenshot: result.screenshot.map(ScreenshotSource::Inline),
+            cursor_position: result.cursor_position,
+            windows: result.windows,
+            captured_window: result.captured_window,
+        }
+    }
 }
 
 impl Display for UseComputerResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UseComputerResult::Success(_) => write!(f, "Use computer completed"),
+            UseComputerResult::Success { .. } => write!(f, "Use computer completed"),
             UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
             UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
         }
@@ -1431,6 +1586,7 @@ pub enum TransferShellCommandControlToUserResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,

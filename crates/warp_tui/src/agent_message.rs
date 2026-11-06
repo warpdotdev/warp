@@ -5,6 +5,7 @@ use warp::tui_export::{
     OrchestrationParticipantKind, ReceivedMessageDisplay, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
 };
+use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
 use warpui_core::elements::tui::{
@@ -15,6 +16,7 @@ use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::orchestrated_agent_identity_styling::{
     AgentIdentity, assign_agent_identity_indices, stable_hash,
 };
+use crate::orchestration_model::ORCHESTRATOR_TAB_LABEL;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Render-ready identity and lifecycle presentation for a message sender.
@@ -105,7 +107,18 @@ fn message_presentation(
             ("Orchestrator".to_owned(), AgentIdentity::default())
         }
         OrchestrationParticipantKind::Agent { name } => (
-            name,
+            {
+                // Depth signal: a sender that is neither the current
+                // conversation's direct child nor its parent/orchestrator is
+                // prefixed with its parent's name (`researcher › crawler`).
+                let parent_prefix = participant.conversation_id.and_then(|sender_id| {
+                    non_direct_sender_parent_label(history, sender_id, current_conversation_id)
+                });
+                match parent_prefix {
+                    Some(parent_name) => format!("{parent_name} › {name}"),
+                    None => name,
+                }
+            },
             participant
                 .conversation_id
                 .and_then(|conversation_id| {
@@ -129,6 +142,52 @@ fn message_presentation(
         status,
         identity,
     }
+}
+
+/// Returns the sender's parent name when the sender is neither the current
+/// conversation's direct child nor its parent, so the collapsed header can
+/// carry the interim depth signal while multi-level orchestration is
+/// enabled. Falls back to `None` — the existing unprefixed treatment —
+/// whenever the lineage cannot be resolved.
+fn non_direct_sender_parent_label(
+    history: &BlocklistAIHistoryModel,
+    sender_conversation_id: AIConversationId,
+    current_conversation_id: AIConversationId,
+) -> Option<String> {
+    if !FeatureFlag::MultiLevelOrchestration.is_enabled()
+        || sender_conversation_id == current_conversation_id
+    {
+        return None;
+    }
+    let sender = history.conversation(&sender_conversation_id)?;
+    let sender_parent_id = history.resolved_parent_conversation_id_for_conversation(sender)?;
+    if sender_parent_id == current_conversation_id {
+        return None;
+    }
+    let current_parent_id = history
+        .conversation(&current_conversation_id)
+        .and_then(|current| history.resolved_parent_conversation_id_for_conversation(current));
+    if current_parent_id == Some(sender_conversation_id) {
+        return None;
+    }
+    let parent = history.conversation(&sender_parent_id)?;
+    let parent_label = parent
+        .agent_name()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            // Only the tree root is the orchestrator; an unnamed mid-tree
+            // parent keeps the shared agent fallback.
+            if history
+                .resolved_parent_conversation_id_for_conversation(parent)
+                .is_none()
+            {
+                ORCHESTRATOR_TAB_LABEL.to_owned()
+            } else {
+                "Agent".to_owned()
+            }
+        });
+    Some(parent_label)
 }
 
 /// The persistent collapse-state key for one received message.

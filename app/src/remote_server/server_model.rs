@@ -51,17 +51,18 @@ use super::proto::{
     GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, HomeSkillMetadata, IndexCodebase,
     Initialize, InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, ResolveConflict,
-    ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase, RipgrepSearchRequest,
-    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
-    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
-    TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess, client_message, delete_file_response,
+    RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, RenameFile,
+    RenameFileResponse, RenameFileSuccess, ResolveConflict, ResolveConflictResponse,
+    ResolveConflictSuccess, ResyncCodebase, RipgrepSearchRequest, RunCommandError,
+    RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer,
+    SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit,
+    UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot, WriteFile,
+    WriteFileResponse, WriteFileSuccess, client_message, delete_file_response,
     discard_files_response, get_diff_state_response, get_fragment_metadata_from_hash_response,
     git_commit_chain_response, git_create_pr_response, git_generate_commit_message_response,
     git_get_committed_branch_files_response, git_push_response, host_scoped_request, notification,
-    remote_skill_proto, resolve_conflict_response, run_command_response, save_buffer_response,
-    server_message, session_scoped_request, write_file_response,
+    remote_skill_proto, rename_file_response, resolve_conflict_response, run_command_response,
+    save_buffer_response, server_message, session_scoped_request, write_file_response,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use super::{diff_state_proto, ripgrep_search};
@@ -188,11 +189,12 @@ enum CodebaseIndexRequestPathKind {
     Requested,
 }
 
-/// Tracks an in-flight file write or delete so the async completion
+/// Tracks an in-flight file operation so the async completion
 /// event can be correlated back to the originating client request.
 enum FileOpKind {
     Write,
     Delete,
+    Rename,
 }
 
 struct PendingFileOp {
@@ -296,7 +298,7 @@ pub struct ServerModel {
     remote_agent_context_snapshot_sent: HashSet<ConnectionId>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
-    /// Tracks in-flight file write/delete operations and handles cleanup.
+    /// Tracks in-flight file operations and handles cleanup.
     pending_file_ops: PendingFileOps,
     /// Daemon-wide auth credentials and user identity.
     auth_state: Arc<AuthState>,
@@ -388,6 +390,20 @@ impl ServerModel {
                             result: Some(delete_file_response::Result::Success(
                                 DeleteFileSuccess {},
                             )),
+                        })
+                    }
+                    (FileModelEvent::FileSaved { .. }, FileOpKind::Rename) => {
+                        server_message::Message::RenameFileResponse(RenameFileResponse {
+                            result: Some(rename_file_response::Result::Success(
+                                RenameFileSuccess {},
+                            )),
+                        })
+                    }
+                    (FileModelEvent::FailedToSave { error, .. }, FileOpKind::Rename) => {
+                        server_message::Message::RenameFileResponse(RenameFileResponse {
+                            result: Some(rename_file_response::Result::Error(FileOperationError {
+                                message: format!("{error}"),
+                            })),
                         })
                     }
                     (FileModelEvent::FailedToSave { error, .. }, FileOpKind::Write) => {
@@ -902,6 +918,9 @@ impl ServerModel {
                     }
                     Some(host_scoped_request::Message::DeleteFile(m)) => {
                         self.handle_delete_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::RenameFile(m)) => {
+                        self.handle_rename_file(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::ReadFileContext(m)) => {
                         self.handle_read_file_context(m, &request_id, conn_id, ctx)
@@ -2304,6 +2323,42 @@ impl ServerModel {
         }
 
         // Response sent asynchronously via the event subscription.
+        HandlerOutcome::Async(None)
+    }
+
+    fn handle_rename_file(
+        &mut self,
+        msg: RenameFile,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let (file_id, version) = self.pending_file_ops.insert(
+            Path::new(&msg.path),
+            request_id.clone(),
+            conn_id,
+            FileOpKind::Rename,
+            ctx,
+        );
+        let file_model = FileModel::handle(ctx);
+        if let Err(error) = file_model.update(ctx, |model, ctx| {
+            model.rename_and_save(
+                file_id,
+                PathBuf::from(msg.new_path),
+                msg.content,
+                version,
+                ctx,
+            )
+        }) {
+            self.pending_file_ops.remove(file_id, ctx);
+            return HandlerOutcome::Sync(server_message::Message::RenameFileResponse(
+                RenameFileResponse {
+                    result: Some(rename_file_response::Result::Error(FileOperationError {
+                        message: format!("Failed to initiate rename: {error}"),
+                    })),
+                },
+            ));
+        }
         HandlerOutcome::Async(None)
     }
 

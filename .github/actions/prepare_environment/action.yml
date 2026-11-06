@@ -15,8 +15,8 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
-  ssh_key:
-    description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
+  install_channel_config:
+    description: If true, mint a read token for the private warp-channel-config repository so the channel config generator can be installed. Only honored when running in warpdotdev/warp-internal.
 
 runs:
   using: composite
@@ -87,19 +87,46 @@ runs:
           rust
           ${{ inputs.target_os == 'macos' && 'brew' || '' }}
 
+    # The script pins the binstall version, verifies the archive against an
+    # in-repo SHA-256, retries transient download failures, and skips the
+    # download entirely when the pinned version is already present (e.g.
+    # restored from a runner cache).
     - name: Install cargo-binstall
-      uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
-      env:
-        BINSTALL_VERSION: 1.14.4
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        ./script/install_cargo_binstall
 
-    # Load the SSH key needed to clone the private warp-channel-config repo. Only
-    # run in warpdotdev/warp-internal; elsewhere (mirrors, fork PRs) this is a no-op
-    # and install_channel_config falls back gracefully.
-    - name: Setup SSH keys for warp-channel-config
-      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.ssh_key != '' }}
-      uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+    # The channel config generator lives in a private repo that install_channel_config fetches
+    # over an SSH URL. Only warpdotdev/warp-internal can mint a token for it; elsewhere (mirrors,
+    # fork PRs) these steps are skipped and install_channel_config falls back gracefully.
+    - name: Mint warp-channel-config token
+      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.install_channel_config == 'true' }}
+      id: channel_config_token
+      uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
       with:
-        ssh-private-key: ${{ inputs.ssh_key }}
+        scope: warpdotdev/warp-channel-config
+        identity: warp-internal-release
+
+    # Rewrite the SSH URL to HTTPS and attach the minted token as an Authorization header scoped
+    # to the warp-channel-config URL. The token must go in a header rather than the URL:
+    # actions/checkout persists an `http.https://github.com/.extraheader` carrying GITHUB_TOKEN
+    # for the checkout, and git lets that header override URL-embedded credentials whenever a
+    # fetch runs inside the checkout. git picks the extraheader with the longest matching URL
+    # prefix, so the warp-channel-config-scoped one wins; URL paths match per component, so the
+    # key must carry the `.git` suffix that install_channel_config fetches. cargo only honors git
+    # URL rewrites when it shells out to the git CLI, so turn that on for the rest of the job.
+    - name: Route warp-channel-config fetches through the minted token
+      if: ${{ steps.channel_config_token.outputs.token != '' }}
+      shell: bash
+      env:
+        CHANNEL_CONFIG_TOKEN: ${{ steps.channel_config_token.outputs.token }}
+      run: |
+        basic_auth="$(printf 'x-access-token:%s' "$CHANNEL_CONFIG_TOKEN" | base64 | tr -d '\n')"
+        echo "::add-mask::$basic_auth"
+        git config --global "url.https://github.com/warpdotdev/warp-channel-config.insteadOf" "ssh://git@github.com/warpdotdev/warp-channel-config"
+        git config --global "http.https://github.com/warpdotdev/warp-channel-config.git.extraheader" "AUTHORIZATION: basic $basic_auth"
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
@@ -147,16 +174,6 @@ runs:
           exit 1
         fi
 
-    - name: Install Node
-      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-      with:
-        node-version: 20.9.0
-
-    - name: Enable Corepack
-      # Enables NodeJS's Corepack tool, which is necessary to use the right version of `yarn` to
-      # build TS command signatures.
-      shell: bash
-      run: corepack enable
 
     - name: Install protoc for generating rust bindings of protobuf APIs
       id: install_protoc

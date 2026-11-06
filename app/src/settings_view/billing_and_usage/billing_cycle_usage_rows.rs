@@ -41,6 +41,16 @@ const ROW_PADDING: f32 = 12.;
 const SELF_OWN_KEY: &str = "__self_own__";
 const OTHER_MEMBERS_KEY: &str = "__other_members__";
 
+const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
+
+fn dimmed_row_text_color(main: ColorU, dimmed: ColorU, is_dimmed: bool) -> ColorU {
+    if is_dimmed { dimmed } else { main }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourceFilter {
     #[default]
@@ -75,13 +85,14 @@ pub struct MemberUsageRow {
     /// Used to deep-link `ServiceAccount` rows to their Oz agent page.
     pub subject_uid: Option<String>,
     pub display_name: String,
-    pub total_credits: i64,
-    pub total_cost_cents: i64,
-    /// Sorted by cost-type then bucket order; zero-credit entries dropped.
+    pub total_credits: f64,
+    pub total_cost_cents: f64,
+    /// Sorted by cost-type then bucket order; entries with no credit or monetary usage dropped.
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
-    pub bar_max_credits: i64,
+    pub bar_max_credits: f64,
     pub is_current_team_member: bool,
+    pub is_disabled: bool,
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -128,8 +139,9 @@ impl MemberUsageRow {
             total_credits,
             total_cost_cents,
             segments,
-            bar_max_credits: total_credits.max(1),
+            bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
@@ -139,14 +151,14 @@ impl MemberUsageRow {
     fn for_viewer_from_total(
         viewer_uid: Option<String>,
         viewer_display_name: String,
-        used: i64,
+        used: f64,
     ) -> Self {
-        let segments = if used > 0 {
+        let segments = if used > 0.0 {
             vec![BarSegment {
                 cost_type: AiCreditsUsageAndCostType::BaseLimit,
                 usage_bucket: AiCreditsUsageBucket::Ai,
                 credits: used,
-                cost_cents: 0,
+                cost_cents: 0.0,
             }]
         } else {
             Vec::new()
@@ -157,10 +169,11 @@ impl MemberUsageRow {
             subject_uid: viewer_uid,
             display_name: viewer_display_name,
             total_credits: used,
-            total_cost_cents: 0,
+            total_cost_cents: 0.0,
             segments,
-            bar_max_credits: used.max(1),
+            bar_max_credits: used.max(1.0),
             is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
@@ -180,8 +193,9 @@ impl MemberUsageRow {
             total_credits,
             total_cost_cents,
             segments,
-            bar_max_credits: total_credits.max(1),
+            bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
@@ -244,7 +258,7 @@ impl MemberUsageRow {
             let (segments, total_credits, total_cost_cents) =
                 match unmatched_usage_by_subject.remove(&key) {
                     Some(group) => aggregate_segments(group.entries.iter()),
-                    None => (Vec::new(), 0, 0),
+                    None => (Vec::new(), 0.0, 0.0),
                 };
 
             rows.push(Self {
@@ -255,8 +269,9 @@ impl MemberUsageRow {
                 total_credits,
                 total_cost_cents,
                 segments,
-                bar_max_credits: 0,
+                bar_max_credits: 0.0,
                 is_current_team_member: true,
+                is_disabled: member.is_disabled,
             });
         }
 
@@ -283,15 +298,16 @@ impl MemberUsageRow {
                 total_credits,
                 total_cost_cents,
                 segments,
-                bar_max_credits: 0,
+                bar_max_credits: 0.0,
                 is_current_team_member,
+                is_disabled: false,
             });
         }
 
         // Sort by total credits desc, stable by subject_key.
         rows.sort_by(|a, b| {
             b.total_credits
-                .cmp(&a.total_credits)
+                .total_cmp(&a.total_credits)
                 .then_with(|| a.subject_key.cmp(&b.subject_key))
         });
 
@@ -337,12 +353,7 @@ fn build_rows(
         visibility.granularity,
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown
     ) {
-        let top = rows
-            .iter()
-            .map(|r| r.total_credits)
-            .max()
-            .unwrap_or(0)
-            .max(1);
+        let top = rows.iter().map(|r| r.total_credits).fold(1.0, f64::max);
         for row in &mut rows {
             row.bar_max_credits = top;
         }
@@ -360,15 +371,16 @@ pub fn has_cloud_usage(entries: &[BillingCycleUsageEntry]) -> bool {
 
 fn render_stacked_bar(
     segments: &[BarSegment],
-    total_credits: i64,
-    team_max_credits: i64,
+    total_credits: f64,
+    team_max_credits: f64,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let track_bg = theme.surface_overlay_1();
     let corner = Radius::Pixels(BAR_CORNER_RADIUS);
+    let segments = segments.iter().filter(|s| s.credits > 0.0).collect_vec();
 
-    if team_max_credits == 0 || total_credits == 0 || segments.is_empty() {
+    if team_max_credits == 0.0 || total_credits == 0.0 || segments.is_empty() {
         // Empty track, top-rounded on both ends.
         return ConstrainedBox::new(
             Container::new(Empty::new().finish())
@@ -470,7 +482,7 @@ fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Eleme
 /// Renders one row card (stacked bar + name/totals).
 fn render_row_card(
     row: &MemberUsageRow,
-    team_max_credits: i64,
+    team_max_credits: f64,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -478,6 +490,7 @@ fn render_row_card(
     let card_bg = theme.background().into_solid();
     let main = blended_colors::text_main(theme, card_bg);
     let is_former_member = !row.is_current_team_member;
+    let is_dimmed = is_former_member || row.is_disabled;
 
     let bar = render_stacked_bar(
         &row.segments,
@@ -518,11 +531,11 @@ fn render_row_card(
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(if is_former_member {
-            theme.sub_text_color(theme.background()).into()
-        } else {
-            main
-        })
+        .with_color(dimmed_row_text_color(
+            main,
+            theme.sub_text_color(theme.background()).into(),
+            is_dimmed,
+        ))
         .finish()
     };
 
@@ -620,12 +633,28 @@ fn render_row_card(
         .with_child(Container::new(cost_cluster).with_margin_left(6.).finish())
         .finish();
 
+    let name_row_element: Box<dyn Element> = match disabled_member_tooltip_text(row.is_disabled) {
+        Some(tooltip_text) => {
+            let disabled_state =
+                mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key));
+            appearance.ui_builder().overlay_tool_tip_on_element(
+                tooltip_text.to_string(),
+                disabled_state,
+                name_row.finish(),
+                ParentAnchor::TopLeft,
+                ChildAnchor::BottomLeft,
+                vec2f(0., -TOOLTIP_GAP),
+            )
+        }
+        None => name_row.finish(),
+    };
+
     let body = Container::new(
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_child(Shrinkable::new(1., name_row.finish()).finish())
+            .with_child(Shrinkable::new(1., name_row_element).finish())
             .with_child(
                 Container::new(credits_and_cost)
                     .with_margin_left(16.)
@@ -646,7 +675,7 @@ fn render_row_card(
     .with_background_color(card_bg)
     .with_border(Border::all(ROW_BORDER_WIDTH).with_border_color(theme.outline().into_solid()))
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)));
-    if is_former_member {
+    if is_dimmed {
         card = card.with_foreground_overlay(theme.background().with_opacity(40));
     }
     card.finish()
@@ -655,7 +684,7 @@ fn render_row_card(
 /// Row card wrapped in a Hoverable that opens the breakdown tooltip.
 fn render_member_row(
     row: &MemberUsageRow,
-    team_max_credits: i64,
+    team_max_credits: f64,
     tooltip_mouse_state: MouseStateHandle,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
@@ -665,15 +694,16 @@ fn render_member_row(
         return render_row_card(row, team_max_credits, mouse_states, appearance);
     }
 
-    // The info icon sits inside the row card, so hovering it would otherwise
-    // trigger both this row's breakdown tooltip and the icon's own tooltip
-    // on top of each other. Pull the icon's hover state up so we can
-    // suppress the breakdown tooltip while the icon is hovered.
+    // Pull nested hover states up so the breakdown tooltip is suppressed
+    // while the info icon or disabled tooltip is hovered.
     let info_state = matches!(
         row.subject_type,
         AiCreditsUsageAndCostSubjectType::ServiceAccount
     )
     .then(|| mouse_states.tooltip_mouse_state(&format!("{}__agent_info", row.subject_key)));
+    let disabled_state = row
+        .is_disabled
+        .then(|| mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key)));
 
     Hoverable::new(tooltip_mouse_state, move |state| {
         let mut stack = Stack::new();
@@ -687,8 +717,11 @@ fn render_member_row(
         let info_hovered = info_state
             .as_ref()
             .is_some_and(|s| s.lock().is_ok_and(|guard| guard.is_hovered()));
+        let disabled_hovered = disabled_state
+            .as_ref()
+            .is_some_and(|s| s.lock().is_ok_and(|guard| guard.is_hovered()));
 
-        if state.is_hovered() && !info_hovered {
+        if state.is_hovered() && !info_hovered && !disabled_hovered {
             stack.add_positioned_overlay_child(
                 render_usage_tooltip_content(row, appearance),
                 OffsetPositioning::offset_from_parent(
@@ -790,7 +823,7 @@ pub fn render_own_usage_solo_row(
     let row = MemberUsageRow::for_viewer_from_total(
         viewer_uid,
         display_name,
-        model.requests_used() as i64,
+        model.requests_used() as f64,
     );
     render_member_row_list(std::slice::from_ref(&row), mouse_states, appearance)
 }

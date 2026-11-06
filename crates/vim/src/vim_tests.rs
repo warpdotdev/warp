@@ -7,6 +7,49 @@ fn type_chars(fsa: &mut VimFSA, chars: &str) -> Vec<VimEvent> {
         .collect()
 }
 
+#[test]
+fn line_text_objects_dispatch_from_operator_pending_mode() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, "dilyal");
+
+    assert_eq!(events.len(), 2);
+    assert_operation_text_object(&events[0], VimOperator::Delete, TextObjectInclusion::Inner);
+    assert_operation_text_object(&events[1], VimOperator::Yank, TextObjectInclusion::Around);
+
+    let event = type_chars(&mut fsa, "dl").pop().unwrap();
+    assert_operation_motion(
+        &event,
+        VimOperator::Delete,
+        &VimMotion::Character(CharacterMotion::Right),
+        MotionType::Charwise,
+    );
+}
+
+#[test]
+fn line_text_objects_set_the_visual_motion_type() {
+    let mut fsa = enter_visual_mode(MotionType::Linewise);
+    let event = type_chars(&mut fsa, "il").pop().unwrap();
+
+    assert!(matches!(
+        event.event_type,
+        VimEventType::VisualTextObject(VimTextObject {
+            inclusion: TextObjectInclusion::Inner,
+            object_type: TextObjectType::Line,
+        })
+    ));
+    assert_eq!(fsa.mode, VimMode::Visual(MotionType::Charwise));
+
+    let event = type_chars(&mut fsa, "al").pop().unwrap();
+    assert!(matches!(
+        event.event_type,
+        VimEventType::VisualTextObject(VimTextObject {
+            inclusion: TextObjectInclusion::Around,
+            object_type: TextObjectType::Line,
+        })
+    ));
+    assert_eq!(fsa.mode, VimMode::Visual(MotionType::Linewise));
+}
+
 fn enter_normal_mode() -> VimFSA {
     let mut fsa = VimFSA::new();
     fsa.mode = VimMode::Normal;
@@ -130,6 +173,31 @@ fn assert_visual_operator(
     }
 }
 
+fn assert_operation_text_object(
+    event: &VimEvent,
+    expected_operator: VimOperator,
+    expected_inclusion: TextObjectInclusion,
+) {
+    match &event.event_type {
+        VimEventType::Operation {
+            operator,
+            operand:
+                VimOperand::TextObject(VimTextObject {
+                    inclusion,
+                    object_type: TextObjectType::Line,
+                }),
+            ..
+        } => {
+            assert_eq!(*operator, expected_operator);
+            assert!(matches!(
+                (inclusion, expected_inclusion),
+                (TextObjectInclusion::Inner, TextObjectInclusion::Inner)
+                    | (TextObjectInclusion::Around, TextObjectInclusion::Around)
+            ));
+        }
+        other => panic!("expected a line text-object operation, got {other:?}"),
+    }
+}
 fn assert_replace_char(event: &VimEvent, expected_character: char, expected_advance: bool) {
     match &event.event_type {
         VimEventType::ReplaceChar { character, advance } => {

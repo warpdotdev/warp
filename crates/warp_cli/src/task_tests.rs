@@ -27,6 +27,7 @@ fn parse_err(argv: &[&str]) -> clap::Error {
 #[test]
 fn defaults_match_pre_change_behavior() {
     let TestApp { args } = parse(&[]);
+    assert!(args.team_selection.team.is_none());
     assert_eq!(args.limit, 10);
     assert!(args.state.is_empty());
     assert!(args.source.is_none());
@@ -46,6 +47,13 @@ fn defaults_match_pre_change_behavior() {
     assert!(args.sort_by.is_none());
     assert!(args.sort_order.is_none());
     assert!(args.cursor.is_none());
+}
+
+#[test]
+fn team_selection_parses_for_run_listing() {
+    let TestApp { args } = parse(&["--team=team-uid"]);
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-uid"));
 }
 
 #[test]

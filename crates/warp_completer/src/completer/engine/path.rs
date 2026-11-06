@@ -4,12 +4,12 @@ use std::fs::DirEntry;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use itertools::{Itertools, iproduct};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use typed_path::{TypedPath, TypedPathBuf};
 use warp_command_signatures::{IconType, PathSuggestionType};
-use warp_util::path::{HOME_DIR_ENV_VAR_PREFIX, ShellFamily};
+use warp_util::path::{HOME_DIR_ENV_VAR_PREFIX, ShellFamily, expand_session_home};
 
 use crate::completer::context::{PathCompletionContext, PathSeparators};
 use crate::completer::matchers::MatchStrategy;
@@ -197,19 +197,11 @@ pub(crate) async fn sorted_cd_directories(
 /// Tilde-expand a `$CDPATH` entry against the shell's home dir, then resolve
 /// relative entries against the shell's pwd so `cd` matches shell behavior.
 fn resolve_cdpath_entry(entry: &str, ctx: &dyn PathCompletionContext) -> TypedPathBuf {
-    let expanded = if entry == "~" {
-        ctx.home_directory().unwrap_or_default().to_owned()
-    } else if let Some(rest) = entry.strip_prefix("~/") {
-        format!("{}/{}", ctx.home_directory().unwrap_or_default(), rest)
-    } else {
-        entry.to_owned()
-    };
-
-    let resolved = TypedPathBuf::from(expanded.as_str());
+    let resolved = expand_session_home(entry, ctx.home_directory(), ctx.path_separators().all);
     if resolved.is_absolute() {
         resolved
     } else {
-        ctx.pwd().join(expanded)
+        ctx.pwd().join(resolved)
     }
 }
 
@@ -404,16 +396,18 @@ impl SplitPath {
 
         let directory_absolute_path = if directory_relative_path_name.is_empty() {
             current_directory.to_path_buf()
-        } else if let Some(rest) = iproduct!([HOME_DIR_ENV_VAR_PREFIX, "~"], path_separators)
-            .find_map(|(prefix, sep)| {
-                directory_relative_path_name.strip_prefix(&format!("{prefix}{sep}"))
-            })
-        {
+        } else if let Some(rest) = path_separators.iter().find_map(|sep| {
+            directory_relative_path_name.strip_prefix(&format!("{HOME_DIR_ENV_VAR_PREFIX}{sep}"))
+        }) {
             let mut home_directory = TypedPathBuf::from(home_directory.unwrap_or_default());
             home_directory.push(rest.replace(r"\~", "~"));
             home_directory
-        } else {
+        } else if directory_relative_path_name.starts_with(r"\~") {
             current_directory.join(directory_relative_path_name.replace(r"\~", "~"))
+        } else {
+            let unescaped_path = directory_relative_path_name.replace(r"\~", "~");
+            let expanded = expand_session_home(&unescaped_path, home_directory, path_separators);
+            current_directory.join(expanded)
         };
 
         // Unescape escaped tildes in the filename.

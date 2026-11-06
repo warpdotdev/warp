@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use comfy_table::Cell;
@@ -8,6 +10,7 @@ use warp_cli::runner::{
     CreateRunnerArgs, DeleteRunnerArgs, ListRunnersArgs, RunnerArchArg, RunnerCommand,
     RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs, validate_os_config,
 };
+use warp_cli::scope::ObjectScope;
 use warp_graphql::mutations::upsert_runner::{
     LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunnerInput,
 };
@@ -20,7 +23,10 @@ use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
+use crate::ai::runner_display::{arch_display, macos_version_display, os_display};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::factory::FactoryClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 /// Handle runner-related CLI commands.
@@ -67,22 +73,31 @@ impl RunnerCommandRunner {
         ctx: &mut ModelContext<Self>,
     ) {
         let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
-        let sort_by = args.sort_by.map(sort_by_to_gql);
-
-        ctx.spawn(
-            async move {
-                let runners = factory.get_runners(sort_by).await?;
-
-                let infos: Vec<RunnerInfo> = runners.into_iter().map(RunnerInfo::from).collect();
-                if args.json_output.force_json_output() {
-                    output::print_raw_json(serde_json::to_value(&infos)?, &args.json_output)?;
-                } else {
-                    output::print_list(infos, output_format);
+        if !args.team_selection.is_team() {
+            ctx.spawn(
+                execute_list(factory, args, None, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+            return;
+        }
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |_, result, ctx| {
+            if result.is_err() {
+                super::report_fatal_error(anyhow!("Timed out refreshing team metadata"), ctx);
+                return;
+            }
+            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
+                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
+                Err(error) => {
+                    super::report_fatal_error(error, ctx);
+                    return;
                 }
-                Ok(())
-            },
-            |_, result: Result<()>, ctx| finish_command(result, ctx),
-        );
+            };
+            ctx.spawn(
+                execute_list(factory, args, team_scope, output_format),
+                |_, result: Result<()>, ctx| finish_command(result, ctx),
+            );
+        });
     }
 
     fn create(
@@ -107,21 +122,27 @@ impl RunnerCommandRunner {
                 return;
             }
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(e) => {
-                        super::report_fatal_error(e, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(e) => {
+                    super::report_fatal_error(e, ctx);
+                    return;
+                }
+            };
+            let team_scope = match resolve_create_request_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(error) => {
+                    super::report_fatal_error(error, ctx);
+                    return;
+                }
+            };
 
             let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
             let input = build_create_input(args, owner.into());
 
             ctx.spawn(
                 async move {
-                    let upserted = factory.upsert_runner(input).await?;
+                    let upserted = factory.upsert_runner(input, team_scope).await?;
                     print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
                     Ok(())
                 },
@@ -137,30 +158,39 @@ impl RunnerCommandRunner {
         ctx: &mut ModelContext<Self>,
     ) {
         let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+        if args.id.is_some() {
+            ctx.spawn(
+                execute_update(factory, args, None, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+            return;
+        }
+        if !args.team_selection.is_team() {
+            ctx.spawn(
+                execute_update(factory, args, None, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+            return;
+        }
 
-        ctx.spawn(
-            async move {
-                // Fetch existing runners so we can resolve the target and preserve
-                // any fields that aren't being changed (the server upsert takes a
-                // full runner config).
-                let runners = factory.get_runners(None).await?;
-
-                let existing = resolve_runner(&runners, args.id.as_deref(), args.name.as_deref())?;
-                let uid = existing.uid.inner().to_string();
-
-                let runner = build_update_input(&args, &existing.config)?;
-
-                let input = UpsertRunnerInput {
-                    uid: Some(cynic::Id::new(uid)),
-                    owner: None,
-                    runner,
-                };
-                let upserted = factory.upsert_runner(input).await?;
-                print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
-                Ok(())
-            },
-            |_, result: Result<()>, ctx| finish_command(result, ctx),
-        );
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |_, result, ctx| {
+            if result.is_err() {
+                super::report_fatal_error(anyhow!("Timed out refreshing team metadata"), ctx);
+                return;
+            }
+            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
+                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
+                Err(error) => {
+                    super::report_fatal_error(error, ctx);
+                    return;
+                }
+            };
+            ctx.spawn(
+                execute_update(factory, args, team_scope, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+        });
     }
 
     fn delete(&self, args: DeleteRunnerArgs, ctx: &mut ModelContext<Self>) {
@@ -202,6 +232,55 @@ impl warpui::Entity for RunnerCommandRunner {
 }
 impl SingletonEntity for RunnerCommandRunner {}
 
+fn resolve_create_request_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> Result<Option<RequestTeamScope>> {
+    if !scope.is_team() {
+        return Ok(None);
+    }
+    let team_scope = super::common::resolve_object_scope(scope, ctx)?;
+    Ok(Some(RequestTeamScope::from_scope(&team_scope)))
+}
+
+async fn execute_list(
+    factory: Arc<dyn FactoryClient>,
+    args: ListRunnersArgs,
+    team_scope: Option<RequestTeamScope>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let runners = factory
+        .get_runners(args.sort_by.map(sort_by_to_gql), team_scope)
+        .await?;
+    let infos: Vec<RunnerInfo> = runners.into_iter().map(RunnerInfo::from).collect();
+    if args.json_output.force_json_output() {
+        output::print_raw_json(serde_json::to_value(&infos)?, &args.json_output)?;
+    } else {
+        output::print_list(infos, output_format);
+    }
+    Ok(())
+}
+
+async fn execute_update(
+    factory: Arc<dyn FactoryClient>,
+    args: UpdateRunnerArgs,
+    team_scope: Option<RequestTeamScope>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let discovery_scope = if args.id.is_some() { None } else { team_scope };
+    let runners = factory.get_runners(None, discovery_scope).await?;
+    let existing = resolve_runner(&runners, args.id.as_deref(), args.name.as_deref())?;
+    let runner = build_update_input(&args, &existing.config)?;
+    let input = UpsertRunnerInput {
+        uid: Some(existing.uid.clone()),
+        owner: None,
+        runner,
+    };
+    let upserted = factory.upsert_runner(input, None).await?;
+    print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
+    Ok(())
+}
+
 /// Prompt the user to confirm deletion of a runner.
 ///
 /// Returns `Ok(true)`/`Ok(false)` for an interactive confirm/decline. In
@@ -221,7 +300,7 @@ fn confirm_delete(uid: &str, is_terminal: bool) -> Result<bool> {
 }
 
 /// Resolve a runner by UID or (unambiguous) name from a fetched list.
-fn resolve_runner<'a>(
+pub(super) fn resolve_runner<'a>(
     runners: &'a [Runner],
     id: Option<&str>,
     name: Option<&str>,
@@ -262,6 +341,7 @@ fn build_create_input(args: CreateRunnerArgs, owner: GqlOwner) -> UpsertRunnerIn
                 version: args.macos_version.map(macos_version_to_gql),
             }),
         ),
+        RunnerOsArg::Windows => (None, None),
     };
 
     let instance_shape = match (args.vcpus, args.memory_gb) {
@@ -300,6 +380,8 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
     let effective_os_arg = match effective_os {
         RunnerOs::Linux => RunnerOsArg::Linux,
         RunnerOs::Macos => RunnerOsArg::Macos,
+        RunnerOs::Windows => RunnerOsArg::Windows,
+        RunnerOs::Unknown => return Err(unrecognized_runner_value_error("OS")),
     };
     validate_os_config(
         effective_os_arg,
@@ -324,8 +406,12 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
                 .macos_version
                 .map(macos_version_to_gql)
                 .or_else(|| existing.mac.as_ref().and_then(|m| m.version));
+            if version == Some(RunnerMacOsVersion::Unknown) {
+                return Err(unrecognized_runner_value_error("macOS version"));
+            }
             (None, Some(MacOsConfigInput { version }))
         }
+        RunnerOs::Windows | RunnerOs::Unknown => (None, None),
     };
 
     // vCPUs and memory can be updated independently; each unspecified dimension
@@ -348,6 +434,10 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         .clone()
         .or_else(|| existing.description.clone());
 
+    if args.arch.is_none() && existing.arch == RunnerArch::Unknown {
+        return Err(unrecognized_runner_value_error("architecture"));
+    }
+
     Ok(RunnerInput {
         name: resolve_updated_name(args.id.is_some(), args.name.as_deref(), &existing.name),
         description,
@@ -361,6 +451,13 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         mac,
         linux,
     })
+}
+
+fn unrecognized_runner_value_error(field: &str) -> anyhow::Error {
+    anyhow!(
+        "This runner's {field} isn't recognized by this version of the CLI, so it can't be \
+         updated without setting {field} explicitly. Update Warp to manage this runner."
+    )
 }
 
 /// Determine the runner's name for an update. A UID identifies the runner
@@ -398,12 +495,13 @@ fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
     match os {
         RunnerOsArg::Linux => RunnerOs::Linux,
         RunnerOsArg::Macos => RunnerOs::Macos,
+        RunnerOsArg::Windows => RunnerOs::Windows,
     }
 }
 
 /// Resolve a [`RunnerArchArg`] into a concrete [`RunnerArch`], mapping `auto`
-/// to the default architecture for the given OS (x86-64 on Linux, aarch64 on
-/// macOS).
+/// to the default architecture for the given OS (x86-64 on Linux and Windows,
+/// aarch64 on macOS).
 fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
     match arch {
         RunnerArchArg::X8664 => RunnerArch::X8664,
@@ -411,6 +509,7 @@ fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
         RunnerArchArg::Auto => match os {
             RunnerOsArg::Linux => RunnerArch::X8664,
             RunnerOsArg::Macos => RunnerArch::Aarch64,
+            RunnerOsArg::Windows => RunnerArch::X8664,
         },
     }
 }
@@ -428,29 +527,6 @@ fn sort_by_to_gql(sort_by: RunnerSortByArg) -> RunnerSortBy {
     match sort_by {
         RunnerSortByArg::Name => RunnerSortBy::Name,
         RunnerSortByArg::LastUpdated => RunnerSortBy::LastUpdated,
-    }
-}
-
-fn os_display(os: RunnerOs) -> &'static str {
-    match os {
-        RunnerOs::Linux => "Linux",
-        RunnerOs::Macos => "macOS",
-    }
-}
-
-fn arch_display(arch: RunnerArch) -> &'static str {
-    match arch {
-        RunnerArch::X8664 => "x86-64",
-        RunnerArch::Aarch64 => "aarch64",
-    }
-}
-
-fn macos_version_display(version: RunnerMacOsVersion) -> &'static str {
-    match version {
-        RunnerMacOsVersion::Macos14 => "macOS 14",
-        RunnerMacOsVersion::Macos15 => "macOS 15",
-        RunnerMacOsVersion::Macos26 => "macOS 26",
-        RunnerMacOsVersion::Macos27 => "macOS 27",
     }
 }
 

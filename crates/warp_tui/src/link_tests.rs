@@ -13,9 +13,10 @@ fn link_renders_visible_underlined_text() {
         app.read(|ctx| {
             let label = "https://example.com/run";
             let link = TuiLink::default();
+            let style = crate::tui_builder::TuiUiBuilder::from_app(ctx).muted_text_style();
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                link.render(label, ctx, |_, _| {}),
+                link.render(label, style, |_, _| {}),
                 TuiRect::new(0, 0, 40, 1),
                 ctx,
             );
@@ -32,11 +33,12 @@ fn link_row_in_stretched_banner_only_underlines_the_link_text() {
         app.read(|ctx| {
             let label = "https://example.com/run";
             let link = TuiLink::default();
+            let style = crate::tui_builder::TuiUiBuilder::from_app(ctx).muted_text_style();
             let banner_content = TuiFlex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .child(
                     TuiFlex::row()
-                        .child(link.render(label, ctx, |_, _| {}))
+                        .child(link.render(label, style, |_, _| {}))
                         .finish(),
                 )
                 .finish();

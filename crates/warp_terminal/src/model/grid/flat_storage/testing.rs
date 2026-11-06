@@ -122,7 +122,9 @@ impl ToRows for &str {
             cell.c = chars.next().unwrap();
             // Add any remaining chars in the grapheme to the cell as zero-width
             // characters.
-            chars.for_each(|c| cell.push_zerowidth(c, /* log_long_grapheme_warnings */ true));
+            chars.for_each(|c| {
+                cell.push_zerowidth(c, /* log_long_grapheme_warnings */ true);
+            });
 
             // If the grapheme takes up two cells, mark the following cell as
             // a spacer.

@@ -201,6 +201,7 @@ fn harness_proto_to_string(harness: Option<&api::Harness>) -> Option<String> {
             api::harness::Variant::OpenCode(_) => "opencode",
             api::harness::Variant::Gemini(_) => "gemini",
             api::harness::Variant::Codex(_) => "codex",
+            api::harness::Variant::Pi(_) => "pi",
         }
         .to_string(),
     )
@@ -215,6 +216,7 @@ fn harness_type_to_proto(harness_type: &str) -> Option<api::Harness> {
         "opencode" => api::harness::Variant::OpenCode(api::harness::OpenCode {}),
         "gemini" => api::harness::Variant::Gemini(api::harness::Gemini {}),
         "codex" => api::harness::Variant::Codex(api::harness::Codex {}),
+        "pi" => api::harness::Variant::Pi(api::harness::Pi {}),
         _ => return None,
     };
     Some(api::Harness {

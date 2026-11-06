@@ -15,6 +15,8 @@ use crate::ai::blocklist::permissions::{
     FileReadPermissionAllowedReason, FileReadPermissionDeniedReason, FileWritePermission,
     FileWritePermissionAllowedReason, FileWritePermissionDeniedReason,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::execution_profiles::ComputerUsePermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
@@ -22,16 +24,22 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ServerId;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::SandboxedAgentSettings;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
+
+/// The team [`UserWorkspaces::setup_test_workspace`] puts in the test workspace. Tests that
+/// never create one resolve this scope to no team, which is what a real teamless window does.
+fn test_scope() -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(2))
+}
 
 struct PermissionsTestState {
     convo_id: AIConversationId,
@@ -96,6 +104,100 @@ fn initialize_permissions_test_with_mode(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn execution_computer_use_is_scoped_to_the_terminal() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        let other_terminal = EntityId::new();
+        let initial_profile = state.profile_model.read(&app, |profiles, ctx| {
+            profiles
+                .active_profile(Some(state.terminal_view_id), ctx)
+                .data()
+                .clone()
+        });
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_session_computer_use(state.terminal_view_id, true, ctx);
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert_eq!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                ComputerUsePermission::AlwaysAllow
+            );
+            assert_ne!(
+                permissions.get_computer_use_setting(Some(other_terminal), &test_scope(), ctx),
+                ComputerUsePermission::AlwaysAllow
+            );
+        });
+        state.profile_model.read(&app, |profiles, ctx| {
+            assert_eq!(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .data()
+                    .computer_use_model,
+                initial_profile.computer_use_model
+            );
+            assert_eq!(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .data()
+                    .computer_use,
+                initial_profile.computer_use
+            );
+        });
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.clear_session_computer_use(state.terminal_view_id, ctx);
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert_eq!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                initial_profile.computer_use
+            );
+            assert_eq!(
+                permissions
+                    .active_permissions_profile(Some(state.terminal_view_id), &test_scope(), ctx)
+                    .computer_use_model,
+                initial_profile.computer_use_model
+            );
+        });
+    })
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn workspace_computer_use_policy_overrides_session_selection() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_session_computer_use(state.terminal_view_id, true, ctx);
+        });
+        state.user_workspaces.update(&mut app, |workspaces, ctx| {
+            workspaces.setup_test_workspace(ctx);
+            workspaces.update_ai_autonomy_settings(
+                |settings| settings.computer_use_setting = Some(ComputerUsePermission::Never),
+                ctx,
+            );
+        });
+        state.permissions.read(&app, |permissions, ctx| {
+            assert_eq!(
+                permissions.get_computer_use_setting(
+                    Some(state.terminal_view_id),
+                    &test_scope(),
+                    ctx
+                ),
+                ComputerUsePermission::Never
+            );
+        });
+    })
+}
+
 #[test]
 fn test_can_read_files_empty_paths() {
     App::test((), |mut app| async move {
@@ -111,6 +213,7 @@ fn test_can_read_files_empty_paths() {
                 &convo_id,
                 vec![],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -147,6 +250,7 @@ fn test_can_read_files_workspace_settings_override_profile() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -174,6 +278,7 @@ fn test_can_read_files_workspace_settings_override_profile() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -220,6 +325,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -233,6 +339,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/not/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -260,6 +367,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -287,6 +395,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/workspace/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -300,6 +409,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -313,6 +423,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/not/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -345,7 +456,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(
                 matches!(
@@ -366,7 +478,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(result.is_allowed());
             assert!(matches!(
                 result,
@@ -386,7 +499,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(matches!(
                 result,
@@ -419,7 +533,8 @@ fn test_can_write_files_workspace_settings_override_profile() {
 
         // Test that profile setting is respected when no workspace setting
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(result.is_allowed());
             assert!(matches!(
                 result,
@@ -442,7 +557,8 @@ fn test_can_write_files_workspace_settings_override_profile() {
 
         // Test that workspace setting overrides profile
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(matches!(
                 result,
@@ -484,6 +600,7 @@ fn test_can_write_files_mcp_config_always_denied() {
                     &convo_id,
                     std::slice::from_ref(&path),
                     Some(terminal_view_id),
+                    &test_scope(),
                     ctx,
                 );
                 assert!(
@@ -499,6 +616,122 @@ fn test_can_write_files_mcp_config_always_denied() {
                 );
             });
         }
+    })
+}
+
+#[test]
+fn cloud_mcp_config_writes_follow_profile_permissions() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_sandboxed(&mut app);
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Allowed(
+                        FileWritePermissionAllowedReason::AutowriteSettingEnabled
+                    )
+                ),
+                "expected cloud profile auto-write, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn cloud_auto_approve_allows_mcp_config_writes() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_sandboxed(&mut app);
+        state.profile_model.update(&mut app, |profiles, ctx| {
+            profiles.set_apply_code_diffs(
+                profiles
+                    .active_profile(Some(state.terminal_view_id), ctx)
+                    .id(),
+                &ActionPermission::AlwaysAsk,
+                ctx,
+            );
+        });
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Allowed(FileWritePermissionAllowedReason::RunToCompletion)
+                ),
+                "expected cloud auto-approval, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn local_app_auto_approve_requires_mcp_config_approval() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test(&mut app);
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                ),
+                "expected local app path protection, got {result:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn local_cli_auto_approve_requires_mcp_config_approval() {
+    App::test((), |mut app| async move {
+        let state = initialize_permissions_test_with_mode(&mut app, ExecutionMode::Sdk, false);
+        state.history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&state.convo_id, state.terminal_view_id, ctx);
+        });
+
+        state.permissions.read(&app, |permissions, ctx| {
+            let result = permissions.can_write_files(
+                &state.convo_id,
+                &[PathBuf::from("/project/.warp/.mcp.json")],
+                Some(state.terminal_view_id),
+                &test_scope(),
+                ctx,
+            );
+            assert!(
+                matches!(
+                    result,
+                    FileWritePermission::Denied(FileWritePermissionDeniedReason::ProtectedPath)
+                ),
+                "expected local CLI path protection, got {result:?}"
+            );
+        });
     })
 }
 
@@ -532,6 +765,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -563,6 +797,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -606,6 +841,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -639,6 +875,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -656,6 +893,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -708,6 +946,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                     false,
                     None,
                     Some(terminal_view_id),
+                    &test_scope(),
                     ctx,
                 );
                 assert!(
@@ -730,6 +969,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -777,6 +1017,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -812,6 +1053,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -830,6 +1072,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -847,6 +1090,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -908,6 +1152,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -924,6 +1169,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -975,6 +1221,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -991,6 +1238,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -1028,6 +1276,7 @@ fn test_can_autoexecute_command_auto_approve_allows_non_denylisted() {
                 true,        // read-only command
                 Some(false), // not risky
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -1064,7 +1313,8 @@ fn test_can_write_to_pty() {
 
         // Test that profile setting is respected when no workspace setting
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_to_pty(&convo_id, Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_to_pty(&convo_id, Some(terminal_view_id), &test_scope(), ctx);
             assert_eq!(result, WriteToPtyPermission::AlwaysAllow);
         });
 
@@ -1081,7 +1331,8 @@ fn test_can_write_to_pty() {
 
         // Test that workspace setting overrides profile
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_to_pty(&convo_id, Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_to_pty(&convo_id, Some(terminal_view_id), &test_scope(), ctx);
             assert_eq!(result, WriteToPtyPermission::AlwaysAsk);
         });
     })
@@ -1374,7 +1625,8 @@ fn test_sandboxed_mode_allows_read_write_files() {
         // In sandboxed mode the workspace read/write restrictions are bypassed,
         // so the profile's AlwaysAllow setting takes effect.
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(
                 result.is_allowed(),
                 "write files should be allowed in sandboxed mode (workspace restriction bypassed)"
@@ -1390,6 +1642,7 @@ fn test_sandboxed_mode_allows_read_write_files() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1429,14 +1682,10 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 },
                 ctx,
             );
-            // Sandboxed denylist blocks "rm .*" instead.
-            model.update_sandboxed_agent_settings(
-                |settings| {
-                    *settings = Some(SandboxedAgentSettings {
-                        execute_commands_denylist: Some(vec![
-                            AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
-                        ]),
-                    });
+            // The team's sandboxed denylist blocks "rm .*" instead.
+            model.update_team_sandboxed_agent_denylist(
+                |denylist| {
+                    denylist.values = vec!["rm .*".to_string()];
                 },
                 ctx,
             );
@@ -1463,6 +1712,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -1480,6 +1730,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1531,7 +1782,8 @@ fn test_merged_denylist_deduplication() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let denylist = model.get_execute_commands_denylist(ctx, Some(terminal_view_id));
+            let denylist =
+                model.get_execute_commands_denylist(Some(terminal_view_id), &test_scope(), ctx);
             let rm_count = denylist.iter().filter(|p| p.to_string() == "rm .*").count();
             assert_eq!(rm_count, 1, "duplicate entries should be deduplicated");
             assert!(
@@ -1552,7 +1804,8 @@ fn test_get_org_execute_commands_denylist() {
         } = initialize_permissions_test(&mut app);
 
         permissions.read(&app, |_, ctx| {
-            let org_list = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+            let org_list =
+                BlocklistAIPermissions::get_org_execute_commands_denylist(&test_scope(), ctx);
             assert!(org_list.is_empty());
         });
 
@@ -1569,7 +1822,8 @@ fn test_get_org_execute_commands_denylist() {
         });
 
         permissions.read(&app, |_, ctx| {
-            let org_list = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+            let org_list =
+                BlocklistAIPermissions::get_org_execute_commands_denylist(&test_scope(), ctx);
             assert_eq!(org_list.len(), 1);
             assert_eq!(org_list[0].to_string(), "git .*");
         });
@@ -1614,6 +1868,7 @@ fn test_empty_org_denylist_allows_user_entries() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1653,6 +1908,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1673,6 +1929,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1696,6 +1953,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1719,6 +1977,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(

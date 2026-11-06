@@ -20,6 +20,7 @@ watcher.workspace = true
 notify-debouncer-full.workspace = true
 repo_metadata.workspace = true
 log.workspace = true
+same-file = "1.0"
 
 [features]
 test-util = []

@@ -4,7 +4,10 @@ use std::sync::Arc;
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
-use super::{display_working_directory, format_session_location, should_render_oz_updates_section};
+use super::{
+    ambient_credits_banner_label, display_working_directory, format_session_location,
+    should_render_oz_updates_section,
+};
 use crate::ai::blocklist::agent_view::zero_state_block::current_working_directory_for_zero_state;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
@@ -33,7 +36,7 @@ fn terminal_with_startup_path(startup_path: Option<&str>) -> TerminalModel {
 
 fn prebootstrap_terminal_with_startup_path(startup_path: &str) -> TerminalModel {
     let mut terminal = terminal_with_startup_path(Some(startup_path));
-    terminal.block_list_mut().reinit_shell();
+    terminal.block_list_mut().reinit_shell(None);
     terminal
 }
 
@@ -157,6 +160,18 @@ fn cwd_for_recent_conversations_does_not_use_startup_path_after_bootstrap() {
     let terminal = terminal_with_startup_path(Some("/startup/path"));
     let cwd = current_working_directory_for_zero_state(&terminal);
     assert_eq!(cwd, None);
+}
+
+#[test]
+fn ambient_credits_banner_shows_dollars_only_when_grants_carry_a_dollar_value() {
+    assert_eq!(
+        ambient_credits_banner_label(100, Some(180.0)),
+        "$1.80 free cloud agent usage"
+    );
+    assert_eq!(
+        ambient_credits_banner_label(100, None),
+        "100 free cloud agent credits"
+    );
 }
 
 #[test]

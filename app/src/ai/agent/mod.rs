@@ -1,12 +1,15 @@
 pub(crate) mod conversation;
+pub(crate) mod conversation_driver;
 pub(crate) mod conversation_yaml;
 pub(crate) mod todos;
 
 pub(crate) mod api;
+pub(crate) mod base_user_query;
 pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
 pub(crate) mod redaction;
+pub(crate) mod request_metadata;
 pub(crate) mod task;
 mod task_store;
 pub(super) mod telemetry;
@@ -18,12 +21,13 @@ use std::ops::{AddAssign, Deref, DerefMut, Range};
 use std::sync::Arc;
 use std::time::Duration;
 
-// Re-export types that were moved to the ai crate.
+// Re-export types that were moved to the ai and ai_types crates.
 pub use ai::agent::action::*;
 pub use ai::agent::action_result::*;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use ai::agent::{AIAgentCitation, FileLocations};
 use ai::skills::ParsedSkill;
+pub use ai_types::{AIAgentActionId, EntrypointType, PassiveSuggestionTriggerType};
 use chrono::{DateTime, Local, TimeDelta};
 use comment::ReviewComment;
 use derivative::Derivative;
@@ -40,6 +44,7 @@ use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::base_user_query::BaseUserQuery;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -70,6 +75,9 @@ impl std::fmt::Display for ServerOutputId {
 pub struct InvokeSkillUserQuery {
     pub query: String,
     pub referenced_attachments: HashMap<String, AIAgentAttachment>,
+    /// Attribution carried over from the message this invocation was restored from, so a
+    /// resent skill query keeps its original author; `None` for a locally typed one.
+    pub base: Option<BaseUserQuery>,
 }
 
 impl ServerOutputId {
@@ -715,6 +723,10 @@ pub enum RenderableAIError {
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
     },
+    /// An explicit terminal failure reported by the MAA server in a `StreamFinished` event.
+    AgentStreamFailure {
+        error_message: String,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
@@ -736,6 +748,78 @@ pub enum RenderableAIError {
     /// GUI error card (`render_cloud_mode_error_screen`) which shows the
     /// message directly.
     CloudStartupFailed(String),
+    /// A request funded by the user's ChatGPT subscription was rejected by OpenAI's
+    /// token-sharing checks. The server authors the copy and the recovery actions; the client
+    /// renders them generically and never branches on `code`. Always a terminal failure (FAILED).
+    ChatGPTSubscriptionError {
+        /// The raw OpenAI error code, for telemetry only.
+        code: String,
+        title: String,
+        message: String,
+        /// Recovery actions in display order.
+        actions: Vec<ChatGPTSubscriptionErrorAction>,
+    },
+}
+
+/// A recovery action offered on a [`RenderableAIError::ChatGPTSubscriptionError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatGPTSubscriptionErrorAction {
+    pub kind: ChatGPTSubscriptionErrorActionKind,
+    /// Server-authored button label.
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatGPTSubscriptionErrorActionKind {
+    /// Re-issue the turn unchanged, still funded by the ChatGPT subscription.
+    Retry,
+    /// Switch the rest of the conversation to Warp-funded inference, then resume.
+    ContinueWithWarpCredits,
+    /// Open an external page in the browser without changing the conversation.
+    OpenUrl { url: String },
+    /// Copy server-authored text without retrying or changing conversation funding.
+    CopyText { text: String },
+}
+
+impl From<warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind>
+    for ChatGPTSubscriptionErrorActionKind
+{
+    fn from(
+        kind: warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind,
+    ) -> Self {
+        use warp_multi_agent_api::response_event::stream_finished::chat_gpt_subscription_error::action::Kind;
+        match kind {
+            Kind::Retry(_) => Self::Retry,
+            Kind::ContinueWithWarpCredits(_) => Self::ContinueWithWarpCredits,
+            Kind::OpenUrl(open_url) => Self::OpenUrl { url: open_url.url },
+            Kind::CopyText(copy_text) => Self::CopyText { text: copy_text.text },
+        }
+    }
+}
+
+impl RenderableAIError {
+    /// Builds a [`Self::ChatGPTSubscriptionError`] from the server's finish reason, dropping
+    /// actions whose kind this client does not understand (decoded as an unset `kind`).
+    pub fn from_chatgpt_subscription_error(
+        error: warp_multi_agent_api::response_event::stream_finished::ChatGptSubscriptionError,
+    ) -> Self {
+        let actions = error
+            .actions
+            .into_iter()
+            .filter_map(|action| {
+                Some(ChatGPTSubscriptionErrorAction {
+                    kind: action.kind?.into(),
+                    label: action.label,
+                })
+            })
+            .collect();
+        Self::ChatGPTSubscriptionError {
+            code: error.code,
+            title: error.title,
+            message: error.message,
+            actions,
+        }
+    }
 }
 
 impl RenderableAIError {
@@ -768,6 +852,10 @@ impl RenderableAIError {
 
     pub fn is_aws_bedrock_credentials_error(&self) -> bool {
         matches!(self, Self::AwsBedrockCredentialsExpiredOrInvalid { .. })
+    }
+
+    pub fn is_chatgpt_subscription_error(&self) -> bool {
+        matches!(self, Self::ChatGPTSubscriptionError { .. })
     }
 
     /// Returns true if an automatic resume will be attempted for this error.
@@ -917,6 +1005,7 @@ impl Display for RenderableAIError {
                     Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
+            Self::AgentStreamFailure { error_message } => write!(f, "{error_message}"),
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell { command } => write!(
                 f,
@@ -925,6 +1014,27 @@ impl Display for RenderableAIError {
                  scripts that can exit the shell."
             ),
             Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
+            Self::ChatGPTSubscriptionError {
+                title,
+                message,
+                actions,
+                ..
+            } => {
+                write!(f, "{title}\n\n{message}")?;
+                for action in actions {
+                    match &action.kind {
+                        ChatGPTSubscriptionErrorActionKind::OpenUrl { url } => {
+                            write!(f, "\n\n{}: {url}", action.label)?;
+                        }
+                        ChatGPTSubscriptionErrorActionKind::CopyText { text } => {
+                            write!(f, "\n\n{}:\n{text}", action.label)?;
+                        }
+                        ChatGPTSubscriptionErrorActionKind::Retry
+                        | ChatGPTSubscriptionErrorActionKind::ContinueWithWarpCredits => {}
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -1034,43 +1144,6 @@ pub struct SuggestedAgentModeWorkflow {
     pub name: String,
     pub prompt: String,
     pub logging_id: SuggestedLoggingId,
-}
-
-/// A ID for an AI action generated as part of an [`AIAgentOutput`].
-///
-/// The internal ID itself should be opaque to all callers. This ID may be relayed back to the AI with
-/// the `AIAgentActionResult` from the action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AIAgentActionId(String);
-
-impl From<String> for AIAgentActionId {
-    fn from(value: String) -> Self {
-        AIAgentActionId(value)
-    }
-}
-
-impl From<AIAgentActionId> for String {
-    fn from(value: AIAgentActionId) -> Self {
-        value.0
-    }
-}
-
-impl Display for AIAgentActionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<crate::persistence::model::AIAgentActionId> for AIAgentActionId {
-    fn from(value: crate::persistence::model::AIAgentActionId) -> Self {
-        Self(value.0)
-    }
-}
-
-impl From<AIAgentActionId> for crate::persistence::model::AIAgentActionId {
-    fn from(value: AIAgentActionId) -> Self {
-        crate::persistence::model::AIAgentActionId(value.0)
-    }
 }
 
 /// An "action" included in an AI output.
@@ -1225,8 +1298,17 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                         "\n```bash\n{command}\n```\n\n**Current Output:**\n```\n{grid_contents}\n```"
                     )
                 }
+                RequestCommandOutputResult::ShellRecovered {
+                    command, output, ..
+                } => write!(
+                    f,
+                    "\n**Command Interrupted:**\n```bash\n{command}\n```\n\n**Output:**\n```\n{output}\n```"
+                ),
                 RequestCommandOutputResult::CancelledBeforeExecution => {
                     write!(f, "\n_Command cancelled_")
+                }
+                RequestCommandOutputResult::TerminalBusy { .. } => {
+                    write!(f, "\n{result}")
                 }
                 RequestCommandOutputResult::Denylisted { command } => {
                     write!(
@@ -1404,7 +1486,8 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 CreateDocumentsResult::Cancelled => write!(f, "\n_Create documents cancelled_"),
             },
             AIAgentActionResultType::ReadShellCommandOutput(result) => match result {
-                ReadShellCommandOutputResult::CommandFinished { output, .. } => {
+                ReadShellCommandOutputResult::CommandFinished { output, .. }
+                | ReadShellCommandOutputResult::ShellRecovered { output, .. } => {
                     write!(f, "\n```\n{output}\n```")
                 }
                 ReadShellCommandOutputResult::LongRunningCommandSnapshot {
@@ -2220,12 +2303,21 @@ pub struct MCPServer {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Managed MCP server uid or well-known integration id the server was
+    /// resolved from; empty for local servers. Mirrors `MCPServerConfig.warp_id`.
+    pub warp_id: String,
     pub resources: Vec<rmcp::model::Resource>,
     pub tools: Vec<rmcp::model::Tool>,
 }
 
 /// Contains context that may be attached to a user query.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Serialization derives the externally tagged form for the named variants,
+/// with `Block` serialized untagged as a bare [`BlockContext`] object.
+/// Deserialization is hand-written below and must accept exactly those
+/// forms; it avoids the generic buffering machinery that serde generates for
+/// enums that mix tagged and untagged variants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum AIAgentContext {
     Directory {
         pwd: Option<String>,
@@ -2282,19 +2374,14 @@ pub enum AIAgentContext {
     /// Information about the GitHub pull request associated with the current branch.
     PullRequest {
         /// The pull request number.
-        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
         number: i32,
         /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
-        #[serde(default)]
         state: String,
         /// Whether the pull request is marked as draft.
-        #[serde(default)]
         draft: bool,
         /// The pull request's base branch.
-        #[serde(default)]
         base_branch: String,
         /// The full URL of the pull request (e.g. "https://github.com/owner/repo/pull/123").
-        #[serde(default)]
         url: String,
     },
 
@@ -2306,6 +2393,131 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+/// The tagged variants of [`AIAgentContext`], used by its hand-written
+/// `Deserialize` implementation. The variant and field shapes must stay
+/// identical to [`AIAgentContext`] so the serialized forms match.
+#[derive(Deserialize)]
+enum AIAgentContextTagged {
+    Directory {
+        pwd: Option<String>,
+        home_dir: Option<String>,
+        are_file_symbols_indexed: bool,
+    },
+    SelectedText(String),
+    ExecutionEnvironment(WarpAiExecutionContext),
+    CurrentTime {
+        current_time: DateTime<Local>,
+    },
+    Image(ImageContext),
+    Codebase {
+        path: String,
+        name: String,
+    },
+    ProjectRules {
+        root_path: String,
+        active_rules: Vec<FileContext>,
+        additional_rule_paths: Vec<String>,
+    },
+    File(FileContext),
+    Git {
+        head: String,
+        branch: Option<String>,
+    },
+    Repository {
+        name: String,
+        owner: Option<String>,
+        host: Option<String>,
+    },
+    PullRequest {
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        #[serde(default)]
+        state: String,
+        #[serde(default)]
+        draft: bool,
+        #[serde(default)]
+        base_branch: String,
+        #[serde(default)]
+        url: String,
+    },
+    Skills {
+        skills: Vec<SkillDescriptor>,
+    },
+}
+
+impl From<AIAgentContextTagged> for AIAgentContext {
+    fn from(tagged: AIAgentContextTagged) -> Self {
+        match tagged {
+            AIAgentContextTagged::Directory {
+                pwd,
+                home_dir,
+                are_file_symbols_indexed,
+            } => AIAgentContext::Directory {
+                pwd,
+                home_dir,
+                are_file_symbols_indexed,
+            },
+            AIAgentContextTagged::SelectedText(text) => AIAgentContext::SelectedText(text),
+            AIAgentContextTagged::ExecutionEnvironment(context) => {
+                AIAgentContext::ExecutionEnvironment(context)
+            }
+            AIAgentContextTagged::CurrentTime { current_time } => {
+                AIAgentContext::CurrentTime { current_time }
+            }
+            AIAgentContextTagged::Image(image) => AIAgentContext::Image(image),
+            AIAgentContextTagged::Codebase { path, name } => {
+                AIAgentContext::Codebase { path, name }
+            }
+            AIAgentContextTagged::ProjectRules {
+                root_path,
+                active_rules,
+                additional_rule_paths,
+            } => AIAgentContext::ProjectRules {
+                root_path,
+                active_rules,
+                additional_rule_paths,
+            },
+            AIAgentContextTagged::File(file) => AIAgentContext::File(file),
+            AIAgentContextTagged::Git { head, branch } => AIAgentContext::Git { head, branch },
+            AIAgentContextTagged::Repository { name, owner, host } => {
+                AIAgentContext::Repository { name, owner, host }
+            }
+            AIAgentContextTagged::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+                url,
+            } => AIAgentContext::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+                url,
+            },
+            AIAgentContextTagged::Skills { skills } => AIAgentContext::Skills { skills },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AIAgentContext {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Buffer the input into one JSON value, then try the tagged variants
+        // and fall back to the untagged Block variant. This matches the
+        // behavior of serde's derive for mixed tagged and untagged enums.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match AIAgentContextTagged::deserialize(&value) {
+            Ok(tagged) => Ok(tagged.into()),
+            Err(tagged_error) => BlockContext::deserialize(&value)
+                .map(|block| AIAgentContext::Block(Box::new(block)))
+                .map_err(|_| serde::de::Error::custom(tagged_error)),
+        }
+    }
 }
 
 fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
@@ -2375,7 +2587,12 @@ pub enum DocumentContentAttachmentSource {
     PlanEdited,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Serialization derives the externally tagged form for the named variants,
+/// with `Block` serialized untagged as a bare [`BlockContext`] object.
+/// Deserialization is hand-written below and must accept exactly those
+/// forms; it avoids the generic buffering machinery that serde generates for
+/// enums that mix tagged and untagged variants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum AIAgentAttachment {
     PlainText(String),
     DocumentContent {
@@ -2418,6 +2635,118 @@ pub enum AIAgentAttachment {
     },
     #[serde(untagged)]
     Block(BlockContext),
+}
+
+/// The tagged variants of [`AIAgentAttachment`], used by its hand-written
+/// `Deserialize` implementation. The variant and field shapes must stay
+/// identical to [`AIAgentAttachment`] so the serialized forms match.
+#[derive(Deserialize)]
+enum AIAgentAttachmentTagged {
+    PlainText(String),
+    DocumentContent {
+        document_id: String,
+        content: String,
+        source: DocumentContentAttachmentSource,
+        line_range: Option<Range<LineCount>>,
+    },
+    DriveObject {
+        uid: String,
+        payload: Option<DriveObjectPayload>,
+    },
+    DiffHunk {
+        file_path: String,
+        line_range: Range<LineCount>,
+        diff_content: String,
+        lines_added: u32,
+        lines_removed: u32,
+        current: Option<CurrentHead>,
+        base: DiffBase,
+    },
+    DiffSet {
+        file_diffs: HashMap<String, Vec<DiffSetHunk>>,
+        current: Option<CurrentHead>,
+        base: DiffBase,
+    },
+    FilePathReference {
+        file_id: String,
+        file_name: String,
+        file_path: String,
+    },
+}
+
+impl From<AIAgentAttachmentTagged> for AIAgentAttachment {
+    fn from(tagged: AIAgentAttachmentTagged) -> Self {
+        match tagged {
+            AIAgentAttachmentTagged::PlainText(text) => AIAgentAttachment::PlainText(text),
+            AIAgentAttachmentTagged::DocumentContent {
+                document_id,
+                content,
+                source,
+                line_range,
+            } => AIAgentAttachment::DocumentContent {
+                document_id,
+                content,
+                source,
+                line_range,
+            },
+            AIAgentAttachmentTagged::DriveObject { uid, payload } => {
+                AIAgentAttachment::DriveObject { uid, payload }
+            }
+            AIAgentAttachmentTagged::DiffHunk {
+                file_path,
+                line_range,
+                diff_content,
+                lines_added,
+                lines_removed,
+                current,
+                base,
+            } => AIAgentAttachment::DiffHunk {
+                file_path,
+                line_range,
+                diff_content,
+                lines_added,
+                lines_removed,
+                current,
+                base,
+            },
+            AIAgentAttachmentTagged::DiffSet {
+                file_diffs,
+                current,
+                base,
+            } => AIAgentAttachment::DiffSet {
+                file_diffs,
+                current,
+                base,
+            },
+            AIAgentAttachmentTagged::FilePathReference {
+                file_id,
+                file_name,
+                file_path,
+            } => AIAgentAttachment::FilePathReference {
+                file_id,
+                file_name,
+                file_path,
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AIAgentAttachment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Buffer the input into one JSON value, then try the tagged variants
+        // and fall back to the untagged Block variant. This matches the
+        // behavior of serde's derive for mixed tagged and untagged enums.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match AIAgentAttachmentTagged::deserialize(&value) {
+            Ok(tagged) => Ok(tagged.into()),
+            Err(tagged_error) => BlockContext::deserialize(&value)
+                .map(AIAgentAttachment::Block)
+                .map_err(|_| serde::de::Error::custom(tagged_error)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2551,37 +2880,6 @@ pub enum StaticQueryType {
     EvaluationSuite,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum EntrypointType {
-    PromptSuggestion {
-        is_static: bool,
-        is_coding: bool,
-    },
-    ZeroStateAgentModePromptSuggestion,
-    InitProjectRules,
-    TriggerPassiveSuggestion {
-        trigger: Option<PassiveSuggestionTriggerType>,
-    },
-    UserInitiated,
-    AgentInitiated,
-    SharedSession,
-    CloneRepository,
-    ResumeConversation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum PassiveSuggestionTriggerType {
-    /// Used for unit test generation.
-    FilesChanged,
-    /// Used for unit test generation.
-    CommandRun,
-
-    ShellCommandCompleted,
-    AgentResponseCompleted,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ShellCommandCompletedTrigger {
     // We heap-allocate this because it's large and bloats the size of the
@@ -2711,6 +3009,12 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        /// The `Request.Input.UserQuery` this input starts from, when warp-server injected one
+        /// with a shared-session prompt. `query`, `user_query_mode`, and `intended_agent` were
+        /// seeded from it (see [`BaseUserQuery::seed_input_fields`]) and `convert_to` writes
+        /// them back over it, so fields this client does not model travel through untouched.
+        /// `None` for everything typed locally.
+        base: Option<BaseUserQuery>,
     },
 
     AutoCodeDiffQuery {
@@ -2813,6 +3117,10 @@ pub enum AIAgentInput {
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
     },
+
+    /// Reports that the run was woken; the server injects any pending agent messages into the
+    /// turn.
+    AgentWake,
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -2906,6 +3214,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
+            Self::AgentWake => write!(f, "AgentWake"),
         }
     }
 }
@@ -2967,7 +3276,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 
@@ -3072,7 +3382,8 @@ impl AIAgentInput {
             Self::SummarizeConversation { context, .. } => Some(context),
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 
@@ -3103,7 +3414,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::AgentWake => None,
         }
     }
 

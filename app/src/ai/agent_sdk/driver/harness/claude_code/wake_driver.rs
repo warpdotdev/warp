@@ -12,7 +12,9 @@ use warp_graphql::ai::AgentTaskState;
 use super::super::claude_transcript::{
     ClaudeTranscriptEnvelope, claude_config_dir, write_envelope, write_session_index_entry,
 };
-use super::super::{remove_claude_externally_managed_listener_env_vars, task_env_vars};
+use super::super::{
+    HarnessSupportSkills, remove_claude_externally_managed_listener_env_vars, task_env_vars,
+};
 use super::parent_bridge::{
     ensure_parent_bridge_state_dir, parent_bridge_root,
     prime_parent_bridge_staged_for_self_managed_wake,
@@ -95,6 +97,7 @@ impl ClaudeHarness {
             .update_agent_task(
                 task_id,
                 Some(AgentTaskState::InProgress),
+                None,
                 None,
                 None,
                 None,
@@ -198,17 +201,22 @@ impl ClaudeHarness {
         wake_message: Option<AgentMessageEventMetadata>,
     ) -> Result<String> {
         let working_dir = working_dir.unwrap_or_else(|| remote.envelope.cwd.clone());
-        prepare_claude_environment_config(&working_dir, &HashMap::new())
-            .context("Failed to prepare Claude environment for wake")?;
+        prepare_claude_environment_config(
+            &working_dir,
+            &working_dir,
+            &HashMap::new(),
+            &ai::skills::parse_skills_dirs_env(),
+            false,
+            HarnessSupportSkills::Plugin,
+        )
+        .context("Failed to prepare Claude environment for wake")?;
 
         remote.envelope.cwd = working_dir.clone();
         let config_root = claude_config_dir().context("Failed to resolve Claude config dir")?;
         write_envelope(&remote.envelope, &config_root)
             .context("Failed to rehydrate Claude transcript for wake")?;
-        if let Err(error) = write_session_index_entry(remote.session_id, &working_dir, &config_root)
-        {
-            log::warn!("Failed to update Claude sessions-index.json for wake: {error:#}");
-        }
+        write_session_index_entry(remote.session_id, &working_dir, &config_root)
+            .context("Failed to update Claude sessions-index.json for wake")?;
 
         let state_dir = parent_bridge_root()?.join(remote.session_id.to_string());
         ensure_parent_bridge_state_dir(&state_dir)?;

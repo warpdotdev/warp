@@ -16,7 +16,7 @@ pub(crate) const ENV_VAR_AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
 pub(crate) const ENV_VAR_AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
 pub(crate) const ENV_VAR_OPENAI_API_KEY: &str = "OPENAI_API_KEY";
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum ManagedSecretValue {
     RawValue {
@@ -45,6 +45,23 @@ pub enum ManagedSecretValue {
         /// When absent, the harness uses the provider's default endpoint.
         #[serde(skip_serializing_if = "Option::is_none")]
         base_url: Option<String>,
+    },
+    LlmProviderApiKey {
+        provider_id: String,
+        api_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+    },
+    DockerRegistry {
+        registry_host: String,
+        username: String,
+        password: String,
+    },
+    /// An AWS ECR credential backed by an IAM role. Unlike `DockerRegistry`, no password is
+    /// ever stored: the server assumes the role and mints a fresh one at dispatch time.
+    AwsEcrCredential {
+        registry_host: String,
+        role_arn: String,
     },
 }
 
@@ -88,6 +105,42 @@ impl ManagedSecretValue {
         Self::OpenaiApiKey {
             api_key: api_key.into(),
             base_url,
+        }
+    }
+
+    pub fn llm_provider_api_key(
+        provider_id: impl Into<String>,
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+    ) -> Self {
+        Self::LlmProviderApiKey {
+            provider_id: provider_id.into(),
+            api_key: api_key.into(),
+            base_url,
+        }
+    }
+
+    /// Construct a private image credential secret value.
+    pub fn docker_registry(
+        registry_host: impl Into<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        Self::DockerRegistry {
+            registry_host: registry_host.into(),
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+
+    /// Construct an AWS ECR credential secret value from a registry host and IAM role ARN.
+    pub fn aws_ecr_credential(
+        registry_host: impl Into<String>,
+        role_arn: impl Into<String>,
+    ) -> Self {
+        Self::AwsEcrCredential {
+            registry_host: registry_host.into(),
+            role_arn: role_arn.into(),
         }
     }
 
@@ -143,6 +196,27 @@ impl ManagedSecretValue {
                 // base_url goes to a config file, not an env var argument.
                 check(ENV_VAR_OPENAI_API_KEY, api_key)
             }
+            ManagedSecretValue::LlmProviderApiKey {
+                provider_id,
+                api_key,
+                ..
+            } => match provider_id.as_str() {
+                "anthropic" => check(ENV_VAR_ANTHROPIC_API_KEY, api_key),
+                "openai" => check(ENV_VAR_OPENAI_API_KEY, api_key),
+                // Other providers' keys are written to a credentials file, not the environment.
+                _ => Ok(()),
+            },
+            ManagedSecretValue::DockerRegistry { .. } => {
+                // Never injected as an environment variable - it authenticates an image
+                // pull, not the agent process - so the MAX_ARG_STRLEN concern this
+                // function exists for does not apply.
+                Ok(())
+            }
+            ManagedSecretValue::AwsEcrCredential { .. } => {
+                // Same reasoning as DockerRegistry: never injected, and neither field would
+                // need size validation even if it were, since neither is a password.
+                Ok(())
+            }
         }
     }
 
@@ -157,6 +231,9 @@ impl ManagedSecretValue {
                 ManagedSecretType::AnthropicBedrockApiKey
             }
             ManagedSecretValue::OpenaiApiKey { .. } => ManagedSecretType::OpenaiApiKey,
+            ManagedSecretValue::LlmProviderApiKey { .. } => ManagedSecretType::LlmProviderApiKey,
+            ManagedSecretValue::DockerRegistry { .. } => ManagedSecretType::DockerRegistry,
+            ManagedSecretValue::AwsEcrCredential { .. } => ManagedSecretType::AwsEcrCredential,
         }
     }
 }
@@ -178,6 +255,15 @@ impl fmt::Debug for ManagedSecretValue {
                 .finish_non_exhaustive(),
             ManagedSecretValue::OpenaiApiKey { .. } => f
                 .debug_struct("ManagedSecret::OpenaiApiKey")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::LlmProviderApiKey { .. } => f
+                .debug_struct("ManagedSecret::LlmProviderApiKey")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::DockerRegistry { .. } => f
+                .debug_struct("ManagedSecret::DockerRegistry")
+                .finish_non_exhaustive(),
+            ManagedSecretValue::AwsEcrCredential { .. } => f
+                .debug_struct("ManagedSecret::AwsEcrCredential")
                 .finish_non_exhaustive(),
         }
     }

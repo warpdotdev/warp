@@ -10,6 +10,69 @@ fn jwt_with_payload(payload: serde_json::Value) -> String {
     format!("{header}.{payload}.test-signature")
 }
 
+#[test]
+fn snapshot_uses_current_token_with_its_actual_expiry() {
+    let context = AuthContext::from_snapshot(CredentialSnapshot {
+        token: "dispatch-test-token".to_owned(),
+        expires_at: Utc::now() + TimeDelta::hours(3),
+    })
+    .unwrap();
+    let expires_at = Utc::now() + TimeDelta::minutes(17);
+    context
+        .token_store
+        .replace("refreshed-test-token".to_owned(), expires_at)
+        .unwrap();
+
+    let snapshot = context.snapshot().unwrap();
+    assert_eq!(snapshot.token, "refreshed-test-token");
+    assert_eq!(snapshot.expires_at, expires_at);
+    assert!(!format!("{snapshot:?}").contains("refreshed-test-token"));
+    let child = AuthContext::from_snapshot(snapshot).unwrap();
+    assert_eq!(
+        child.token_store.valid_authorization_header().unwrap(),
+        "Bearer refreshed-test-token"
+    );
+    assert_eq!(child.snapshot().unwrap().expires_at, expires_at);
+}
+
+#[test]
+fn snapshot_refuses_expired_credentials() {
+    let snapshot = CredentialSnapshot {
+        token: "expired-test-token".to_owned(),
+        expires_at: Utc::now() - TimeDelta::minutes(1),
+    };
+    let store = TokenStore::new(snapshot.token.clone(), snapshot.expires_at).unwrap();
+    assert!(store.valid_snapshot().is_none());
+    assert!(AuthContext::from_snapshot(snapshot).is_err());
+}
+
+#[test]
+fn concurrent_refresh_cannot_mix_snapshot_token_and_expiry() {
+    let first_expiry = Utc::now() + TimeDelta::minutes(20);
+    let second_expiry = Utc::now() + TimeDelta::minutes(40);
+    let store = TokenStore::new("first-test-token".to_owned(), first_expiry).unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..1000 {
+                store
+                    .replace("second-test-token".to_owned(), second_expiry)
+                    .unwrap();
+                store
+                    .replace("first-test-token".to_owned(), first_expiry)
+                    .unwrap();
+            }
+        });
+        for _ in 0..1000 {
+            let snapshot = store.valid_snapshot().unwrap();
+            match snapshot.token.as_str() {
+                "first-test-token" => assert_eq!(snapshot.expires_at, first_expiry),
+                "second-test-token" => assert_eq!(snapshot.expires_at, second_expiry),
+                _ => panic!("Unexpected snapshot credential"),
+            }
+        }
+    });
+}
+
 fn client_with_expiry(token: &str, expires_at: DateTime<Utc>) -> AuthenticatedHttpClient {
     let (refresh_hint_sender, _) = async_channel::bounded(1);
     AuthenticatedHttpClient {

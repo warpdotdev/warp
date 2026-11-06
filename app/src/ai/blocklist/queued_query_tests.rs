@@ -3,13 +3,15 @@
 //! Covers FIFO ordering, append from each origin, edit semantics, reorder semantics, the
 //! per-conversation auto-queue toggle, and history-driven cleanup.
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin,
+    AutofireAction, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin, RequestRow,
 };
 use crate::ai::agent::ImageContext;
 use crate::ai::agent::conversation::AIConversationId;
@@ -44,6 +46,235 @@ where
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+fn steering_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::LocalSteering)
+}
+
+fn local_steering_row_id(queue: &QueuedQueryModel, id: AIConversationId) -> Option<QueuedQueryId> {
+    match queue.next_row_for_request(id)? {
+        RequestRow::LocalSteering(row) => Some(row.id()),
+        RequestRow::InjectedFollowup(_) | RequestRow::SteeredHead(_) => None,
+    }
+}
+
+#[test]
+fn steering_row_passes_plain_prompts_but_keeps_its_own_order_and_edit_hold() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            let response = queue.append(id, user_query("after response"), ctx);
+            let first = queue.append(id, steering_query("first correction"), ctx);
+            let second = queue.append(id, steering_query("second correction"), ctx);
+            assert_eq!(local_steering_row_id(queue, id), Some(first));
+            assert_eq!(queue.ready_head(id).unwrap().id(), response);
+            queue.enter_edit_mode(id, first, ctx);
+            assert_eq!(local_steering_row_id(queue, id), None);
+            queue.cancel_edit(id, ctx);
+            queue.reorder(id, second, 1, ctx);
+            assert_eq!(local_steering_row_id(queue, id), Some(second));
+            queue.begin_native_setup(id, ctx);
+            assert_eq!(local_steering_row_id(queue, id), None);
+            queue.finish_native_setup(id, ctx);
+            queue.arm_command_in_flight(id);
+            assert_eq!(local_steering_row_id(queue, id), None);
+            queue.clear_command_in_flight(id);
+            assert_eq!(local_steering_row_id(queue, id), Some(second));
+        });
+    });
+}
+
+#[test]
+fn steering_row_does_not_pass_command_or_locked_rows() {
+    with_model(|mut app, model, _| {
+        for barrier in [
+            initial_cloud_mode_query("setup"),
+            command_query("sleep 1"),
+            QueuedQuery::new("pending".into(), QueuedQueryOrigin::PendingLrcAutoQueue),
+            QueuedQuery::new("command finish".into(), QueuedQueryOrigin::LrcAutoQueue),
+        ] {
+            let id = AIConversationId::new();
+            model.update(&mut app, |queue, ctx| {
+                queue.append(id, barrier, ctx);
+                queue.append(id, steering_query("correction"), ctx);
+                assert!(queue.next_row_for_request(id).is_none());
+            });
+        }
+    });
+}
+
+#[test]
+fn next_row_for_request_prefers_injections_then_steered_heads() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            let plain = queue.append(id, user_query("plain"), ctx);
+            queue.append(id, steering_query("correction"), ctx);
+            assert!(matches!(
+                queue.next_row_for_request(id),
+                Some(RequestRow::LocalSteering(_))
+            ));
+            queue.set_delivery_mode(id, QueuedPromptDeliveryMode::Steering);
+            assert!(matches!(
+                queue.next_row_for_request(id),
+                Some(RequestRow::SteeredHead(row)) if row.id() == plain
+            ));
+            let injected = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "injected".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+            queue.reorder(id, injected, 0, ctx);
+            assert!(matches!(
+                queue.next_row_for_request(id),
+                Some(RequestRow::InjectedFollowup(row)) if row.id() == injected
+            ));
+        });
+    });
+}
+
+#[test]
+fn effective_mode_applies_the_binary_toggle_on_top_of_each_default() {
+    use settings::Setting;
+
+    use crate::settings::{AISettings, PromptSubmissionMode};
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        for (default, toggled_once, toggled_twice) in [
+            (
+                PromptSubmissionMode::Interrupt,
+                PromptSubmissionMode::Queue,
+                PromptSubmissionMode::Interrupt,
+            ),
+            (
+                PromptSubmissionMode::Steer,
+                PromptSubmissionMode::Queue,
+                PromptSubmissionMode::Steer,
+            ),
+            (
+                PromptSubmissionMode::Queue,
+                PromptSubmissionMode::Interrupt,
+                PromptSubmissionMode::Queue,
+            ),
+        ] {
+            AISettings::handle(&app).update(&mut app, |settings, ctx| {
+                settings
+                    .default_prompt_submission_mode
+                    .set_value(default, ctx)
+                    .unwrap();
+            });
+            model.update(&mut app, |queue, ctx| {
+                queue.queues.remove(&id);
+                assert_eq!(queue.effective_prompt_submission_mode(id), default);
+                queue.toggle_queue_next_prompt(id, ctx);
+                assert_eq!(queue.effective_prompt_submission_mode(id), toggled_once);
+                queue.toggle_queue_next_prompt(id, ctx);
+                assert_eq!(queue.effective_prompt_submission_mode(id), toggled_twice);
+            });
+        }
+    });
+}
+
+#[test]
+fn native_setup_barrier_blocks_dispatch_until_finished() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            queue.begin_native_setup(id, ctx);
+            assert!(queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "first".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+            assert!(queue.has_pending_native_injections(id));
+
+            // The barrier -- not `clear_queue` itself -- is what gates when a caller is
+            // allowed to dispatch; the row sits untouched until then.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            let cleared = queue.clear_queue(id, ctx);
+            assert_eq!(cleared.len(), 1);
+            assert_eq!(cleared[0].text(), "first");
+            assert!(!queue.has_pending_native_injections(id));
+
+            // Idempotent once already released.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+        });
+    });
+}
+
+#[test]
+fn clear_queue_removes_every_row_regardless_of_origin_in_fifo_order() {
+    with_model(|mut app, model, events| {
+        let id = AIConversationId::new();
+        let (shared, local, command) = model.update(&mut app, |queue, ctx| {
+            let shared = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "shared".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+            let local = queue.append(id, user_query("local"), ctx);
+            let command = queue.append(id, command_query("ls"), ctx);
+            (shared, local, command)
+        });
+        events.borrow_mut().clear();
+
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
+        assert_eq!(
+            cleared.iter().map(QueuedQuery::text).collect::<Vec<_>>(),
+            vec!["shared", "local", "ls"],
+            "every row is cleared regardless of origin, in FIFO order"
+        );
+        assert_eq!(cleared[0].id(), shared);
+        assert_eq!(cleared[1].id(), local);
+        assert_eq!(cleared[2].id(), command);
+
+        model.read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+            assert!(!queue.has_pending_native_injections(id));
+        });
+
+        let evts = events.borrow();
+        assert_eq!(evts.len(), 3);
+        assert!(evts.iter().all(|e| matches!(
+            e,
+            QueuedQueryEvent::Removed { conversation_id, .. } if *conversation_id == id
+        )));
+    });
+}
+
+#[test]
+fn clear_queue_no_ops_when_nothing_queued() {
+    with_model(|mut app, model, events| {
+        let id = AIConversationId::new();
+        events.borrow_mut().clear();
+
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
+        assert!(cleared.is_empty());
+        assert!(events.borrow().is_empty());
+    });
 }
 
 fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
@@ -877,6 +1108,91 @@ fn command_in_flight_flag_arms_and_clears() {
 
         model.update(&mut app, |m, _| m.clear_command_in_flight(conv));
         model.read(&app, |m, _| assert!(!m.has_command_in_flight(conv)));
+    });
+}
+
+fn preparing_query() -> QueuedQuery {
+    QueuedQuery::new_shared_session_prompt(
+        "follow up".into(),
+        ParticipantId::new(),
+        vec![AgentAttachment::FileReference {
+            attachment_id: "file-id".into(),
+            file_name: "event-payload.json".into(),
+        }],
+        None,
+    )
+}
+
+#[test]
+fn preparation_blocks_fifo_and_emits_ready_once_even_on_download_failure() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let id = model.update(&mut app, |m, ctx| m.append(conv, preparing_query(), ctx));
+        append_user(&model, &mut app, conv, "later");
+        model.read(&app, |m, _| {
+            assert!(m.ready_head(conv).is_none());
+            assert!(m.ready_query(conv, id).is_none());
+            assert!(m.peek_autofire(conv).is_none());
+            assert!(!m.has_autofireable_prompt(conv));
+            assert!(m.has_pending_native_injections(conv));
+        });
+        events.borrow_mut().clear();
+        model.update(&mut app, |m, ctx| {
+            m.complete_preparation(conv, id, HashMap::new(), ctx);
+            m.complete_preparation(conv, id, HashMap::new(), ctx);
+        });
+        model.read(&app, |m, _| {
+            let head = m.ready_head(conv).unwrap();
+            assert_eq!(head.id(), id);
+            assert!(
+                head.text()
+                    .contains("could not be downloaded: event-payload.json")
+            );
+            assert!(m.has_autofireable_prompt(conv));
+        });
+        assert!(matches!(events.borrow().as_slice(),
+            [QueuedQueryEvent::PromptReady { conversation_id, query_id }]
+                if *conversation_id == conv && *query_id == id));
+    });
+}
+
+#[test]
+fn preparation_completion_after_removal_or_clear_does_not_resurrect_rows() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        for clear_all in [false, true] {
+            let id = model.update(&mut app, |m, ctx| m.append(conv, preparing_query(), ctx));
+            model.update(&mut app, |m, ctx| {
+                if clear_all {
+                    m.clear_queue(conv, ctx);
+                } else {
+                    m.remove_by_id(conv, id, ctx);
+                }
+            });
+            events.borrow_mut().clear();
+            model.update(&mut app, |m, ctx| {
+                m.complete_preparation(conv, id, HashMap::new(), ctx)
+            });
+            assert!(events.borrow().is_empty());
+            model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+        }
+    });
+}
+
+#[test]
+fn later_download_finishing_first_does_not_overtake_fifo_head() {
+    with_model(|mut app, model, _| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            let first = m.append(conv, preparing_query(), ctx);
+            let second = m.append(conv, preparing_query(), ctx);
+            m.complete_preparation(conv, second, HashMap::new(), ctx);
+            assert!(m.ready_head(conv).is_none());
+            m.complete_preparation(conv, first, HashMap::new(), ctx);
+            assert_eq!(m.ready_head(conv).unwrap().id(), first);
+            m.remove_fired_row(conv, first, ctx);
+            assert_eq!(m.ready_head(conv).unwrap().id(), second);
+        });
     });
 }
 

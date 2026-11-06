@@ -319,13 +319,12 @@ macro_rules! define_setting {
                 &mut self,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 Self::clear_from_preferences(Self::preferences_for_setting(ctx))?;
                 self.inner = self.validate(Self::default_value());
                 self.is_explicitly_set = false;
-                ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                    change_event_reason: ChangeEventReason::Clear,
-                }}));
+                ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                    $crate::ChangeEventReason::Clear,
+                ));
                 Ok(())
             }
 
@@ -334,15 +333,14 @@ macro_rules! define_setting {
                 new_value: Self::Value,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
                     self.inner = self.validate(new_value);
                     self.is_explicitly_set = true;
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::CloudSync,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::CloudSync,
+                    ));
                 }
                 Ok(())
             }
@@ -352,15 +350,14 @@ macro_rules! define_setting {
                 new_value: Self::Value,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
                     self.inner = self.validate(new_value);
                     self.is_explicitly_set = true;
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::LocalChange,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::LocalChange,
+                    ));
                 }
                 Ok(())
             }
@@ -371,14 +368,13 @@ macro_rules! define_setting {
                 explicitly_set: bool,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let validated = self.validate(new_value);
                 if self.value() != &validated || self.is_explicitly_set != explicitly_set {
                     self.inner = validated;
                     self.is_explicitly_set = explicitly_set;
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::LocalChange,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::LocalChange,
+                    ));
                 }
                 Ok(())
             }
@@ -410,6 +406,16 @@ macro_rules! define_setting {
                 self.value()
             }
         }
+
+        $crate::macros::concat_idents!(EventName = $group, ChangedEvent {
+            impl $crate::SettingChangeEvent for $name {
+                fn change_event(reason: $crate::ChangeEventReason) -> EventName {
+                    EventName::$name {
+                        change_event_reason: reason,
+                    }
+                }
+            }
+        });
 
         $crate::submit_schema_entry!(
             private: $private,
@@ -596,12 +602,11 @@ macro_rules! implement_setting_for_enum {
                 &mut self,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 Self::clear_from_preferences(Self::preferences_for_setting(ctx))?;
                 *self = self.validate(Self::default_value());
-                ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                    change_event_reason: ChangeEventReason::Clear,
-                }}));
+                ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                    $crate::ChangeEventReason::Clear,
+                ));
                 Ok(())
             }
 
@@ -610,14 +615,13 @@ macro_rules! implement_setting_for_enum {
                 new_value: Self::Value,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
                     *self = self.validate(new_value);
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::CloudSync,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::CloudSync,
+                    ));
                 }
                 Ok(())
             }
@@ -627,14 +631,13 @@ macro_rules! implement_setting_for_enum {
                 new_value: Self::Value,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let changed_in_storage =
                     Self::write_to_preferences(&new_value, Self::preferences_for_setting(ctx))?;
                 if self.value() != &new_value || changed_in_storage {
                     *self = self.validate(new_value);
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::LocalChange,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::LocalChange,
+                    ));
                 }
                 Ok(())
             }
@@ -645,13 +648,12 @@ macro_rules! implement_setting_for_enum {
                 _explicitly_set: bool,
                 ctx: &mut $crate::warpui_core::ModelContext<Self::Group>,
             ) -> anyhow::Result<()> {
-                use $crate::ChangeEventReason;
                 let validated = self.validate(new_value);
                 if self.value() != &validated {
                     *self = validated;
-                    ctx.emit($crate::macros::concat_idents!(EventName = $group, ChangedEvent { EventName::$name {
-                        change_event_reason: ChangeEventReason::LocalChange,
-                    }}));
+                    ctx.emit(<Self as $crate::SettingChangeEvent>::change_event(
+                        $crate::ChangeEventReason::LocalChange,
+                    ));
                 }
                 Ok(())
             }
@@ -676,6 +678,16 @@ macro_rules! implement_setting_for_enum {
             }
             )?
         }
+
+        $crate::macros::concat_idents!(EventName = $group, ChangedEvent {
+            impl $crate::SettingChangeEvent for $name {
+                fn change_event(reason: $crate::ChangeEventReason) -> EventName {
+                    EventName::$name {
+                        change_event_reason: reason,
+                    }
+                }
+            }
+        });
 
         $crate::submit_schema_entry!(
             private: $private,
@@ -810,158 +822,49 @@ pub use define_settings_group;
 #[macro_export]
 macro_rules! register_settings_events {
     ( $group:ident, $var:ident, $setting:ident, $handle:expr, $ctx:expr ) => {{
-        $crate::macros::generate_settings_event_fn!($group, $var, $setting);
-
-        concat_idents::concat_idents!(fn_name = register_events_for_, $setting, {
-            fn_name($handle, $ctx);
-        });
+        // The callback bodies must expand here with the concrete setting type
+        // so an inherent method on the setting (for example
+        // `current_value_is_syncable`) can shadow the `Setting` trait default.
+        $crate::registration::register_setting_events::<$setting, _>(
+            $handle,
+            $crate::registration::SettingCallbacks {
+                apply_set: |settings_group: &mut $group, value, from_cloud_sync, ctx| {
+                    use $crate::Setting as _;
+                    if from_cloud_sync {
+                        settings_group.$var.set_value_from_cloud_sync(value, ctx)
+                    } else {
+                        settings_group.$var.set_value(value, ctx)
+                    }
+                },
+                apply_clear: |settings_group: &mut $group, ctx| {
+                    use $crate::Setting as _;
+                    if settings_group
+                        .$var
+                        .is_setting_syncable_on_current_platform(true)
+                    {
+                        log::debug!(
+                            "Clearing cloud synced setting from local storage: {}",
+                            <$setting as $crate::Setting>::storage_key()
+                        );
+                        settings_group.$var.clear_value(ctx)
+                    } else {
+                        Ok(())
+                    }
+                },
+                apply_load: |settings_group: &mut $group, value, explicitly_set, ctx| {
+                    use $crate::Setting as _;
+                    settings_group.$var.load_value(value, explicitly_set, ctx)
+                },
+                current_value_is_syncable: |settings_group: &$group| {
+                    use $crate::Setting as _;
+                    settings_group.$var.current_value_is_syncable()
+                },
+            },
+            $ctx,
+        );
     }};
 }
 pub use register_settings_events;
-
-/// Generates a function that can be used to register event handlers for a
-/// for letting the SettingsManager know when a setting has been updated.
-/// Used for managing the flow of events for local and cloud settings.
-#[macro_export]
-macro_rules! generate_settings_event_fn {
-    ( $group:ident, $var:ident, $setting:ident ) => {
-        concat_idents::concat_idents!(fn_name = register_events_for_, $setting, {
-            #[allow(dead_code)]
-            #[allow(non_snake_case)]
-            fn fn_name(
-                settings_group: $crate::warpui_core::ModelHandle<$group>,
-                ctx: &mut (
-                         impl $crate::warpui_core::GetSingletonModelHandle
-                         + $crate::warpui_core::AddSingletonModel
-                         + $crate::warpui_core::UpdateModel
-                     ),
-            ) {
-                use anyhow::anyhow;
-                use serde_json;
-                use $crate::Setting as _;
-                use $crate::manager::{SettingsEvent, SettingsManager};
-                use $crate::warpui_core::SingletonEntity;
-                SettingsManager::handle(ctx).update(ctx, |manager, ctx| {
-                    // Propagate per settings change events through the SettingsManager
-                    ctx.subscribe_to_model(&settings_group, |_manager, _, _, ctx| {
-                        ctx.emit(SettingsEvent::LocalPreferencesUpdated {
-                            storage_key: $setting::storage_key().to_string(),
-                            sync_to_cloud: $setting::sync_to_cloud(),
-                        });
-                    });
-                    // Register callbacks for updating individual settings model by storage key
-                    let settings_group_update_clone = settings_group.clone();
-                    let settings_group_reset_clone = settings_group.clone();
-                    let settings_group_load_clone = settings_group.clone();
-                    let settings_group_is_syncable_clone = settings_group.clone();
-                    let serialized_default_value =
-                        serde_json::to_string(&$setting::default_value())
-                            .expect("default should serialize");
-                    let file_serialized_default_value = {
-                        use $crate::_settings_value::SettingsValue as _;
-                        let file_value = $setting::default_value().to_file_value();
-                        serde_json::to_string(&file_value)
-                            .expect("default file value should serialize")
-                    };
-                    manager.register_setting(
-                        $setting::storage_key(),
-                        $setting::sync_to_cloud(),
-                        $setting::supported_platforms(),
-                        serialized_default_value,
-                        file_serialized_default_value,
-                        $setting::hierarchy(),
-                        $setting::toml_key(),
-                        $setting::max_table_depth(),
-                        $setting::is_private(),
-                        move |value, from_cloud_sync, ctx| {
-                            use $crate::_settings_value::SettingsValue as _;
-                            // Try SettingsValue first (handles snake_case enums etc.),
-                            // then fall back to serde for cloud sync values.
-                            let value = serde_json::from_str::<serde_json::Value>(&value)
-                                .ok()
-                                .and_then(|json_val| {
-                                    <$setting as $crate::Setting>::Value::from_file_value(&json_val)
-                                })
-                                .or_else(|| serde_json::from_str(&value).ok());
-                            let Some(value) = value else {
-                                return Err(anyhow!(
-                                    "Failed to parse updated value for setting {}: Not updating",
-                                    $setting::storage_key()
-                                ));
-                            };
-                            settings_group_update_clone.update(ctx, |settings_group, ctx| {
-                                if from_cloud_sync {
-                                    settings_group.$var.set_value_from_cloud_sync(value, ctx)
-                                } else {
-                                    settings_group.$var.set_value(value, ctx)
-                                }
-                            })
-                        },
-                        move |ctx| {
-                            settings_group_reset_clone.update(ctx, |settings_group, ctx| {
-                                if settings_group
-                                    .$var
-                                    .is_setting_syncable_on_current_platform(true)
-                                {
-                                    log::debug!(
-                                        "Clearing cloud synced setting from local storage: {}",
-                                        $setting::storage_key()
-                                    );
-                                    settings_group.$var.clear_value(ctx)
-                                } else {
-                                    Ok(())
-                                }
-                            })
-                        },
-                        move |value, explicitly_set, ctx| {
-                            use $crate::_settings_value::SettingsValue as _;
-                            let value = serde_json::from_str::<serde_json::Value>(&value)
-                                .ok()
-                                .and_then(|json_val| {
-                                    <$setting as $crate::Setting>::Value::from_file_value(&json_val)
-                                })
-                                .or_else(|| serde_json::from_str(&value).ok());
-                            let Some(value) = value else {
-                                return Err(anyhow!(
-                                    "Failed to parse loaded value for setting {}: Not loading",
-                                    $setting::storage_key()
-                                ));
-                            };
-                            settings_group_load_clone.update(ctx, |settings_group, ctx| {
-                                settings_group.$var.load_value(value, explicitly_set, ctx)
-                            })
-                        },
-                        |left, right| {
-                            use $crate::_settings_value::SettingsValue as _;
-                            let parse =
-                                |s: &str| -> anyhow::Result<<$setting as $crate::Setting>::Value> {
-                                    let json_val = serde_json::from_str::<serde_json::Value>(s)?;
-                                    <$setting as $crate::Setting>::Value::from_file_value(&json_val)
-                                        .or_else(|| serde_json::from_str(s).ok())
-                                        .ok_or_else(|| {
-                                            anyhow!(
-                                                "Failed to parse value for {}",
-                                                $setting::storage_key()
-                                            )
-                                        })
-                                };
-                            let left_setting = $setting::new(Some(parse(left)?));
-                            let right_setting = $setting::new(Some(parse(right)?));
-                            Ok(left_setting.value() == right_setting.value())
-                        },
-                        move |ctx| {
-                            settings_group_is_syncable_clone
-                                .as_ref(ctx)
-                                .$var
-                                .current_value_is_syncable()
-                        },
-                    );
-                });
-            }
-        });
-    };
-}
-pub use generate_settings_event_fn;
 
 #[cfg(test)]
 #[path = "macros_tests.rs"]

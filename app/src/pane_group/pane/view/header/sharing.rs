@@ -139,7 +139,12 @@ impl<P: BackingView> PaneHeader<P> {
         source: SharingDialogSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !self.is_sharing_dialog_enabled(ctx) || !self.has_shareable_shared_session(ctx) {
+        if !self.is_sharing_dialog_enabled(ctx)
+            || !self
+                .sharing_dialog()
+                .as_ref(ctx)
+                .has_shared_session_link(ctx)
+        {
             return;
         }
 
@@ -156,6 +161,12 @@ impl<P: BackingView> PaneHeader<P> {
             }
         });
         ctx.notify();
+    }
+
+    pub fn refresh_shared_session_link(&mut self, ctx: &mut ViewContext<Self>) {
+        self.sharing_dialog().update(ctx, |dialog, ctx| {
+            dialog.refresh_shared_session_link(ctx);
+        });
     }
 
     fn handle_sharing_dialog_event(

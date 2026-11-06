@@ -154,7 +154,7 @@ font-kit.workspace = true
 bimap = "0.6.2"
 bytemuck.workspace = true
 command.workspace = true
-cosmic-text = { git = "https://github.com/warpdotdev/cosmic-text.git", rev = "15198beba692162201c0ea8b15222cf5643ea068" }
+cosmic-text = { git = "https://github.com/warpdotdev/cosmic-text.git", rev = "a7c7b71497542758e08f77390b8efce543b3181f" }
 derivative.workspace = true
 fontdb = "0.23.0"
 memmap2 = "0.9.3"

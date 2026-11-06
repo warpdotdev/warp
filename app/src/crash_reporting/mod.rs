@@ -342,12 +342,7 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
             }
         }
 
-        for (k, v) in APPLICATION_LIFECYCLE_STAGE.read().to_sentry_tags() {
-            event.tags.insert(k.to_string(), v);
-        }
-        for (k, v) in TAGS.read().iter() {
-            event.tags.insert(k.clone(), v.clone());
-        }
+        set_event_tags(&mut event);
 
         Some(event)
     }));
@@ -518,9 +513,23 @@ fn release_version() -> &'static str {
     ChannelState::app_version().unwrap_or("<no tag>")
 }
 
+fn set_event_tags(event: &mut sentry::protocol::Event<'_>) {
+    for (key, value) in APPLICATION_LIFECYCLE_STAGE.read().to_sentry_tags() {
+        event.tags.insert(key.to_string(), value);
+    }
+    for (key, value) in TAGS.read().iter() {
+        event.tags.insert(key.clone(), value.clone());
+    }
+}
+
 /// Sets the warp.client_type Sentry tag.
 pub fn set_client_type_tag(client_id: &str) {
     set_tag("warp.client_type", client_id);
+}
+
+/// Sets the warp.task_id Sentry tag.
+pub fn set_task_id_tag(task_id: &str) {
+    set_tag("warp.task_id", task_id);
 }
 
 /// Initializes the warp.virtual_env Sentry tag group.
@@ -615,3 +624,7 @@ impl ToSentryTags for &AntivirusInfo {
         )]
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

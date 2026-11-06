@@ -1,11 +1,14 @@
 use std::borrow::Cow;
 
 use async_channel::Sender;
+use uuid::Uuid;
+use warp_completer::meta::Span;
 #[cfg(unix)]
 use warpui::AppContext;
 use warpui::{Entity, ViewContext};
 
 use crate::ai::agent::AIAgentPtyWriteMode;
+use crate::server::telemetry::CloudAgentShellRecoveryFailureClass;
 #[cfg(unix)]
 use crate::terminal::event::AfterBlockCompletedEvent;
 use crate::terminal::model::completions::ShellCompletion;
@@ -34,7 +37,7 @@ pub enum PtyIntent {
     ExecuteCommand(ExecuteCommandEvent),
     RunNativeShellCompletions {
         buffer_text: String,
-        results_tx: Sender<Vec<ShellCompletion>>,
+        results_tx: Sender<(Vec<ShellCompletion>, Option<Span>)>,
     },
 }
 
@@ -54,11 +57,39 @@ pub trait TerminalSurface: Entity + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
 {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn on_shell_replaced(
+        &mut self,
+        _request_id: Uuid,
+        _result: anyhow::Result<()>,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
     /// Whether the local manager should start polling termios for a password prompt
     /// after the given block starts.
     #[cfg(unix)]
     fn should_start_password_prompt_polling(&self, _command: &str, _ctx: &AppContext) -> bool {
         false
+    }
+
+    /// The replacement shell requested via `TerminalManager::recover_cloud_shell` bootstrapped.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn on_cloud_shell_recovered(
+        &mut self,
+        _restored_working_directory: String,
+        _used_fallback_directory: bool,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    fn on_cloud_shell_recovery_failed(
+        &mut self,
+        _failure_class: CloudAgentShellRecoveryFailureClass,
+        _error: anyhow::Error,
+        _ctx: &mut ViewContext<Self>,
+    ) {
     }
 
     /// Whether the local manager should stop password-prompt polling for this completed block.

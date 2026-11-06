@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
@@ -29,11 +30,17 @@ use crate::ai::blocklist::{
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+}
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
@@ -93,11 +100,12 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
 
 fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
     SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some(prompt.to_owned()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(false),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -116,11 +124,12 @@ fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
 /// local-to-cloud handoff where the agent skips its initial turn.
 fn promptless_cloud_spawn_request() -> SpawnAgentRequest {
     SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(false),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -184,6 +193,79 @@ where
 }
 
 #[test]
+fn mixed_queue_with_long_preview_and_inline_editor_lays_out() {
+    use warpui::elements::ChildView;
+    use warpui::{AppContext, Element, Entity, Presenter, View, WindowInvalidation};
+
+    struct PanelWindow(ViewHandle<QueuedPromptsPanelView>);
+    impl Entity for PanelWindow {
+        type Event = ();
+    }
+    impl TypedActionView for PanelWindow {
+        type Action = ();
+    }
+    impl View for PanelWindow {
+        fn ui_name() -> &'static str {
+            "PanelWindow"
+        }
+        fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+            ChildView::new(&self.0).finish()
+        }
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let id = BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            let id = history.start_new_conversation(terminal.id(), false, false, false, ctx);
+            history.set_active_conversation_id(id, terminal.id(), ctx);
+            id
+        });
+        let edited = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new("long preview ".repeat(100), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+            queue.append(
+                id,
+                QueuedQuery::new("correction".into(), QueuedQueryOrigin::LocalSteering),
+                ctx,
+            )
+        });
+        let panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .unwrap()
+                .clone()
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.enter_edit_mode(id, edited, ctx);
+        });
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test(
+                "long inline editor content ".repeat(40).as_str(),
+                ctx,
+            );
+        });
+        let (window_id, root) = app.add_window(WindowStyle::NotStealFocus, |_| PanelWindow(panel));
+        let mut presenter = Presenter::new(window_id);
+        app.update(|ctx| {
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated: [root.id()].into_iter().collect(),
+                    ..Default::default()
+                },
+                ctx,
+            );
+            let _scene = presenter.build_scene(vec2f(500., 400.), 1., None, ctx);
+        });
+    });
+}
+
+#[test]
 fn complete_drain_pops_head_and_returns_submit_action() {
     // On Complete, the next queued prompt fires via Submit.
     with_singleton(|mut app, model, conv| {
@@ -219,7 +301,11 @@ fn dispatched_cloud_prompt_uses_locked_queue_row_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("write tests"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("write tests"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             view.handle_ambient_agent_event(&AmbientAgentViewModelEvent::DispatchedAgent, ctx);
 
@@ -387,7 +473,11 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -423,7 +513,11 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                     model.set_harness(Harness::Claude, ctx);
                 });
 
@@ -500,7 +594,11 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -622,7 +720,11 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(promptless_cloud_spawn_request(), ctx);
+                    model.spawn_agent_with_request(
+                        promptless_cloud_spawn_request(),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(
@@ -683,7 +785,11 @@ fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial prompt"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial prompt"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(

@@ -19,4 +19,21 @@ CARGO_BUNDLE_VERSION="0.11.0"
 # through cargo-quickinstall, which covers both apple-darwin targets. Where no
 # prebuilt is available binstall compiles from source, which is left enabled: a
 # slow bootstrap is a better outcome than one that can't finish.
-cargo binstall --no-confirm "cargo-bundle@${CARGO_BUNDLE_VERSION}"
+#
+# Check the binary itself rather than trusting binstall's install metadata: CI
+# caches can restore the metadata without the binary (rust-cache prunes
+# $CARGO_HOME/bin), and a plain `cargo binstall` would then skip the install and
+# leave bundling broken. `--force` bypasses that metadata check.
+#
+# The banner's tool name varies across releases (0.11.0 prints
+# "cargo bundle v0.11.0", older versions "cargo-bundle v..."), so compare only
+# the trailing version number.
+INSTALLED_VERSION=""
+if command -v cargo-bundle; then
+    INSTALLED_VERSION="$(cargo-bundle --version)"
+    INSTALLED_VERSION="${INSTALLED_VERSION##* }"
+    INSTALLED_VERSION="${INSTALLED_VERSION#v}"
+fi
+if [ "$INSTALLED_VERSION" != "$CARGO_BUNDLE_VERSION" ]; then
+    cargo binstall --force --no-confirm "cargo-bundle@${CARGO_BUNDLE_VERSION}"
+fi

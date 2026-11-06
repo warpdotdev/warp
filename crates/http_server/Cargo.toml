@@ -6,6 +6,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 axum.workspace = true
 log.workspace = true
 tokio.workspace = true

@@ -92,7 +92,9 @@ impl ChannelState {
     pub fn override_server_root_url(url: impl Into<Cow<'static, str>>) -> Result<(), ParseError> {
         let url = url.into();
         Url::parse(&url)?;
-        CHANNEL_STATE.lock().config.server_config.server_root_url = url;
+        let mut channel_state = CHANNEL_STATE.lock();
+        channel_state.config.server_config.server_root_url = url;
+        channel_state.config.server_config.iap_config = None;
         Ok(())
     }
 
@@ -277,6 +279,30 @@ impl ChannelState {
                 Cow::Owned(MOCK_SERVER_URL.clone())
             } else {
                 CHANNEL_STATE.lock().config.server_config.server_root_url.clone()
+            }
+        }
+    }
+
+    pub fn override_prewarmed_sandbox_control_url(
+        url: impl Into<Cow<'static, str>>,
+    ) -> Result<(), ParseError> {
+        let url = url.into();
+        Url::parse(&url)?;
+        CHANNEL_STATE
+            .lock()
+            .config
+            .server_config
+            .prewarmed_sandbox_control_url = Some(url);
+        Ok(())
+    }
+
+    pub fn prewarmed_sandbox_control_url() -> Cow<'static, str> {
+        let state = CHANNEL_STATE.lock();
+        match &state.config.server_config.prewarmed_sandbox_control_url {
+            Some(url) => url.clone(),
+            None => {
+                drop(state);
+                Self::server_root_url()
             }
         }
     }

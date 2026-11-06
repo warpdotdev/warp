@@ -1163,8 +1163,7 @@ impl ansi::Handler for HeaderGrid {
             );
             // We send a terminal event which will result in bindkeys being issued to the shell session, to
             // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
-            self.event_proxy
-                .send_terminal_event(Event::HonorPS1OutOfSync);
+            self.event_proxy.send_app_event(Event::HonorPS1OutOfSync);
 
             // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
             // Note that we ALWAYS want this to be synced properly since the shell determines the prompt

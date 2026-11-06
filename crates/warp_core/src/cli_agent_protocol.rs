@@ -31,6 +31,10 @@ pub struct CLIAgentNotification {
     pub tool_input: Option<serde_json::Value>,
     pub plugin_version: Option<String>,
     pub error_type: Option<String>,
+    /// Background tasks (shell, subagent, monitor, ...) still running when the agent stopped.
+    pub background_task_count: Option<u32>,
+    /// Session-scoped scheduled wakeups (cron, loop) pending when the agent stopped.
+    pub session_cron_count: Option<u32>,
 }
 
 impl CLIAgentNotification {
@@ -50,6 +54,8 @@ impl CLIAgentNotification {
             tool_input: None,
             plugin_version: None,
             error_type: None,
+            background_task_count: None,
+            session_cron_count: None,
         }
     }
 }

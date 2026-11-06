@@ -2,19 +2,23 @@ use std::cmp::Ordering;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
+use warp_graphql::billing::{
+    AddonCreditAutoReloadStatus, AddonCreditsOption, ServiceAgreement, ServiceAgreementType,
+};
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource,
 };
 
-use super::team::{MembershipRole, Team};
+use super::gql_convert::{ToAgentModeCommandExecutionPredicates, ToPathBufs};
+use super::team::{DiscoverableTeam, MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::{LLMModelHost, LLMProvider};
+use crate::ai::llms::{LLMModelHost, LLMProvider, ModelsByFeature};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -43,12 +47,14 @@ pub struct Workspace {
     pub name: String,
     pub stripe_customer_id: Option<String>,
     pub teams: Vec<Team>,
+    pub open_teams: Vec<DiscoverableTeam>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_purchased_this_month: BonusGrantsPurchased,
     pub billing_cycle_usage: Option<BillingCycleUsageData>,
     pub has_billing_history: bool,
     pub settings: WorkspaceSettings,
-    pub invite_code: Option<WorkspaceInviteCode>,
+    /// The resolved-teamless model catalog -- fallback to this when teams[x].feature_model_choice isn't available
+    pub feature_model_choice: ModelsByFeature,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub pending_email_invites: Vec<EmailInvite>,
     // If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
@@ -58,7 +64,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn from_local_cache(uid: WorkspaceUid, name: String, teams: Option<Vec<Team>>) -> Self {
+    pub fn from_local_cache(
+        uid: WorkspaceUid,
+        name: String,
+        teams: Option<Vec<Team>>,
+        feature_model_choice: Option<ModelsByFeature>,
+    ) -> Self {
         // Derive the workspace billing metadata from the first team's cached billing
         // metadata, if available. This ensures the workspace-level billing info is
         // consistent with team-level data loaded from the cache.
@@ -72,12 +83,13 @@ impl Workspace {
             name,
             stripe_customer_id: Default::default(),
             teams: teams.unwrap_or_default(),
+            open_teams: Default::default(),
             billing_metadata,
             bonus_grants_purchased_this_month: Default::default(),
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
-            invite_code: Default::default(),
+            feature_model_choice: feature_model_choice.unwrap_or_default(),
             invite_link_domain_restrictions: Default::default(),
             pending_email_invites: Default::default(),
             is_eligible_for_discovery: false,
@@ -100,6 +112,17 @@ impl Workspace {
             .tier
             .native_workspaces_policy
             .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn joinable_teams(&self) -> impl Iterator<Item = &DiscoverableTeam> {
+        self.open_teams.iter().filter(|open_team| {
+            let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
+            self.teams.iter().all(|team| team.uid != open_team_uid)
+        })
+    }
+
+    pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
+        self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
     }
 
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
@@ -160,10 +183,6 @@ impl Workspace {
         false
     }
 
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.billing_metadata.is_byo_api_key_enabled()
-    }
-
     /// Returns true if the workspace has reached or exceeded its monthly addon credits spend limit.
     pub fn is_at_addon_credits_monthly_limit(&self) -> bool {
         if let Some(limit) = self.settings.addon_credits_settings.max_monthly_spend_cents {
@@ -182,21 +201,16 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// Returns the price in cents for the selected auto-reload pack,
     /// including any plan surcharge (premium plans reload at the premium price).
-    /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
+    /// Returns None if auto-reload is not configured or if the pack can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
-        addon_credits_options: &[warp_graphql::billing::AddonCreditsOption],
+        addon_credits_options: &[AddonCreditsOption],
     ) -> Option<i32> {
-        let selected_credits = self
-            .settings
+        self.settings
             .addon_credits_settings
-            .selected_auto_reload_credit_denomination?;
-
-        addon_credits_options
-            .iter()
-            .find(|option| option.credits == selected_credits)
+            .selected_auto_reload_option(addon_credits_options)
             .map(|option| {
                 option.price_usd_cents_with_premium(
                     self.billing_metadata.addon_credits_price_premium_bps(),
@@ -205,16 +219,12 @@ impl Workspace {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct WorkspaceInviteCode {
-    pub code: String,
-}
-
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct WorkspaceMember {
     pub uid: UserUid,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 
@@ -223,6 +233,12 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    /// The member's `includedUsageCents`: their included monthly allowance in US cents, when
+    /// the server sends one; never sent when usage is unlimited.
+    pub included_usage_cents: Option<OrderedFloat<f64>>,
+    /// The member's `usageCentsUsedSinceLastRefresh`: how much of that allowance they have
+    /// used, in US cents, when the server sends one; never sent when usage is unlimited.
+    pub usage_cents_used_since_last_refresh: Option<OrderedFloat<f64>>,
     pub is_request_limit_prorated: bool,
 }
 
@@ -242,6 +258,7 @@ impl Ord for WorkspaceMember {
 pub struct EmailInvite {
     pub invitee_email: String,
     pub expired: bool,
+    pub team_uid: Option<ServerId>,
 }
 
 impl PartialOrd for EmailInvite {
@@ -429,6 +446,26 @@ impl PurchaseAddOnCreditsPolicy {
     }
 }
 
+/// The unit a plan charges AI usage in, as the server states it on the tier. The rollout signal
+/// for dollars-first displays: while a plan charges in credits, the credit figures stay
+/// authoritative even when a response also carries cents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChargeUnit {
+    #[default]
+    Credits,
+    /// US cents: usage is billed in dollars.
+    Cents,
+}
+
+/// Plan terms carried by the user's own tier rather than a workspace's. A teamless user's only
+/// workspace is the server's placeholder, which the client drops, so this is the only place
+/// their plan terms survive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserTier {
+    pub purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    pub charge_unit: ChargeUnit,
+}
+
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct EnterprisePayAsYouGoPolicy {
     pub enabled: bool,
@@ -516,6 +553,7 @@ pub enum HostEnablementSetting {
 pub struct Tier {
     pub name: String,
     pub description: String,
+    pub charge_unit: ChargeUnit,
     pub warp_ai_policy: Option<WarpAiPolicy>,
     pub workspace_size_policy: Option<WorkspaceSizePolicy>,
     pub shared_notebooks_policy: Option<SharedNotebooksPolicy>,
@@ -605,8 +643,8 @@ pub struct BillingCycleUsageEntry {
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,
-    pub credits_used: i32,
-    pub cost_cents: i32,
+    pub credits_used: f64,
+    pub cost_cents: f64,
     /// Uid of the team this usage is attributed to. `billingCycleUsageHistory`
     /// is workspace-wide, so this is what scopes an entry to a single team.
     /// `None` for rows written before usage attribution shipped and for the
@@ -917,6 +955,16 @@ pub struct AiPermissionsSettings {
     pub remote_session_regex_list: Vec<Regex>,
 }
 
+/// The AI autonomy policy an admin has imposed, in the shape the enforcement paths
+/// consume: `None` on a field means no admin override, so the user's execution profile
+/// decides.
+///
+/// Both admin layers lower into this one type. The workspace layer stores it directly on
+/// [`WorkspaceSettings`]; a team's effective policy arrives as [`TeamAiAutonomySettings`]
+/// and converts via its `From` impl. The team shape's extra structure —
+/// [`EnforceableSetting`]'s `is_enforced_by_workspace` and [`SplitListSetting`]'s
+/// per-layer entries — records which admin layer contributed a value, which is an admin-UI
+/// concern rather than part of the policy, so it does not survive the conversion.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AiAutonomySettings {
     pub apply_code_diffs_setting: Option<ActionPermission>,
@@ -1003,6 +1051,43 @@ pub struct AddonCreditsSettings {
     pub auto_reload_enabled: bool,
     pub max_monthly_spend_cents: Option<i32>,
     pub selected_auto_reload_credit_denomination: Option<i32>,
+    /// The list price of the selected auto-reload pack, which is the usage it buys for a
+    /// workspace billed in dollars. `None` when auto-reload is not configured or the
+    /// workspace is billed in credits.
+    #[serde(default)]
+    pub selected_auto_reload_usage_cents: Option<i32>,
+}
+
+impl AddonCreditsSettings {
+    /// Whether `option` is the catalog pack auto-reload is configured to buy. A pack sold in
+    /// dollars is matched by its list price, which survives the credit count a pack is listed
+    /// under changing; otherwise by credit denomination.
+    fn is_selected_auto_reload_option(&self, option: &AddonCreditsOption) -> bool {
+        match (self.selected_auto_reload_usage_cents, option.usage_cents) {
+            (Some(selected_usage_cents), Some(usage_cents)) => selected_usage_cents == usage_cents,
+            (None, _) | (_, None) => self
+                .selected_auto_reload_credit_denomination
+                .is_some_and(|credits| credits == option.credits),
+        }
+    }
+
+    pub fn selected_auto_reload_option<'a>(
+        &self,
+        options: &'a [AddonCreditsOption],
+    ) -> Option<&'a AddonCreditsOption> {
+        options
+            .iter()
+            .find(|option| self.is_selected_auto_reload_option(option))
+    }
+
+    pub fn selected_auto_reload_option_index(
+        &self,
+        options: &[AddonCreditsOption],
+    ) -> Option<usize> {
+        options
+            .iter()
+            .position(|option| self.is_selected_auto_reload_option(option))
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1064,10 +1149,32 @@ pub struct SplitListSetting<T> {
     pub team_entries: Vec<T>,
 }
 
+impl<T> SplitListSetting<T> {
+    /// Whether an admin layer configured this list.
+    ///
+    /// Empty `values` does not answer that: the two allowlists merge by intersection
+    /// server-side, so layers configuring `["ls"]` and `["git status"]` yield empty `values`
+    /// with both entry lists populated. Reading `values` alone would call that unconfigured
+    /// and fall back to the user's own profile allowlist, granting exemptions neither admin
+    /// granted. The denylists and regex lists merge by union, where empty `values` already
+    /// implies empty entries, so the entry checks are inert for them.
+    ///
+    /// Clearing a list stores it as unset rather than empty -- that is how an admin reverts
+    /// to no constraint -- so "configured but empty" does not arise. If that changes,
+    /// `StringListSettingInfo.isConfigured` answers this directly, once the vendored schema
+    /// copy is re-pulled to include it.
+    pub fn is_configured(&self) -> bool {
+        !(self.values.is_empty()
+            && self.workspace_entries.is_empty()
+            && self.team_entries.is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamAiPermissionsSettings {
     pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
-    pub remote_session_regex_list: SplitListSetting<String>,
+    #[serde(with = "serde_regex")]
+    pub remote_session_regex_list: Vec<Regex>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1087,6 +1194,50 @@ pub struct TeamAiAutonomySettings {
     pub read_files_allowlist: SplitListSetting<String>,
     pub execute_commands_allowlist: SplitListSetting<String>,
     pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
+    /// Lowers a team's effective autonomy policy into the shape enforcement reads.
+    ///
+    /// A list counts as an override when any admin layer configured it, which is not the
+    /// same question as whether the merged result is empty — see
+    /// [`SplitListSetting::is_configured`].
+    ///
+    /// `create_plans` is dropped. It exists only on the team side; `AIExecutionProfile`
+    /// carries no create-plans permission for it to override, so there is nothing to
+    /// lower it into.
+    fn from(team: &TeamAiAutonomySettings) -> Self {
+        fn override_list<T>(
+            list: &SplitListSetting<String>,
+            convert: impl FnOnce(Vec<String>) -> Vec<T>,
+        ) -> Option<Vec<T>> {
+            if list.is_configured() {
+                Some(convert(list.values.clone()))
+            } else {
+                None
+            }
+        }
+
+        Self {
+            apply_code_diffs_setting: team.apply_code_diffs.value,
+            read_files_setting: team.read_files.value,
+            read_files_allowlist: override_list(
+                &team.read_files_allowlist,
+                ToPathBufs::to_path_bufs,
+            ),
+            execute_commands_setting: team.execute_commands.value,
+            execute_commands_allowlist: override_list(
+                &team.execute_commands_allowlist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            execute_commands_denylist: override_list(
+                &team.execute_commands_denylist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            write_to_pty_setting: team.write_to_pty.value,
+            computer_use_setting: team.computer_use.value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

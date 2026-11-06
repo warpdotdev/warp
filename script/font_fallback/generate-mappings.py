@@ -67,6 +67,18 @@ HACK_FONT_FILEPATH = "../../app/assets/bundled/fonts/hack/Hack-Regular.ttf"
 ROBOTO_FONT_FILEPATH = "../../app/assets/bundled/fonts/roboto/Roboto-Regular.ttf"
 FONT_DOWNLOAD_DIR = "./downloaded_fonts"
 
+# Code points that Hack Nerd Font must not claim even though its cmap covers them.
+# Warp renders these glyphs next to mac modifier glyphs (e.g. ⌘ U+2318, ⌥ U+2325)
+# that resolve to Noto Sans Symbols 2 because Hack Nerd Font doesn't cover them. Hack
+# Nerd Font is a monospace icon font with different metrics and weight than Noto Sans
+# Symbols 2, so when it wins one glyph out of a set that's meant to render consistently
+# side-by-side (see KeyboardShortcut), that glyph ends up mismatched in weight and
+# baseline alignment. Excluding them here lets them fall through to the next
+# highest-priority font that also covers them, currently Noto Sans Symbols 2.
+HACK_NERD_FONT_EXCLUDED_CODE_POINTS = {
+    0x21E7,  # ⇧ UPWARDS WHITE ARROW (Shift key glyph)
+}
+
 
 def download_fallback_fonts():
     if os.path.exists(FONT_DOWNLOAD_DIR):
@@ -91,7 +103,11 @@ def get_default_fonts():
     return [TTFont(HACK_FONT_FILEPATH), TTFont(ROBOTO_FONT_FILEPATH)]
 
 
-# Returns a `TTFont` object for each fallback font, sorted by their global order.
+# Returns a `TTFont` object for each fallback font, sorted by their global order. Fonts
+# with the same global order (i.e. those not listed in `GLOBAL_ORDER`) are ordered
+# alphabetically by family name as a tie-break, so the resulting order - and therefore
+# which font wins a code point shared between two equal-priority fonts - is
+# deterministic and doesn't depend on filesystem directory-listing order.
 def get_fallback_fonts(fallback_fonts_dir):
     fonts = []
     for file in os.listdir(fallback_fonts_dir):
@@ -101,10 +117,10 @@ def get_fallback_fonts(fallback_fonts_dir):
 
             font_name = get_font_name(font)
             global_order = get_global_order(font_name)
-            fonts.append((font, global_order))
+            fonts.append((font, global_order, font_name))
 
-    fonts.sort(key=itemgetter(1))
-    return [font for (font, _) in fonts]
+    fonts.sort(key=itemgetter(1, 2))
+    return [font for (font, _, _) in fonts]
 
 
 def get_font_name(font):
@@ -132,6 +148,8 @@ def generate_mapping(default_fonts, fallback_fonts):
         font_code_points = supported_code_points(font)
         for code_point in font_code_points:
             if code_point in default_code_points:
+                continue
+            if font_name == "Hack Nerd Font" and code_point in HACK_NERD_FONT_EXCLUDED_CODE_POINTS:
                 continue
             mapping[code_point] = font_name
     ranges = coalesce_ranges(collapse_to_ranges(mapping))

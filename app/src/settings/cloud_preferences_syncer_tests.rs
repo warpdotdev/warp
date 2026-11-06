@@ -32,6 +32,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::cloud_preferences::{
     CloudPreferenceModel, CloudPreferencesSettings, Platform,
 };
+use crate::test_util::assert_eventually;
 
 define_settings_group!(TestSettings, settings: [
     all_platforms_cloud_setting: AllPlatforms {
@@ -205,16 +206,13 @@ async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {
         .await
 }
 async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, message: &str) {
-    for _ in 0..50 {
-        let num_spawned_futures =
-            SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len());
-        if num_spawned_futures == expected_num {
-            return;
-        }
-        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
-    }
-
-    assert_num_spawned_futures(app, expected_num, message);
+    assert_eventually!(
+        1000 => SyncQueue::handle(app).read(app, |sync_queue, _ctx| {
+            sync_queue.spawned_futures().len() == expected_num
+        }),
+        "{message}: expected {expected_num} spawned futures, found {}",
+        SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len())
+    );
 }
 
 async fn await_spawned_futures(app: &mut App, num_futures: usize, message: &str) {

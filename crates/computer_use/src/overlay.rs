@@ -1,7 +1,7 @@
 //! Action overlay model and `.ass` subtitle generation for burned-in
 //! recording annotations. The types are used by the app layer (to collect a
 //! per-recording action log) on every platform; `.ass` generation is only built
-//! where the burn-in re-encode runs (Linux) or under test.
+//! where the burn-in re-encode runs (Linux and Windows) or under test.
 
 use std::time::Duration;
 
@@ -215,42 +215,42 @@ fn scroll_label(direction: ScrollDirection) -> &'static str {
     }
 }
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const PILL_FONT_SIZE: i32 = 48;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const APPROX_GLYPH_WIDTH: i32 = 29;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const PILL_HORIZONTAL_PADDING: i32 = 32;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const PILL_GAP: i32 = 24;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const PILL_BOTTOM_MARGIN: i32 = 90;
 /// Context margins retained around a real action window before cutting. The
 /// pre-action lead-in is short because those frames are mostly the thinking/
 /// blocked gap the cut removes; the post-action window is longer so the action's
 /// on-screen effect (and its overlay pill) stays visible. Neither is a
 /// transition and neither changes the 1x playback rate inside a segment.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const SEGMENT_MARGIN_PRE: Duration = Duration::from_millis(250);
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
 
 // --- Pointer (click ripple / drag trail) annotation constants ----------------
 /// Shared orange fill/stroke for pointer annotations, as ASS `BBGGRR` (RGB
 /// `[255, 80, 40]`).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const POINTER_COLOR_BGR: &str = "2850FF";
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CLICK_RING_MIN_RADIUS: f64 = 18.0;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CLICK_RING_MAX_RADIUS: f64 = 36.0;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CLICK_RING_THICKNESS: i32 = 4;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const HELD_INDICATOR_RADIUS: f64 = 16.0;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const DRAG_ANCHOR_RADIUS: f64 = 10.0;
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const DRAG_TRAIL_THICKNESS: f64 = 4.0;
 /// The click ripple and the post-release drag-trail fade are expressed directly
 /// as a function of the cut's retained post-action margin
@@ -259,44 +259,44 @@ const DRAG_TRAIL_THICKNESS: f64 = 4.0;
 /// by the cut, shrinking automatically if the margin is reduced). The headroom
 /// also absorbs ASS centisecond rounding and frame quantization. At the current
 /// 1000 ms margin these evaluate to the design values of 900 ms and 600 ms.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
 /// Outline thickness of the synthetic cursor glyph. The capture composites no
 /// real X11 cursor (`-draw_mouse 0`; XFixes never reports the background agent
 /// seat's cursor), so the burn-in draws an arrow glyph — white fill with a
 /// black outline for legibility on any background — that tracks the recorded
 /// pointer events.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CURSOR_OUTLINE_THICKNESS: i32 = 2;
 /// Maximum duration of the eased glide the synthetic cursor takes into each
 /// pointer event. The glide ends exactly at the event (so a click's ripple
 /// fires the moment the cursor arrives) and starts up to this long before it,
 /// never before the previous event. Calibrated against polished
 /// screen-recording tools, which glide the cursor for roughly half a second.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CURSOR_GLIDE_MAX: Duration = Duration::from_millis(500);
 /// Target duration of each linear `\move` piece used to approximate the
 /// ease-in-out glide curve (an ASS `\move` is strictly linear).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CURSOR_GLIDE_STEP: Duration = Duration::from_millis(50);
 /// Upper bound on `\move` pieces per glide, capping the dialogue count for
 /// pathologically long spans.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CURSOR_GLIDE_MAX_PIECES: usize = 16;
 /// Fade-in applied to the first cursor dialogue so the glyph does not pop
 /// into existence at the first pointer event (its position is unknown before
 /// that event, so nothing is drawn earlier).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 const CURSOR_FADE_IN: Duration = Duration::from_millis(150);
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn click_ring_duration() -> Duration {
     SEGMENT_MARGIN_POST.saturating_sub(CLICK_RING_TAIL_HEADROOM)
 }
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn drag_trail_fade_duration() -> Duration {
     SEGMENT_MARGIN_POST.saturating_sub(DRAG_FADE_TAIL_HEADROOM)
 }
@@ -307,7 +307,7 @@ fn drag_trail_fade_duration() -> Duration {
 /// of the 1x source master that is kept; `output_start` is where that interval
 /// begins on the compacted output timeline (segments are concatenated in source
 /// order with all gaps removed).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeepSegment {
     pub(crate) source_start: Duration,
@@ -315,7 +315,7 @@ pub(crate) struct KeepSegment {
     pub(crate) output_start: Duration,
 }
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn frame_duration(frame_rate: u32) -> Duration {
     Duration::from_secs_f64(1.0 / frame_rate.max(1) as f64)
 }
@@ -325,7 +325,7 @@ fn frame_duration(frame_rate: u32) -> Duration {
 /// and finish collapse into the same frame (for example an instantaneous call).
 /// Returns `None` when the clamped interval is empty (the group falls entirely
 /// at or beyond `source_duration`).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn group_source_interval(
     entry: &ActionLogEntry,
     source_duration: Duration,
@@ -350,7 +350,7 @@ fn group_source_interval(
 /// It is bounded by `source_duration` and by the next group's start so pills
 /// never extend past kept frames or overlap. Returns `None` when the interval
 /// is empty.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn overlay_display_interval(
     entry: &ActionLogEntry,
     next_offset: Option<Duration>,
@@ -381,7 +381,7 @@ fn overlay_display_interval(
 /// windows become one contiguous segment), and each merged segment is assigned
 /// an `output_start` equal to the cumulative duration of the segments before
 /// it. Source gaps between merged segments are removed entirely by the cut.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 pub(crate) fn build_keep_segments(
     entries: &[ActionLogEntry],
     source_duration: Duration,
@@ -438,7 +438,7 @@ pub(crate) fn build_keep_segments(
 /// clamped up to the first overlapping segment's start, and the end is clamped
 /// down to the last overlapping segment's end. Remapping is done at `Duration`
 /// precision before ASS centisecond formatting.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 pub(crate) fn remap_source_interval(
     start: Duration,
     end: Duration,
@@ -470,7 +470,7 @@ pub(crate) fn remap_source_interval(
 /// Returns `None` when the instant falls in removed footage — defensive only:
 /// every pointer event lies inside its group's retained window by
 /// construction.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn remap_source_instant(instant: Duration, segments: &[KeepSegment]) -> Option<Duration> {
     segments
         .iter()
@@ -480,7 +480,7 @@ fn remap_source_instant(instant: Duration, segments: &[KeepSegment]) -> Option<D
 
 /// Total duration of the compacted output timeline (the concatenated retained
 /// segments).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn output_duration(segments: &[KeepSegment]) -> Duration {
     segments.last().map_or(Duration::ZERO, |seg| {
         seg.output_start + (seg.source_end - seg.source_start)
@@ -496,7 +496,7 @@ fn output_duration(segments: &[KeepSegment]) -> Duration {
 /// whose remapped interval is empty (for example wholly inside a removed gap)
 /// emit no dialogue. Pointer-only groups with empty labels commit to the
 /// timeline (keeping their segment) but render no pill.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 pub(crate) fn build_overlay_ass(
     entries: &[ActionLogEntry],
     dimensions: (u32, u32),
@@ -586,13 +586,13 @@ pub(crate) fn build_overlay_ass(
     script
 }
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn approximate_pill_width(label: &str) -> i32 {
     label.chars().count() as i32 * APPROX_GLYPH_WIDTH + PILL_HORIZONTAL_PADDING
 }
 
 /// Formats a duration as an ASS timecode (`H:MM:SS.cc`, centisecond precision).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn format_ass_timecode(duration: Duration) -> String {
     let total_cs = (duration.as_millis() / 10) as u64;
     let cs = total_cs % 100;
@@ -605,7 +605,7 @@ fn format_ass_timecode(duration: Duration) -> String {
 
 /// Neutralizes characters that would be interpreted by the ASS parser so a label
 /// renders as plain text.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn escape_ass_text(text: &str) -> String {
     text.replace('\\', "")
         .replace('{', "(")
@@ -614,7 +614,7 @@ fn escape_ass_text(text: &str) -> String {
 }
 
 /// A pointer gesture reconstructed from an entry's ordered pointer events.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 enum PointerGesture {
     /// A press + release with no intervening move: rendered as one ring.
     Click { offset: Duration, point: Vector2I },
@@ -653,7 +653,7 @@ enum PointerGesture {
 /// inside a drag (scroll samples, unmatched releases) are skipped so the
 /// cursor and the held indicator stay glued together; everything else is a
 /// free waypoint.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn classify_pointer_gestures(events: &[PointerEvent]) -> (Vec<PointerGesture>, Vec<CursorRole>) {
     let mut gestures = Vec::new();
     let mut roles = vec![CursorRole::Free; events.len()];
@@ -745,7 +745,7 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> (Vec<PointerGesture>, V
 
 /// How the synthetic cursor treats one pointer event (see
 /// [`classify_pointer_gestures`]).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorRole {
     /// A standalone waypoint: the cursor glides into it and holds.
@@ -762,7 +762,7 @@ enum CursorRole {
 /// stable so equal-offset events keep their insertion (dispatch) order, which
 /// preserves a `Down` before its same-offset `Up` and a call-A event before a
 /// call-B event at the same timestamp.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn flatten_pointer_events(entries: &[&ActionLogEntry]) -> Vec<PointerEvent> {
     let mut stream: Vec<PointerEvent> = Vec::new();
     for entry in entries {
@@ -780,7 +780,7 @@ fn flatten_pointer_events(entries: &[&ActionLogEntry]) -> Vec<PointerEvent> {
 /// retained segments onto the compacted output timeline. A drag that arrives
 /// as one `UseComputer` call and one split across `Down`/`Move`/`Up` calls
 /// therefore produce the same single trail/anchor/held indicator.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn append_recording_pointer_dialogues(
     script: &mut String,
     events: &[PointerEvent],
@@ -804,7 +804,7 @@ fn append_recording_pointer_dialogues(
 /// drag's legs share the profile across the whole gesture — accelerate out of
 /// the press, constant speed through intermediate waypoints, settle into the
 /// final point — so the pointer never appears to stop mid-path.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MotionEase {
     InOut,
@@ -816,7 +816,7 @@ enum MotionEase {
 /// One span of a pointer glyph's motion plan on the compacted output
 /// timeline: stationary when `from == to`, otherwise a glide from `from` to
 /// `to` on the span's ease profile.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 struct MotionSpan {
     out_start: Duration,
     out_end: Duration,
@@ -829,7 +829,7 @@ struct MotionSpan {
 
 /// One input waypoint for [`build_motion_spans`], on the compacted output
 /// timeline. `drag` tags waypoints that belong to the same drag gesture.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 struct MotionWaypoint {
     time: Duration,
     point: (i32, i32),
@@ -854,7 +854,7 @@ struct MotionWaypoint {
 /// Zero-length spans are dropped: coincident waypoints defer to the later
 /// one, matching the previous hold-only behavior for a same-instant press +
 /// release. After the last waypoint the glyph holds through `end`.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn build_motion_spans(waypoints: &[MotionWaypoint], end: Duration) -> Vec<MotionSpan> {
     let mut spans = Vec::new();
     for (index, waypoint) in waypoints.iter().enumerate() {
@@ -930,7 +930,7 @@ fn build_motion_spans(waypoints: &[MotionWaypoint], end: Duration) -> Vec<Motion
 /// the last eases out, and intermediate legs stay linear. Stationary legs
 /// (real dwells, for example resting at the end point before releasing) are
 /// left as holds.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn assign_drag_leg_easing(spans: &mut [MotionSpan]) {
     let mut index = 0;
     while index < spans.len() {
@@ -964,7 +964,7 @@ fn assign_drag_leg_easing(spans: &mut [MotionSpan]) {
 /// Eased progress in `[0, 1]` for a span's speed profile. `InOut` is
 /// smoothstep; `In`/`Out` are its quadratic halves so a drag accelerates out
 /// of the press and settles into the final point.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn ease_progress(ease: MotionEase, progress: f64) -> f64 {
     match ease {
         MotionEase::InOut => progress * progress * (3.0 - 2.0 * progress),
@@ -976,7 +976,7 @@ fn ease_progress(ease: MotionEase, progress: f64) -> f64 {
 
 /// The glide position at `progress` in `[0, 1]` along a span, on the span's
 /// ease profile.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn eased_glide_point(span: &MotionSpan, progress: f64) -> (i32, i32) {
     let eased = ease_progress(span.ease, progress);
     let x = span.from.0 as f64 + (span.to.0 - span.from.0) as f64 * eased;
@@ -988,18 +988,18 @@ fn eased_glide_point(span: &MotionSpan, progress: f64) -> (i32, i32) {
 /// front keeps adjacent dialogues exactly contiguous and lets each `\move`
 /// duration equal its dialogue's rendered length, so the glyph never doubles,
 /// vanishes, or stutters at a piece boundary.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn quantize_cs(duration: Duration) -> u64 {
     (duration.as_millis() / 10) as u64
 }
 
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn format_cs_timecode(cs: u64) -> String {
     format_ass_timecode(Duration::from_millis(cs * 10))
 }
 
 /// Rendering parameters shared by every dialogue of one motion plan.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 struct MotionGlyph<'a> {
     layer: u8,
     /// Color/alpha/border override tags applied to every dialogue.
@@ -1014,7 +1014,7 @@ struct MotionGlyph<'a> {
 /// Emits the dialogues for one motion plan: a stationary span renders as a
 /// single `\pos` hold and a glide span as a run of short linear `\move`
 /// pieces sampled from the ease curve (libass has no positional easing tag).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn append_motion_dialogues(
     script: &mut String,
     spans: &[MotionSpan],
@@ -1087,7 +1087,7 @@ fn append_motion_dialogues(
 }
 
 /// Emits the synthetic cursor: an arrow glyph that follows the recorded
-/// pointer events. The capture composites no real X11 cursor
+/// pointer events. The capture composites no platform cursor
 /// (`-draw_mouse 0`) because XFixes only reports the user's core pointer —
 /// never the background agent seat's — so this pass is what makes the
 /// artifact's pointer visible, identically for screen and window scopes.
@@ -1106,7 +1106,7 @@ fn append_motion_dialogues(
 /// glyph holds through the end of the output; there is no cursor before the
 /// first event (its position is unknown), and the first dialogue fades in
 /// over [`CURSOR_FADE_IN`].
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn append_cursor_dialogues(
     script: &mut String,
     events: &[PointerEvent],
@@ -1151,7 +1151,7 @@ fn append_cursor_dialogues(
 /// A classic arrow pointer (~28 px tall) as ASS `\p` drawing commands, with
 /// the tip (hotspot) at the drawing origin so `\an7\pos` lands it exactly on
 /// the pointer position.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn ass_cursor_arrow_path() -> &'static str {
     "m 0 0 l 0 25 l 6 20 l 10 28 l 14 26 l 11 18 l 19 18"
 }
@@ -1165,7 +1165,7 @@ fn ass_cursor_arrow_path() -> &'static str {
 /// the ring is centered on the captured cursor and scales symmetrically about
 /// it. `\an5` would shift the drawing origin by half the path's bounding box
 /// (about one radius), rendering the ring above-left of the click point.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn append_click_ring(
     script: &mut String,
     offset: Duration,
@@ -1198,7 +1198,7 @@ fn append_click_ring(
 /// that moves along the path). On release the trail and anchor fade over the
 /// (capped) fade duration; a held press with no release stays through the end of
 /// its retained window.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn append_drag(
     script: &mut String,
     points: &[(Duration, Vector2I)],
@@ -1291,7 +1291,7 @@ fn append_drag(
 
 /// Clamps a capture-space point into the video frame so a drawing can never
 /// address outside `[0,width) x [0,height)`.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn clamp_point(point: Vector2I, width: u32, height: u32) -> (i32, i32) {
     let max_x = width.saturating_sub(1) as i32;
     let max_y = height.saturating_sub(1) as i32;
@@ -1300,7 +1300,7 @@ fn clamp_point(point: Vector2I, width: u32, height: u32) -> (i32, i32) {
 
 /// A closed circle of radius `r` centered at the drawing origin, as ASS `\p`
 /// drawing commands (four cubic beziers, kappa approximation).
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn ass_circle_path(r: f64) -> String {
     let k = (r * 0.552_284_7).round() as i64;
     let r = r.round() as i64;
@@ -1312,7 +1312,7 @@ fn ass_circle_path(r: f64) -> String {
 
 /// A stroked polyline through `points`, as one filled quad per segment so the
 /// line has an even width and no spurious closing edge.
-#[cfg(any(linux, test))]
+#[cfg(any(linux, windows, test))]
 fn ass_trail_quads(points: &[(i32, i32)]) -> String {
     let half = DRAG_TRAIL_THICKNESS / 2.0;
     let mut path = String::new();

@@ -1,11 +1,16 @@
+use std::io;
+
 use ai::LLMProvider;
 use clap::Parser;
 use warp::tui_export::register_tui_session_view_test_singletons;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::App;
+use warpui_core::runtime::TuiDriverStartupError;
 
-use super::{TuiArgs, ensure_terminal_session, parse_resume_token};
+use super::{
+    TuiArgs, ensure_terminal_session, handle_tui_driver_startup_error, parse_resume_token,
+};
 use crate::root_view::RootTuiView;
 use crate::session_registry::TuiSessions;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
@@ -97,7 +102,7 @@ fn terminal_bootstrap_is_idempotent_after_background_terminal_exists() {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |_| RootTuiView::new(),
+                RootTuiView::new,
             )
         });
         let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
@@ -109,6 +114,22 @@ fn terminal_bootstrap_is_idempotent_after_background_terminal_exists() {
         });
 
         app.read(|ctx| assert_eq!(TuiSessions::as_ref(ctx).len(), 1));
+    });
+}
+#[test]
+fn terminal_disconnect_during_driver_startup_exits_without_error() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            handle_tui_driver_startup_error(
+                TuiDriverStartupError::TerminalDisconnected(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "terminal disconnected",
+                )),
+                ctx,
+            );
+        });
+
+        assert!(app.termination_result().is_none());
     });
 }
 

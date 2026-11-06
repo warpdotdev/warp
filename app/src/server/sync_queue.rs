@@ -705,7 +705,7 @@ impl SyncQueue {
             SyncId::ServerId(server_id) => Some(Cow::Owned(server_id.uid())),
         };
         if sync_id.as_ref().map(|id| id.as_str()) == Some(server_id) {
-            *current_revision = Some(new_revision.clone())
+            *current_revision = Some(*new_revision)
         }
     }
 
@@ -1454,7 +1454,7 @@ impl SyncQueue {
         let future = ctx.spawn_with_retry_on_error(
             move || {
                 let model_clone = model.clone();
-                let revision_clone = revision.clone();
+                let revision_clone = revision;
                 let object_client_clone = object_client.clone();
                 async move {
                     model_clone
@@ -1537,7 +1537,7 @@ impl SyncQueue {
 
                 self.handle_dependency_success(&QueueDependency::QueueItem(queue_item_id));
 
-                self.update_items_with_new_revision(uid, revision_and_editor.revision.clone());
+                self.update_items_with_new_revision(uid, revision_and_editor.revision);
 
                 ctx.emit(SyncQueueEvent::ObjectUpdateSuccessful {
                     server_id: ServerId::from_string_lossy(uid),
@@ -1580,7 +1580,7 @@ impl SyncQueue {
 
                 self.update_items_with_new_revision(
                     &server_creation_info.server_id_and_type.id.uid(),
-                    revision_and_editor.revision.clone(),
+                    revision_and_editor.revision,
                 );
                 ctx.emit(SyncQueueEvent::ObjectCreationSuccessful {
                     client_id,

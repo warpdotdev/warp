@@ -429,7 +429,6 @@ mod full_text_searcher {
         }
 
         fn rebuild_search_index(&mut self) -> Result<(), anyhow::Error> {
-            self.clear_search_index();
             let documents = self.shell_id_to_options.iter().map(|(id, option)| {
                 let binding_description = option.description().to_lowercase();
 
@@ -438,7 +437,7 @@ mod full_text_searcher {
                     id: id.0.clone(),
                 }
             });
-            self.searcher.build_index_async(documents)
+            self.searcher.rebuild_index_async(documents)
         }
 
         fn clear_search_index(&mut self) {

@@ -44,4 +44,6 @@ pub struct CreateAgentTaskInput {
     pub parent_run_id: Option<cynic::Id>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub agent_config_snapshot: Option<String>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<String>,
 }

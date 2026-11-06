@@ -29,7 +29,7 @@ pub fn top_colors_for_image(image_path: PathBuf) -> Result<Vec<ColorU>> {
                     Ok(color_u) => color_u,
                     Err(e) => {
                         report_error!(
-                            anyhow::anyhow!("{e}")
+                            anyhow::Error::new(e)
                                 .context("kmeans algorithm did not produce valid hex strings")
                         );
                         ColorU::black()

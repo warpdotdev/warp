@@ -17,6 +17,7 @@ pub enum AICreditDenialReason {
     Delinquent,
     EnterpriseTeamSpendLimitHit,
     EnterprisePerUserSpendLimitHit,
+    EnterprisePerUnassignedUserSpendLimitHit,
     EnterpriseWorkspaceSpendLimitHit,
     /// A reason from a newer server that this client version doesn't know.
     /// Treated as a generic denial for presentation purposes.
@@ -74,6 +75,9 @@ impl From<GqlAICreditAvailabilityDenialReason> for AICreditDenialReason {
             }
             GqlAICreditAvailabilityDenialReason::EnterprisePerUserSpendLimitHit => {
                 Self::EnterprisePerUserSpendLimitHit
+            }
+            GqlAICreditAvailabilityDenialReason::EnterprisePerUnassignedUserSpendLimitHit => {
+                Self::EnterprisePerUnassignedUserSpendLimitHit
             }
             GqlAICreditAvailabilityDenialReason::EnterpriseWorkspaceSpendLimitHit => {
                 Self::EnterpriseWorkspaceSpendLimitHit

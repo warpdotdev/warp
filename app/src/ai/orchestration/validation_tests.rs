@@ -1,7 +1,9 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use warpui::{App, AppContext, Entity};
 
-use super::accept_disabled_reason_with_auth;
+use super::{
+    accept_disabled_reason_with_auth, empty_env_recommendation_message, harness_is_selectable,
+};
 use crate::ai::orchestration::config_state::{AuthSecretSelection, OrchestrationConfigState};
 
 /// Minimal entity used to borrow an `AppContext` inside `App::test`.
@@ -9,6 +11,37 @@ struct CtxProbe;
 
 impl Entity for CtxProbe {
     type Event = ();
+}
+
+#[test]
+fn pi_orchestration_requires_cloud_execution() {
+    with_app_ctx(|ctx| {
+        let state = state(
+            "pi",
+            RunAgentsExecutionMode::Local,
+            AuthSecretSelection::Inherit,
+        );
+        assert_eq!(
+            accept_disabled_reason_with_auth(&state, ctx).as_deref(),
+            Some("Pi child agents require Cloud execution."),
+        );
+        assert!(!harness_is_selectable(warp_cli::agent::Harness::Pi, true));
+        assert!(harness_is_selectable(warp_cli::agent::Harness::Pi, false));
+    });
+}
+
+#[test]
+fn pi_cloud_accept_requires_server_availability() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        app.read(|ctx| {
+            let state = state("pi", cloud(), AuthSecretSelection::Inherit);
+            assert_eq!(
+                accept_disabled_reason_with_auth(&state, ctx).as_deref(),
+                Some("The pi harness is not available."),
+            );
+        });
+    });
 }
 
 /// Runs `f` with a plain `AppContext` (no singletons registered).
@@ -47,6 +80,25 @@ fn accept_allowed_for_oz_local_and_cloud() {
             assert_eq!(accept_disabled_reason_with_auth(&state, ctx), None);
         }
     });
+}
+
+#[test]
+fn empty_environment_recommendation_uses_visible_environment_availability() {
+    let mode = RunAgentsExecutionMode::Remote {
+        environment_id: String::new(),
+        worker_host: "warp".to_string(),
+        computer_use_enabled: false,
+        runner_id: String::new(),
+    };
+
+    assert_eq!(
+        empty_env_recommendation_message(&mode, true).as_deref(),
+        Some("We recommend selecting an environment for cloud agents.")
+    );
+    assert_eq!(
+        empty_env_recommendation_message(&mode, false).as_deref(),
+        Some("We recommend creating an environment for cloud agents.")
+    );
 }
 
 #[test]

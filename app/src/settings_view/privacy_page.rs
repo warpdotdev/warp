@@ -32,7 +32,7 @@ use warpui::{
 
 use super::privacy::{AddRegexModal, AddRegexModalEvent};
 use super::settings_page::{
-    HEADER_PADDING, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
+    HEADER_PADDING, LocalOnlyIconState, MatchData, PageTitle, PageType, SettingsPageMeta,
     SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
     render_body_item, render_sub_header,
 };
@@ -230,7 +230,7 @@ impl PrivacyPageView {
         }
         widgets.push(Box::new(DataManagementWidget::default()));
         widgets.push(Box::new(PrivacyPolicyWidget::default()));
-        PageType::new_uncategorized(widgets, Some("Privacy"))
+        PageType::new_uncategorized(widgets, Some(PageTitle::new("Privacy")))
     }
 
     fn update_button_states(

@@ -210,6 +210,57 @@ fn unconfigured_state_points_user_to_admin_setup() {
 }
 
 #[test]
+fn conflicting_across_teams_requires_admin_action() {
+    let state = GeapCredentialsState::ConflictingAcrossTeams {
+        team_names: vec!["Acme Corp".to_string(), "Acme Labs".to_string()],
+    };
+    assert_eq!(
+        state.recovery_action(),
+        Some(GeapRecoveryAction::ContactAdmin)
+    );
+    assert!(state.requires_admin_action());
+}
+
+#[test]
+fn conflicting_across_teams_names_two_teams_in_prose() {
+    let state = GeapCredentialsState::ConflictingAcrossTeams {
+        team_names: vec!["Acme Corp".to_string(), "Acme Labs".to_string()],
+    };
+    let (title, description, icon) = state.user_facing_components();
+    assert!(title.to_lowercase().contains("conflict"));
+    assert!(description.contains("Acme Corp and Acme Labs"));
+    assert!(description.to_lowercase().contains("admin"));
+    assert!(matches!(icon, Icon::AlertTriangle));
+}
+
+#[test]
+fn conflicting_across_teams_lists_exactly_three_teams_by_name() {
+    let state = GeapCredentialsState::ConflictingAcrossTeams {
+        team_names: vec![
+            "Acme Corp".to_string(),
+            "Acme Labs".to_string(),
+            "Acme EU".to_string(),
+        ],
+    };
+    let (_, description, _) = state.user_facing_components();
+    assert!(description.contains("Acme Corp, Acme Labs, and Acme EU"));
+}
+
+#[test]
+fn conflicting_across_teams_summarizes_more_than_three_teams() {
+    let state = GeapCredentialsState::ConflictingAcrossTeams {
+        team_names: vec![
+            "Acme Corp".to_string(),
+            "Acme Labs".to_string(),
+            "Acme EU".to_string(),
+            "Acme APAC".to_string(),
+        ],
+    };
+    let (_, description, _) = state.user_facing_components();
+    assert!(description.contains("Acme Corp, Acme Labs, and 2 other teams"));
+}
+
+#[test]
 fn state_components_use_expected_icons() {
     assert!(matches!(
         GeapCredentialsState::Missing.user_facing_components().2,

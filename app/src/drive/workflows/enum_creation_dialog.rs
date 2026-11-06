@@ -191,6 +191,7 @@ impl EnumCreationDialog {
                         PropagateAndNoOpNavigationKeys::Always,
                     soft_wrap: true,
                     placeholder_soft_wrap: true,
+                    supports_vim_mode: true,
                     ..Default::default()
                 };
 
@@ -294,7 +295,7 @@ impl EnumCreationDialog {
         let cloud_model = CloudModel::as_ref(ctx);
         let workflow_enum_model = cloud_model.get_workflow_enum(&enum_id);
 
-        self.revision_ts = workflow_enum_model.and_then(|model| model.metadata.revision.clone());
+        self.revision_ts = workflow_enum_model.and_then(|model| model.metadata.revision);
 
         let workflow_enum =
             workflow_enum_model.map(|workflow_enum| workflow_enum.model().string_model.clone());
@@ -494,7 +495,7 @@ impl EnumCreationDialog {
                             id,
                             name: self.name_editor.as_ref(ctx).buffer_text(ctx),
                             is_shared: true,
-                            revision_ts: self.revision_ts.clone(),
+                            revision_ts: self.revision_ts,
                             new_data: Some(variants),
                         },
                         false,
@@ -507,7 +508,7 @@ impl EnumCreationDialog {
                     id: SyncId::ClientId(ClientId::default()),
                     name: self.name_editor.as_ref(ctx).buffer_text(ctx),
                     is_shared: true,
-                    revision_ts: self.revision_ts.clone(),
+                    revision_ts: self.revision_ts,
                     new_data: Some(variants),
                 }));
             }

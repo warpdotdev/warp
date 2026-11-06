@@ -549,7 +549,7 @@ fn vim_operand_motion_type(operand: &VimOperand) -> MotionType {
     match operand {
         VimOperand::Motion { motion_type, .. } => *motion_type,
         VimOperand::Line => MotionType::Linewise,
-        VimOperand::TextObject(_) => MotionType::Charwise,
+        VimOperand::TextObject(text_object) => text_object.motion_type(),
     }
 }
 fn bounded_repeated_text(text: &str, count: u32) -> String {

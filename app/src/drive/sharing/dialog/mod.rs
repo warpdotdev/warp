@@ -60,7 +60,7 @@ use crate::word_block_editor::{
     WordBlockStyles,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
@@ -262,6 +262,10 @@ impl SharingDialog {
             },
         );
 
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            me.handle_user_workspaces_event(event, ctx);
+        });
+
         let invite_form = EmailInviteForm {
             email_editor: ctx.add_typed_action_view(|ctx| {
                 let mut view = WordBlockEditorView::new(
@@ -299,6 +303,21 @@ impl SharingDialog {
             ui_state_handles: Default::default(),
             open_menu_state: Default::default(),
             mode: Default::default(),
+        }
+    }
+
+    fn handle_user_workspaces_event(
+        &mut self,
+        event: &UserWorkspacesEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let changes_this_windows_policy = match event {
+            UserWorkspacesEvent::TeamsChanged => true,
+            UserWorkspacesEvent::WindowTeamChanged { window_id } => *window_id == ctx.window_id(),
+            _ => false,
+        };
+        if changes_this_windows_policy {
+            ctx.notify();
         }
     }
 
@@ -402,13 +421,24 @@ impl SharingDialog {
             .is_some_and(|target| matches!(target, ShareableObject::Session { .. }))
     }
 
+    pub(crate) fn has_shared_session_link(&self, app: &AppContext) -> bool {
+        self.has_shared_session_target() && self.target_link(app).is_some()
+    }
+
     pub fn show_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
-        if matches!(self.target, Some(ShareableObject::Session { .. })) {
+        if self.has_shared_session_link(ctx) {
             self.set_open_menu(OpenMenuState::None, ctx);
             self.mode = SharingDialogMode::QrCode;
             ctx.focus_self();
             ctx.notify();
         }
+    }
+
+    pub(crate) fn refresh_shared_session_link(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.mode == SharingDialogMode::QrCode && !self.has_shared_session_link(ctx) {
+            self.mode = SharingDialogMode::Access;
+        }
+        ctx.notify();
     }
 
     /// Returns `true` if the target is an AI conversation that cannot be shared.
@@ -464,12 +494,16 @@ impl SharingDialog {
         self.target.is_some() && self.access_level(app).can_edit_access()
     }
 
+    fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
+    }
+
     fn can_anyone_with_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled()
+        UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled(&self.team_scope(app))
     }
 
     fn can_direct_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled()
+        UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled(&self.team_scope(app))
     }
 
     /// The editability state of the object.
@@ -1604,6 +1638,12 @@ impl SharingDialog {
 
     /// Send all pending email invitations.
     fn send_invitations(&mut self, ctx: &mut ViewContext<Self>) {
+        // The window can change teams after the form renders.
+        if !self.can_direct_link_share(ctx) {
+            ctx.notify();
+            return;
+        }
+
         let form_state = self.invite_form_state(ctx);
         if !form_state.is_valid() {
             return;
@@ -2787,7 +2827,7 @@ impl SharingDialog {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::CopyLink))
             .finish();
 
-        let qr_button = matches!(self.target, Some(ShareableObject::Session { .. })).then(|| {
+        let qr_button = self.has_shared_session_link(app).then(|| {
             self.render_footer_icon_button(
                 Icon::QrCode,
                 SharingDialogAction::ShowQrCode,
@@ -2849,9 +2889,9 @@ impl View for SharingDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let (contents, width) = if self.mode == SharingDialogMode::QrCode
-            && matches!(self.target, Some(ShareableObject::Session { .. }))
-        {
+        let should_render_qr_code =
+            self.mode == SharingDialogMode::QrCode && self.has_shared_session_link(app);
+        let (contents, width) = if should_render_qr_code {
             (self.render_qr_dialog(appearance, app), QR_DIALOG_WIDTH)
         } else {
             let mut contents = Flex::column();
@@ -2919,6 +2959,11 @@ impl TypedActionView for SharingDialog {
             }
             SharingDialogAction::SetLinkPermissions(access_level) => {
                 self.set_open_menu(OpenMenuState::None, ctx);
+                // The window can change teams after the menu renders. Revocation remains allowed.
+                if access_level.is_some() && !self.can_anyone_with_link_share(ctx) {
+                    ctx.notify();
+                    return;
+                }
                 if let Some(ShareableObject::WarpDriveObject(id)) = self.target.as_ref() {
                     UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                         update_manager.set_object_link_permissions(*id, *access_level, ctx);
@@ -3007,3 +3052,7 @@ impl TypedActionView for SharingDialog {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

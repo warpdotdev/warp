@@ -79,7 +79,7 @@ fn test_lazy_background_insertion() {
 fn test_background_triggers_wakeup() {
     let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
     let mut block_list = new_block_list(
-        ChannelEventListener::builder_for_test()
+        ChannelEventListener::builder_for_test::<crate::terminal::event::Event>()
             .with_wakeups_tx(wakeups_tx)
             .build(),
         TypeaheadMode::ShellReported,

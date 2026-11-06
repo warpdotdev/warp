@@ -1178,65 +1178,204 @@ pub enum SearcherEvent {
     IndexCleared,
 }
 
+/// A strictly increasing logical position assigned to every write requested on an
+/// `AsyncSearcher`, whether a regular event or a rebuild. Comparing an event's position against
+/// the currently pending rebuild's is how the background writer reconstructs true request order
+/// without needing to give the rebuild a slot of its own in the events channel -- see
+/// [`SearcherProducerState`].
+type Sequence = u64;
+
+/// A regular (insert/delete/clear) operation together with the logical position it was requested
+/// at, sent over `AsyncSearcher`'s events channel.
+struct SequencedEvent {
+    sequence: Sequence,
+    event: SearcherEvent,
+}
+
+/// An item sent over `AsyncSearcher`'s events channel.
+enum QueuedItem {
+    /// A regular insert/delete/clear operation.
+    Event(SequencedEvent),
+    /// Wakes the background writer to re-check `pending_rebuild`, which holds the actual
+    /// rebuild data -- this carries none. See [`AsyncSearcher::rebuild_index_async`] for how at
+    /// most one stays outstanding.
+    RebuildMarker,
+}
+
+/// The most recently requested, not-yet-applied full-index rebuild, together with the logical
+/// position it was requested at. See [`AsyncSearcher::rebuild_index_async`].
+struct PendingRebuild {
+    sequence: Sequence,
+    documents: Vec<FullTextSearchDocumentEntry>,
+}
+
+/// Producer-side state shared between `AsyncSearcher` and its background writer task, guarded by
+/// a single lock so that allocating a sequence number and publishing the corresponding
+/// operation happen atomically with respect to any other producer or the background writer.
+/// Without that atomicity, the writer could observe a rebuild as "later" than an event that had
+/// already been assigned an earlier sequence number but not yet reached the channel, letting a
+/// stale event apply after a newer rebuild (or a newer event apply before one).
+struct SearcherProducerState {
+    /// The next [`Sequence`] to assign.
+    next_sequence: Sequence,
+    /// The currently pending rebuild, if any. See [`AsyncSearcher::rebuild_index_async`].
+    pending_rebuild: Option<PendingRebuild>,
+}
+
 const SEARCH_ASYNC_BATCH_INTERVAL: Duration = Duration::from_millis(75);
 const SEARCH_ASYNC_MAX_BATCH_SIZE: usize = 100;
 /// If this amount of time passes without any events, we will join with the
 /// index writer (waiting for any remaining operations to complete).
 const SEARCH_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Splits a drained batch of events around the currently pending rebuild (if any) into one or
+/// more chunks, each to be committed as its own unit, in true request order.
+///
+/// A rebuild is always isolated into its own commit, never sharing one with an event requested
+/// before it. This is required because Tantivy's `delete_all_documents` only removes
+/// already-*committed* segments -- it does not affect documents added earlier in the same
+/// uncommitted writer transaction. If an earlier event's commit were merged with the rebuild's,
+/// that event would survive the "clear" and could incorrectly win over the rebuild's value for
+/// the same document.
+///
+/// A rebuild's own inserts are not further split into bounded sub-commits. Tantivy's
+/// add-document pipeline (`crossbeam_channel::bounded`, sized to `PIPELINE_MAX_SIZE_IN_DOCS` =
+/// 10,000 documents, not bytes -- see `tantivy::indexer::index_writer`) already bounds a single
+/// rebuild's transient footprint there, independent of `commit()` -- unlike `memory_budget`,
+/// which bounds a separate, downstream pool. Splitting commits would not lower that footprint,
+/// only add a new cost: concurrent searches observing a partially-rebuilt index in between.
+fn merge_with_rebuild(
+    batch: Vec<SequencedEvent>,
+    rebuild: Option<PendingRebuild>,
+) -> Vec<Vec<SearcherEvent>> {
+    let Some(rebuild) = rebuild else {
+        return if batch.is_empty() {
+            Vec::new()
+        } else {
+            vec![batch.into_iter().map(|sequenced| sequenced.event).collect()]
+        };
+    };
+
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for sequenced in batch {
+        if sequenced.sequence < rebuild.sequence {
+            before.push(sequenced.event);
+        } else {
+            after.push(sequenced.event);
+        }
+    }
+
+    let mut chunks = Vec::new();
+    if !before.is_empty() {
+        chunks.push(before);
+    }
+    let mut rebuild_events = Vec::with_capacity(rebuild.documents.len() + 1);
+    rebuild_events.push(SearcherEvent::IndexCleared);
+    rebuild_events.extend(
+        rebuild
+            .documents
+            .into_iter()
+            .map(SearcherEvent::DocumentInserted),
+    );
+    chunks.push(rebuild_events);
+    if !after.is_empty() {
+        chunks.push(after);
+    }
+    chunks
+}
+
 async fn process_searcher_events(
-    rx: async_channel::Receiver<SearcherEvent>,
+    rx: async_channel::Receiver<QueuedItem>,
+    producer_state: Arc<Mutex<SearcherProducerState>>,
     writer_handle: SearcherWriterHandle,
 ) {
     let mut running = true;
     while running {
         let mut batch = vec![];
+        let mut batch_started = false;
+        let mut hit_idle_timeout = false;
 
-        let mut timer = Timer::never().fuse();
-        let mut idle_timer = Timer::at(Instant::now() + SEARCH_IDLE_TIMEOUT).fuse();
-        loop {
-            futures::select! {
-                event = rx.recv().fuse() => {
-                    match event {
-                        Ok(event) => {
-                            if batch.is_empty() {
-                                // If we're starting a batch, set a timer to cut off the batch after
-                                // a period of time.
-                                timer = Timer::at(Instant::now() + SEARCH_ASYNC_BATCH_INTERVAL).fuse();
-                                // Unset the idle timer, so that it doesn't interfere with the batch.
-                                idle_timer = Timer::never().fuse();
+        // If a rebuild is already pending as this cycle begins, skip waiting and process it
+        // immediately. Otherwise its wake-up marker could be drained by an *earlier* cycle's
+        // post-take drain before this cycle exists to notice it, delaying -- not losing -- the
+        // rebuild until the next real event or the idle timeout.
+        if producer_state.lock().pending_rebuild.is_none() {
+            let mut timer = Timer::never().fuse();
+            let mut idle_timer = Timer::at(Instant::now() + SEARCH_IDLE_TIMEOUT).fuse();
+            loop {
+                futures::select! {
+                    item = rx.recv().fuse() => {
+                        match item {
+                            Ok(item) => {
+                                if !batch_started {
+                                    // If we're starting a batch, set a timer to cut off the batch after
+                                    // a period of time.
+                                    batch_started = true;
+                                    timer = Timer::at(Instant::now() + SEARCH_ASYNC_BATCH_INTERVAL).fuse();
+                                    // Unset the idle timer, so that it doesn't interfere with the batch.
+                                    idle_timer = Timer::never().fuse();
+                                }
+                                match item {
+                                    QueuedItem::Event(event) => {
+                                        batch.push(event);
+                                        // If we get a decent batch size, process immediately.
+                                        if batch.len() >= SEARCH_ASYNC_MAX_BATCH_SIZE {
+                                            break;
+                                        }
+                                    }
+                                    // Nothing to push: `pending_rebuild` is re-checked below
+                                    // regardless of what woke us.
+                                    QueuedItem::RebuildMarker => {}
+                                }
                             }
-                            batch.push(event);
-                            // If we get a decent batch size, process immediately.
-                            if batch.len() >= SEARCH_ASYNC_MAX_BATCH_SIZE {
+                            Err(async_channel::RecvError) => {
+                                running = false;
                                 break;
                             }
                         }
-                        Err(async_channel::RecvError) => {
-                            running = false;
-                            break;
-                        }
+                    },
+                    _ = timer => {
+                        break;
                     }
-                },
-                _ = timer => {
-                    break;
-                }
-                _ = idle_timer => {
-                    // If we hit the idle timeout, and the batch is empty, join with the index writer
-                    // threads and terminate them.
-                    if batch.is_empty() && let Err(e) = writer_handle.lock().wait_on_and_drop_indexing_threads() {
-                        report_error!(e.context("Failed to wait on Tantivy indexing threads"));
+                    _ = idle_timer => {
+                        hit_idle_timeout = true;
+                        break;
                     }
-                    break;
                 }
             }
         }
-        // Process the batch of events.
-        if batch.is_empty() {
+
+        // Take the pending rebuild *before* draining further events, not after -- this order is
+        // load-bearing. Sequence allocation and publishing happen atomically under the producer
+        // lock, so by the time we take the rebuild here, every event with a lower sequence
+        // number has already reached the channel; draining afterwards can only pick up events
+        // sequenced after it, which `merge_with_rebuild` places correctly. Reversing the order
+        // would reopen that gap: an event already allocated a lower sequence number, but not yet
+        // published, could land in this batch and be misapplied after a rebuild it preceded.
+        let rebuild = producer_state.lock().pending_rebuild.take();
+        while let Ok(item) = rx.try_recv() {
+            if let QueuedItem::Event(event) = item {
+                batch.push(event);
+            }
+        }
+
+        if batch.is_empty() && rebuild.is_none() {
+            // If we hit the idle timeout and there's truly nothing pending, join with the index
+            // writer threads and terminate them.
+            if hit_idle_timeout
+                && let Err(e) = writer_handle.lock().wait_on_and_drop_indexing_threads()
+            {
+                report_error!(e.context("Failed to wait on Tantivy indexing threads"));
+            }
             continue;
         }
-        if let Err(e) = writer_handle.lock().execute_operations(batch) {
-            report_error!(e.context("Failed to execute search events"));
+        // Each chunk is committed on its own; see `merge_with_rebuild` for why a rebuild must
+        // never share a commit with an event requested before it.
+        for events in merge_with_rebuild(batch, rebuild) {
+            if let Err(e) = writer_handle.lock().execute_operations(events) {
+                report_error!(e.context("Failed to execute search events"));
+            }
         }
     }
 }
@@ -1245,17 +1384,47 @@ async fn process_searcher_events(
 // All search (read) operations remain synchronous and blocking.
 pub struct AsyncSearcher<C: SearchSchemaConfig> {
     searcher: SimpleFullTextSearcher<C>,
-    tx: async_channel::Sender<SearcherEvent>,
+    tx: async_channel::Sender<QueuedItem>,
+    producer_state: Arc<Mutex<SearcherProducerState>>,
 }
 
 impl<C: SearchSchemaConfig> AsyncSearcher<C> {
     fn new(searcher: SimpleFullTextSearcher<C>, background_executor: Arc<Background>) -> Self {
         let (tx, rx) = async_channel::unbounded();
+        let producer_state = Arc::new(Mutex::new(SearcherProducerState {
+            next_sequence: 0,
+            pending_rebuild: None,
+        }));
         background_executor
-            .spawn(process_searcher_events(rx, searcher.writer.clone()))
+            .spawn(process_searcher_events(
+                rx,
+                producer_state.clone(),
+                searcher.writer.clone(),
+            ))
             .detach();
 
-        Self { searcher, tx }
+        Self {
+            searcher,
+            tx,
+            producer_state,
+        }
+    }
+
+    /// Allocates the next sequence number and publishes `event` on the events channel under the
+    /// producer lock, so it can never be observed out of order relative to a concurrently
+    /// published rebuild. See [`SearcherProducerState`].
+    fn publish_event(&self, event: SearcherEvent) -> anyhow::Result<()> {
+        let sequence = {
+            let mut state = self.producer_state.lock();
+            let sequence = state.next_sequence;
+            state.next_sequence += 1;
+            sequence
+        };
+        block_on(
+            self.tx
+                .send(QueuedItem::Event(SequencedEvent { sequence, event })),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to send search index event: {e}"))
     }
 
     pub fn search_id(
@@ -1284,8 +1453,7 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
 
     // Async write operations
     pub fn clear_search_index_async(&self) -> anyhow::Result<()> {
-        block_on(self.tx.send(SearcherEvent::IndexCleared))
-            .map_err(|e| anyhow::anyhow!("Failed to send clear index event: {}", e))
+        self.publish_event(SearcherEvent::IndexCleared)
     }
 
     pub fn build_index_async(
@@ -1298,19 +1466,51 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
         Ok(())
     }
 
+    /// Clears the index and inserts `documents`, coalescing a burst of rebuild requests into at
+    /// most one pending rebuild rather than one per call: if called again before the background
+    /// writer has processed a previous rebuild, the earlier request is replaced, not retained
+    /// alongside it. This never reorders against interleaved [`Self::insert_document_async`] /
+    /// [`Self::delete_document_async`] calls: an insert/delete requested before a rebuild is
+    /// never clobbered by that (now-superseded) rebuild's snapshot, and one requested after a
+    /// rebuild is never overwritten by it.
+    pub fn rebuild_index_async(
+        &self,
+        documents: impl IntoIterator<Item = C::SearchDocEntry>,
+    ) -> anyhow::Result<()> {
+        let documents = documents
+            .into_iter()
+            .map(SearchDocumentEntry::into_document_entry)
+            .collect();
+        let needs_marker = {
+            let mut state = self.producer_state.lock();
+            let sequence = state.next_sequence;
+            state.next_sequence += 1;
+            // A marker is needed only on the transition from no rebuild pending to one being
+            // pending, checked here before `pending_rebuild` is overwritten below: if one is
+            // already pending, the writer will pick up this document set when it wakes for the
+            // marker already sent.
+            let needs_marker = state.pending_rebuild.is_none();
+            state.pending_rebuild = Some(PendingRebuild {
+                sequence,
+                documents,
+            });
+            needs_marker
+        };
+        if needs_marker {
+            block_on(self.tx.send(QueuedItem::RebuildMarker))
+                .map_err(|e| anyhow::anyhow!("Failed to send rebuild marker: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn insert_document_async(&self, entry: C::SearchDocEntry) -> anyhow::Result<()> {
-        block_on(
-            self.tx
-                .send(SearcherEvent::DocumentInserted(entry.into_document_entry())),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to send document insertion event: {}", e))
+        self.publish_event(SearcherEvent::DocumentInserted(entry.into_document_entry()))
     }
 
     pub fn delete_document_async(&self, identifying_entry: C::SearchIdEntry) -> anyhow::Result<()> {
-        block_on(self.tx.send(SearcherEvent::DocumentDeleted(
+        self.publish_event(SearcherEvent::DocumentDeleted(
             identifying_entry.into_identifying_entry(),
-        )))
-        .map_err(|e| anyhow::anyhow!("Failed to send document deletion event: {}", e))
+        ))
     }
 }
 

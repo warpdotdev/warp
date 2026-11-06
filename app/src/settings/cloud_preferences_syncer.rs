@@ -16,7 +16,7 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
 use super::PrivacySettings;
-use super::ai::ExecutionProfiles;
+use super::ai::{CustomEndpoints, ExecutionProfiles};
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
 use crate::auth::auth_state::AuthState;
@@ -177,6 +177,7 @@ lazy_static! {
         super::privacy::CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
         super::privacy::CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY,
         ExecutionProfiles::storage_key(),
+        CustomEndpoints::storage_key(),
     ];
 }
 
@@ -223,6 +224,11 @@ impl CloudPreferencesSyncer {
     /// Returns whether initial cloud/local preference reconciliation has completed.
     pub(crate) fn has_completed_initial_load(&self) -> bool {
         self.has_completed_initial_load
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_initial_load_completed_for_test(&mut self) {
+        self.has_completed_initial_load = true;
     }
 
     fn new_internal(

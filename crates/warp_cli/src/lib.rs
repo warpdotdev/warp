@@ -25,6 +25,7 @@ pub mod completions;
 pub mod config_file;
 mod date_time;
 pub mod environment;
+pub mod environment_checkout;
 pub mod federate;
 pub mod harness_support;
 pub mod integration;
@@ -39,13 +40,21 @@ pub mod schedule;
 pub mod secret;
 pub mod share;
 pub mod task;
+// Each of these variables is injected under both its `OZ_` and its `WARP_` name, carrying the
+// identical value. Read sites still use the `OZ_` names.
 pub const OZ_RUN_ID_ENV: &str = "OZ_RUN_ID";
+pub const WARP_RUN_ID_ENV: &str = "WARP_RUN_ID";
 pub const OZ_PARENT_RUN_ID_ENV: &str = "OZ_PARENT_RUN_ID";
+pub const WARP_PARENT_RUN_ID_ENV: &str = "WARP_PARENT_RUN_ID";
 pub const OZ_CLI_ENV: &str = "OZ_CLI";
+pub const WARP_CLI_ENV: &str = "WARP_CLI";
 pub const OZ_HARNESS_ENV: &str = "OZ_HARNESS";
+pub const WARP_HARNESS_ENV: &str = "WARP_HARNESS";
 pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "WARP_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "WARP_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "WARP_SESSION_SHARING_SERVER_URL";
+pub const PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV: &str = "WARP_PREWARMED_SANDBOX_CONTROL_URL";
+pub const WARP_PREWARMED_SANDBOX_ID_ENV: &str = "WARP_PREWARMED_SANDBOX_ID";
 
 /// Options related to the parent process that spawned this Warp instance.
 #[derive(Debug, Default, Clone, clap::Args)]
@@ -493,14 +502,6 @@ pub enum WorkerCommand {
     #[cfg(unix)]
     TerminalServer(TerminalServerArgs),
 
-    /// Run this process as the plugin host rather than the main app.
-    #[cfg(feature = "plugin_host")]
-    #[clap(long_flag = "plugin-host")]
-    PluginHost {
-        #[clap(flatten)]
-        parent: ParentOpts,
-    },
-
     /// Run the minidump server.
     #[clap(hide = true)]
     MinidumpServer {
@@ -521,6 +522,18 @@ pub enum WorkerCommand {
     #[cfg(not(target_family = "wasm"))]
     #[clap(hide = true)]
     RemoteServerDaemon(RemoteServerIdentityArgs),
+
+    /// Connect an Agent Client Protocol agent's stdin/stdout to the loopback socket the agent
+    /// driver is listening on. Run from the driver's terminal session so the agent inherits the
+    /// shell state established by environment setup commands.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    AcpBridge {
+        /// File the driver wrote with the address to connect to, the token to present, and the
+        /// agent command line.
+        #[clap(long = "launch-file")]
+        launch_file: std::path::PathBuf,
+    },
 
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]
@@ -550,6 +563,9 @@ pub enum CliCommand {
     /// Manage cloud environments.
     #[command(subcommand)]
     Environment(crate::environment::EnvironmentCommand),
+
+    #[command(hide = true)]
+    EnvironmentCheckout(crate::environment_checkout::EnvironmentCheckoutArgs),
 
     /// Manage MCP servers.
     #[command(subcommand)]
@@ -620,6 +636,7 @@ impl CliCommand {
         match self {
             CliCommand::Agent(command) => command.as_str_for_tracing(),
             CliCommand::Environment(command) => command.as_str_for_tracing(),
+            CliCommand::EnvironmentCheckout(_) => "environment_checkout",
             CliCommand::MCP(command) => command.as_str_for_tracing(),
             CliCommand::Run(command) => command.as_str_for_tracing(),
             CliCommand::Model(command) => command.as_str_for_tracing(),
@@ -677,6 +694,12 @@ pub enum Command {
     /// Print debugging information and exit.
     #[clap(long_flag = "dump-debug-info")]
     DumpDebugInfo,
+    /// Print the JSON schema for the current Warp channel's settings and exit.
+    #[cfg(not(target_family = "wasm"))]
+    DumpSettingsSchema {
+        /// Write the schema to this path instead of standard output.
+        output_path: Option<std::path::PathBuf>,
+    },
 
     /// Print telemetry events in production and exit.
     #[clap(long_flag = "print-telemetry-events", hide = true)]
@@ -691,6 +714,8 @@ impl Command {
             Command::Worker(_) => false,
             Command::CommandLine(_) | Command::DumpDebugInfo => true,
             Command::Completions { .. } => true,
+            #[cfg(not(target_family = "wasm"))]
+            Command::DumpSettingsSchema { output_path } => output_path.is_none(),
             #[cfg(not(target_family = "wasm"))]
             Command::PrintTelemetryEvents => true,
         }

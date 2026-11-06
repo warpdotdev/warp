@@ -1,10 +1,12 @@
 use url::Url;
-use warpui::{App, EntityId};
+use warpui::App;
 
 use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
 fn attachment() -> AttachmentInput {
     AttachmentInput {
         file_name: "context.txt".to_owned(),
@@ -13,8 +15,16 @@ fn attachment() -> AttachmentInput {
     }
 }
 
+fn team_request_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
+
 fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
-    app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
+    let terminal_view = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal_view.id();
+    app.add_model(|ctx| {
+        AmbientAgentViewModel::new(terminal_view_id, terminal_view.downgrade(), ctx)
+    })
 }
 
 #[test]
@@ -84,7 +94,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         );
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScopeForTest, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto")
             );
         });
@@ -92,7 +105,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScopeForTest, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -121,7 +137,8 @@ fn spawn_config_honors_pane_model_override() {
             };
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                 prefs.update_feature_model_choices(Ok(models), ctx);
-                prefs.update_preferred_agent_mode_llm(
+                prefs.update_preferred_agent_mode_llm_for_team_uid(
+                    None,
                     &LLMId::from("auto-genius"),
                     terminal_view_id,
                     ctx,
@@ -131,7 +148,10 @@ fn spawn_config_honors_pane_model_override() {
 
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScopeForTest, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -145,7 +165,7 @@ fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.spawn_agent("new run".to_owned(), vec![], ctx);
+            model.spawn_agent("new run".to_owned(), vec![], &TeamlessScopeForTest, ctx);
         });
 
         model.read(&app, |model, _| {
@@ -165,7 +185,12 @@ fn duplicate_handoff_completion_is_ignored() {
 
         model.update(&mut app, |model, ctx| {
             let (cancel, _) = oneshot::channel();
-            model.begin_local_to_cloud_handoff(retry_request("initial request"), cancel, ctx);
+            model.begin_local_to_cloud_handoff(
+                retry_request("initial request"),
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                cancel,
+                ctx,
+            );
             model.handle_handoff_commit_failure(
                 HandoffCommitFailure {
                     issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
@@ -212,7 +237,12 @@ fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
         let (cancel, mut cancellation) = oneshot::channel();
 
         model.update(&mut app, |model, ctx| {
-            model.begin_local_to_cloud_handoff(retry_request("queued prompt"), cancel, ctx);
+            model.begin_local_to_cloud_handoff(
+                retry_request("queued prompt"),
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                cancel,
+                ctx,
+            );
             assert_eq!(
                 model
                     .request()
@@ -322,6 +352,7 @@ fn set_live_execution_session_marks_session_live_until_it_ends() {
 
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some(prompt.into()),
         mode: crate::server::server_api::ai::UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
@@ -365,6 +396,7 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
                 kind: SessionStartupKind::InitialRun,
             };
             model.request = Some(retry_request("fix tests"));
+            model.request_team_scope = Some(team_request_scope());
             model.handle_ambient_agent_stream_error(
                 anyhow::Error::new(ClientError {
                     error: "auth required".to_string(),
@@ -405,6 +437,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 auth_url: "https://example.com/oauth/connect/github".to_string(),
             };
             model.request = Some(retry_request("retry this"));
+            model.request_team_scope = Some(team_request_scope());
 
             model.handle_github_auth_completed(ctx);
 
@@ -416,6 +449,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 }
             ));
             let request = model.request().expect("retry should spawn a request");
+            assert_eq!(model.request_team_scope, Some(team_request_scope()));
             assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));

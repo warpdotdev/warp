@@ -24,4 +24,8 @@ jobs:
     name: CI
     if: github.repository_owner == 'warpdotdev'
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read # ci.yml jobs clone the repo
+      id-token: write # ci.yml's tests jobs mint an OIDC token to authenticate to GCP
+      pull-requests: read # ci.yml's params job reads the PR changed-files list; a reusable-workflow caller must grant everything its callee's jobs declare
     secrets: inherit

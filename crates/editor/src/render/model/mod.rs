@@ -35,7 +35,7 @@ use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::platform::LineStyle;
-use warpui_core::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use warpui_core::text_layout::{CaretPosition, Line, TextFrame};
 use warpui_core::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
     selection_crosses_newline_offset_based,
@@ -1115,6 +1115,10 @@ pub struct RenderState {
 
     pending_edits: Mutex<Vec<PendingLayout>>,
     pending_selection_change: Mutex<Option<PendingSelectionUpdate>>,
+    /// A scroll fraction awaiting layout. The content height isn't known until element layout
+    /// completes, so the fraction is applied only once content at or past its `minimum_version`
+    /// has been laid out — mirroring the code editor's `ScrollTrigger`.
+    pending_scroll_fraction: Option<PendingScrollFraction>,
     layout_options: RenderLayoutOptions,
 
     /// Optional path to the document being rendered, used for resolving relative paths
@@ -1416,7 +1420,7 @@ impl ColumnUnit {
 }
 
 /// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
-/// passed to [`warpui_core::text_layout::LayoutCache::layout_text()`].
+/// passed to the text layout system.
 ///
 /// Frame offsets often, but not always, correspond to glyph indices and caret positions. However,
 /// they do not line up 1:1 if a glyph or grapheme contains multiple characters
@@ -2529,6 +2533,7 @@ impl RenderState {
             pending_selection_change: Mutex::new(None),
             layout_options: Default::default(),
             document_path: None,
+            pending_scroll_fraction: None,
             hidden_lines: None,
             layout_mode: LayoutMode::CharCell(char_cell),
         }
@@ -2590,6 +2595,7 @@ impl RenderState {
             #[cfg(any(test, feature = "test-util"))]
             outstanding_layouts: Default::default(),
             pending_selection_change: Mutex::new(None),
+            pending_scroll_fraction: None,
             layout_options: Default::default(),
             document_path: None,
             hidden_lines,
@@ -3037,6 +3043,30 @@ impl RenderState {
         ScrollPositionSnapshot::from_scroll_top(self)
     }
 
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    ///
+    /// Unlike [`Self::snapshot_scroll_position`], this is document-independent, so it can be used
+    /// to preserve scroll position across a document swap (e.g. toggling markdown between raw and
+    /// rendered), where a char-offset snapshot cannot map between the two different documents.
+    pub fn scroll_fraction(&self) -> f32 {
+        self.viewport.scroll_fraction(self.height())
+    }
+
+    /// Scroll to the given `fraction` (clamped to `0..=1`) of the scrollable range, applied after
+    /// content at or past `minimum_version` has been laid out so the content height is known.
+    ///
+    /// `minimum_version` must be captured by the caller at submit time (typically the content
+    /// buffer's version right after the edit that produced the content to scroll). It cannot be
+    /// captured when the action is dequeued: the edit's `BufferEdit` may reach the layout channel
+    /// via a deferred subscription and arrive *after* this action, so the render model's own
+    /// version bookkeeping isn't reliable at dequeue time.
+    pub fn scroll_to_fraction(&mut self, fraction: f32, minimum_version: BufferVersion) {
+        self.submit_layout_action(LayoutAction::ScrollToFraction {
+            fraction,
+            minimum_version,
+        })
+    }
+
     pub fn scroll_data_horizontal(&self) -> ScrollData {
         let mut visible_px = self.viewport.width();
         let total_size = self.width();
@@ -3230,6 +3260,25 @@ impl RenderState {
                     ctx.notify();
                 }
             }
+            LayoutAction::ScrollToFraction {
+                fraction,
+                minimum_version,
+            } => {
+                // Always defer to `apply_element_update`, which runs after the element has been
+                // laid out — applying here would read a stale (often ~0) content height on an
+                // editor that has never rendered (a fresh pane has no viewport size yet) and clamp
+                // to the top. `minimum_version` comes from the submit site rather than the render
+                // model's own bookkeeping, because the edit that produced the content may reach the
+                // layout channel *after* this action. This mirrors the code editor's `ScrollTrigger`.
+                self.pending_scroll_fraction = Some(PendingScrollFraction {
+                    fraction,
+                    minimum_version,
+                });
+                // Trigger a re-render so a subsequent element layout applies the pending
+                // fraction even when the content is already quiescent — without this the
+                // restore would wait for an unrelated re-render.
+                ctx.notify();
+            }
             LayoutAction::LayoutTemporaryBlock(blocks) => {
                 // Temporary blocks are interleaved deleted/replaced lines in diff
                 // views (only created by `CodeEditorModel::refresh_diff_state`).
@@ -3325,8 +3374,7 @@ impl RenderState {
     }
 
     fn layout_temporary_blocks(&self, blocks: Vec<TemporaryBlock>, app: &AppContext) {
-        let layout_cache = LayoutCache::new();
-        let layout_context = self.layout_context(&layout_cache, app);
+        let layout_context = self.layout_context(app);
         let laid_out_blocks = layout_temporary_blocks(blocks, &layout_context);
         self.reset_temporary_block(laid_out_blocks);
     }
@@ -3337,8 +3385,7 @@ impl RenderState {
         hidden_ranges: Option<RangeSet<CharOffset>>,
         app: &AppContext,
     ) {
-        let layout_cache = LayoutCache::new();
-        let layout_context = self.layout_context(&layout_cache, app);
+        let layout_context = self.layout_context(app);
         let laid_out_edit = delta.layout_delta(
             &layout_context,
             self.document_path.as_deref(),
@@ -3349,15 +3396,8 @@ impl RenderState {
         self.layout_pending_edit(laid_out_edit, hidden_ranges);
     }
 
-    /// Construct a throwaway layout cache. We only lay out modified text, so in effect,
-    /// the entire RenderState is a cache.
-    fn layout_context<'a>(
-        &'a self,
-        layout_cache: &'a LayoutCache,
-        ctx: &'a AppContext,
-    ) -> TextLayout<'a> {
+    fn layout_context<'a>(&'a self, ctx: &'a AppContext) -> TextLayout<'a> {
         TextLayout::new(
-            layout_cache,
             ctx.font_cache().text_layout_system(),
             &self.styles,
             match self.width_setting {
@@ -3413,6 +3453,30 @@ impl RenderState {
                 // Don't emit this event when the channel has more current updates
                 // to process. This is to avoid emitting events when the viewport info is stale.
                 ctx.emit(RenderEvent::ViewportUpdated(update.buffer_version));
+            }
+        }
+
+        // Apply a deferred scroll fraction now that content has been laid out and both the content
+        // height and viewport size are current. Gated on the laid-out version so we don't apply
+        // against content that predates the reset that requested the scroll.
+        if let Some(pending) = self.pending_scroll_fraction.take() {
+            // A zero-height viewport means the element has never been laid out, so the content
+            // height is meaningless regardless of buffer versions. An update without a laid-out
+            // version (or one older than the reset) hasn't rendered the target content yet, so we
+            // retain the pending fraction rather than apply it against stale content.
+            let version_ready = self.viewport.height() > Pixels::zero()
+                && update
+                    .buffer_version
+                    .is_some_and(|laid_out| laid_out >= pending.minimum_version);
+            if version_ready {
+                if self
+                    .viewport
+                    .scroll_to_fraction(pending.fraction, self.height())
+                {
+                    ctx.notify();
+                }
+            } else {
+                self.pending_scroll_fraction = Some(pending);
             }
         }
     }
@@ -4208,6 +4272,13 @@ struct PendingSelectionUpdate {
     buffer_version: BufferVersion,
 }
 
+/// A scroll fraction deferred until the content it targets has been laid out.
+struct PendingScrollFraction {
+    fraction: f32,
+    /// Apply only once content at or past this version has been laid out.
+    minimum_version: BufferVersion,
+}
+
 /// A change to the rendering state that's processed by the background layout task.
 #[derive(Debug, Clone)]
 enum LayoutAction {
@@ -4230,6 +4301,12 @@ enum LayoutAction {
     },
     /// Scroll to a snapshotted scroll position.
     ScrollTo(ScrollPositionSnapshot),
+    /// Scroll to a fraction of the scrollable range, in `0..=1`, once content at or past
+    /// `minimum_version` has been laid out.
+    ScrollToFraction {
+        fraction: f32,
+        minimum_version: BufferVersion,
+    },
 }
 
 impl From<Pixels> for Height {

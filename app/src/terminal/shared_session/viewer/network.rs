@@ -29,7 +29,6 @@ use session_sharing_protocol::viewer::{
 };
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_server_client::iap::IapManager;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity, WeakViewHandle,
@@ -297,15 +296,12 @@ impl Network {
         session_id: SessionId,
         auth_client: Arc<dyn AuthClient>,
         auth_state: Arc<AuthState>,
-        iap_headers: Vec<(&'static str, String)>,
     ) -> anyhow::Result<((impl Sink, impl Stream), UserID)> {
         let Some(join_endpoint) = connect_endpoint(format!("/sessions/join/{session_id}")) else {
             bail!("This channel does not support session-sharing.");
         };
         let user_id = Self::get_user_id(auth_client, &auth_state).await?;
-        let socket =
-            websocket::WebSocket::connect_with_headers(&join_endpoint, None::<&str>, iap_headers)
-                .await?;
+        let socket = websocket::WebSocket::connect(&join_endpoint, None::<&str>).await?;
         anyhow::Ok(((socket.split().await), user_id))
     }
 
@@ -382,18 +378,12 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let iap_headers: Vec<(&'static str, String)> = IapManager::as_ref(ctx)
-            .iap_state()
-            .and_then(|state| state.proxy_auth_header())
-            .into_iter()
-            .collect();
         // Open a websocket to the server to join the session.
         ctx.spawn(
             Self::connect_websocket_and_get_user_id(
                 session_id,
                 auth_client,
-                auth_state.clone(),
-                iap_headers,
+                auth_state,
             ),
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
@@ -418,9 +408,6 @@ impl Network {
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 Err(e) => {
-                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.check_ws_connect_error(&e, ctx);
-                    });
                     report_error!(
                         e.context(
                             "viewer Network::start_websocket: WS connect failed; emitting FailedToJoin (no automatic retry)"
@@ -456,22 +443,13 @@ impl Network {
         let session_id = self.session_id;
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let iap_state = IapManager::as_ref(ctx).iap_state();
         let abort_handle = ctx.spawn_with_retry_on_error(
             move || {
                 log::info!("Attempting to reconnect to session sharing server as viewer");
-                // Re-read the IAP header each attempt so a refresh that landed
-                // since the last try is picked up (staging only).
-                let iap_headers: Vec<(&'static str, String)> = iap_state
-                    .as_ref()
-                    .and_then(|state| state.proxy_auth_header())
-                    .into_iter()
-                    .collect();
                 Self::connect_websocket_and_get_user_id(
                     session_id,
                     auth_client.clone(),
                     auth_state.clone(),
-                    iap_headers,
                 )
             },
             RECONNECT_RETRY_STRATEGY,
@@ -503,9 +481,6 @@ impl Network {
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 RequestState::RequestFailedRetryPending(e) => {
-                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.check_ws_connect_error(&e, ctx);
-                    });
                     log::warn!("Failed to reconnect to shared session as viewer, will retry: {e}");
                 }
                 RequestState::RequestFailed(e) => {
@@ -953,6 +928,9 @@ impl Network {
             server_conversation_token,
             prompt,
             attachments,
+            // Viewer-typed prompts carry only text and attachments; warp-server fills this in for
+            // the follow-ups it injects.
+            user_query_b64: None,
         };
         self.send_message_to_server(UpstreamMessage::SendAgentPrompt(request));
     }

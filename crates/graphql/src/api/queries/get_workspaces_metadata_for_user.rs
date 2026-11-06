@@ -1,5 +1,5 @@
 use crate::ai::AICreditAvailability;
-use crate::billing::{PricingInfo, PurchaseAddOnCreditsPolicy};
+use crate::billing::{ChargeUnit, PricingInfo, PurchaseAddOnCreditsPolicy};
 use crate::experiment::Experiment;
 use crate::request_context::RequestContext;
 use crate::schema;
@@ -21,6 +21,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
         }
         billingMetadata {
           tier {
+            chargeUnit
             purchaseAddOnCreditsPolicy {
               enabled
               premiumEnabled
@@ -35,15 +36,26 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             uid
             email
             role
+            isDisabled
           }
           teams {
             uid
             name
+            inviteLink
             members {
               uid
               email
               role
+              isDisabled
             }
+            visibility
+            featureModelChoice { ... }
+          }
+          openTeams {
+            teamUid
+            numMembers
+            name
+            teamAcceptingInvites
           }
           billingMetadata {
             customerType
@@ -167,10 +179,10 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             }
           }
           hasBillingHistory
-          inviteCode
           pendingEmailInvites {
             email
             expired
+            teamUid
           }
           inviteLinkDomainRestrictions {
             uid
@@ -250,10 +262,11 @@ pub struct User {
     pub discoverable_teams: Vec<DiscoverableTeamData>,
 }
 
-/// Slim selection of the user-level `billingMetadata`: only the add-on
-/// credits purchase policy. This is the teamless-purchase fallback (fresh
-/// free users have no team and their only workspace is the server's
-/// placeholder) — do not widen it into the full `BillingMetadata` selection.
+/// Slim selection of the user-level `billingMetadata`: only the plan terms a
+/// user needs without a workspace (fresh free users have no team and their
+/// only workspace is the server's placeholder) — the add-on credits purchase
+/// policy and the charge unit. Do not widen it into the full
+/// `BillingMetadata` selection.
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "BillingMetadata")]
 pub struct UserPurchasePolicyBillingMetadata {
@@ -263,6 +276,7 @@ pub struct UserPurchasePolicyBillingMetadata {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Tier")]
 pub struct UserPurchasePolicyTier {
+    pub charge_unit: ChargeUnit,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
 }
 

@@ -39,20 +39,17 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     builder: fn(SettingsAction) -> T,
 ) {
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![
-            ToggleSettingActionPair::custom(
-                SettingActionPairDescriptions::new("Enable Warp Drive", "Disable Warp Drive"),
-                builder(SettingsAction::WarpDrive(
-                    WarpDriveSettingsPageAction::ToggleShowWarpDrive,
-                )),
-                SettingActionPairContexts::new(
-                    context.clone() & !id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
-                    context.clone() & id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
-                ),
-                None,
-            )
-            .with_enabled(|| FeatureFlag::OpenWarpNewSettingsModes.is_enabled()),
-        ],
+        vec![ToggleSettingActionPair::custom(
+            SettingActionPairDescriptions::new("Enable Warp Drive", "Disable Warp Drive"),
+            builder(SettingsAction::WarpDrive(
+                WarpDriveSettingsPageAction::ToggleShowWarpDrive,
+            )),
+            SettingActionPairContexts::new(
+                context.clone() & !id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
+                context.clone() & id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
+            ),
+            None,
+        )],
         app,
     );
 }
@@ -125,7 +122,7 @@ impl SettingsPageMeta for WarpDriveSettingsPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        true
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {

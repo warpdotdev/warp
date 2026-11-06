@@ -773,7 +773,7 @@ where
                                     ctx.dispatch_typed_action(
                                         WorkspaceAction::ShowSettingsPageWithSearch {
                                             search_query: "Autonomy".to_string(),
-                                            section: Some(SettingsSection::AI),
+                                            section: Some(SettingsSection::WarpAgent),
                                         },
                                     );
                                 })),
@@ -996,6 +996,10 @@ impl View for AIBlock {
                     user_display_name: &avatar_display_name,
                     profile_image_path: profile_image_path.as_ref(),
                     avatar_color,
+                    query_sent_at: self.query_sent_at(app),
+                    query_timestamp_tooltip_handle: &self
+                        .state_handles
+                        .query_timestamp_tooltip_handle,
                     query_and_index: Some((&query_for_display, input_index)),
                     query_prefix_highlight_len,
                     detected_links_state: &self.detected_links_state,
@@ -1123,6 +1127,8 @@ impl View for AIBlock {
                 current_todo_list: self.current_todo_list(app),
                 finish_reason: self.finish_reason.as_ref(),
                 is_usage_footer_expanded: self.is_usage_footer_expanded,
+                is_turn_panel_expanded: self.is_turn_panel_expanded,
+                turn_panel_view: self.turn_panel_view.as_ref(),
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
@@ -1226,7 +1232,7 @@ impl View for AIBlock {
             });
         let should_add_top_padding = contains_user_query_and_is_not_pin_to_top
             || renders_below_requested_command_view
-            || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation(app));
+            || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation());
 
         if should_add_top_padding {
             content = content.with_padding_top(CONTENT_VERTICAL_PADDING);
@@ -1387,7 +1393,8 @@ impl AIAgentInput {
             | AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
             | AIAgentInput::PassiveSuggestionResult { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentWake => None,
         }
     }
 }

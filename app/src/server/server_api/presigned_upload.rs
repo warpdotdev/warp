@@ -245,10 +245,7 @@ async fn ensure_upload_succeeded(
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let status_err = HttpStatusError {
-        status: status.as_u16(),
-        body: body.clone(),
-    };
+    let status_err = HttpStatusError::new(status.as_u16(), body.clone());
     Err(anyhow::Error::new(status_err).context(format!(
         "{} failed with status {status}: {body}",
         error_context.failure
@@ -266,6 +263,7 @@ async fn send_upload_request(
         .body(body)
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .context(error_context.transport)?;
 
     ensure_upload_succeeded(response, error_context).await
@@ -334,6 +332,7 @@ async fn send_multipart_upload(
         .multipart(form)
         .send()
         .await
+        .map_err(reqwest::Error::without_url)
         .context(error_context.transport)?;
     ensure_upload_succeeded(response, error_context).await
 }

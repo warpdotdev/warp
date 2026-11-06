@@ -15,7 +15,7 @@ use crate::agent::action::{
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
-use crate::diff_validation::{ParsedDiff, V4AHunk};
+use crate::diff_validation::{ParsedDiff, V4AHunk, V4ALineData};
 use crate::document::{AIDocumentId, DEFAULT_PLANNING_DOCUMENT_TITLE};
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
@@ -98,6 +98,12 @@ impl From<api::message::tool_call::ApplyFileDiffs> for AIAgentActionType {
                         old: hunk.old,
                         new: hunk.new,
                         post_context: hunk.post_context,
+                        line_data: hunk.line_data.map(|data| V4ALineData {
+                            pre_context: data.pre_context,
+                            old: data.old,
+                            new: data.new,
+                            post_context: data.post_context,
+                        }),
                     })
                     .collect(),
             })
@@ -114,6 +120,7 @@ impl From<api::message::tool_call::ApplyFileDiffs> for AIAgentActionType {
             .map(|new_file| FileEdit::Create {
                 file: new_file.file_path.none_if_default(),
                 content: new_file.content.none_if_default(),
+                allow_overwrite: new_file.allow_overwrite,
             });
 
         AIAgentActionType::RequestFileEdits {
@@ -434,7 +441,10 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
                     use_computer::action::Type::MouseDown(mouse_down) => {
                         Ok(computer_use::Action::MouseDown {
                             button: to_computer_use_button(mouse_down.button()),
-                            at: coordinates_to_vec(mouse_down.at.as_ref())?,
+                            at: mouse_down
+                                .at
+                                .as_ref()
+                                .map(|at| computer_use::Vector2I::new(at.x, at.y)),
                         })
                     }
                     use_computer::action::Type::MouseUp(mouse_up) => {
@@ -623,7 +633,9 @@ fn log_window_target_coord(action: &computer_use::Action, target: computer_use::
     };
     let coord = match action {
         computer_use::Action::MouseMove { to } => Some(("mouse_move", to.x(), to.y())),
-        computer_use::Action::MouseDown { at, .. } => Some(("mouse_down", at.x(), at.y())),
+        computer_use::Action::MouseDown { at: Some(at), .. } => {
+            Some(("mouse_down", at.x(), at.y()))
+        }
         computer_use::Action::MouseWheel { at, .. } => Some(("mouse_wheel", at.x(), at.y())),
         _ => None,
     };

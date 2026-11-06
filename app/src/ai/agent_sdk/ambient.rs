@@ -4,11 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow};
+use bytes::Bytes;
 use comfy_table::Cell;
 use futures::{StreamExt, future};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
 use warp_cli::json_filter::JsonOutput;
+use warp_cli::scope::TeamSelection;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
     MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
@@ -17,6 +19,7 @@ use warp_cli::task::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_server_client::HttpStatusError;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -44,12 +47,18 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{HeadlessTeamScope, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
+const HTTP_UNPROCESSABLE_ENTITY: u16 = 422;
+#[cfg(not(target_family = "wasm"))]
+const HTTP_NOT_FOUND: u16 = 404;
+const OPERATION_NOT_SUPPORTED_TYPE_URI: &str =
+    "https://docs.warp.dev/errors/operation_not_supported";
 
 /// Singleton model that runs async work for ambient agent CLI commands.
 struct AmbientAgentRunner;
@@ -71,7 +80,14 @@ pub fn list_ambient_agent_tasks(
     let json_output = args.json_output.clone();
     let output_format = global_options.output_format;
     runner.update(ctx, |runner, ctx| {
-        runner.list_tasks(args.limit, filter, output_format, json_output, ctx)
+        runner.list_tasks(
+            args.team_selection,
+            args.limit,
+            filter,
+            output_format,
+            json_output,
+            ctx,
+        )
     })
 }
 
@@ -188,6 +204,31 @@ fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     }
 }
 
+enum ListTasksOutput {
+    Raw(serde_json::Value),
+    Tasks(Vec<AmbientAgentTask>),
+}
+
+async fn load_tasks_for_output(
+    ai_client: &dyn AIClient,
+    limit: i32,
+    filter: TaskListFilter,
+    request_team_scope: RequestTeamScope,
+    output_format: OutputFormat,
+    json_output: &JsonOutput,
+) -> anyhow::Result<ListTasksOutput> {
+    if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
+        let response = ai_client
+            .list_agent_runs_raw(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Raw(response))
+    } else {
+        let tasks = ai_client
+            .list_ambient_agent_tasks(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Tasks(tasks))
+    }
+}
 /// Run a message-related CLI command.
 pub fn run_message(
     ctx: &mut AppContext,
@@ -379,6 +420,14 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
+            let team_scope = match super::common::resolve_object_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
+
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
                 && let Some(environment_id) = loaded_file
@@ -388,8 +437,11 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
+            let environment_id = match EnvironmentChoice::resolve_for_create(
+                environment_args,
+                &team_scope,
+                ctx,
+            ) {
                 Ok(EnvironmentChoice::None) => {
                     eprintln!("Agent will run without an environment.");
                     None
@@ -436,11 +488,13 @@ impl AmbientAgentRunner {
             .then(|| crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
                 claude_auth_secret_name: args.claude_auth_secret.clone(),
                 codex_auth_secret_name: args.codex_auth_secret.clone(),
+                pi_auth_secret_name: None,
             });
 
             let merged_config = super::config_file::merge_with_precedence(
                 loaded_file.as_ref(),
                 AgentConfigSnapshot {
+                    experimental: None,
                     name: args.name,
                     environment_id,
                     runner_id: args.runner,
@@ -474,7 +528,11 @@ impl AmbientAgentRunner {
                     .model_id
                     .as_deref()
                     .map(|model_id| {
-                        super::common::validate_agent_mode_base_model_id(model_id, ctx)
+                        super::common::validate_agent_mode_base_model_id_for_scope(
+                            model_id,
+                            &team_scope,
+                            ctx,
+                        )
                     })
                     .transpose()
                 {
@@ -511,20 +569,20 @@ impl AmbientAgentRunner {
                 None => (None, UserQueryMode::Normal),
             };
             let request = SpawnAgentRequest {
+                metadata: Default::default(),
                 prompt,
                 mode,
                 config,
-                title: None,
-                team: match (args.scope.team, args.scope.personal) {
-                    (true, _) => Some(true),
-                    (_, true) => Some(false),
-                    _ => None,
-                },
+                title: args.title,
+                team: Some(match &team_scope {
+                    HeadlessTeamScope::Personal => false,
+                    HeadlessTeamScope::Team(_) => true,
+                }),
                 agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,
                 interactive: None,
-                parent_run_id: None,
+                parent_run_id: args.parent_run_id,
                 runtime_skills: vec![],
                 referenced_attachments: vec![],
                 conversation_id: args.conversation,
@@ -536,8 +594,14 @@ impl AmbientAgentRunner {
             let should_open = args.open;
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(request, ai_client_clone, Some(TASK_STATUS_POLLING_DURATION)));
+                let mut stream = Box::pin(spawn_task(
+                    request,
+                    request_team_scope,
+                    ai_client_clone,
+                    Some(TASK_STATUS_POLLING_DURATION),
+                ));
                 let mut session_join_info = None;
                 let mut spawned_task_id = None;
 
@@ -622,32 +686,76 @@ impl AmbientAgentRunner {
 
     fn list_tasks(
         &self,
+        team_selection: TeamSelection,
         limit: i32,
         filter: TaskListFilter,
         output_format: OutputFormat,
         json_output: JsonOutput,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |runner, refresh_result, ctx| {
+            if let Err(err) = refresh_result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            runner.list_tasks_after_workspace_refresh(
+                team_selection,
+                limit,
+                filter,
+                output_format,
+                json_output,
+                ctx,
+            );
+        });
 
-        let list_future = async move {
-            if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.list_agent_runs_raw(limit, filter).await?;
-                super::output::print_raw_json(response, &json_output)?;
-            } else if matches!(output_format, OutputFormat::Ndjson) {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                for task in tasks {
-                    super::output::write_json_line(&task, std::io::stdout())?;
+        Ok(())
+    }
+
+    fn list_tasks_after_workspace_refresh(
+        &self,
+        team_selection: TeamSelection,
+        limit: i32,
+        filter: TaskListFilter,
+        output_format: OutputFormat,
+        json_output: JsonOutput,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request_team_scope =
+            match UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection) {
+                Ok(scope) => RequestTeamScope::from_scope(&scope),
+                Err(err) => {
+                    super::report_fatal_error(err.into(), ctx);
+                    return;
                 }
-            } else {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                Self::print_tasks_table(&tasks);
+            };
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let list_future = async move {
+            match load_tasks_for_output(
+                ai_client.as_ref(),
+                limit,
+                filter,
+                request_team_scope,
+                output_format,
+                &json_output,
+            )
+            .await?
+            {
+                ListTasksOutput::Raw(response) => {
+                    super::output::print_raw_json(response, &json_output)?;
+                }
+                ListTasksOutput::Tasks(tasks) if matches!(output_format, OutputFormat::Ndjson) => {
+                    for task in tasks {
+                        super::output::write_json_line(&task, std::io::stdout())?;
+                    }
+                }
+                ListTasksOutput::Tasks(tasks) => {
+                    Self::print_tasks_table(&tasks);
+                }
             }
             Ok(())
         };
         self.spawn_command(list_future, ctx);
-
-        Ok(())
     }
 
     fn get_task_status(
@@ -1416,6 +1524,144 @@ pub fn get_run_conversation(ctx: &mut AppContext, run_id: String) -> anyhow::Res
     runner.update(ctx, |runner, ctx| runner.get_run_conversation(run_id, ctx))
 }
 
+/// Normalized Warp conversation JSON, or a raw third-party harness transcript.
+#[derive(Debug, PartialEq)]
+enum ConversationCliOutput {
+    Normalized(serde_json::Value),
+    RawTranscript(Bytes),
+}
+
+async fn load_run_conversation(
+    ai_client: &dyn AIClient,
+    run_id: &str,
+) -> anyhow::Result<ConversationCliOutput> {
+    match ai_client.get_run_conversation(run_id).await {
+        Ok(conversation) => Ok(ConversationCliOutput::Normalized(conversation)),
+        Err(err) => {
+            #[cfg(not(target_family = "wasm"))]
+            if is_normalized_conversation_unsupported(&err) {
+                return download_raw_run_transcript(ai_client, run_id)
+                    .await
+                    .map(ConversationCliOutput::RawTranscript);
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn load_public_conversation(
+    ai_client: &dyn AIClient,
+    conversation_id: &str,
+) -> anyhow::Result<ConversationCliOutput> {
+    match ai_client.get_public_conversation(conversation_id).await {
+        Ok(conversation) => Ok(ConversationCliOutput::Normalized(conversation)),
+        Err(err) => {
+            #[cfg(not(target_family = "wasm"))]
+            if is_normalized_conversation_unsupported(&err) {
+                return download_raw_conversation_transcript(ai_client, conversation_id)
+                    .await
+                    .map(ConversationCliOutput::RawTranscript);
+            }
+            Err(err)
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+async fn download_raw_run_transcript(
+    ai_client: &dyn AIClient,
+    run_id: &str,
+) -> anyhow::Result<Bytes> {
+    let task_id = parse_ambient_task_id(run_id, "Invalid run ID")?;
+    map_raw_transcript_download(
+        ai_client.download_run_transcript(&task_id).await,
+        format!("Raw transcript not found for run {run_id}. It may not have been uploaded yet."),
+        format!("Failed to download raw transcript for run {run_id}"),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+async fn download_raw_conversation_transcript(
+    ai_client: &dyn AIClient,
+    conversation_id: &str,
+) -> anyhow::Result<Bytes> {
+    map_raw_transcript_download(
+        ai_client
+            .download_conversation_transcript(conversation_id)
+            .await,
+        format!(
+            "Raw transcript not found for conversation {conversation_id}. It may not have been uploaded yet."
+        ),
+        format!("Failed to download raw transcript for conversation {conversation_id}"),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn map_raw_transcript_download(
+    result: anyhow::Result<Bytes>,
+    not_found_message: String,
+    failure_context: String,
+) -> anyhow::Result<Bytes> {
+    match result {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if is_http_status(&err, HTTP_NOT_FOUND) => Err(anyhow!(not_found_message)),
+        Err(err) => Err(err.context(failure_context)),
+    }
+}
+
+#[derive(Deserialize)]
+struct Rfc7807Problem {
+    #[serde(default, rename = "type")]
+    problem_type: String,
+}
+
+fn is_normalized_conversation_unsupported(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let Some(status_error) = cause.downcast_ref::<HttpStatusError>() else {
+            return false;
+        };
+        if status_error.status != HTTP_UNPROCESSABLE_ENTITY {
+            return false;
+        }
+        let Ok(problem) = serde_json::from_str::<Rfc7807Problem>(&status_error.body) else {
+            return false;
+        };
+        problem.problem_type == OPERATION_NOT_SUPPORTED_TYPE_URI
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn is_http_status(err: &anyhow::Error, status: u16) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<HttpStatusError>()
+            .is_some_and(|status_error| status_error.status == status)
+    })
+}
+
+fn print_conversation_cli_output(output: &ConversationCliOutput) -> anyhow::Result<()> {
+    write_conversation_cli_output(output, std::io::stdout())
+}
+
+fn write_conversation_cli_output<W>(
+    output: &ConversationCliOutput,
+    mut writer: W,
+) -> anyhow::Result<()>
+where
+    W: std::io::Write,
+{
+    match output {
+        ConversationCliOutput::Normalized(conversation) => {
+            let pretty = serde_json::to_string_pretty(conversation)?;
+            writeln!(writer, "{pretty}")?;
+        }
+        ConversationCliOutput::RawTranscript(bytes) => {
+            writer.write_all(bytes.as_ref())?;
+        }
+    }
+    Ok(())
+}
+
 impl AmbientAgentRunner {
     fn get_conversation(
         &self,
@@ -1425,9 +1671,8 @@ impl AmbientAgentRunner {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         let future = async move {
-            let conversation = ai_client.get_public_conversation(&conversation_id).await?;
-            let pretty = serde_json::to_string_pretty(&conversation)?;
-            println!("{pretty}");
+            let output = load_public_conversation(ai_client.as_ref(), &conversation_id).await?;
+            print_conversation_cli_output(&output)?;
             Ok(())
         };
         self.spawn_command(future, ctx);
@@ -1443,9 +1688,8 @@ impl AmbientAgentRunner {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         let future = async move {
-            let conversation = ai_client.get_run_conversation(&run_id).await?;
-            let pretty = serde_json::to_string_pretty(&conversation)?;
-            println!("{pretty}");
+            let output = load_run_conversation(ai_client.as_ref(), &run_id).await?;
+            print_conversation_cli_output(&output)?;
             Ok(())
         };
         self.spawn_command(future, ctx);

@@ -38,6 +38,7 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width: 1280,
             height: 720,
+            capture_origin: crate::Vector2I::new(0, 0),
             exit_state: Arc::new(Mutex::new(None)),
             // The mock never spawns a capture process; the widened handle fields
             // are populated so the literal compiles on macOS, and

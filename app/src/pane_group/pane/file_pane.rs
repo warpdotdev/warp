@@ -125,7 +125,7 @@ impl PaneContent for FilePane {
     fn detach(
         &self,
         _group: &PaneGroup,
-        _detach_type: DetachType,
+        detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
         // Always unsubscribe from views and models
@@ -133,6 +133,15 @@ impl PaneContent for FilePane {
         ctx.unsubscribe_to_view(&file_view);
         ctx.unsubscribe_to_model(&file_view.as_ref(ctx).links());
         ctx.unsubscribe_to_view(&self.view);
+
+        // Only release the shared file state once the pane is really gone. During the undo-close
+        // grace period and across moves the same view is reattached, so it keeps its file open.
+        #[cfg(feature = "local_fs")]
+        if matches!(detach_type, DetachType::Closed) {
+            file_view.update(ctx, |view, ctx| view.release_file_model(ctx));
+        }
+        #[cfg(not(feature = "local_fs"))]
+        let _ = detach_type;
     }
 
     fn snapshot(&self, app: &AppContext) -> LeafContents {
