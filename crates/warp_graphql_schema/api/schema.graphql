@@ -5231,6 +5231,8 @@ type Workspace {
 A plan's shared workspace allowance for the current monthly AI cycle.
 """
 type IncludedUsagePool {
+  monthlyCredits: Float!
+  usedCredits: Float!
   monthlyCents: Int!
   grantedCents: Float!
   remainingCents: Float!

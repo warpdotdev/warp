@@ -48,6 +48,8 @@ pub struct Workspace {
 
 #[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct IncludedUsagePool {
+    pub monthly_credits: f64,
+    pub used_credits: f64,
     pub monthly_cents: i32,
     pub granted_cents: f64,
     pub remaining_cents: f64,

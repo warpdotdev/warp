@@ -26,6 +26,8 @@ fn pool_query_is_separate_from_core_usage_and_metadata_queries() {
     });
     for field in [
         "includedUsagePool",
+        "monthlyCredits",
+        "usedCredits",
         "monthlyCents",
         "grantedCents",
         "remainingCents",
@@ -52,6 +54,8 @@ fn pool_response_accepts_null_and_fractional_balances() {
                 "workspaces": [
                     {"uid": "without-pool", "includedUsagePool": null},
                     {"uid": "with-pool", "includedUsagePool": {
+                        "monthlyCredits": 1234.75,
+                        "usedCredits": 1000.125,
                         "monthlyCents": 10000,
                         "grantedCents": 10000.0,
                         "remainingCents": 1234.56,
@@ -66,6 +70,12 @@ fn pool_response_accepts_null_and_fractional_balances() {
         panic!("Expected user")
     };
     assert!(output.user.workspaces[0].included_usage_pool.is_none());
+    let pool = output.user.workspaces[1]
+        .included_usage_pool
+        .as_ref()
+        .unwrap();
+    assert_eq!(pool.monthly_credits, 1234.75);
+    assert_eq!(pool.used_credits, 1000.125);
     assert_eq!(
         output.user.workspaces[1]
             .included_usage_pool
