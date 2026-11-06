@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef};
+use warpui::App;
 
+use super::super::AgentDriverOptions;
 use super::super::environment_checkout_protocol::{CheckoutFailureKind, CheckoutOutcome};
 use super::*;
+use crate::workspace::view::tests::initialize_app;
 
 const AGENT_SKILLS: &str = "agents/triage/skills";
 const FACTORY_SKILLS: &str = "skills";
@@ -150,6 +153,42 @@ fn unresolved(report: &ReferenceFileReport) -> Vec<(&str, UnresolvedReason)> {
         .iter()
         .map(|entry| (entry.entry.as_str(), entry.reason))
         .collect()
+}
+
+#[test]
+fn skill_sources_use_the_assigned_factory_forge() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let fixture = Fixture::new(&[(
+            "skills/shared.yaml",
+            "source: acme/shared\ninclude: [deploy]\n",
+        )]);
+        let mut options = AgentDriverOptions {
+            working_dir: fixture.root.clone(),
+            task_id: Some("01234567-89ab-cdef-0123-456789abcdef".parse().unwrap()),
+            environment_variables: HashMap::from([(
+                FACTORY_CODE_FORGE_ENV.into(),
+                "GITLAB".into(),
+            )]),
+            snapshot_disabled: Some(true),
+            ..Default::default()
+        };
+        options.workspace.factory_skill_dirs = Some(vec![FACTORY_SKILLS.into()]);
+        let driver = app.update(|ctx| AgentDriver::create(options, ctx).unwrap());
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+
+        let discovery = AgentDriver::discover_skill_references(&foreground)
+            .await
+            .unwrap();
+        let (batch, _) = plan_checkouts(&discovery.levels, &fixture.root.join("sources"));
+
+        let [request] = batch.repositories.as_slice() else {
+            panic!("expected one skill source checkout: {batch:?}");
+        };
+        assert_eq!(request.source.code_forge, RepositoryForge::GitLab);
+        assert_eq!(request.source.repo_owner, "acme");
+        assert_eq!(request.source.repo_name, "shared");
+    });
 }
 
 #[test]

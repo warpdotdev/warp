@@ -205,13 +205,24 @@ impl AgentDriver {
     pub(super) async fn discover_skill_references(
         foreground: &ModelSpawner<Self>,
     ) -> Option<SkillReferenceDiscovery> {
-        let (task_id, working_dir, configured_dirs, reference_dirs) = foreground
+        let (task_id, working_dir, configured_dirs, reference_dirs, factory_forge) = foreground
             .spawn(|me, _| {
+                let factory_forge = me
+                    .resolved_env_vars
+                    .get(OsStr::new(FACTORY_CODE_FORGE_ENV))
+                    .cloned()
+                    .or_else(|| std::env::var_os(FACTORY_CODE_FORGE_ENV))
+                    .and_then(|value| {
+                        value
+                            .to_str()
+                            .and_then(|value| parse_code_forge(value.trim()))
+                    });
                 (
                     me.task_id,
                     me.working_dir.clone(),
                     me.skill_dirs.clone(),
                     me.skill_reference_dirs.clone(),
+                    factory_forge,
                 )
             })
             .await
@@ -219,9 +230,6 @@ impl AgentDriver {
         let task_id = task_id?;
         let resolved_dirs = resolve_skills_dirs(&working_dir, configured_dirs.clone());
         let reference_dirs = resolve_skills_dirs(&working_dir, reference_dirs);
-        let factory_forge = std::env::var(FACTORY_CODE_FORGE_ENV)
-            .ok()
-            .and_then(|value| parse_code_forge(value.trim()));
         let levels = discover(&resolved_dirs, &reference_dirs, factory_forge);
         (!levels.is_empty()).then(|| SkillReferenceDiscovery {
             root: std::env::temp_dir()
