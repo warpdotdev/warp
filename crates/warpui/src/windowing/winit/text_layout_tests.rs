@@ -583,6 +583,121 @@ fn test_layout_text_first_line_indent_large_bidirectional() -> Result<()> {
     Ok(())
 }
 
+/// Combining marks must be placed with the shaper's GPOS offsets, not with the pen position.
+///
+/// [`cosmic_text::LayoutGlyph`] reports the shaped placement of a glyph in `x_offset` / `y_offset`
+/// (em units, to be scaled by `font_size`), separately from `x` / `y`, which are the pen position
+/// after advance accumulation. Ignoring the offsets draws every zero-advance combining mark at the
+/// pen instead of on its base.
+///
+/// This is invisible with a single mark — most fonts draw mark glyphs extending left of their
+/// origin, so a mark placed at the pen happens to land over its base — and only becomes visible
+/// once two marks stack, since both then get identical coordinates.
+#[test]
+fn test_combining_marks_are_placed_with_gpos_offsets() -> Result<()> {
+    use std::path::PathBuf;
+
+    let (mut font_db, _roboto) = init_fonts();
+
+    // The bundled Roboto-Regular doesn't cover COMBINING DIAERESIS, and carries no mark anchors
+    // for COMBINING ACUTE ACCENT either, so it can't exercise GPOS mark positioning. RobotoFlex,
+    // also bundled, has both marks plus mark-to-base and mark-to-mark anchors.
+    let font_path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "..",
+        "..",
+        "app",
+        "assets",
+        "bundled",
+        "fonts",
+        "roboto",
+        "RobotoFlex-Semibold.ttf",
+    ]
+    .iter()
+    .collect();
+    let roboto_flex = font_db
+        .load_from_bytes(
+            "RobotoFlex",
+            vec![std::fs::read(font_path).expect("should be able to read the bundled RobotoFlex")],
+        )
+        .expect("should be able to load RobotoFlex for test");
+
+    // `b` has no precomposed form with either mark, so the shaper cannot compose them away and
+    // emits three glyphs: the base, then two stacked zero-advance marks.
+    let text = "b\u{0301}\u{0308}"; // b + COMBINING ACUTE ACCENT + COMBINING DIAERESIS
+
+    let line = font_db.text_layout_system().layout_line(
+        text,
+        LineStyle {
+            font_size: FONT_SIZE,
+            line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+        },
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(roboto_flex, Properties::default(), TextStyle::new()),
+        )],
+        f32::MAX,
+        crate::text_layout::ClipConfig::default(),
+    );
+
+    let glyphs = line
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter())
+        .collect_vec();
+    assert_eq!(
+        glyphs.len(),
+        3,
+        "expected a base glyph followed by two combining marks, got {glyphs:?}"
+    );
+
+    let base = glyphs[0];
+    let (acute, diaeresis) = (glyphs[1], glyphs[2]);
+
+    assert!(base.width > 0., "the base glyph should advance the pen");
+    assert_eq!(
+        (
+            base.position_along_baseline.x(),
+            base.position_along_baseline.y()
+        ),
+        (0., 0.),
+        "the base glyph starts at the origin"
+    );
+
+    for mark in [acute, diaeresis] {
+        assert_eq!(mark.width, 0., "combining marks have no advance");
+        // Without the GPOS offsets a mark keeps the pen position it inherited from the base's
+        // advance, which places it after the base instead of over it.
+        assert!(
+            mark.position_along_baseline.x() < base.width,
+            "mark should be pulled back over its base by its GPOS x offset, got x = {} with a \
+             base advance of {}",
+            mark.position_along_baseline.x(),
+            base.width
+        );
+        // Screen coordinates grow downwards, so a mark rendered above the baseline has a negative
+        // y. Without the GPOS offsets every mark stays on the baseline.
+        assert!(
+            mark.position_along_baseline.y() < 0.,
+            "mark should be raised above the baseline by its GPOS y offset, got y = {}",
+            mark.position_along_baseline.y()
+        );
+    }
+
+    // The point of the fix: stacked marks must not collapse onto one another. The diaeresis is
+    // attached to the acute by the font's mark-to-mark anchors, so it sits strictly higher.
+    assert!(
+        diaeresis.position_along_baseline.y() < acute.position_along_baseline.y(),
+        "the second mark should stack above the first, but they are at y = {} and y = {}",
+        diaeresis.position_along_baseline.y(),
+        acute.position_along_baseline.y()
+    );
+
+    Ok(())
+}
+
 /// Checks that the head indent and first line's width don't exceed the frame's width.
 fn first_line_bounded(frame: &TextFrame, first_line_indent: f32, frame_width: f32) -> bool {
     let first_line_width = frame.lines().first().unwrap().width;

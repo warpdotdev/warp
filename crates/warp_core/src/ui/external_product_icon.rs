@@ -2,6 +2,7 @@ use warpui_core::elements::Icon as WarpUiIcon;
 
 use crate::ui::theme::Fill;
 
+#[derive(Clone, Copy)]
 pub enum ExternalProductIcon {
     Heroku,
     Notion,
@@ -16,35 +17,39 @@ pub enum ExternalProductIcon {
 }
 
 impl ExternalProductIcon {
-    pub fn from_string(s: &str) -> Option<ExternalProductIcon> {
+    const PREFIXES: &'static [(&'static str, Self)] = &[
+        ("heroku", Self::Heroku),
+        ("notion", Self::Notion),
+        ("linear", Self::Linear),
+        ("figma", Self::Figma),
+        ("github", Self::Github),
+        ("slack", Self::Slack),
+        ("composio", Self::Composio),
+        ("resend", Self::Resend),
+        ("sentry", Self::Sentry),
+        ("you.com", Self::YouDotCom),
+    ];
+
+    pub fn from_string(s: &str) -> Option<Self> {
         let s_lower = s.to_ascii_lowercase();
-        match s_lower.as_str() {
-            "heroku" => Some(ExternalProductIcon::Heroku),
-            "notion" => Some(ExternalProductIcon::Notion),
-            "linear" => Some(ExternalProductIcon::Linear),
-            "figma" => Some(ExternalProductIcon::Figma),
-            "github" => Some(ExternalProductIcon::Github),
-            "slack" => Some(ExternalProductIcon::Slack),
-            "composio" => Some(ExternalProductIcon::Composio),
-            "resend" => Some(ExternalProductIcon::Resend),
-            "sentry" => Some(ExternalProductIcon::Sentry),
-            "you.com" => Some(ExternalProductIcon::YouDotCom),
-            _other => None,
-        }
+        Self::PREFIXES
+            .iter()
+            .find(|(prefix, _)| s_lower.starts_with(prefix))
+            .map(|(_, icon)| *icon)
     }
 
     pub fn get_path(&self) -> &'static str {
         match self {
-            ExternalProductIcon::Heroku => "bundled/svg/heroku.svg",
-            ExternalProductIcon::Notion => "bundled/svg/notion.svg",
-            ExternalProductIcon::Linear => "bundled/svg/linear.svg",
-            ExternalProductIcon::Figma => "bundled/svg/figma.svg",
-            ExternalProductIcon::Github => "bundled/svg/github.svg",
-            ExternalProductIcon::Slack => "bundled/svg/slack-logo.svg",
-            ExternalProductIcon::Composio => "bundled/svg/composio.svg",
-            ExternalProductIcon::Resend => "bundled/svg/resend.svg",
-            ExternalProductIcon::Sentry => "bundled/svg/sentry.svg",
-            ExternalProductIcon::YouDotCom => "bundled/svg/you-com.svg",
+            Self::Heroku => "bundled/svg/heroku.svg",
+            Self::Notion => "bundled/svg/notion.svg",
+            Self::Linear => "bundled/svg/linear.svg",
+            Self::Figma => "bundled/svg/figma.svg",
+            Self::Github => "bundled/svg/github.svg",
+            Self::Slack => "bundled/svg/slack-logo.svg",
+            Self::Composio => "bundled/svg/composio.svg",
+            Self::Resend => "bundled/svg/resend.svg",
+            Self::Sentry => "bundled/svg/sentry.svg",
+            Self::YouDotCom => "bundled/svg/you-com.svg",
         }
     }
 

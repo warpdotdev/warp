@@ -37,7 +37,7 @@ mod macos {
         let dispatched_on_main = Arc::new(AtomicBool::new(false));
         let worker_returned = Arc::new(AtomicBool::new(false));
 
-        AppBuilder::new_headless(AppCallbacks::default(), Box::new(()), None).run({
+        AppBuilder::new_windowless(AppCallbacks::default(), Box::new(()), None).run({
             let dispatched_on_main = dispatched_on_main.clone();
             let worker_returned = worker_returned.clone();
             move |ctx| {

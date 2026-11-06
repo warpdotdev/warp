@@ -61,6 +61,7 @@ export HOMEBREW_NO_ASK=1
 brew update
 
 brew install jq
+brew install shellcheck
 brew install getsentry/tools/sentry-cli
 brew install clang-format
 brew install create-dmg
@@ -76,6 +77,7 @@ if ! pwsh --version >/dev/null 2>&1; then
 fi
 brew install pkgconf
 brew install llvm
+brew install protobuf
 
 # Install PSScriptAnalyzer for PowerShell linting
 pwsh -Command "Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser"

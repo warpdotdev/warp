@@ -21,6 +21,7 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
+use crate::workspaces::user_workspaces::TeamContext;
 use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 const FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,7 +54,8 @@ impl FileGlobExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
             action:
@@ -88,6 +90,7 @@ impl FileGlobExecutor {
                 &conversation_id,
                 vec![PathBuf::from(absolute_path)],
                 Some(self.terminal_view_id),
+                scope,
                 ctx,
             )
             .is_allowed()

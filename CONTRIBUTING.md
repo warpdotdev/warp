@@ -120,11 +120,11 @@ For issues labeled `ready-to-implement`:
 
 You **do not need to manually request reviewers**. Oz is auto-assigned to PRs that target a ready issue and produces an initial review. After Oz approves, it automatically requests a follow-up review from the appropriate Warp team subject-matter expert.
 
-After you push changes that address Oz's feedback, comment `/oz-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need more reviews than that, mention **@oss-maintainers** on the PR to escalate to the team.
+After you push changes that address Oz's feedback, comment `/warp-agent-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need more reviews than that, mention **@oss-maintainers** on the PR to escalate to the team.
 
 **You must include proof of [manual testing](#manual-testing)**. For small, isolated, and visual changes, you should include **before and after screenshots**. For larger, broad, or interactive changes, you should also include a **narrated screen recording**.
 
-If a maintainer requests changes to your PR, you will need to request `/oz-review` again and pass it before a re-review can be requested. Oz will request the re-review for you automatically once you pass its reviews.
+If a maintainer requests changes to your PR, you will need to request `/warp-agent-review` again and pass it before a re-review can be requested. Oz will request the re-review for you automatically once you pass its reviews.
 
 ### PRs opened without a linked issue
 
@@ -151,7 +151,7 @@ All pull requests go through a two-stage review process:
 1. **Oz review** — When you open a PR, [Oz](https://warp.dev/oz) is automatically assigned and produces the first review. Oz checks for correctness, style, test coverage, and alignment with the linked issue and any associated specs.
 2. **Warp team review** — Only after Oz has **approved** the PR is it routed to a Warp team subject-matter expert for a final human review. PRs that have not yet been approved by Oz will not be assigned to a team member.
 
-You do not need to manually request reviewers at any stage. After pushing changes that address Oz's feedback, comment `/oz-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need additional reviews, mention **@oss-maintainers** on the PR to escalate to the team.
+You do not need to manually request reviewers at any stage. After pushing changes that address Oz's feedback, comment `/warp-agent-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need additional reviews, mention **@oss-maintainers** on the PR to escalate to the team.
 
 ### Stale PRs with requested changes
 

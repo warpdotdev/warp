@@ -136,6 +136,30 @@ pub async fn issue_workload_token(
     }
 }
 
+/// Returns `true` when [`issue_workload_token`] can plausibly succeed for the
+/// current isolation platform, without actually issuing a token or
+/// performing any of that function's network/subprocess side effects.
+///
+/// Mirrors `issue_workload_token`'s platform resolution: a platform with its
+/// own issuance mechanism was detected, or a platform-agnostic token is
+/// available via `WARP_WORKLOAD_TOKEN`. Callers can use this to cheaply skip
+/// an attempt that is guaranteed to fail, without ruling out the case where
+/// no platform was detected but a generic token is still configured.
+pub fn workload_token_available() -> bool {
+    is_workload_token_available_for(detect())
+}
+
+fn is_workload_token_available_for(platform: Option<IsolationPlatformType>) -> bool {
+    match platform {
+        #[cfg(not(target_family = "wasm"))]
+        Some(IsolationPlatformType::DockerSandbox) | Some(IsolationPlatformType::Namespace) => true,
+        #[cfg(not(target_family = "wasm"))]
+        _ => read_generic_workload_token().is_ok(),
+        #[cfg(target_family = "wasm")]
+        _ => false,
+    }
+}
+
 /// Read a platform-agnostic workload token from the `WARP_WORKLOAD_TOKEN` environment variable.
 /// Returns a `WorkloadToken` with no expiration, or an error if the variable is missing/empty.
 #[cfg(not(target_family = "wasm"))]
@@ -188,3 +212,7 @@ pub enum IsolationPlatformError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "lib_tests.rs"]
+mod tests;

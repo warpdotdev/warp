@@ -15,6 +15,7 @@ use crate::pane_group::{PaneGroup, PaneView};
 use crate::root_view::RootView;
 use crate::search::command_palette::{self};
 use crate::search::command_search::view::CommandSearchView;
+use crate::settings_view::SettingsView;
 use crate::settings_view::keybindings::KeybindingsView;
 use crate::terminal::TerminalView;
 use crate::terminal::input::Input;
@@ -214,6 +215,11 @@ pub fn theme_chooser_view(app: &App, window_id: WindowId) -> ViewHandle<ThemeCho
 
 /// Panics if there isn't a single single keybindings view in the view hierarchy.
 pub fn keybindings_view(app: &App, window_id: WindowId) -> ViewHandle<KeybindingsView> {
+    singleton_view_of_type(app, window_id)
+}
+
+/// Panics if there isn't a single settings view in the view hierarchy.
+pub fn settings_view(app: &App, window_id: WindowId) -> ViewHandle<SettingsView> {
     singleton_view_of_type(app, window_id)
 }
 

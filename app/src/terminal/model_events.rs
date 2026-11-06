@@ -5,7 +5,7 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::event::{BootstrappedEvent, SshLoginStatus};
 use super::model::ansi;
-use super::model::ansi::FinishUpdateValue;
+use super::model::ansi::{ExternalShellWidgetSelectionValue, FinishUpdateValue};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
@@ -18,7 +18,7 @@ use crate::terminal::ClipboardType;
 use crate::terminal::event::{
     AfterBlockCompletedEvent, BlockCompletedEvent, BlockMetadataReceivedEvent,
     BlockWorkingDirectoryUpdatedEvent, Event, ExecutedExecutorCommandEvent, InitSubshellEvent,
-    SourcedRcFileInSubshellEvent, TerminalMode,
+    ObservedExitStatus, SourcedRcFileInSubshellEvent, TerminalMode,
 };
 use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::ShellType;
@@ -201,7 +201,9 @@ impl ModelEventDispatcher {
             Event::Handler(HandlerEvent::UnsetMode {
                 mode: ansi::Mode::BracketedPaste,
             }) => ModelEvent::Handler(AnsiHandlerEvent::UnsetBracketedPaste),
-            Event::CompletionsFinished(res) => ModelEvent::CompletionsFinished(res),
+            Event::CompletionsFinished(res, replacement_span) => {
+                ModelEvent::CompletionsFinished(res, replacement_span)
+            }
             Event::MouseCursorDirty => ModelEvent::MouseCursorDirty,
             Event::Title(title) => ModelEvent::Title(title),
             Event::VisibleBootstrapBlock => ModelEvent::VisibleBootstrapBlock,
@@ -241,6 +243,7 @@ impl ModelEventDispatcher {
                 ModelEvent::DetectedEndOfSshLogin(check_type)
             }
             Event::Bell => ModelEvent::Bell,
+            Event::ShellExitObserved { status } => ModelEvent::ShellExitObserved { status },
             Event::Exit { reason } => ModelEvent::Exit { reason },
             Event::PreInteractiveSSHSession => ModelEvent::PreInteractiveSSHSession,
             Event::SSH(ssh) => ModelEvent::SSH(ssh),
@@ -261,9 +264,11 @@ impl ModelEventDispatcher {
             Event::HonorPS1OutOfSync => ModelEvent::HonorPS1OutOfSync,
             Event::Typeahead => ModelEvent::Typeahead,
             Event::FinishUpdate(data) => ModelEvent::FinishUpdate(data),
+            Event::ExternalShellWidgetSelection(data) => {
+                ModelEvent::ExternalShellWidgetSelection(data)
+            }
             Event::TextSelectionChanged => ModelEvent::SelectedTextChanged,
             Event::ShellSpawned(shell_type) => ModelEvent::ShellSpawned(shell_type),
-            Event::SendCompletionsPrompt => ModelEvent::SendCompletionsPrompt,
             Event::ImageReceived {
                 image_id,
                 image_data,
@@ -404,6 +409,11 @@ pub enum ModelEvent {
     CursorBlinkingChange(bool),
     TerminalClear,
     Bell,
+    /// The shell process exited but the terminal has not been finalized yet; the surface must
+    /// either recover the shell or call `TerminalModel::finalize_exit`.
+    ShellExitObserved {
+        status: ObservedExitStatus,
+    },
     Exit {
         reason: ExitReason,
     },
@@ -446,10 +456,10 @@ pub enum ModelEvent {
     /// inaccessible to views/models.
     Handler(AnsiHandlerEvent),
     FinishUpdate(FinishUpdateValue),
+    ExternalShellWidgetSelection(ExternalShellWidgetSelectionValue),
     SelectedTextChanged,
     ShellSpawned(ShellType),
-    CompletionsFinished(Vec<ShellCompletion>),
-    SendCompletionsPrompt,
+    CompletionsFinished(Vec<ShellCompletion>, Option<warp_completer::meta::Span>),
     ImageReceived {
         image_id: u32,
         image_data: Vec<u8>,

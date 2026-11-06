@@ -423,6 +423,7 @@ fn compose_child_prompt_treats_whitespace_only_base_as_empty() {
 
 fn agent_cfg() -> RunAgentsAgentRunConfig {
     RunAgentsAgentRunConfig {
+        metadata: Default::default(),
         name: "child".to_string(),
         prompt: "do X".to_string(),
         title: "Child".to_string(),

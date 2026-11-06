@@ -2,12 +2,15 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Range, RangeInclusive, Sub, SubAssign};
 
 use serde::{Deserialize, Serialize};
 use warpui_core::units::Lines;
 
 use super::grid::Dimensions;
+pub trait RangeInModel {
+    fn range(&self) -> RangeInclusive<Point>;
+}
 
 /// Behavior for handling grid boundaries.
 pub enum Boundary {
@@ -419,6 +422,24 @@ impl DoubleEndedIterator for IndexRange<VisibleRow> {
     }
 }
 
+/// The side of a cell.
+pub type Side = Direction;
+
+/// Horizontal direction.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd)]
+pub enum Direction {
+    Left,
+    Right,
+}
+
+impl Direction {
+    pub fn opposite(self) -> Self {
+        match self {
+            Side::Right => Side::Left,
+            Side::Left => Side::Right,
+        }
+    }
+}
 #[cfg(test)]
 #[path = "indexing_tests.rs"]
 mod tests;

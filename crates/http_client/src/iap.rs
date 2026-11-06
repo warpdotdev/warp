@@ -3,9 +3,17 @@ pub const IAP_GENERATED_RESPONSE_HEADER: &str = "x-goog-iap-generated-response";
 
 /// HTTP header used to attach the IAP bearer token to outbound requests.
 pub const IAP_PROXY_AUTH_HEADER: &str = "Proxy-Authorization";
+pub const IAP_OPT_IN_HEADER: &str = "x-warp-enable-iap";
 
-pub fn proxy_auth_header(token: &str) -> (&'static str, String) {
-    (IAP_PROXY_AUTH_HEADER, format!("Bearer {token}"))
+pub fn headers(token: Option<String>, routing_opt_in_enabled: bool) -> Vec<(&'static str, String)> {
+    let mut headers = Vec::new();
+    if let Some(token) = token {
+        headers.push((IAP_PROXY_AUTH_HEADER, format!("Bearer {token}")));
+    }
+    if routing_opt_in_enabled {
+        headers.push((IAP_OPT_IN_HEADER, "1".to_string()));
+    }
+    headers
 }
 
 /// Returns `true` if the given status + headers appear to be an IAP-generated
@@ -22,6 +30,10 @@ pub fn is_iap_challenge(status: reqwest::StatusCode, headers: &http::HeaderMap) 
 /// Source of the current IAP bearer token.
 pub trait IapTokenProvider: Send + Sync {
     fn cached_token(&self) -> Option<String>;
+
+    fn routing_opt_in_enabled(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

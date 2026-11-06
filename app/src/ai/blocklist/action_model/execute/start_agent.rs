@@ -7,6 +7,9 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{LifecycleEventType, StartAgentExecutionMode};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::server::team_scope::RequestTeamScope;
+pub const TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR: &str =
+    "The window's team changed before the child agent could start. Run the orchestration again.";
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]
@@ -32,6 +35,7 @@ impl StartAgentRequestId {
 
 #[derive(Clone)]
 pub struct StartAgentRequest {
+    pub metadata: HashMap<String, String>,
     pub id: StartAgentRequestId,
     pub name: String,
     pub prompt: String,
@@ -39,6 +43,7 @@ pub struct StartAgentRequest {
     pub lifecycle_subscription: Option<Vec<LifecycleEventType>>,
     pub parent_conversation_id: AIConversationId,
     pub parent_run_id: Option<String>,
+    pub request_team_scope: RequestTeamScope,
 }
 
 struct PendingStartAgent {
@@ -248,9 +253,11 @@ impl StartAgentExecutor {
         name: String,
         prompt: String,
         execution_mode: StartAgentExecutionMode,
+        metadata: HashMap<String, String>,
         lifecycle_subscription: Option<Vec<LifecycleEventType>>,
         parent_conversation_id: AIConversationId,
         parent_run_id: Option<String>,
+        request_team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<StartAgentOutcome> {
         let (sender, receiver) = async_channel::bounded(1);
@@ -269,9 +276,11 @@ impl StartAgentExecutor {
                 name,
                 prompt,
                 execution_mode,
+                metadata,
                 lifecycle_subscription,
                 parent_conversation_id,
                 parent_run_id,
+                request_team_scope,
             },
         )));
         receiver

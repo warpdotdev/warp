@@ -157,32 +157,12 @@ pub enum HistoryEvent {
     Initialized(SessionId),
 }
 
-/// This holds the aggregated data from the "commands" table in sqlite. We aggregate as a means of
-/// de-duping, and store data mostly for the most recent execution for each command.
-#[derive(Debug)]
-struct CommandHistorySummary {
-    /// The execution metadata from the latest time a particular command was run.
-    most_recent_entry: HistoryEntry,
-    /// Counts the number of executions in the "commands" table. Note that this may not match the
-    /// count in the HISTFILE.
-    count: u32,
-}
-
-impl CommandHistorySummary {
-    fn new(most_recent_entry: HistoryEntry) -> Self {
-        Self {
-            most_recent_entry,
-            count: 1,
-        }
-    }
-}
-
 #[derive(Default, Debug)]
 pub struct History {
-    /// For each ShellHost, the de-duped commands from the sqlite "commands" table is stored here.
-    /// Each time a history file is read, it gets "joined" to the commands in here to add the
-    /// execution metadata from the most recent run.
-    persisted_commands_summary: HashMap<ShellHost, HashMap<String, CommandHistorySummary>>,
+    /// For each ShellHost, the de-duped commands from the sqlite "commands" table is stored here,
+    /// keyed by command string. Each time a history file is read, it gets "joined" to the
+    /// commands in here to add the execution metadata from the most recent run.
+    persisted_commands_summary: HashMap<ShellHost, HashMap<String, HistoryEntry>>,
 
     /// Entries from the history file for the host.  Immutable once loaded and
     /// shared between sessions.
@@ -461,7 +441,7 @@ impl History {
     pub fn new(persisted_commands: Vec<PersistedCommand>) -> Self {
         log::debug!("Creating new History model with persisted commands {persisted_commands:?}");
         let mut persisted_commands_summary =
-            HashMap::<ShellHost, HashMap<String, CommandHistorySummary>>::new();
+            HashMap::<ShellHost, HashMap<String, HistoryEntry>>::new();
 
         for command in persisted_commands {
             if let Some(shell_host) = command.shell_host.as_ref() {
@@ -471,8 +451,7 @@ impl History {
                 let hist_entry: HistoryEntry = command.into();
                 summaries
                     .entry(hist_entry.command.clone())
-                    .and_modify(|summary| summary.count += 1)
-                    .or_insert(CommandHistorySummary::new(hist_entry));
+                    .or_insert(hist_entry);
             }
         }
 
@@ -647,7 +626,7 @@ impl History {
                     self.persisted_commands_summary
                         .get(&host)
                         .and_then(|summaries| summaries.get(&command))
-                        .map(|summary| summary.most_recent_entry.clone())
+                        .cloned()
                         .unwrap_or_else(|| HistoryEntry::command_only(command))
                 })
                 .map(Arc::new)

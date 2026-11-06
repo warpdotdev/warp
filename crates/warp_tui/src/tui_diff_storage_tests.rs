@@ -1,6 +1,5 @@
 use std::fs;
 
-use warp_core::HostId;
 use warpui::App;
 
 use super::*;
@@ -16,11 +15,78 @@ fn add_tui_storage(
     app.add_model(|_| TuiDiffStorage::new(diffs, session_type))
 }
 
+#[test]
+fn tui_v4a_final_bytes() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../ai/src/diff_validation/testdata/blank_lines.json"
+        ))
+        .unwrap();
+        let mut diffs = Vec::new();
+        let mut expected = Vec::new();
+        for fixture in fixtures {
+            let path = dir.path().join(fixture["name"].as_str().unwrap());
+            let initial = fixture["initial"].as_str().unwrap();
+            fs::write(&path, initial).unwrap();
+            let hunk = serde_json::from_value(fixture["dual"].clone()).unwrap();
+            let diff = ai::diff_validation::fuzzy_match_v4a_diffs(
+                &path.to_string_lossy(),
+                &[hunk],
+                None,
+                initial,
+            );
+            assert_eq!(diff.failures, None);
+            diffs.push(FileDiff::new(
+                initial.into(),
+                diff.file_name,
+                diff.diff_type,
+            ));
+            expected.push((path, fixture["final"].as_str().unwrap().to_owned()));
+        }
+        let result = accept_local(&mut app, diffs).await;
+        assert!(matches!(result, RequestFileEditsResult::Success { .. }));
+        for (path, final_content) in expected {
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                final_content,
+                "{path:?}"
+            );
+        }
+    });
+}
+
 /// Runs the shared accept flow for local diffs on a fresh app and awaits the result.
 async fn accept_local(app: &mut App, diffs: Vec<FileDiff>) -> RequestFileEditsResult {
     let model = add_tui_storage(app, diffs, DiffSessionType::Local);
     let future = model.update(app, |model, ctx| model.accept_and_save(ctx));
     future.await
+}
+
+#[test]
+fn tui_v4a_cr_trailing_blank_final_bytes() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cr.txt").to_string_lossy().to_string();
+        fs::write(&path, "old\n").unwrap();
+        let hunk = serde_json::from_value(serde_json::json!({
+            "change_context": [], "pre_context": "", "old": "old",
+            "new": "x\ry\n", "post_context": "",
+            "line_data": {"old": ["old"], "new": ["x\ry", ""]}
+        }))
+        .unwrap();
+        let diff = ai::diff_validation::fuzzy_match_v4a_diffs(&path, &[hunk], None, "old\n");
+        assert_eq!(diff.failures, None);
+
+        let result = accept_local(
+            &mut app,
+            vec![FileDiff::new("old\n".into(), path.clone(), diff.diff_type)],
+        )
+        .await;
+
+        assert!(matches!(result, RequestFileEditsResult::Success { .. }));
+        assert_eq!(fs::read(&path).unwrap(), b"x\ry\n\n");
+    });
 }
 
 #[test]
@@ -103,12 +169,18 @@ fn accept_renames_and_reports_source_as_deleted() {
         )
         .await;
 
-        let RequestFileEditsResult::Success { deleted_files, .. } = result else {
+        let RequestFileEditsResult::Success {
+            deleted_files,
+            updated_files,
+            ..
+        } = result
+        else {
             panic!("expected rename to succeed");
         };
         assert_eq!(fs::read_to_string(&new_path).unwrap(), "content\n");
         assert!(!Path::new(&old_path).exists());
         assert_eq!(deleted_files, vec![old_path]);
+        assert_eq!(updated_files[0].file_context.file_name, new_path);
     });
 }
 
@@ -165,47 +237,39 @@ fn accept_reports_write_dispatch_failure() {
 }
 
 #[test]
-fn persist_action_renames_only_on_local_sessions() {
-    let rename_op = DiffType::update(Vec::new(), Some("/tmp/new.rs".to_owned()));
+fn accept_normalized_same_path_move_reports_only_a_write() {
+    App::test((), |mut app| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt").to_string_lossy().to_string();
+        let target = dir
+            .path()
+            .join("./source.txt")
+            .to_string_lossy()
+            .to_string();
+        fs::write(&path, "original\n").unwrap();
 
-    assert!(matches!(
-        PersistAction::resolve(&rename_op, &DiffSessionType::Local, "/tmp/old.rs"),
-        PersistAction::Rename(_)
-    ));
-    // Remote sessions have no rename primitive: the file is written in place.
-    assert!(matches!(
-        PersistAction::resolve(
-            &rename_op,
-            &DiffSessionType::Remote(HostId::new("host".to_owned())),
-            "/tmp/old.rs"
-        ),
-        PersistAction::Write
-    ));
-    // A "rename" to the same path is just a write.
-    assert!(matches!(
-        PersistAction::resolve(&rename_op, &DiffSessionType::Local, "/tmp/new.rs"),
-        PersistAction::Write
-    ));
-}
+        let result = accept_local(
+            &mut app,
+            vec![FileDiff::new(
+                "original\n".to_owned(),
+                path.clone(),
+                DiffType::update(Vec::new(), Some(target)),
+            )],
+        )
+        .await;
 
-#[test]
-fn remote_rename_outcome_reports_update_at_original_path() {
-    // The reported outcome must match the actual write: a remote rename falls
-    // back to writing the original path, so nothing is deleted and the update
-    // is reported at the original path — not the rename target.
-    let op = DiffType::update(Vec::new(), Some("/tmp/new.rs".to_owned()));
-    let diff = FileDiff::new("content\n".to_owned(), "/tmp/old.rs".to_owned(), op.clone());
-    let action = PersistAction::resolve(
-        &op,
-        &DiffSessionType::Remote(HostId::new("host".to_owned())),
-        "/tmp/old.rs",
-    );
-
-    let state = persist_outcome(&action, &diff, "/tmp/old.rs", "content!\n");
-
-    let updated = state.updated.expect("expected an updated file");
-    assert_eq!(updated.path, "/tmp/old.rs");
-    assert_eq!(state.deleted_paths, Vec::<String>::new());
+        let RequestFileEditsResult::Success {
+            deleted_files,
+            updated_files,
+            ..
+        } = result
+        else {
+            panic!("expected same-path write to succeed");
+        };
+        assert!(deleted_files.is_empty());
+        assert_eq!(updated_files[0].file_context.file_name, path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original\n");
+    });
 }
 
 #[test]

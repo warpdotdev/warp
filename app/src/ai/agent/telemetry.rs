@@ -2,10 +2,7 @@ use serde::Serialize;
 use warpui::{AppContext, SingletonEntity};
 
 use super::conversation::AIConversationId;
-use super::{
-    AIAgentCitation, AIAgentExchangeId, EntrypointType, PassiveSuggestionTriggerType,
-    ServerOutputId,
-};
+use super::{AIAgentCitation, AIAgentExchangeId, ServerOutputId};
 use crate::CloudModel;
 use crate::ai::llms::LLMId;
 use crate::server::telemetry::AgentModeCitation as CitationForTelemetry;
@@ -41,45 +38,6 @@ impl ForTelemetry for AIAgentCitation {
                 memory_store_id: memory_store_id.clone(),
                 memory_id: memory_id.clone(),
             }),
-        }
-    }
-}
-
-impl EntrypointType {
-    pub fn entrypoint(&self) -> String {
-        match self {
-            Self::PromptSuggestion {
-                is_static,
-                is_coding,
-            } => match (is_static, is_coding) {
-                (true, true) => "PROMPT_SUGGESTION.CODING_STATIC".to_string(),
-                (true, false) => "PROMPT_SUGGESTION.STATIC".to_string(),
-                (false, true) => "PROMPT_SUGGESTION.CODING".to_string(),
-                (false, false) => "PROMPT_SUGGESTION.SIMPLE".to_string(),
-            },
-            Self::ZeroStateAgentModePromptSuggestion => {
-                "ZERO_STATE_AGENT_MODE_PROMPT_SUGGESTION".to_string()
-            }
-            Self::InitProjectRules => "INIT_PROJECT_RULES".to_string(),
-            Self::UserInitiated => "USER_INITIATED".to_string(),
-            Self::AgentInitiated => "AGENT_INITIATED".to_string(),
-            Self::TriggerPassiveSuggestion { trigger } => {
-                let trigger_name = match trigger {
-                    Some(PassiveSuggestionTriggerType::FilesChanged) => "FILES_CHANGED",
-                    Some(PassiveSuggestionTriggerType::CommandRun) => "COMMAND_RUN",
-                    Some(PassiveSuggestionTriggerType::ShellCommandCompleted) => {
-                        "SHELL_COMMAND_COMPLETED"
-                    }
-                    Some(PassiveSuggestionTriggerType::AgentResponseCompleted) => {
-                        "AGENT_RESPONSE_COMPLETED"
-                    }
-                    None => "NONE",
-                };
-                format!("TRIGGER_SUGGEST_PROMPT.{trigger_name}")
-            }
-            Self::CloneRepository => "CLONE_REPOSITORY".to_string(),
-            Self::SharedSession => "SHARED_SESSION".to_string(),
-            Self::ResumeConversation => "RESUME_CONVERSATION".to_string(),
         }
     }
 }

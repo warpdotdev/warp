@@ -1,13 +1,263 @@
+use std::time::SystemTime;
+
+use ai::api_keys::{ApiKeyManager, ChatGPTConnection, ChatGPTConnectionStatus};
 use futures::FutureExt;
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warpui::{App, SingletonEntity};
+use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
-    AISettings, AuthManager, AuthManagerEvent, AuthStateProvider, FEATURE_INTROS, FeatureIntroId,
-    FreeAiRemovalModalDecision, OneTimeModalModel, free_ai_removal_modal_decision,
+    AISettings, AuthManager, AuthManagerEvent, AuthStateProvider, CloudPreferencesSyncer,
+    FEATURE_INTROS, FeatureIntroId, FreeAiRemovalModalDecision, OneTimeModalModel,
+    free_ai_removal_modal_decision, hoa_onboarding,
 };
-use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::test_util::terminal::{
+    add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
+};
 use crate::workspaces::workspace::CustomerType;
+
+/// Registers the cloud preferences syncer on top of the standard terminal test setup, and
+/// returns the window the ChatGPT plan modal would target.
+fn initialize_app_for_chatgpt_plan_modal(app: &mut App) -> WindowId {
+    initialize_app_for_terminal_view(app);
+    app.add_singleton_model(|ctx| {
+        CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+    });
+    add_window_with_id_and_terminal(app, None).0
+}
+
+fn set_chatgpt_connected(token_sharing_active: bool, app: &mut App) {
+    ApiKeyManager::handle(app).update(app, |manager, ctx| {
+        manager.set_chatgpt_connection_status(
+            ChatGPTConnectionStatus::Connected(ChatGPTConnection {
+                email: None,
+                connected_at: SystemTime::now(),
+                token_sharing_active,
+            }),
+            ctx,
+        );
+    });
+}
+
+fn mark_cloud_preferences_loaded(app: &mut App) {
+    CloudPreferencesSyncer::handle(app).update(app, |syncer, _| {
+        syncer.mark_initial_load_completed_for_test();
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_shows_once_for_an_active_subscription() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        set_chatgpt_connected(true, &mut app);
+        mark_cloud_preferences_loaded(&mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+
+            let shown = model.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+
+            // The seen marker is written up front, whether or not the modal is shown on
+            // the current channel.
+            assert!(*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+            assert_eq!(model.is_chatgpt_plan_modal_open, shown);
+            if shown {
+                assert_eq!(model.target_window_id, Some(window_id));
+                assert!(model.is_chatgpt_plan_modal_open());
+            }
+
+            // A second check is a no-op, so the modal is never shown twice.
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+
+            model.mark_chatgpt_plan_modal_dismissed(ctx);
+            assert!(!model.is_chatgpt_plan_modal_open);
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_requires_an_active_subscription() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        mark_cloud_preferences_loaded(&mut app);
+
+        // Nothing connected yet.
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+        });
+
+        // Linked, but the server holds no delegated credentials, so plan sharing is off.
+        set_chatgpt_connected(false, &mut app);
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_waits_for_the_initial_preferences_load() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        set_chatgpt_connected(true, &mut app);
+
+        // The synced seen marker can't be trusted until the initial preferences load
+        // lands, so the check defers without consuming the marker.
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+        });
+
+        mark_cloud_preferences_loaded(&mut app);
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            let shown = model.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+            assert!(*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+            assert_eq!(model.is_chatgpt_plan_modal_open, shown);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_trusts_preferences_already_loaded_for_the_same_user() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+
+        // The Sign in with ChatGPT handoff re-fetches the user, which resets the syncer's
+        // loaded state, but this session already loaded the same user's preferences.
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            model.record_cloud_preferences_loaded(ctx);
+            assert!(model.cloud_preferences_loaded_for.is_some());
+        });
+        set_chatgpt_connected(true, &mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load());
+            let shown = model.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+            assert!(*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+            assert_eq!(model.is_chatgpt_plan_modal_open, shown);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_waits_for_a_fresh_preferences_load_after_logout() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+
+        // Logout wipes the local seen marker, so a re-login of the same user must not
+        // trust the earlier load and re-show the modal before cloud values arrive.
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            model.record_cloud_preferences_loaded(ctx);
+            model.on_log_out();
+            assert!(model.cloud_preferences_loaded_for.is_none());
+        });
+        set_chatgpt_connected(true, &mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load());
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_respects_the_synced_seen_marker() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        set_chatgpt_connected(true, &mut app);
+        mark_cloud_preferences_loaded(&mut app);
+
+        // Another device already showed the modal for this connection.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            assert!(
+                settings
+                    .did_show_chatgpt_plan_modal
+                    .set_value(true, ctx)
+                    .is_ok()
+            );
+        });
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!model.is_chatgpt_plan_modal_open);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_defers_while_another_one_time_modal_is_open() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        set_chatgpt_connected(true, &mut app);
+        mark_cloud_preferences_loaded(&mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            model.target_window_id = Some(window_id);
+            model.set_auto_handoff_sleep_modal_open(true, ctx);
+
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            // Deferred rather than consumed: the marker stays unset so a later re-check
+            // can still show it.
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+
+            model.mark_auto_handoff_sleep_modal_dismissed(ctx);
+            let shown = model.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+            assert!(*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+            assert_eq!(model.is_chatgpt_plan_modal_open, shown);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_defers_while_the_onboarding_tutorial_is_active() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(true);
+        set_chatgpt_connected(true, &mut app);
+        mark_cloud_preferences_loaded(&mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            model.set_onboarding_tutorial_active(true, ctx);
+
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+
+            model.set_onboarding_tutorial_active(false, ctx);
+            let shown = model.check_and_trigger_chatgpt_plan_modal(window_id, ctx);
+            assert!(*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+            assert_eq!(model.is_chatgpt_plan_modal_open, shown);
+        });
+    });
+}
+
+#[test]
+fn chatgpt_plan_modal_skipped_when_flag_disabled() {
+    App::test((), |mut app| async move {
+        let window_id = initialize_app_for_chatgpt_plan_modal(&mut app);
+        let _flag = FeatureFlag::ChatGPTSubscription.override_enabled(false);
+        set_chatgpt_connected(true, &mut app);
+        mark_cloud_preferences_loaded(&mut app);
+
+        OneTimeModalModel::handle(&app).update(&mut app, |model, ctx| {
+            assert!(!model.check_and_trigger_chatgpt_plan_modal(window_id, ctx));
+            model.on_workspace_shown(window_id, ctx);
+            assert!(!model.is_chatgpt_plan_modal_open);
+            // The marker stays untouched so the modal can still be shown once the flag
+            // is turned on.
+            assert!(!*AISettings::as_ref(ctx).did_show_chatgpt_plan_modal);
+        });
+    });
+}
 
 #[test]
 fn wait_until_auto_handoff_sleep_modal_closed_tracks_modal_state() {
@@ -353,6 +603,64 @@ fn agent_cli_launch_modal_pre_dismissed_for_new_users_on_auth_complete() {
         // their second startup, right after onboarding.
         app.read(|ctx| {
             assert!(*AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal);
+        });
+    });
+}
+
+#[test]
+fn hoa_onboarding_pre_dismissed_for_new_users_on_auth_complete() {
+    App::test((), |mut app| async move {
+        let _hoa_onboarding_flow = FeatureFlag::HOAOnboardingFlow.override_enabled(true);
+        let _vertical_tabs = FeatureFlag::VerticalTabs.override_enabled(true);
+        let _hoa_notifications = FeatureFlag::HOANotifications.override_enabled(true);
+        let _tab_configs = FeatureFlag::TabConfigs.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+        });
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _model = OneTimeModalModel::handle(ctx);
+
+            AuthStateProvider::as_ref(ctx).get().set_is_onboarded(false);
+            assert!(!hoa_onboarding::has_completed_hoa_onboarding(ctx));
+
+            AuthManager::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(AuthManagerEvent::AuthComplete);
+            });
+        });
+        terminal.update(&mut app, |_, ctx| {
+            assert!(hoa_onboarding::has_completed_hoa_onboarding(ctx));
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!model.check_and_trigger_hoa_onboarding(ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn hoa_onboarding_not_pre_dismissed_for_existing_users_on_auth_complete() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+        });
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _model = OneTimeModalModel::handle(ctx);
+
+            AuthStateProvider::as_ref(ctx).get().set_is_onboarded(true);
+            assert!(!hoa_onboarding::has_completed_hoa_onboarding(ctx));
+
+            AuthManager::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(AuthManagerEvent::AuthComplete);
+            });
+        });
+
+        app.read(|ctx| {
+            assert!(!hoa_onboarding::has_completed_hoa_onboarding(ctx));
         });
     });
 }

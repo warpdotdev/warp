@@ -11,6 +11,7 @@ pub mod notebook;
 pub mod object;
 pub mod object_actions;
 pub mod object_permissions;
+pub mod platform_error;
 pub mod queries;
 pub mod request_context;
 pub mod response_context;

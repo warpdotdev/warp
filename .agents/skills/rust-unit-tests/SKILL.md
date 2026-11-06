@@ -209,7 +209,7 @@ assert_lines_approx_eq!(actual_lines, INLINE_BANNER_HEIGHT);
 ## Running unit tests
 - Workspace (parallel):
 ```bash
-cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
+cargo nextest run --no-fail-fast --workspace
 ```
 - Single crate:
 ```bash
@@ -224,14 +224,11 @@ cargo nextest run -E 'test(<substring>)'
 cargo test --doc
 ```
 
-## Linting and formatting
-Run before submitting changes:
+## Final validation order
+After the relevant tests pass, run Clippy, fix its findings, and then format once:
 ```bash
+cargo clippy -p <package_name> --all-targets --tests -- -D warnings
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
 
-For a full local check before a PR, you can also run:
-```bash
-./script/presubmit
-```
+Do not rerun tests or Clippy after formatting, and do not add a full `./script/presubmit` run, unless the user, task, or approved spec explicitly requires it. Follow the repository's Implementation Validation Order in `AGENTS.md` for invalidation and follow-up changes.

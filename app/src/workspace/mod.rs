@@ -67,11 +67,11 @@ use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
     NEW_AGENT_TAB_BINDING_NAME, NEW_AMBIENT_AGENT_TAB_BINDING_NAME, NEW_FILE_BINDING_NAME,
-    NEW_TAB_BINDING_NAME, NEW_TERMINAL_TAB_BINDING_NAME, OPEN_GLOBAL_SEARCH_BINDING_NAME,
-    TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME,
-    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_RIGHT_PANEL_BINDING_NAME,
-    TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME,
-    TOGGLE_WARP_DRIVE_BINDING_NAME,
+    NEW_TAB_BINDING_NAME, NEW_TERMINAL_TAB_BINDING_NAME, NEW_WINDOW_BINDING_NAME,
+    OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
+    TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, TOGGLE_PROJECT_EXPLORER_BINDING_NAME,
+    TOGGLE_RIGHT_PANEL_BINDING_NAME, TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME,
+    TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -94,6 +94,7 @@ pub fn init(app: &mut AppContext) {
     view::agent_cli_launch_modal::init(app);
     view::feature_intro_modal::init(app);
     view::auto_handoff_sleep_modal::init(app);
+    view::chatgpt_plan_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
     view::free_ai_removal_modal::init(app);
@@ -264,6 +265,18 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
+                    "workspace:open_chatgpt_plan_modal",
+                    "[Debug] Open ChatGPT Plan Modal",
+                    WorkspaceAction::OpenChatGPTPlanModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_chatgpt_plan_modal_state",
+                    "[Debug] Reset ChatGPT Plan Modal State",
+                    WorkspaceAction::ResetChatGPTPlanModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
                     "workspace:trigger_auto_handoff_to_cloud",
                     "[Debug] Trigger Auto-Handoff to Cloud",
                     WorkspaceAction::TriggerAutoHandoffToCloud,
@@ -340,14 +353,16 @@ pub fn init(app: &mut AppContext) {
             "Switch to previous tab",
             id!("Workspace") & id!("Workspace_MultipleTabs"),
         ),
-        FixedBinding::custom(
-            CustomAction::AddWindow,
-            WorkspaceAction::AddWindow,
-            "Create New Window",
-            id!("Workspace"),
-        )
-        .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
     ]);
+
+    app.register_editable_bindings([EditableBinding::new(
+        NEW_WINDOW_BINDING_NAME,
+        BindingDescription::new("Create New Window"),
+        WorkspaceAction::AddWindow,
+    )
+    .with_custom_action(CustomAction::AddWindow)
+    .with_context_predicate(id!("Workspace"))
+    .with_enabled(|| ContextFlag::CreateNewSession.is_enabled())]);
 
     app.register_editable_bindings([EditableBinding::new(
         NEW_FILE_BINDING_NAME,
@@ -513,17 +528,6 @@ pub fn init(app: &mut AppContext) {
             .with_custom_action(CustomAction::ResetFontSize),
         ]);
     }
-
-    app.register_fixed_bindings([
-        // Menu dispatch for the "Open File Picker" custom action.
-        FixedBinding::custom(
-            CustomAction::ToggleProjectExplorer,
-            WorkspaceAction::ToggleProjectExplorer,
-            BindingDescription::new("Toggle project explorer")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Project Explorer"),
-            id!("Workspace") & id!(flags::SHOW_PROJECT_EXPLORER),
-        ),
-    ]);
 
     app.register_editable_bindings([
         EditableBinding::new(
@@ -979,6 +983,14 @@ pub fn init(app: &mut AppContext) {
         "workspace:rename_active_pane",
         "Rename the current pane",
         WorkspaceAction::RenameActivePane,
+    )
+    .with_group(bindings::BindingGroup::Settings.as_str())
+    .with_context_predicate(id!("Workspace"))]);
+
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:cycle_active_tab_color",
+        "Cycle current tab color",
+        WorkspaceAction::CycleActiveTabColor,
     )
     .with_group(bindings::BindingGroup::Settings.as_str())
     .with_context_predicate(id!("Workspace"))]);
@@ -1654,7 +1666,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:show_mcp_servers_settings_page",
             BindingDescription::new("Open Settings: MCP Servers"),
-            WorkspaceAction::ShowSettingsPage(SettingsSection::MCPServers),
+            WorkspaceAction::ShowSettingsPage(SettingsSection::AgentMCPServers),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),

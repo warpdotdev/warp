@@ -23,7 +23,9 @@ use crate::ai::get_relevant_files::controller::{
     GetRelevantFilesError, GetRelevantFilesRequestTarget,
 };
 use crate::features::FeatureFlag;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContext;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct SearchCodebaseExecutor {
@@ -149,7 +151,8 @@ impl SearchCodebaseExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
             action:
@@ -171,6 +174,7 @@ impl SearchCodebaseExecutor {
                     &conversation_id,
                     vec![root_repo_path.to_owned()],
                     Some(self.terminal_view_id),
+                    scope,
                     ctx,
                 )
                 .is_allowed()
@@ -180,6 +184,7 @@ impl SearchCodebaseExecutor {
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
@@ -258,6 +263,7 @@ impl SearchCodebaseExecutor {
                         query.clone(),
                         partial_paths.as_ref(),
                         id.clone(),
+                        team_scope,
                         ctx,
                     )
                 }) {
@@ -370,6 +376,7 @@ impl SearchCodebaseExecutor {
                         query.clone(),
                         partial_paths.as_ref(),
                         id.clone(),
+                        team_scope,
                         ctx,
                     )
                 }) {

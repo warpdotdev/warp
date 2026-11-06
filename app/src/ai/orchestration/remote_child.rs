@@ -31,6 +31,7 @@ use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
 use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::PrivacySettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
@@ -104,25 +105,17 @@ pub struct PreparedRemoteChildLaunch {
 }
 
 /// Failure while constructing the remote child request, before calling the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PrepareRemoteChildLaunchError {
+    #[error("Remote child agents require the parent run_id to be available.")]
     MissingParentRunId,
+    #[error("Failed to resolve child agent skills: {}", references.join(", "))]
     UnresolvedSkills { references: Vec<String> },
 }
 
 impl PrepareRemoteChildLaunchError {
     pub fn user_message(&self) -> String {
-        match self {
-            Self::MissingParentRunId => {
-                "Remote child agents require the parent run_id to be available.".to_string()
-            }
-            Self::UnresolvedSkills { references } => {
-                format!(
-                    "Failed to resolve child agent skills: {}",
-                    references.join(", ")
-                )
-            }
-        }
+        self.to_string()
     }
 }
 
@@ -235,6 +228,7 @@ pub enum CloudAgentStartupIssue {
 pub fn prepare_remote_child_launch(
     request: &StartAgentRequest,
     config: RemoteChildLaunchConfig,
+    team_scope: RequestTeamScope,
     ctx: &AppContext,
 ) -> Result<PreparedRemoteChildLaunch, PrepareRemoteChildLaunchError> {
     let orchestration_harness = config.orchestration_harness();
@@ -258,11 +252,18 @@ pub fn prepare_remote_child_launch(
     let agent_name = normalize_orchestrator_agent_name(&request.name);
     let display_name = agent_name.clone().unwrap_or_default();
     let environment_id = Some(environment_id).filter(|id| !id.trim().is_empty());
+    let mut model_id = (!model_id.is_empty()).then_some(model_id);
     let harness_override = if harness_type.is_empty() {
         None
     } else {
         match <Harness as clap::ValueEnum>::from_str(&harness_type, true) {
-            Ok(harness) => Some(HarnessConfig::from_harness_type(harness)),
+            Ok(harness) => {
+                let mut harness_config = HarnessConfig::from_harness_type(harness);
+                if harness == Harness::Pi {
+                    harness_config.model_id = model_id.take();
+                }
+                Some(harness_config)
+            }
             Err(_) => {
                 log::warn!(
                     "Unknown child-agent harness type: {harness_type:?}; omitting harness override so the server picks its default"
@@ -279,21 +280,29 @@ pub fn prepare_remote_child_launch(
             Harness::Claude => Some(HarnessAuthSecretsConfig {
                 claude_auth_secret_name: Some(name),
                 codex_auth_secret_name: None,
+                pi_auth_secret_name: None,
             }),
             Harness::Codex => Some(HarnessAuthSecretsConfig {
                 claude_auth_secret_name: None,
                 codex_auth_secret_name: Some(name),
+                pi_auth_secret_name: None,
+            }),
+            Harness::Pi => Some(HarnessAuthSecretsConfig {
+                claude_auth_secret_name: None,
+                codex_auth_secret_name: None,
+                pi_auth_secret_name: Some(name),
             }),
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });
     let spawn_request = SpawnAgentRequest {
+        metadata: request.metadata.clone(),
         prompt: Some(request.prompt.clone()),
         mode: UserQueryMode::Normal,
         config: Some(AgentConfigSnapshot {
             name: agent_name,
             environment_id,
             runner_id: (!runner_id.is_empty()).then_some(runner_id),
-            model_id: (!model_id.is_empty()).then_some(model_id),
+            model_id,
             worker_host: (!worker_host.is_empty()).then_some(worker_host),
             computer_use_enabled,
             harness: harness_override,
@@ -301,7 +310,7 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        team: None,
+        team: Some(team_scope.team_uid().is_some()),
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),

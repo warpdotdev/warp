@@ -25,6 +25,7 @@ use crate::ai::blocklist::agent_view::zero_state_block::{
 use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewControllerEvent, is_in_cloud_context,
 };
+use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
     BlocklistAIInputEvent, BlocklistAIInputModel, ai_brand_color,
@@ -40,7 +41,7 @@ use crate::ai::request_usage_model::{
 };
 use crate::auth::auth_manager::AuthManager;
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::message_bar::attached_context::{
     AttachedBlocksMessageProducer, AttachedContextArgs, AttachedTextSelectionMessageProducer,
@@ -254,6 +255,11 @@ impl AgentMessageBar {
                 ctx.notify();
             }
         });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
 
         let message_bar = Self {
             agent_view_controller,
@@ -424,8 +430,15 @@ impl View for AgentMessageBar {
                         && !request_usage_model.is_ambient_credits_banner_dismissed()
                 })
                 .map(|credits| {
+                    let usage_cents = match usage_display_unit(app) {
+                        UsageDisplayUnit::Dollars => {
+                            request_usage_model.ambient_only_usage_cents_remaining()
+                        }
+                        UsageDisplayUnit::Credits => None,
+                    };
                     render_ambient_credits_banner(
                         credits,
+                        usage_cents,
                         self.mouse_states.ambient_credits_banner_close.clone(),
                         AgentMessageBarAction::DismissAmbientCreditsBanner,
                         app,
@@ -843,10 +856,13 @@ fn should_fork_from_last_known_good_state(
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
         | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. }
-        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => false,
+        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+        | RenderableAIError::ChatGPTSubscriptionError { .. } => false,
         // A shell-exit failure can't resume in this (now-dead) pane, but the user
         // can fork from the last known good state to continue in a fresh one.
-        RenderableAIError::InternalWarpError | RenderableAIError::AgentExitedShell { .. } => true,
+        RenderableAIError::InternalWarpError
+        | RenderableAIError::AgentStreamFailure { .. }
+        | RenderableAIError::AgentExitedShell { .. } => true,
         RenderableAIError::Other {
             will_attempt_resume,
             ..

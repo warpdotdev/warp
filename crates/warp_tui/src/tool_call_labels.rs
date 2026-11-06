@@ -264,6 +264,9 @@ fn label_for_action(
                         Some(AIAgentActionResultType::RequestCommandOutput(
                             RequestCommandOutputResult::Denylisted { .. },
                         )) => format!("`{cmd}` denied (denylisted)"),
+                        Some(AIAgentActionResultType::RequestCommandOutput(
+                            RequestCommandOutputResult::TerminalBusy { .. },
+                        )) => format!("`{cmd}` not started (terminal busy)"),
                         _ => format!("`{cmd}` failed"),
                     },
                 },

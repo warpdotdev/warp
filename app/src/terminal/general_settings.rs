@@ -159,14 +159,6 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-    anonymous_user_ai_sign_up_banner_shown: AnonymousUserAISignUpBannerShown {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Never,
-        surface: settings::SettingSurfaces::GUI,
-        private: true,
-    },
     auto_open_code_review_pane_on_first_agent_change: AutoOpenCodeReviewPaneOnFirstAgentChange {
         type: bool,
         default: false,

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use comfy_table::Cell;
 use cynic::QueryBuilder;
+use futures::future;
 use inquire::error::InquireError;
 use inquire::{Confirm, Select};
 use serde::Serialize;
@@ -9,6 +10,7 @@ use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
 use warp_cli::scope::ObjectScope;
+use warp_graphql::object::SpaceType;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
     ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
@@ -23,16 +25,17 @@ use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, BaseImage, CloudAmbientAgentEnvironment,
-    CloudAmbientAgentEnvironmentModel, GithubRepo,
+    CloudAmbientAgentEnvironmentModel, GithubRepo, environment_matches_scope,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::factory::FactoryClient;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_profiles::UserProfiles;
 
@@ -63,8 +66,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| EnvironmentCommandRunner);
     match command {
-        EnvironmentCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        EnvironmentCommand::List { scope } => {
+            runner.update(ctx, |runner, ctx| runner.list(global_options, scope, ctx));
             Ok(())
         }
         EnvironmentCommand::Create {
@@ -100,6 +103,7 @@ pub fn run(
             description,
             remove_description,
             docker_image,
+            default_runner,
             repo,
             setup_command,
             remove_repo,
@@ -116,6 +120,7 @@ pub fn run(
                     description,
                     remove_description,
                     docker_image,
+                    default_runner,
                     repos,
                     setup_command,
                     remove_repos,
@@ -184,24 +189,42 @@ impl EnvironmentCommandRunner {
         });
     }
 
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
-        let initial_sync = UpdateManager::as_ref(ctx)
-            .initial_load_complete()
-            .with_timeout(WARP_DRIVE_SYNC_TIMEOUT);
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        scope: ObjectScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
+        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
 
-        ctx.spawn(initial_sync, move |_, result, ctx| {
-            if result.is_err() {
-                super::report_fatal_error(
-                    anyhow::anyhow!("Timed out waiting for Warp Drive to sync"),
-                    ctx,
-                );
+        ctx.spawn(setup_future, move |_, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = if scope.is_team() || scope.personal {
+                match super::common::resolve_object_scope(&scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
 
             let environments = CloudAmbientAgentEnvironment::get_all(ctx);
 
             let environment_infos: Vec<_> = environments
                 .iter()
+                .filter(|environment| {
+                    team_scope.as_ref().is_none_or(|team_scope| {
+                        environment_matches_scope(environment, team_scope, false)
+                    })
+                })
                 .map(|environment| {
                     let name = environment.model().string_model.name.clone();
                     let description = environment.model().string_model.description.clone();
@@ -308,6 +331,10 @@ impl EnvironmentCommandRunner {
                 println!("Docker image: None");
             }
         }
+        println!(
+            "Default runner: {}",
+            env.default_runner_uid.as_deref().unwrap_or("None")
+        );
         if env.github_repos.is_empty() {
             println!("Repositories: None");
         } else {
@@ -740,7 +767,7 @@ impl EnvironmentCommandRunner {
         );
         let client_id = ClientId::default();
 
-        let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+        let owner = match super::common::resolve_owner(&scope, ctx) {
             Ok(owner) => owner,
             Err(e) => {
                 super::report_fatal_error(e, ctx);
@@ -842,6 +869,7 @@ impl EnvironmentCommandRunner {
         description: Option<String>,
         remove_description: bool,
         docker_image: Option<String>,
+        default_runner: Option<String>,
         add_repos: Vec<GithubRepo>,
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
@@ -889,6 +917,7 @@ impl EnvironmentCommandRunner {
             // confirmed with the user and checked on auth.
             let environment_clone = environment.clone();
             let repos_clone = add_repos.clone();
+            let default_runner_clone = default_runner.clone();
             let execute_update = move |ctx: &mut ModelContext<Self>| {
                 Self::update_environment_after_auth_check(
                     &environment_clone,
@@ -897,6 +926,7 @@ impl EnvironmentCommandRunner {
                     description,
                     remove_description,
                     docker_image,
+                    default_runner_clone,
                     repos_clone,
                     add_setup_commands,
                     remove_repos,
@@ -911,16 +941,30 @@ impl EnvironmentCommandRunner {
                 Self::auth_repos_then_execute(add_repos, 1, "update", execute_update, ctx);
             };
 
-            // Check if any integrations are using this environment
-            if force {
-                auth_repos_before_update(ctx);
-            } else {
-                Self::confirm_if_integrations_using_environment(
-                    id,
-                    "update",
-                    auth_repos_before_update,
-                    ctx,
+            let confirm_then_update = move |ctx: &mut ModelContext<Self>| {
+                if force {
+                    auth_repos_before_update(ctx);
+                } else {
+                    Self::confirm_if_integrations_using_environment(
+                        id,
+                        "update",
+                        auth_repos_before_update,
+                        ctx,
+                    );
+                }
+            };
+            if let Some(uid) = default_runner {
+                let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+                let owner = environment.permissions().owner;
+                ctx.spawn(
+                    async move { validate_default_runner(factory.as_ref(), &uid, owner).await },
+                    move |_, result, ctx| match result {
+                        Ok(()) => confirm_then_update(ctx),
+                        Err(error) => super::report_fatal_error(error, ctx),
+                    },
                 );
+            } else {
+                confirm_then_update(ctx);
             }
         });
     }
@@ -934,6 +978,7 @@ impl EnvironmentCommandRunner {
         description: Option<String>,
         remove_description: bool,
         docker_image: Option<String>,
+        default_runner: Option<String>,
         add_repos: Vec<GithubRepo>,
         add_setup_commands: Vec<String>,
         remove_repos: Vec<GithubRepo>,
@@ -955,6 +1000,9 @@ impl EnvironmentCommandRunner {
 
         if let Some(new_docker_image) = docker_image {
             updated_env.base_image = Some(BaseImage::DockerImage(new_docker_image));
+        }
+        if let Some(uid) = default_runner {
+            updated_env.default_runner_uid = Some(uid);
         }
 
         for repo in add_repos {
@@ -989,7 +1037,7 @@ impl EnvironmentCommandRunner {
         }
 
         // Update the environment via UpdateManager
-        let revision = environment.metadata.revision.clone();
+        let revision = environment.metadata.revision;
         UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager
                 .update_object::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(
@@ -1179,7 +1227,6 @@ struct ImageInfo {
     repository: String,
     tag: String,
 }
-
 impl TableFormat for ImageInfo {
     fn header() -> Vec<Cell> {
         vec![
@@ -1197,3 +1244,30 @@ impl TableFormat for ImageInfo {
         ]
     }
 }
+
+async fn validate_default_runner(
+    factory: &dyn FactoryClient,
+    uid: &str,
+    owner: Owner,
+) -> anyhow::Result<()> {
+    let runners = factory.get_runners(None, None).await?;
+    let runner = super::runner::resolve_runner(&runners, Some(uid), None)?;
+    let same_owner = match (owner, runner.scope.type_) {
+        (Owner::Team { team_uid }, SpaceType::Team) => {
+            runner.scope.uid.inner() == team_uid.to_string()
+        }
+        (Owner::User { user_uid }, SpaceType::User) => {
+            runner.scope.uid.inner() == user_uid.to_string()
+        }
+        (Owner::Team { .. }, SpaceType::User) | (Owner::User { .. }, SpaceType::Team) => false,
+    };
+    anyhow::ensure!(
+        same_owner,
+        "Runner '{uid}' must belong to the same owner as the environment"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "environment_tests.rs"]
+mod tests;

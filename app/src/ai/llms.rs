@@ -1,39 +1,57 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+use ai::api_keys::{
+    ApiKeyManager, ApiKeyManagerEvent, ChatGPTConnectionStatus, CustomEndpoint, CustomEndpointModel,
+};
 pub use ai::{LLMId, LLMProvider};
-use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize, de};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
-use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
+use super::agent::conversation::AIConversation;
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::AuthStateProvider;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::update_manager::TeamUpdateManager;
+#[cfg(feature = "agent_mode_evals")]
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
-/// For xAI, a connected Grok subscription counts: its OAuth access token is
-/// sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
+/// Connected subscriptions count as BYO credentials: a Grok subscription's OAuth
+/// access token is sent like a BYO key (see `ApiKeyManager::api_keys_for_request`),
+/// and a ChatGPT subscription's delegated token is attached by the server.
 pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    is_using_api_key_for_provider_in_conversation(provider, None, app)
+}
+
+/// Like [`is_using_api_key_for_provider`], but for requests in `conversation`: a connected
+/// ChatGPT subscription does not count once that conversation has switched to Warp credits.
+pub fn is_using_api_key_for_provider_in_conversation(
+    provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
+    app: &AppContext,
+) -> bool {
     if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
         return false;
     }
+
     let manager = ApiKeyManager::as_ref(app);
 
     match provider {
-        LLMProvider::OpenAI => manager.keys().openai.is_some(),
+        LLMProvider::OpenAI => {
+            manager.keys().openai.is_some()
+                || is_chatgpt_subscription_active_in_conversation(manager, conversation)
+        }
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
         LLMProvider::Xai => manager.grok_tokens().is_some(),
@@ -41,17 +59,62 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     }
 }
 
+fn is_chatgpt_subscription_active_in_conversation(
+    manager: &ApiKeyManager,
+    conversation: Option<&AIConversation>,
+) -> bool {
+    manager.has_chatgpt_subscription()
+        && !conversation.is_some_and(AIConversation::use_warp_credits_instead_of_chatgpt)
+}
+
+/// Whether requests to `provider` in `conversation` are billed to the user's connected ChatGPT
+/// subscription. A pasted OpenAI API key takes precedence over the subscription.
+fn is_using_chatgpt_subscription_for_provider_in_conversation(
+    provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
+    app: &AppContext,
+) -> bool {
+    if !matches!(provider, LLMProvider::OpenAI)
+        || !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
+    {
+        return false;
+    }
+    let manager = ApiKeyManager::as_ref(app);
+    manager.keys().openai.is_none()
+        && is_chatgpt_subscription_active_in_conversation(manager, conversation)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ByoKeySource {
     UserProvided,
     TeamProvided,
+    ChatGPTSubscription,
 }
+
+/// Where a user with a connected ChatGPT subscription can review that subscription's usage.
+pub const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 impl ByoKeySource {
     pub fn inference_label(self) -> &'static str {
         match self {
             ByoKeySource::UserProvided => "Inference via User-provided API key",
             ByoKeySource::TeamProvided => "Inference via Team-provided API key",
+            ByoKeySource::ChatGPTSubscription => "Using ChatGPT plan",
+        }
+    }
+
+    pub fn manage_button_label(self) -> &'static str {
+        match self {
+            ByoKeySource::UserProvided | ByoKeySource::TeamProvided => "Manage",
+            ByoKeySource::ChatGPTSubscription => "Manage usage",
+        }
+    }
+
+    /// External page the manage button opens instead of the API keys settings page, if any.
+    pub fn manage_url(self) -> Option<&'static str> {
+        match self {
+            ByoKeySource::UserProvided | ByoKeySource::TeamProvided => None,
+            ByoKeySource::ChatGPTSubscription => Some(CHATGPT_USAGE_URL),
         }
     }
 }
@@ -59,79 +122,94 @@ impl ByoKeySource {
 /// Returns the first-party key source that will be used for this provider.
 /// Member-provided keys win when team policy allows them; otherwise a
 /// configured team-managed key is used when available.
+///
+/// `conversation` is the conversation the answer applies to, when known; see
+/// [`is_using_api_key_for_provider_in_conversation`].
 pub fn first_party_key_source_for_provider(
     provider: &LLMProvider,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Option<ByoKeySource> {
     let workspaces = UserWorkspaces::as_ref(app);
-    if workspaces.are_member_byo_keys_allowed() && is_using_api_key_for_provider(provider, app) {
-        return Some(ByoKeySource::UserProvided);
+    if workspaces.are_member_byo_keys_allowed(scope)
+        && is_using_api_key_for_provider_in_conversation(provider, conversation, app)
+    {
+        return Some(
+            if is_using_chatgpt_subscription_for_provider_in_conversation(
+                provider,
+                conversation,
+                app,
+            ) {
+                ByoKeySource::ChatGPTSubscription
+            } else {
+                ByoKeySource::UserProvided
+            },
+        );
     }
-    if is_using_team_first_party_key_for_provider(provider, app) {
+    if workspaces.has_team_first_party_key(scope, *provider) {
         return Some(ByoKeySource::TeamProvided);
     }
     None
 }
 
-pub fn is_using_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
-    first_party_key_source_for_provider(provider, app).is_some()
-}
-
-fn is_using_team_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
-    UserWorkspaces::as_ref(app)
-        .current_workspace()
-        .is_some_and(|workspace| {
-            workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                && workspace
-                    .settings
-                    .team_byo
-                    .as_ref()
-                    .is_some_and(|team_byo| {
-                        team_byo.first_party_enabled
-                            && team_byo
-                                .first_party_keys
-                                .iter()
-                                .any(|key| key.provider == *provider)
-                    })
-        })
-}
-
-pub fn byo_key_source_for_model(llm: &LLMInfo, app: &AppContext) -> Option<ByoKeySource> {
+pub fn byo_key_source_for_model(
+    llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> Option<ByoKeySource> {
+    let workspaces = UserWorkspaces::as_ref(app);
     let is_custom_endpoint = LLMPreferences::as_ref(app)
         .custom_llm_info_for_id(&llm.id)
         .is_some();
-    if is_custom_endpoint && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed() {
+    if is_custom_endpoint && workspaces.are_member_byo_endpoints_allowed(scope) {
         return Some(ByoKeySource::UserProvided);
     }
-    if is_using_team_byo_endpoint_for_model(llm, app) {
+    if workspaces.has_team_byo_endpoint(scope, &llm.id) {
         return Some(ByoKeySource::TeamProvided);
     }
-    first_party_key_source_for_provider(&llm.provider, app)
+    first_party_key_source_for_provider(&llm.provider, conversation, scope, app)
 }
 
-fn is_using_team_byo_endpoint_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
-    UserWorkspaces::as_ref(app)
-        .current_workspace()
-        .is_some_and(|workspace| {
-            workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                && workspace
-                    .settings
-                    .team_byo
-                    .as_ref()
-                    .is_some_and(|team_byo| {
-                        team_byo.endpoints_enabled
-                            && team_byo.endpoints.iter().any(|endpoint| {
-                                endpoint.enabled
-                                    && endpoint.models.iter().any(|model| {
-                                        model.enabled && model.config_key == llm.id.as_str()
-                                    })
-                            })
-                    })
-        })
+pub fn should_show_key_icon_for_model(
+    llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
+    byo_key_source_for_model(llm, conversation, scope, app).is_some()
 }
 
-pub fn should_show_key_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
-    byo_key_source_for_model(llm, app).is_some()
+/// Whether requests for `llm` in `conversation` are billed to the user's connected ChatGPT
+/// subscription.
+pub fn is_using_chatgpt_subscription_for_model(
+    llm: &LLMInfo,
+    conversation: Option<&AIConversation>,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
+    byo_key_source_for_model(llm, conversation, scope, app)
+        == Some(ByoKeySource::ChatGPTSubscription)
+}
+
+/// Whether `scope`'s team lets this member reach `llm` at all.
+///
+/// Only a member's *own* custom endpoints can be withheld this way. Everything else, including
+/// a team-managed endpoint, arrives in the workspace's server-provided catalog rather than in
+/// `custom_llms`, and no team narrows that catalog today.
+///
+/// Applied where a member picks or names a model, not inside the catalog. The catalog also
+/// answers team-neutral questions -- resolving a stored id, reconciling a stored preference --
+/// and those must not turn on the team a member happens to be in.
+pub fn is_model_allowed_for_scope(
+    prefs: &LLMPreferences,
+    llm: &LLMInfo,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
+    prefs.custom_llm_info_for_id(&llm.id).is_none()
+        || UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed(scope)
 }
 
 fn should_show_host_icon_for_model(
@@ -146,22 +224,27 @@ fn should_show_host_icon_for_model(
             .is_some_and(|config| config.enabled)
 }
 
-pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+pub fn should_show_bedrock_icon_for_model(
+    llm: &LLMInfo,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::AwsBedrock,
-        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(scope, app),
     )
 }
 
 pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     llm: &LLMInfo,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
-        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(scope, app),
     )
 }
 
@@ -249,8 +332,19 @@ impl DisableReason {
 /// Returns `true` when the model is usable for the current user: not disabled,
 /// or disabled for a reason that doesn't block requests (see
 /// [`DisableReason::should_clear_preference`]).
+///
+/// Deliberately team-neutral, unlike [`first_party_key_source_for_provider`]. This decides
+/// whether a *stored* preference survives, and a profile is a cloud object that follows the
+/// user between devices and teams, so a team-scoped answer here would propagate a clear
+/// everywhere. A team that forbids a credential blocks it where the user acts instead.
+///
+/// The plan entitlement is the whole question: `has_byok_key` only reaches the
+/// `RequiresUpgrade` arm, and the team-managed key half would always be `false` there anyway,
+/// since `has_team_first_party_key` requires managed BYOK/BYOE (enterprise) while
+/// `RequiresUpgrade` is a free-plan reason. That invariant is product shape, not something the
+/// types or the server contract enforce; it stops holding if enterprise gains such a tier.
 fn is_usable_llm(info: &LLMInfo, app: &AppContext) -> bool {
-    let has_byok_key = is_using_first_party_key_for_provider(&info.provider, app);
+    let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
     info.disable_reason
         .as_ref()
         .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
@@ -517,7 +611,7 @@ impl AvailableLLMs {
         })
     }
 
-    fn info_for_id(&self, id: &LLMId) -> Option<&LLMInfo> {
+    pub(crate) fn info_for_id(&self, id: &LLMId) -> Option<&LLMInfo> {
         self.choices.iter().find(|info| info.id == *id)
     }
 
@@ -567,6 +661,11 @@ impl AvailableLLMs {
             preferred_codex_model_id: None,
         }
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn push_choice_for_test(&mut self, llm: LLMInfo) {
+        self.choices.push(llm);
+    }
 }
 
 /// The set of models available to the client, grouped by the feature they support.
@@ -598,7 +697,7 @@ impl ModelsByFeature {
     ///
     /// For models that are available across multiple features,
     /// any one of the metadata will be returned.
-    fn info_for_id(&self, id: &LLMId) -> Option<&LLMInfo> {
+    pub(crate) fn info_for_id(&self, id: &LLMId) -> Option<&LLMInfo> {
         self.agent_mode.info_for_id(id)
     }
 }
@@ -718,14 +817,14 @@ struct AvailableLLMsUpdate {
 /// Singleton model holding user/workspace LLM preferences, including the set of LLMs available for
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
-    models_by_feature: ModelsByFeature,
     /// Whether the most recent authed agent-mode model-list fetch failed.
-    agent_mode_models_unavailable: bool,
+    agent_mode_models_unavailable: HashMap<Option<ServerId>, bool>,
     last_update: Option<AvailableLLMsUpdate>,
     // Stores model overrides for a given terminal view. User selections are
     // normalized against the GUI profile default, while explicit child-run
     // selections remain pinned even when they currently equal the fallback.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
+    computer_use_llm_for_terminal_view: HashMap<EntityId, Option<LLMId>>,
     /// Synthetic `LLMInfo` entries built from the user's `ApiKeyManager.custom_endpoints` so
     /// custom models surface in the model picker and resolve through `info_for_id` lookups.
     /// Each entry's `id` is the model's `config_key` (UUID), which is also what flows out to
@@ -736,35 +835,16 @@ pub struct LLMPreferences {
     custom_llms: Vec<LLMInfo>,
     /// All custom model routers, including both local and cloud-backed.
     custom_model_routers: Vec<CustomModelRouter>,
+    /// Whether the server held delegated ChatGPT credentials as of the last observed
+    /// connection update. `None` until the server has reported a status at least once.
+    last_seen_chatgpt_subscription_connected: Option<bool>,
 }
 
 impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let models_by_feature = get_cached_models(ctx).unwrap_or_default();
-
-        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
-            if let NetworkStatusEvent::NetworkStatusChanged {
-                new_status: NetworkStatusKind::Online,
-            } = event
-            {
-                me.refresh_authed_models(ctx);
-            }
-        });
-
-        // TODO: Instead of querying this ad-hoc upon a successful log in, we should add the
-        // available LLMs query to the general workspace metadata query which is polled
-        // and hooked up to workspace changes. For that to work, each user would need to
-        // have a personal workspace. This is a stop-gap.
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
-            if let AuthManagerEvent::AuthComplete = event {
-                me.refresh_authed_models(ctx);
-            }
-        });
-
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.sanitize_disabled_custom_model_preferences(ctx);
-                me.refresh_authed_models(ctx);
             }
         });
 
@@ -774,10 +854,13 @@ impl LLMPreferences {
         // immediately flow through to the model picker.
         ctx.subscribe_to_model(
             &ApiKeyManager::handle(ctx),
-            |me, _, _event: &ApiKeyManagerEvent, ctx| {
+            |me, _, event: &ApiKeyManagerEvent, ctx| {
                 me.rebuild_custom_llms(ctx);
-                me.reconcile_disabled_model_preferences(ctx);
+                me.reconcile_disabled_model_preferences_for_known_scopes(ctx);
                 ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
+                if matches!(event, ApiKeyManagerEvent::ChatGPTConnectionUpdated) {
+                    me.refresh_models_if_chatgpt_subscription_changed(ctx);
+                }
             },
         );
 
@@ -793,15 +876,16 @@ impl LLMPreferences {
         }
 
         let base_llm_for_terminal_view = HashMap::new();
-        let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).keys());
+        let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).custom_endpoints());
 
         let mut me = Self {
-            models_by_feature,
-            agent_mode_models_unavailable: false,
+            agent_mode_models_unavailable: HashMap::new(),
             last_update: None,
             base_llm_for_terminal_view,
+            computer_use_llm_for_terminal_view: HashMap::new(),
             custom_llms,
             custom_model_routers: Vec::new(),
+            last_seen_chatgpt_subscription_connected: None,
         };
 
         // Seed from any already-loaded local config (the async load emits
@@ -815,7 +899,7 @@ impl LLMPreferences {
         // In production, this is handled reactively (on auth complete, network online, etc.)
         // to avoid duplicate requests at startup.
         #[cfg(feature = "agent_mode_evals")]
-        me.refresh_available_models(ctx);
+        me.refresh_available_models(&ResolvedTeamScope::teamless(), ctx);
 
         me
     }
@@ -823,46 +907,87 @@ impl LLMPreferences {
     /// Returns the `LLMInfo` for the base LLM to be used for an Agent Mode request.
     pub fn get_active_base_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
-        self.get_preferred_base_model(app, terminal_view_id)
+        self.get_preferred_base_model(scope, app, terminal_view_id)
+    }
+
+    pub fn get_active_base_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &'a LLMInfo {
+        let models_by_feature =
+            UserWorkspaces::as_ref(app).feature_model_choice_for_team_uid(team_uid);
+        if let Some(terminal_view_id) = terminal_view_id {
+            let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
+            if let Some(llm_id) = raw_override
+                && let Some(llm_info) =
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
+            {
+                return llm_info;
+            }
+        }
+        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+        profile
+            .data()
+            .base_model
+            .clone()
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
     fn get_preferred_base_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
+        let models_by_feature = UserWorkspaces::as_ref(app).feature_model_choice_for_scope(scope);
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
+                    self.usable_model_info_for_id(&models_by_feature.agent_mode, llm_id, app)
             {
                 return llm_info;
             }
         }
 
-        self.get_active_profile_base_model(app, terminal_view_id)
+        self.get_active_profile_base_model(scope, app, terminal_view_id)
     }
 
     /// Returns the active execution profile's effective base model without applying a
     /// terminal-view override.
     pub fn get_active_profile_base_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &'a LLMInfo {
+        self.get_active_profile_base_model_for_team_uid(scope.team_uid(), app, terminal_view_id)
+    }
+
+    pub fn get_active_profile_base_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+        let models_by_feature =
+            UserWorkspaces::as_ref(app).feature_model_choice_for_team_uid(team_uid);
 
         profile
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.agent_mode, app))
+            .and_then(|id| self.usable_model_info_for_id(&models_by_feature.agent_mode, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.agent_mode, app))
     }
 
     /// Disable-aware fallback for when the user has no explicit (usable)
@@ -872,7 +997,7 @@ impl LLMPreferences {
     fn fallback_llm_info<'a>(
         &'a self,
         available: &'a AvailableLLMs,
-        app: &AppContext,
+        app: &'a AppContext,
     ) -> &'a LLMInfo {
         available
             .usable_default_llm_info(app)
@@ -891,35 +1016,50 @@ impl LLMPreferences {
         &'a self,
         available: &'a AvailableLLMs,
         id: &LLMId,
-        app: &AppContext,
+        app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
 
+    fn usable_model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &'a AppContext,
+    ) -> Option<&'a LLMInfo> {
+        Self::server_info_for_id_router_gated(available, id)
+            .filter(|info| is_usable_llm(info, app))
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
     pub fn get_active_coding_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
-        self.get_preferred_coding_model(app, terminal_view_id)
+        self.get_preferred_coding_model(scope, app, terminal_view_id)
     }
 
     /// Returns `LLMInfo` for user's preferred coding model.
-    fn get_preferred_coding_model(
-        &self,
-        app: &AppContext,
+    fn get_preferred_coding_model<'a>(
+        &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
-    ) -> &LLMInfo {
+    ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+        let models_by_feature = UserWorkspaces::as_ref(app).feature_model_choice_for_scope(scope);
 
         profile
             .data()
             .coding_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&self.models_by_feature.coding, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.coding, app))
+            .and_then(|id| self.model_info_for_id(&models_by_feature.coding, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&models_by_feature.coding, app))
     }
 
     /// Resolves `id` against a server-provided model list, but hides cloud/team
@@ -941,17 +1081,25 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for Agent Mode use.
-    pub fn get_base_llm_choices_for_agent_mode(
-        &self,
-        app: &AppContext,
-    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
-        // Don't show admin-disabled models in the dropdown
+    pub fn get_base_llm_choices_for_agent_mode<'a, S: TeamScope + ?Sized>(
+        &'a self,
+        scope: &S,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a LLMInfo> + use<'a, S> {
+        self.get_base_llm_choices_for_agent_mode_for_team_uid(scope.team_uid(), app)
+    }
+
+    pub fn get_base_llm_choices_for_agent_mode_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a LLMInfo> + use<'a> {
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
-        self.models_by_feature
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_team_uid(team_uid)
             .agent_mode
             .choices
             .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             // Gate cloud/team routers behind the same flag as local routers so
             // the entire custom-router feature is controlled by one flag.
             .filter(move |llm| {
@@ -962,18 +1110,28 @@ impl LLMPreferences {
     }
 
     #[cfg(any(test, feature = "test-util"))]
-    pub fn add_agent_mode_model_for_test(&mut self, llm: LLMInfo) {
-        self.models_by_feature.agent_mode.choices.push(llm);
+    pub fn add_agent_mode_model_for_test(
+        &mut self,
+        scope: &(impl TeamScope + ?Sized),
+        llm: LLMInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_uid = scope.team_uid();
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+            workspaces.add_agent_mode_model_for_test_for_team_uid(team_uid, llm);
+        });
     }
 
     /// Returns the set of LLMs available for coding.
-    pub fn get_coding_llm_choices(
-        &self,
-        app: &AppContext,
-    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
+    pub fn get_coding_llm_choices<'a, S: TeamScope + ?Sized>(
+        &'a self,
+        scope: &S,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a LLMInfo> + use<'a, S> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
-        self.models_by_feature
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_scope(scope)
             .coding
             .choices
             .iter()
@@ -987,12 +1145,13 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for CLI agent.
-    pub fn get_cli_agent_llm_choices(
-        &self,
-        app: &AppContext,
-    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
+    pub fn get_cli_agent_llm_choices<'a, S: TeamScope + ?Sized>(
+        &'a self,
+        scope: &S,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a LLMInfo> + use<'a, S> {
         // Don't show admin-disabled models in the dropdown
-        self.get_cli_agent_available()
+        self.get_cli_agent_available(scope.team_uid(), app)
             .choices
             .iter()
             .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
@@ -1002,12 +1161,22 @@ impl LLMPreferences {
     /// Returns the `LLMInfo` for the CLI agent model.
     pub fn get_active_cli_agent_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &'a LLMInfo {
+        self.get_active_cli_agent_model_for_team_uid(scope.team_uid(), app, terminal_view_id)
+    }
+
+    pub fn get_active_cli_agent_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
-        let available = self.get_cli_agent_available();
+        let available = self.get_cli_agent_available(team_uid, app);
         profile
             .data()
             .cli_agent_model
@@ -1022,56 +1191,118 @@ impl LLMPreferences {
 
     /// Returns the effective default CLI agent model as a fallback
     /// (disable-aware, see [`Self::fallback_llm_info`]).
-    pub fn get_default_cli_agent_model(&self, app: &AppContext) -> &LLMInfo {
-        self.fallback_llm_info(self.get_cli_agent_available(), app)
+    pub fn get_default_cli_agent_model<'a>(
+        &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        self.fallback_llm_info(self.get_cli_agent_available(scope.team_uid(), app), app)
+    }
+
+    pub fn get_default_cli_agent_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        self.fallback_llm_info(self.get_cli_agent_available(team_uid, app), app)
     }
 
     /// Helper to get the AvailableLLMs for cli_agent, falling back to agent_mode.
-    fn get_cli_agent_available(&self) -> &AvailableLLMs {
-        self.models_by_feature
+    fn get_cli_agent_available<'a>(
+        &self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> &'a AvailableLLMs {
+        let models_by_feature =
+            UserWorkspaces::as_ref(app).feature_model_choice_for_team_uid(team_uid);
+        models_by_feature
             .cli_agent
             .as_ref()
-            .unwrap_or(&self.models_by_feature.agent_mode)
+            .unwrap_or(&models_by_feature.agent_mode)
     }
 
     /// Returns the set of LLMs available for computer use agent.
-    pub fn get_computer_use_llm_choices(&self) -> impl Iterator<Item = &LLMInfo> {
-        self.get_computer_use_available().choices.iter()
+    pub fn get_computer_use_llm_choices<'a>(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a LLMInfo> {
+        self.get_computer_use_available(scope.team_uid(), app)
+            .choices
+            .iter()
     }
 
     /// Returns the `LLMInfo` for the computer use agent model.
     pub fn get_active_computer_use_model<'a>(
         &'a self,
+        scope: &(impl TeamScope + ?Sized),
         app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
-        let available = self.get_computer_use_available();
-        profile
-            .data()
-            .computer_use_model
-            .clone()
-            .and_then(|id| available.info_for_id(&id))
-            .unwrap_or_else(|| self.get_default_computer_use_model(app))
+        let available = self.get_computer_use_available(scope.team_uid(), app);
+        let selected_model = terminal_view_id
+            .and_then(|id| self.computer_use_llm_for_terminal_view.get(&id))
+            .map(Option::as_ref)
+            .unwrap_or_else(|| profile.data().computer_use_model.as_ref());
+        selected_model
+            .and_then(|id| available.info_for_id(id))
+            .unwrap_or_else(|| self.get_default_computer_use_model(scope, app))
     }
 
     /// Returns the effective default computer use model as a fallback: the
     /// server default when usable, else the first usable choice, else the
     /// (possibly disabled) server default. No custom-endpoint fallback here:
     /// custom models aren't offered for computer use.
-    pub fn get_default_computer_use_model(&self, app: &AppContext) -> &LLMInfo {
-        let available = self.get_computer_use_available();
+    pub fn get_default_computer_use_model<'a>(
+        &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        let available = self.get_computer_use_available(scope.team_uid(), app);
         available
             .usable_default_llm_info(app)
             .unwrap_or_else(|| available.default_llm_info())
     }
 
+    pub fn get_default_computer_use_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        let available = self.get_computer_use_available(team_uid, app);
+        available
+            .usable_default_llm_info(app)
+            .unwrap_or_else(|| available.default_llm_info())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_computer_use_llm_override(
+        &mut self,
+        terminal_view_id: EntityId,
+        model_id: Option<LLMId>,
+    ) {
+        self.computer_use_llm_for_terminal_view
+            .insert(terminal_view_id, model_id);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn clear_computer_use_llm_override(&mut self, terminal_view_id: EntityId) {
+        self.computer_use_llm_for_terminal_view
+            .remove(&terminal_view_id);
+    }
+
     /// Helper to get the AvailableLLMs for computer_use.
     /// Falls back to a computer-use-specific default if None.
-    fn get_computer_use_available(&self) -> &AvailableLLMs {
+    fn get_computer_use_available<'a>(
+        &self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> &'a AvailableLLMs {
         static DEFAULT: OnceLock<AvailableLLMs> = OnceLock::new();
-        self.models_by_feature
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_team_uid(team_uid)
             .computer_use
             .as_ref()
             .unwrap_or_else(|| DEFAULT.get_or_init(default_computer_use_llms))
@@ -1080,9 +1311,19 @@ impl LLMPreferences {
     /// Returns metadata about an LLM, if the client knows about it.
     /// Falls back to the user's custom-endpoint LLMs when the id isn't a server-known model
     /// id (e.g. when it's a `config_key` UUID).
-    pub fn get_llm_info(&self, id: &LLMId) -> Option<&LLMInfo> {
-        self.models_by_feature
-            .info_for_id(id)
+    pub fn get_llm_info<'a>(&'a self, id: &LLMId, app: &'a AppContext) -> Option<&'a LLMInfo> {
+        let workspaces = UserWorkspaces::as_ref(app);
+        workspaces
+            .current_workspace()
+            .map(|workspace| workspace.teams.iter())
+            .into_iter()
+            .flatten()
+            .find_map(|team| team.feature_model_choice.info_for_id(id))
+            .or_else(|| {
+                workspaces
+                    .feature_model_choice_for_team_uid(None)
+                    .info_for_id(id)
+            })
             .or_else(|| self.custom_llm_info_for_id(id))
             .or_else(|| self.custom_router_llm_info_for_id(id))
     }
@@ -1127,11 +1368,14 @@ impl LLMPreferences {
     /// (Oz) agent (see [`Self::is_cloud_runnable_oz_model_id`]).
     pub(crate) fn is_active_base_model_cloud_runnable(
         &self,
+        scope: &(impl TeamScope + ?Sized),
         terminal_view_id: EntityId,
         app: &AppContext,
     ) -> bool {
         self.is_cloud_runnable_oz_model_id(
-            &self.get_active_base_model(app, Some(terminal_view_id)).id,
+            &self
+                .get_active_base_model(scope, app, Some(terminal_view_id))
+                .id,
         )
     }
 
@@ -1163,8 +1407,7 @@ impl LLMPreferences {
     }
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
-        let workspaces = UserWorkspaces::as_ref(app);
-        workspaces.is_custom_inference_enabled(app) && workspaces.are_member_byo_endpoints_allowed()
+        UserWorkspaces::as_ref(app).is_byo_endpoint_enabled_for_any_team(app)
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.
@@ -1245,7 +1488,7 @@ impl LLMPreferences {
             let unknown: Vec<&str> = router
                 .all_targets()
                 .into_iter()
-                .filter(|id| self.get_llm_info(&LLMId::from(*id)).is_none())
+                .filter(|id| self.get_llm_info(&LLMId::from(*id), ctx).is_none())
                 .collect();
             if unknown.is_empty() {
                 return true;
@@ -1278,7 +1521,7 @@ impl LLMPreferences {
         // vision is supported only when every concrete target model supports it.
         for router in &mut deduped {
             router.info.vision_supported = router.all_targets().iter().all(|id| {
-                self.get_llm_info(&LLMId::from(*id))
+                self.get_llm_info(&LLMId::from(*id), ctx)
                     .is_some_and(|info| info.vision_supported)
             });
         }
@@ -1323,11 +1566,11 @@ impl LLMPreferences {
         }
     }
 
-    /// Reads the user's current `ApiKeyManager.custom_endpoints` and replaces `custom_llms`
+    /// Reads the user's current joined custom endpoints and replaces `custom_llms`
     /// with synthetic `LLMInfo`s. Called on every `ApiKeyManagerEvent::KeysUpdated`, so adds,
     /// edits, and removals all propagate immediately.
     fn rebuild_custom_llms(&mut self, app: &AppContext) {
-        self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).keys());
+        self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).custom_endpoints());
     }
 
     fn sanitize_disabled_custom_model_preferences(&mut self, ctx: &mut ModelContext<Self>) {
@@ -1407,53 +1650,127 @@ impl LLMPreferences {
 
     /// Returns the effective default base model as a fallback
     /// (disable-aware, see [`Self::fallback_llm_info`]).
-    pub fn get_default_base_model(&self, app: &AppContext) -> &LLMInfo {
-        self.fallback_llm_info(&self.models_by_feature.agent_mode, app)
+    pub fn get_default_base_model<'a>(
+        &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        self.fallback_llm_info(
+            &UserWorkspaces::as_ref(app)
+                .feature_model_choice_for_scope(scope)
+                .agent_mode,
+            app,
+        )
+    }
+
+    pub fn get_default_base_model_for_team_uid<'a>(
+        &'a self,
+        team_uid: Option<ServerId>,
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        self.fallback_llm_info(
+            &UserWorkspaces::as_ref(app)
+                .feature_model_choice_for_team_uid(team_uid)
+                .agent_mode,
+            app,
+        )
     }
 
     /// Returns the effective default coding model as a fallback
     /// (disable-aware, see [`Self::fallback_llm_info`]).
-    pub fn get_default_coding_model(&self, app: &AppContext) -> &LLMInfo {
-        self.fallback_llm_info(&self.models_by_feature.coding, app)
+    pub fn get_default_coding_model<'a>(
+        &'a self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> &'a LLMInfo {
+        self.fallback_llm_info(
+            &UserWorkspaces::as_ref(app)
+                .feature_model_choice_for_scope(scope)
+                .coding,
+            app,
+        )
     }
 
     /// Returns the preferred Codex model, if set by the server.
-    pub fn get_preferred_codex_model(&self) -> Option<&LLMInfo> {
-        self.models_by_feature
-            .agent_mode
+    pub fn get_preferred_codex_model<'a>(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &'a AppContext,
+    ) -> Option<&'a LLMInfo> {
+        let agent_mode = &UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_scope(scope)
+            .agent_mode;
+        agent_mode
             .preferred_codex_model_id
             .as_ref()
-            .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
+            .and_then(|id| agent_mode.info_for_id(id))
     }
 
     /// Returns `true` when the most recent authed agent-mode model-list fetch
     /// failed, so the server-provided model list is currently unavailable.
-    pub fn agent_mode_models_unavailable(&self) -> bool {
+    pub fn agent_mode_models_unavailable(&self, scope: &(impl TeamScope + ?Sized)) -> bool {
+        self.agent_mode_models_unavailable_for_team_uid(scope.team_uid())
+    }
+
+    pub fn agent_mode_models_unavailable_for_team_uid(&self, team_uid: Option<ServerId>) -> bool {
         self.agent_mode_models_unavailable
+            .get(&team_uid)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Sets whether the authed agent-mode model list is currently unavailable.
     /// Called from the authed fetch path on failure, from
     /// [`Self::on_server_update`] on any successful model-list update, and
     /// from tests.
-    pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
-        self.agent_mode_models_unavailable = unavailable;
+    pub(crate) fn set_agent_mode_models_unavailable_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
+        unavailable: bool,
+    ) {
+        self.agent_mode_models_unavailable
+            .insert(team_uid, unavailable);
     }
 
     #[cfg(feature = "integration_tests")]
-    pub fn is_available_agent_mode_llm(&self, id: &LLMId) -> bool {
-        self.models_by_feature.agent_mode.info_for_id(id).is_some()
+    pub fn is_available_agent_mode_llm(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        id: &LLMId,
+        app: &AppContext,
+    ) -> bool {
+        UserWorkspaces::as_ref(app)
+            .feature_model_choice_for_scope(scope)
+            .agent_mode
+            .info_for_id(id)
+            .is_some()
     }
 
     /// Creates a pane-level override for the Agent Mode LLM.
     pub fn update_preferred_agent_mode_llm(
         &mut self,
+        scope: &(impl TeamScope + ?Sized),
+        preferred_llm_id: &LLMId,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.update_preferred_agent_mode_llm_for_team_uid(
+            scope.team_uid(),
+            preferred_llm_id,
+            terminal_view_id,
+            ctx,
+        )
+    }
+
+    pub fn update_preferred_agent_mode_llm_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
         preferred_llm_id: &LLMId,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         let profile_default_model_id = self
-            .get_active_profile_base_model(ctx, Some(terminal_view_id))
+            .get_active_profile_base_model_for_team_uid(team_uid, ctx, Some(terminal_view_id))
             .id
             .clone();
 
@@ -1517,12 +1834,13 @@ impl LLMPreferences {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_agent_mode_llm_override(
         &mut self,
+        scope: &(impl TeamScope + ?Sized),
         terminal_view_id: EntityId,
         model_id: LLMId,
         ctx: &mut ModelContext<Self>,
     ) {
         let previous_effective_model_id = self
-            .get_active_base_model(ctx, Some(terminal_view_id))
+            .get_active_base_model(scope, ctx, Some(terminal_view_id))
             .id
             .clone();
         let stored_selection_changed = self
@@ -1531,7 +1849,9 @@ impl LLMPreferences {
             != Some(model_id);
         if stored_selection_changed {
             self.trigger_snapshot_save(ctx);
-            if self.get_active_base_model(ctx, Some(terminal_view_id)).id
+            if self
+                .get_active_base_model(scope, ctx, Some(terminal_view_id))
+                .id
                 != previous_effective_model_id
             {
                 ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
@@ -1581,11 +1901,17 @@ impl LLMPreferences {
 
     pub fn update_preferred_coding_llm(
         &self,
+        scope: &(impl TeamScope + ?Sized),
         preferred_llm_id: &LLMId,
         terminal_view_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let new_value = if preferred_llm_id == &self.models_by_feature.coding.default_id {
+        let new_value = if preferred_llm_id
+            == &UserWorkspaces::as_ref(ctx)
+                .feature_model_choice_for_scope(scope)
+                .coding
+                .default_id
+        {
             None
         } else {
             Some(preferred_llm_id.clone())
@@ -1652,7 +1978,19 @@ impl LLMPreferences {
     }
 
     /// Fetches the latest set of models from the server for the currently logged in user, and updates the model.
-    pub fn refresh_authed_models(&self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_authed_models(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.refresh_authed_models_for_team_uid(scope.team_uid(), ctx);
+    }
+
+    fn refresh_authed_models_for_team_uid(
+        &self,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Don't try to fetch auth'd models if the user is not logged in yet.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
@@ -1661,19 +1999,22 @@ impl LLMPreferences {
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(
             async move { ai_api_client.get_feature_model_choices().await },
-            |me, result, ctx| match result {
+            move |me, result, ctx| match result {
                 Ok(update) => {
-                    if update != me.models_by_feature {
-                        me.on_server_update(update, ctx);
+                    if update
+                        != *UserWorkspaces::as_ref(ctx).feature_model_choice_for_team_uid(team_uid)
+                    {
+                        me.on_server_update(team_uid, update, ctx);
                     }
-                    // Clear the flag; on_server_update also clears it but may be skipped when the list is unchanged.
-                    me.set_agent_mode_models_unavailable(false);
+                    // Clear the flag; on_server_update also clears it but may be skipped
+                    // when the list is unchanged.
+                    me.set_agent_mode_models_unavailable_for_team_uid(team_uid, false);
                 }
                 Err(e) => {
                     report_error!(e.context("Failed to fetch LLMs from server"));
                     // Mark the model list unavailable so validators surface a server error
                     // instead of blaming the user's model id.
-                    me.set_agent_mode_models_unavailable(true);
+                    me.set_agent_mode_models_unavailable_for_team_uid(team_uid, true);
                 }
             },
         );
@@ -1686,8 +2027,10 @@ impl LLMPreferences {
             async move { ai_api_client.get_free_available_models(None).await },
             |me, result, ctx| match result {
                 Ok(update) => {
-                    if update != me.models_by_feature {
-                        me.on_server_update(update, ctx);
+                    if update
+                        != *UserWorkspaces::as_ref(ctx).feature_model_choice_for_team_uid(None)
+                    {
+                        me.on_server_update(None, update, ctx);
                     }
                 }
                 Err(e) => {
@@ -1697,12 +2040,47 @@ impl LLMPreferences {
         );
     }
 
-    pub fn refresh_available_models(&self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_available_models(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        ctx: &mut ModelContext<Self>,
+    ) {
         if AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            self.refresh_authed_models(ctx);
+            self.refresh_authed_models(scope, ctx);
         } else {
             self.refresh_public_models(ctx);
         }
+    }
+
+    /// Refetches the server's model catalogs when the connected ChatGPT subscription starts or
+    /// stops funding OpenAI requests, since the server derives the agent-mode default and the
+    /// tier gating of OpenAI models from that state. The first status the server reports after
+    /// login is only recorded: the login user fetch already delivered a catalog computed from it.
+    /// A connect attempt that starts before any status was reported is the exception: the
+    /// catalog predates whatever the attempt produces, so it is treated as a not-connected
+    /// baseline.
+    fn refresh_models_if_chatgpt_subscription_changed(&mut self, ctx: &mut ModelContext<Self>) {
+        let manager = ApiKeyManager::as_ref(ctx);
+        if matches!(
+            manager.chatgpt_connection_status(),
+            ChatGPTConnectionStatus::Unknown
+        ) {
+            self.last_seen_chatgpt_subscription_connected =
+                manager.chatgpt_oauth_pending().then_some(false);
+            return;
+        }
+        let connected = manager.has_chatgpt_subscription();
+        let previous = self
+            .last_seen_chatgpt_subscription_connected
+            .replace(connected);
+        if previous.is_none_or(|previous| previous == connected) {
+            return;
+        }
+        // Team-scoped catalogs live on the workspace metadata, so refresh both.
+        self.refresh_authed_models_for_team_uid(None, ctx);
+        TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+            drop(manager.refresh_workspace_metadata(ctx));
+        });
     }
 
     pub fn update_feature_model_choices(
@@ -1711,36 +2089,29 @@ impl LLMPreferences {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Ok(choices) = choices_result {
-            self.on_server_update(choices, ctx);
+            self.on_server_update(None, choices, ctx);
         }
     }
 
-    fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
+    fn on_server_update(
+        &mut self,
+        team_uid: Option<ServerId>,
+        update: ModelsByFeature,
+        ctx: &mut ModelContext<Self>,
+    ) {
         // Clear the unavailable flag on every successful model-list update.
-        self.set_agent_mode_models_unavailable(false);
+        self.set_agent_mode_models_unavailable_for_team_uid(team_uid, false);
 
-        let has_existing_persisted_config = get_cached_models(ctx).is_some();
+        let old = UserWorkspaces::as_ref(ctx)
+            .feature_model_choice_for_team_uid(team_uid)
+            .clone();
+        let has_existing_persisted_config = old != ModelsByFeature::default();
 
-        let old = std::mem::replace(&mut self.models_by_feature, update);
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+            workspaces.set_feature_model_choice_for_team_uid(team_uid, update);
+        });
 
-        match serde_json::to_string(&self.models_by_feature)
-            .context("Failed to serialize LLMs for cache")
-        {
-            Ok(serialized_update) => {
-                if let Err(e) = ctx
-                    .private_user_preferences()
-                    .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
-                    .context("Failed to cache LLMs")
-                {
-                    log::warn!("{e:#}");
-                }
-            }
-            Err(e) => {
-                report_error!(e);
-            }
-        }
-
-        self.reconcile_disabled_model_preferences(ctx);
+        self.reconcile_disabled_model_preferences(team_uid, ctx);
 
         // Re-evaluate custom model routers now that the server catalog is fresh.
         // A router that was excluded at startup (because its target wasn't in the
@@ -1750,8 +2121,12 @@ impl LLMPreferences {
             self.reconcile_stale_custom_router_selection(ctx);
         }
 
-        let new_choices =
-            get_new_agent_mode_choices(&old.agent_mode, &self.models_by_feature.agent_mode);
+        let new_choices = get_new_agent_mode_choices(
+            &old.agent_mode,
+            &UserWorkspaces::as_ref(ctx)
+                .feature_model_choice_for_team_uid(team_uid)
+                .agent_mode,
+        );
         if !new_choices.is_empty() {
             self.last_update = Some(AvailableLLMsUpdate {
                 new_choices,
@@ -1769,9 +2144,11 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Clear any model selections where the model is no longer supported
-    /// or effectively disabled, and clear orphaned context window limits
-    /// for non-configurable or unusable models.
+    /// Reconcile stored model selections with the current model catalog and credentials.
+    ///
+    /// An `AdminDisabled` base-model selection and its context limit are preserved because
+    /// profiles are shared across teams. Other unusable base, coding, CLI agent, and computer use
+    /// selections are cleared.
     ///
     /// Called both when the model list is refreshed from the server and when
     /// BYOK API keys change (since `RequiresUpgrade` usability is BYOK-aware).
@@ -1782,7 +2159,14 @@ impl LLMPreferences {
     /// where a custom endpoint was configured on device A but not yet on device B —
     /// are not erroneously reset and synced back to cloud, which would destroy the
     /// user's settings on their primary device.
-    fn reconcile_disabled_model_preferences(&self, ctx: &mut ModelContext<Self>) {
+    fn reconcile_disabled_model_preferences(
+        &self,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let models_by_feature = UserWorkspaces::as_ref(ctx)
+            .feature_model_choice_for_team_uid(team_uid)
+            .clone();
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
@@ -1791,25 +2175,20 @@ impl LLMPreferences {
                     let preferred_base_model = profile_data.base_model.clone();
                     let effective_base_model_id = preferred_base_model
                         .as_ref()
-                        .unwrap_or(&self.models_by_feature.agent_mode.default_id);
-
-                    // Only reconcile a preferred model when this device recognizes its ID.
-                    // If neither the server catalog nor local custom endpoints know it, the ID
-                    // likely belongs to a custom endpoint configured on another device. Clearing
-                    // it here would sync the removal back to cloud and erase the user's setting
-                    // on every other device.
+                        .unwrap_or(&models_by_feature.agent_mode.default_id);
+                    let preferred_base_model_info = models_by_feature
+                        .agent_mode
+                        .info_for_id(effective_base_model_id);
                     let preferred_base_model_is_recognized = preferred_base_model.is_none()
-                        || self
-                            .models_by_feature
-                            .agent_mode
-                            .info_for_id(effective_base_model_id)
-                            .is_some()
+                        || preferred_base_model_info.is_some()
                         || self
                             .custom_llm_info_for_id(effective_base_model_id)
                             .is_some();
-
-                    let effective_base_model_usable = self
-                        .models_by_feature
+                    let preferred_base_model_is_admin_disabled = preferred_base_model_info
+                        .is_some_and(|info| {
+                            info.disable_reason == Some(DisableReason::AdminDisabled)
+                        });
+                    let effective_base_model_usable = models_by_feature
                         .agent_mode
                         .usable_info_for_id(effective_base_model_id, ctx)
                         .or_else(|| {
@@ -1822,27 +2201,26 @@ impl LLMPreferences {
 
                     if preferred_base_model.is_some()
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && effective_base_model_unusable
                     {
                         profiles.set_base_model(&profile_id, None, ctx);
                     }
                     if has_context_window_limit
                         && preferred_base_model_is_recognized
+                        && !preferred_base_model_is_admin_disabled
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
                         profiles.set_context_window_limit(&profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
-                        // Same guard: only clear recognized IDs.
-                        let is_recognized = self
-                            .models_by_feature
+                        let is_recognized = models_by_feature
                             .coding
                             .info_for_id(preferred_llm_id)
                             .is_some()
                             || self.custom_llm_info_for_id(preferred_llm_id).is_some();
                         if is_recognized
-                            && self
-                                .models_by_feature
+                            && models_by_feature
                                 .coding
                                 .usable_info_for_id(preferred_llm_id, ctx)
                                 .or_else(|| {
@@ -1854,15 +2232,14 @@ impl LLMPreferences {
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
-                        // Same guard: only clear recognized IDs.
                         let is_recognized = self
-                            .get_cli_agent_available()
+                            .get_cli_agent_available(team_uid, ctx)
                             .info_for_id(preferred_llm_id)
                             .is_some()
                             || self.custom_llm_info_for_id(preferred_llm_id).is_some();
                         if is_recognized
                             && self
-                                .get_cli_agent_available()
+                                .get_cli_agent_available(team_uid, ctx)
                                 .usable_info_for_id(preferred_llm_id, ctx)
                                 .or_else(|| {
                                     self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
@@ -1874,7 +2251,7 @@ impl LLMPreferences {
                     }
                     if let Some(preferred_llm_id) = &profile.data().computer_use_model
                         && self
-                            .get_computer_use_available()
+                            .get_computer_use_available(team_uid, ctx)
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
                     {
@@ -1885,9 +2262,39 @@ impl LLMPreferences {
         });
     }
 
-    pub fn vision_supported(&self, app: &AppContext, terminal_view_id: Option<EntityId>) -> bool {
-        self.get_active_base_model(app, terminal_view_id)
+    fn reconcile_disabled_model_preferences_for_known_scopes(&self, ctx: &mut ModelContext<Self>) {
+        self.reconcile_disabled_model_preferences(None, ctx);
+        let team_uids: Vec<ServerId> = UserWorkspaces::as_ref(ctx)
+            .current_workspace()
+            .map(|workspace| workspace.teams.iter().map(|team| team.uid).collect())
+            .unwrap_or_default();
+        for team_uid in team_uids {
+            self.reconcile_disabled_model_preferences(Some(team_uid), ctx);
+        }
+    }
+
+    pub fn vision_supported(
+        &self,
+        scope: &(impl TeamScope + ?Sized),
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> bool {
+        self.vision_supported_for_team_uid(scope.team_uid(), app, terminal_view_id)
+    }
+
+    pub fn vision_supported_for_team_uid(
+        &self,
+        team_uid: Option<ServerId>,
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> bool {
+        self.get_active_base_model_for_team_uid(team_uid, app, terminal_view_id)
             .vision_supported
+    }
+
+    pub(crate) fn reset_session_overrides(&mut self) {
+        self.base_llm_for_terminal_view.clear();
+        self.computer_use_llm_for_terminal_view.clear();
     }
 
     pub fn get_base_llm_override(&self, terminal_view_id: EntityId) -> Option<String> {
@@ -1914,6 +2321,19 @@ impl LLMPreferences {
         if old.is_some() {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(custom_llms: Vec<LLMInfo>) -> Self {
+        Self {
+            agent_mode_models_unavailable: HashMap::new(),
+            last_update: None,
+            base_llm_for_terminal_view: HashMap::new(),
+            computer_use_llm_for_terminal_view: HashMap::new(),
+            custom_llms,
+            custom_model_routers: Vec::new(),
+            last_seen_chatgpt_subscription_connected: None,
         }
     }
 }
@@ -1954,8 +2374,8 @@ fn get_new_agent_mode_choices(
 ///
 /// Endpoints with empty URL or API key, and models with empty name or config_key, are
 /// skipped — they shouldn't surface in the picker until the user finishes configuring them.
-fn build_custom_llm_infos(keys: &ai::api_keys::ApiKeys) -> Vec<LLMInfo> {
-    keys.custom_endpoints
+fn build_custom_llm_infos(endpoints: &[CustomEndpoint]) -> Vec<LLMInfo> {
+    endpoints
         .iter()
         .filter(|ep| !ep.url.trim().is_empty() && !ep.api_key.is_empty())
         .flat_map(|endpoint| {
@@ -1987,35 +2407,6 @@ fn custom_llm_info_from(endpoint: &CustomEndpoint, model: &CustomEndpointModel) 
         host_configs: HashMap::new(),
         discount_percentage: None,
         context_window: LLMContextWindow::default(),
-    }
-}
-
-/// Gets the last cached LLM metadata.
-fn get_cached_models(app: &mut AppContext) -> Option<ModelsByFeature> {
-    let value = app
-        .private_user_preferences()
-        .read_value(MODELS_BY_FEATURE_CACHE_KEY)
-        .ok()
-        .flatten()?;
-
-    // Try to deserialize to the [`ModelsByFeature`] type.
-    match serde_json::from_str::<ModelsByFeature>(value.as_str()) {
-        Ok(config) => Some(config),
-        Err(e1) => {
-            // If that fails, try to deserialize directly to [`AvailableLLMs`].
-            // Before we had model choice by feature, all available LLMs were solely
-            // for Agent Mode.
-            match serde_json::from_str::<AvailableLLMs>(value.as_str()) {
-                Ok(config) => Some(ModelsByFeature {
-                    agent_mode: config,
-                    ..Default::default()
-                }),
-                Err(e2) => {
-                    log::warn!("Failed to deserialize cached LLMs: {e1}\n{e2}");
-                    None
-                }
-            }
-        }
     }
 }
 

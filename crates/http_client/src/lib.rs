@@ -24,7 +24,7 @@ use warp_core::execution_mode;
 use warp_core::operating_system_info::OperatingSystemInfo;
 use warp_errors::report_error;
 
-use crate::iap::{IapTokenProvider, proxy_auth_header};
+use crate::iap::IapTokenProvider;
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
@@ -64,6 +64,9 @@ const EXTRA_HTTP_HEADERS_ENV_VAR: &str = "WARP_EXTRA_HTTP_HEADERS";
 /// run outside of a Tokio context.
 pub struct Client {
     wrapped: reqwest::Client,
+    include_warp_headers: bool,
+    #[cfg(target_family = "wasm")]
+    omit_credentials: bool,
 
     /// A callback that is executed before every request is sent with a cloned
     /// version of the outbound request.  If for some reason the request cannot be
@@ -155,6 +158,17 @@ impl Client {
         Self::from_client_builder(builder).expect("should not fail to create client")
     }
 
+    /// Creates a pooled client without automatic Warp headers, IAP tokens, or browser credentials.
+    pub fn new_external() -> Self {
+        let mut client = Self::new();
+        client.include_warp_headers = false;
+        #[cfg(target_family = "wasm")]
+        {
+            client.omit_credentials = true;
+        }
+        client
+    }
+
     #[cfg(feature = "test-util")]
     pub fn new_for_test() -> Self {
         let client_builder = reqwest::ClientBuilder::new()
@@ -170,6 +184,9 @@ impl Client {
     pub fn from_client_builder(client_builder: reqwest::ClientBuilder) -> reqwest::Result<Self> {
         client_builder.build().map(|client| Self {
             wrapped: client,
+            include_warp_headers: true,
+            #[cfg(target_family = "wasm")]
+            omit_credentials: false,
             before_request_sent: None,
             after_response_received: None,
             iap_token_provider: None,
@@ -192,8 +209,14 @@ impl Client {
         &self,
         wrapped: reqwest::RequestBuilder,
         include_warp_headers: bool,
-        iap_token: Option<String>,
+        iap_headers: Vec<(&'static str, String)>,
     ) -> RequestBuilder<'_> {
+        #[cfg(target_family = "wasm")]
+        let wrapped = if self.omit_credentials {
+            wrapped.fetch_credentials_omit()
+        } else {
+            wrapped
+        };
         let mut builder = RequestBuilder {
             wrapped,
             client: self,
@@ -201,12 +224,11 @@ impl Client {
             prevent_sleep_reason: None,
         };
 
-        if include_warp_headers {
+        if include_warp_headers && self.include_warp_headers {
             builder = Self::add_warp_http_headers(builder);
         }
 
-        if let Some(token) = iap_token {
-            let (name, value) = proxy_auth_header(&token);
+        for (name, value) in iap_headers {
             builder = builder.header(name, value);
         }
 
@@ -215,43 +237,45 @@ impl Client {
 
     pub fn get<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
-        let iap_token = self.iap_token_for(url.clone());
-        self.builder(self.wrapped.get(url), include_warp_headers, iap_token)
+        let iap_headers = self.iap_headers_for(url.clone());
+        self.builder(self.wrapped.get(url), include_warp_headers, iap_headers)
     }
 
     pub fn post<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
-        let iap_token = self.iap_token_for(url.clone());
-        self.builder(self.wrapped.post(url), include_warp_headers, iap_token)
+        let iap_headers = self.iap_headers_for(url.clone());
+        self.builder(self.wrapped.post(url), include_warp_headers, iap_headers)
     }
 
     pub fn put<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
-        let iap_token = self.iap_token_for(url.clone());
-        self.builder(self.wrapped.put(url), include_warp_headers, iap_token)
+        let iap_headers = self.iap_headers_for(url.clone());
+        self.builder(self.wrapped.put(url), include_warp_headers, iap_headers)
     }
 
     pub fn patch<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
-        let iap_token = self.iap_token_for(url.clone());
-        self.builder(self.wrapped.patch(url), include_warp_headers, iap_token)
+        let iap_headers = self.iap_headers_for(url.clone());
+        self.builder(self.wrapped.patch(url), include_warp_headers, iap_headers)
     }
 
     pub fn delete<U: IntoUrl + Clone>(&self, url: U) -> RequestBuilder<'_> {
         let include_warp_headers = Self::include_warp_http_headers(url.clone());
-        let iap_token = self.iap_token_for(url.clone());
-        self.builder(self.wrapped.delete(url), include_warp_headers, iap_token)
+        let iap_headers = self.iap_headers_for(url.clone());
+        self.builder(self.wrapped.delete(url), include_warp_headers, iap_headers)
     }
 
-    /// Returns the IAP bearer token to attach to a request targeting
-    /// `url`, scoped to the Warp server's origin.
-    fn iap_token_for<U: IntoUrl>(&self, url: U) -> Option<String> {
-        let provider = self.iap_token_provider.as_ref()?;
-        let url = url.into_url().ok()?;
-        if !is_warp_server_origin(&url) {
-            return None;
-        }
-        provider.cached_token()
+    /// Returns IAP headers, with credentials scoped to Warp server origins.
+    fn iap_headers_for<U: IntoUrl>(&self, url: U) -> Vec<(&'static str, String)> {
+        let Some(provider) = self.iap_token_provider.as_ref() else {
+            return Vec::new();
+        };
+        let token = if url.into_url().is_ok_and(|url| is_warp_server_origin(&url)) {
+            provider.cached_token()
+        } else {
+            None
+        };
+        iap::headers(token, provider.routing_opt_in_enabled())
     }
 
     /// Helper method to determine if the request should include warp-specific headers. The only case
@@ -497,10 +521,10 @@ impl<'a> RequestBuilder<'a> {
     /// Sends the request to the endpoint, which is assumed to be a streaming server-sent-events
     /// endpoint, and returns a corresponding `EventSource`.
     pub fn eventsource(self) -> EventSourceStream {
+        let prevent_sleep_reason = self.prevent_sleep_reason;
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
-                let mut stream = self
-                    .wrapped
+                let mut stream = self.wrapped
                     .eventsource()
                     .expect("Request type for SSE endpoint must be cloneable.");
 
@@ -520,8 +544,7 @@ impl<'a> RequestBuilder<'a> {
                     }
                 };
             } else {
-                let mut stream = self
-                    .wrapped
+                let mut stream = self.wrapped
                     .eventsource()
                     .expect("Request type for SSE endpoint must be cloneable.");
 
@@ -553,7 +576,7 @@ impl<'a> RequestBuilder<'a> {
         // Wrap the stream in one that holds onto a prevent_sleep guard, if one is required here.
         let stream = prevent_sleep::Stream::wrap(
             stream,
-            self.prevent_sleep_reason.map(prevent_sleep::prevent_sleep),
+            prevent_sleep_reason.map(prevent_sleep::prevent_sleep),
         );
 
         cfg_if::cfg_if! {
@@ -786,14 +809,14 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
         Box::pin(async move {
             let uri = request.uri().to_string();
             let include_warp_headers = Self::include_warp_http_headers(uri.clone());
-            let iap_token = self.iap_token_for(uri);
+            let iap_headers = self.iap_headers_for(uri);
             let builder = reqwest::RequestBuilder::from_parts(
                 self.wrapped.clone(),
                 request.try_into().map_err(Box::new)?,
             );
 
             let response = self
-                .builder(builder, include_warp_headers, iap_token)
+                .builder(builder, include_warp_headers, iap_headers)
                 .send()
                 .await
                 .map_err(Box::new)?;

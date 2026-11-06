@@ -12,6 +12,7 @@ pub enum AgentHarnessInput {
     Oz,
     ClaudeCode,
     Gemini,
+    Pi,
     Codex,
 }
 
@@ -21,6 +22,7 @@ impl From<crate::ai::AgentHarness> for Option<AgentHarnessInput> {
             crate::ai::AgentHarness::Oz => Some(AgentHarnessInput::Oz),
             crate::ai::AgentHarness::ClaudeCode => Some(AgentHarnessInput::ClaudeCode),
             crate::ai::AgentHarness::Gemini => Some(AgentHarnessInput::Gemini),
+            crate::ai::AgentHarness::Pi => Some(AgentHarnessInput::Pi),
             crate::ai::AgentHarness::Codex => Some(AgentHarnessInput::Codex),
             crate::ai::AgentHarness::Other(_) => None,
         }

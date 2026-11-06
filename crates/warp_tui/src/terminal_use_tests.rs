@@ -73,7 +73,7 @@ fn shell_startup_routes_input_by_bootstrap_stage() {
     let mut model = TerminalModel::mock(None, None);
     assert_eq!(tui_input_target(&model), TuiInputTarget::AgentEditor);
 
-    model.block_list_mut().reinit_shell();
+    model.block_list_mut().reinit_shell(None);
     assert_eq!(tui_input_target(&model), TuiInputTarget::Disabled);
     assert_eq!(
         tui_input_target_for_state(false, true, false, false, false, false),

@@ -106,8 +106,8 @@
 /app/src/ai/agent/ @zachbai
 
 # Vertical tabs
-/app/src/workspace/view/vertical_tabs.rs @johnturcoo
-/app/src/workspace/view/vertical_tabs/ @johnturcoo
+/app/src/workspace/view/vertical_tabs.rs @peicodes
+/app/src/workspace/view/vertical_tabs/ @peicodes
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M
@@ -225,8 +225,6 @@
 /crates/managed_secrets/ @bnavetta @ianhodge
 /crates/warp_web_event_bus/ @bnavetta @ianhodge
 
-# Command signatures v2
-/command-signatures-v2/ @zachbai
 
 # OS-level bootstrap scripts
 /script/linux/bootstrap @acarl005

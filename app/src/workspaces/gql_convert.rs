@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
+use ordered_float::OrderedFloat;
 use regex::Regex;
 use warp_errors::report_error;
 use warp_graphql::billing::{
@@ -8,8 +9,8 @@ use warp_graphql::billing::{
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
     BonusGrant as GqlBonusGrant, BonusGrantScope as GqlBonusGrantScope,
     ByoApiKeyPolicy as GqlByoApiKeyPolicy, ByoEndpointPolicy as GqlByoEndpointPolicy,
-    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
-    DelinquencyStatus as GqlDelinquencyStatus,
+    ChargeUnit as GqlChargeUnit, CodebaseContextPolicy as GqlCodebaseContextPolicy,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
@@ -28,7 +29,10 @@ use warp_graphql::billing::{
 use warp_graphql::queries::get_conversation_usage as gql_usage;
 use warp_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
 use warp_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
-use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
+use warp_graphql::user::{
+    DiscoverableTeamData as GqlDiscoverableTeamData,
+    DiscoverableWorkspaceData as GqlDiscoverableWorkspaceData,
+};
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
@@ -37,18 +41,20 @@ use warp_graphql::workspace::{
     ByoEndpointModelMetadata as GqlByoEndpointModelMetadata,
     ByoFirstPartyKey as GqlByoFirstPartyKey,
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
-    HostEnablementSetting as GqlHostEnablementSetting,
+    FeatureModelChoice, HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, StringListSettingInfo as GqlStringListSettingInfo,
     Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings, TeamMember as GqlTeamMember,
-    TeamSettings as GqlTeamSettings,
+    TeamSettings as GqlTeamSettings, TeamVisibility as GqlTeamVisibility,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
 };
 
-use super::team::{DiscoverableTeam, MembershipRole, Team, TeamMember};
+use super::team::{
+    DiscoverableTeam, DiscoverableWorkspace, MembershipRole, Team, TeamMember, TeamVisibility,
+};
 use super::user_workspaces::WorkspacesMetadataResponse;
 use super::workspace::{
     AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
@@ -63,14 +69,14 @@ use super::workspace::{
     TeamSandboxedAgentSettings, TeamSecretRedactionSettings, TeamSettings,
     TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
     UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
-    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
-    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
-    WorkspaceSizePolicy,
+    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceMember,
+    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
+use crate::ai::llms::ModelsByFeature;
 use crate::ai::{BonusGrant, BonusGrantScope};
 use crate::auth::UserUid;
 use crate::convert_to_server_experiment;
@@ -80,10 +86,10 @@ use crate::server::graphql::schema::object_action_history_from_gql;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
-    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
-    EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
-    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
-    UsageBasedPricingSettings, WorkspaceUid,
+    AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, ChargeUnit,
+    CodebaseContextPolicy, EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy,
+    ManagedByokByoePolicy, MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
+    UsageBasedPricingSettings, UserTier, WorkspaceUid,
 };
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
@@ -94,6 +100,22 @@ impl From<GqlTeamMember> for TeamMember {
             uid: UserUid::new(&gql_team_member.uid.into_inner()),
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
+            is_disabled: gql_team_member.is_disabled,
+        }
+    }
+}
+
+impl From<GqlDiscoverableWorkspaceData> for DiscoverableWorkspace {
+    fn from(gql_workspace: GqlDiscoverableWorkspaceData) -> Self {
+        Self {
+            workspace_uid: gql_workspace.workspace_uid.into_inner().into(),
+            name: gql_workspace.name,
+            open_teams: gql_workspace
+                .open_teams
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            member_count: i64::from(gql_workspace.member_count),
         }
     }
 }
@@ -105,7 +127,19 @@ impl From<GqlTeamMember> for TeamMember {
 /// they can operate as in the client. Filtering here keeps every consumer of
 /// `Workspace::teams` (team switcher, team spaces, warp drive teams, ...)
 /// scoped to real memberships.
-fn retain_authenticated_teams(workspace: &mut Workspace, user_uid: UserUid) {
+///
+/// Service accounts are never recorded as a human `TeamMember` (that list only tracks
+/// user-role memberships), so this membership check cannot recognize them and would strip
+/// every team out from under any service account. Skip it in that case and trust the server
+/// to have already scoped `teams` to the service account's own team.
+fn retain_authenticated_teams(
+    workspace: &mut Workspace,
+    user_uid: UserUid,
+    is_service_account: bool,
+) {
+    if is_service_account {
+        return;
+    }
     workspace
         .teams
         .retain(|team| team.members.iter().any(|member| member.uid == user_uid));
@@ -195,6 +229,26 @@ impl From<MembershipRole> for GqlMembershipRole {
     }
 }
 
+impl From<GqlTeamVisibility> for TeamVisibility {
+    fn from(visibility: GqlTeamVisibility) -> Self {
+        match visibility {
+            GqlTeamVisibility::Open => TeamVisibility::Open,
+            GqlTeamVisibility::Private => TeamVisibility::Private,
+            GqlTeamVisibility::Hidden => TeamVisibility::Hidden,
+            GqlTeamVisibility::Other(value) => {
+                report_error!(
+                    "Invalid TeamVisibility from server; treating as Private",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                // Fail closed: an unrecognized value must not be treated as Open,
+                // since that would surface the invite-by-link control.
+                TeamVisibility::Private
+            }
+        }
+    }
+}
+
 impl From<GqlWorkspaceMemberUsageInfo> for WorkspaceMemberUsageInfo {
     fn from(
         gql_workspace_member_usage_info: GqlWorkspaceMemberUsageInfo,
@@ -203,6 +257,12 @@ impl From<GqlWorkspaceMemberUsageInfo> for WorkspaceMemberUsageInfo {
             request_limit: gql_workspace_member_usage_info.request_limit,
             requests_used_since_last_refresh: gql_workspace_member_usage_info
                 .requests_used_since_last_refresh,
+            included_usage_cents: gql_workspace_member_usage_info
+                .included_usage_cents
+                .map(OrderedFloat),
+            usage_cents_used_since_last_refresh: gql_workspace_member_usage_info
+                .usage_cents_used_since_last_refresh
+                .map(OrderedFloat),
             is_unlimited: gql_workspace_member_usage_info.is_unlimited,
             is_request_limit_prorated: gql_workspace_member_usage_info.is_request_limit_prorated,
         }
@@ -215,6 +275,7 @@ impl From<GqlWorkspaceMember> for WorkspaceMember {
             uid: UserUid::new(&gql_workspace_member.uid.into_inner()),
             email: gql_workspace_member.email,
             role: gql_workspace_member.role.into(),
+            is_disabled: gql_workspace_member.is_disabled,
             usage_info: gql_workspace_member.usage_info.into(),
         }
     }
@@ -225,6 +286,9 @@ impl From<GqlEmailInvite> for EmailInvite {
         Self {
             invitee_email: gql_email_invite.email,
             expired: gql_email_invite.expired,
+            team_uid: gql_email_invite
+                .team_uid
+                .map(|uid| ServerId::from_string_lossy(uid.into_inner())),
         }
     }
 }
@@ -323,6 +387,9 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
 
 impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
     fn from(gql: &gql_usage::ConversationUsage) -> Self {
+        let usage_metadata =
+            persistence::model::ConversationUsageMetadata::from(&gql.usage_metadata);
+        let total_cost_in_cents = usage_metadata.billed_cost_in_cents();
         let persistence::model::ConversationUsageMetadata {
             credits_spent,
             platform_credits_spent,
@@ -331,7 +398,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             context_window_usage,
             context_window_segments,
             ..
-        } = (&gql.usage_metadata).into();
+        } = usage_metadata;
         ConversationUsageInfo {
             credits_spent,
             platform_credits_spent,
@@ -344,6 +411,9 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
             commands_executed: tool.run_command_stats.commands_executed,
+            total_cost_in_cents,
+            // The settings usage-history query carries no per-block breakdown.
+            cost_in_cents_for_last_block: None,
         }
     }
 }
@@ -390,25 +460,37 @@ impl From<&GqlAiPermissionsSettings> for AiPermissionsSettings {
     fn from(gql_ai_permissions_settings: &GqlAiPermissionsSettings) -> AiPermissionsSettings {
         Self {
             allow_ai_in_remote_sessions: gql_ai_permissions_settings.allow_ai_in_remote_sessions,
-            remote_session_regex_list: gql_ai_permissions_settings
-                .remote_session_regex_list
-                .iter()
-                .filter_map(|r| {
-                    let regex = Regex::new(r);
-                    match regex {
-                        Ok(regex) => Some(regex),
-                        Err(_) => {
-                            report_error!(
-                                "Invalid regex pattern for remote session detection",
-                                extra: { "pattern" => %r }
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect(),
+            remote_session_regex_list: compile_remote_session_regex_list(
+                gql_ai_permissions_settings
+                    .remote_session_regex_list
+                    .clone(),
+            ),
         }
     }
+}
+
+/// Compiles each remote-session command pattern into a [`Regex`], dropping (and reporting) any
+/// pattern that fails to compile so one bad entry in an org's configuration cannot suppress the
+/// rest of the list.
+///
+/// Throttled to once per run: an uncompilable pattern is a static configuration problem that
+/// does not resolve itself between polls of the workspaces-metadata query, so reporting it every
+/// time would page the same broken pattern at the poll rate for every affected user.
+fn compile_remote_session_regex_list(patterns: impl IntoIterator<Item = String>) -> Vec<Regex> {
+    patterns
+        .into_iter()
+        .filter_map(|pattern| match Regex::new(&pattern) {
+            Ok(regex) => Some(regex),
+            Err(_) => {
+                report_error!(
+                    "Invalid regex pattern for remote session detection",
+                    extra: { "pattern" => %pattern },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 impl From<GqlUgcDataCollectionPolicy> for UgcDataCollectionPolicy {
@@ -448,6 +530,7 @@ impl From<GqlAddonCreditsSettings> for AddonCreditsSettings {
             max_monthly_spend_cents: gql_settings.max_monthly_spend_cents,
             selected_auto_reload_credit_denomination: gql_settings
                 .selected_auto_reload_credit_denomination,
+            selected_auto_reload_usage_cents: gql_settings.selected_auto_reload_usage_cents,
         }
     }
 }
@@ -614,8 +697,8 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
                         cost_type: entry.cost_type,
                         usage_bucket: entry.usage_bucket,
                         usage_source: entry.usage_source,
-                        credits_used: entry.credits_used,
-                        cost_cents: entry.cost_cents,
+                        credits_used: entry.credits_used_exact,
+                        cost_cents: entry.cost_cents_exact,
                         attributed_team_uid: entry.attributed_team_uid,
                     })
                     .collect(),
@@ -624,11 +707,30 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
     }
 }
 
+impl From<GqlChargeUnit> for ChargeUnit {
+    fn from(gql_charge_unit: GqlChargeUnit) -> ChargeUnit {
+        match gql_charge_unit {
+            GqlChargeUnit::Credits => ChargeUnit::Credits,
+            GqlChargeUnit::Cents => ChargeUnit::Cents,
+            GqlChargeUnit::Other(value) => {
+                report_error!(
+                    "Invalid ChargeUnit. Make sure to update client GraphQL types!",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                // Fail closed to the unit every server supports.
+                ChargeUnit::Credits
+            }
+        }
+    }
+}
+
 impl From<GqlTier> for Tier {
     fn from(gql_tier: GqlTier) -> Tier {
         Self {
             name: gql_tier.name,
             description: gql_tier.description,
+            charge_unit: gql_tier.charge_unit.into(),
             warp_ai_policy: gql_tier.warp_ai_policy.map(From::from),
             workspace_size_policy: gql_tier.team_size_policy.map(From::from),
             shared_notebooks_policy: gql_tier.shared_notebooks_policy.map(From::from),
@@ -743,6 +845,8 @@ impl BonusGrant {
             user_facing_message: bonus_grant.user_facing_message,
             request_credits_granted: bonus_grant.request_credits_granted,
             request_credits_remaining: bonus_grant.request_credits_remaining,
+            usage_cents_granted: bonus_grant.usage_cents_granted,
+            usage_cents_remaining: bonus_grant.usage_cents_remaining,
             scope,
         }
     }
@@ -855,7 +959,7 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
     }
 }
 
-trait ToAgentModeCommandExecutionPredicates {
+pub(crate) trait ToAgentModeCommandExecutionPredicates {
     fn to_predicates(self) -> Vec<AgentModeCommandExecutionPredicate>;
 }
 
@@ -877,7 +981,7 @@ impl ToAgentModeCommandExecutionPredicates for Vec<String> {
     }
 }
 
-trait ToPathBufs {
+pub(crate) trait ToPathBufs {
     fn to_path_bufs(self) -> Vec<PathBuf>;
 }
 
@@ -963,24 +1067,11 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
                 allow_ai_in_remote_sessions: gql_workspace_settings
                     .ai_permissions_settings
                     .allow_ai_in_remote_sessions,
-                remote_session_regex_list: gql_workspace_settings
-                    .ai_permissions_settings
-                    .remote_session_regex_list
-                    .iter()
-                    .filter_map(|r| {
-                        let regex = Regex::new(r);
-                        match regex {
-                            Ok(regex) => Some(regex),
-                            Err(_) => {
-                                report_error!(
-                                    "Invalid regex pattern for remote session detection",
-                                    extra: { "pattern" => %r }
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect(),
+                remote_session_regex_list: compile_remote_session_regex_list(
+                    gql_workspace_settings
+                        .ai_permissions_settings
+                        .remote_session_regex_list,
+                ),
             },
             link_sharing_settings: LinkSharingSettings {
                 anyone_with_link_sharing_enabled: gql_workspace_settings
@@ -1132,8 +1223,11 @@ impl From<GqlTeamSettings> for TeamSettings {
                         .allow_ai_in_remote_sessions
                         .is_enforced_by_workspace,
                 },
-                remote_session_regex_list: split_string_list(
-                    gql_team_settings.ai_permissions.remote_session_regex_list,
+                remote_session_regex_list: compile_remote_session_regex_list(
+                    gql_team_settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .values,
                 ),
             },
             secret_redaction: TeamSecretRedactionSettings {
@@ -1285,8 +1379,8 @@ impl From<GqlTeamSettings> for TeamSettings {
 /// Derives a team's effective settings from the GraphQL payload. The settings
 /// always come from the **team** payload (`gql_team.settings`), never from a
 /// clone of the workspace settings. Workspace-scoped flags such as
-/// invite-link/discoverability are intentionally not part of `TeamSettings` and
-/// are read from the workspace settings at their call sites.
+/// discoverability are intentionally not part of `TeamSettings` and are read
+/// from the workspace settings at their call sites.
 ///
 /// Extracted from [`Team::from_gql`] so the team-payload sourcing is
 /// unit-testable without constructing a full `GqlWorkspace`.
@@ -1294,12 +1388,31 @@ pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSett
     team_settings.into()
 }
 
+fn feature_model_choice_from_gql(choice: FeatureModelChoice) -> ModelsByFeature {
+    choice.try_into().unwrap_or_else(|e: anyhow::Error| {
+        report_error!(
+            e.context("Failed to convert FeatureModelChoice from server"),
+            ReportErrorLogMode::OncePerRun
+        );
+        ModelsByFeature::default()
+    })
+}
+
+pub(crate) fn team_pending_email_invites_from_gql(
+    workspace_pending_email_invites: &[GqlEmailInvite],
+    team_uid: &cynic::Id,
+) -> Vec<EmailInvite> {
+    workspace_pending_email_invites
+        .iter()
+        .filter(|invite| invite.team_uid.as_ref() == Some(team_uid))
+        .cloned()
+        .map(Into::into)
+        .collect()
+}
+
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
         Self {
-            // TEAM FIELDS
-            // These fields will persist in the Team rust type even after we finish
-            // rolling out workspaces.
             uid: ServerId::from_string_lossy(gql_team.uid.inner()),
             name: gql_team.name.clone(),
             color: gql_team.color.clone(),
@@ -1309,21 +1422,11 @@ impl Team {
                 .into_iter()
                 .map(|gql_member| gql_member.into())
                 .collect(),
-
-            // WORKSPACE FIELDS
-            // TODO(skambashi): The fields below are derived from the workspace. We should
-            // remove these from the Team rust type and use the values in the parent
-            // Workspace instead.
-            invite_code: gql_workspace
-                .invite_code
-                .clone()
-                .map(|code| WorkspaceInviteCode { code: code.clone() }),
-            pending_email_invites: gql_workspace
-                .pending_email_invites
-                .clone()
-                .into_iter()
-                .map(|gql_email_invite| gql_email_invite.into())
-                .collect(),
+            invite_link: gql_team.invite_link.clone(),
+            pending_email_invites: team_pending_email_invites_from_gql(
+                &gql_workspace.pending_email_invites,
+                &gql_team.uid,
+            ),
             invite_link_domain_restrictions: gql_workspace
                 .invite_link_domain_restrictions
                 .clone()
@@ -1336,12 +1439,12 @@ impl Team {
                 .as_ref()
                 .map(|id| id.clone().into_inner()),
             // Team-effective settings come from the team payload, not from a
-            // clone of the workspace settings. Invite-link / discoverability are
-            // workspace-level and are read from the workspace settings at their
-            // call sites, so they are not surfaced on `Team`.
+            // clone of the workspace settings.
             settings: team_settings_from_gql(gql_team.settings),
+            feature_model_choice: feature_model_choice_from_gql(gql_team.feature_model_choice),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
+            visibility: gql_team.visibility.into(),
         }
     }
 }
@@ -1361,6 +1464,12 @@ impl From<GqlWorkspace> for Workspace {
                 .into_iter()
                 .map(|gql_team| Team::from_gql(gql_workspace.clone(), gql_team))
                 .collect(),
+            open_teams: gql_workspace
+                .open_teams
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             billing_metadata: gql_workspace.billing_metadata.clone().into(),
             bonus_grants_purchased_this_month: gql_workspace
                 .bonus_grants_info
@@ -1375,10 +1484,9 @@ impl From<GqlWorkspace> for Workspace {
                 .map(convert_billing_cycle_usage),
             has_billing_history: gql_workspace.has_billing_history,
             settings: gql_workspace.settings.clone().into(),
-            invite_code: gql_workspace
-                .invite_code
-                .clone()
-                .map(|code| WorkspaceInviteCode { code: code.clone() }),
+            feature_model_choice: feature_model_choice_from_gql(
+                gql_workspace.feature_model_choice.clone(),
+            ),
             invite_link_domain_restrictions: gql_workspace
                 .invite_link_domain_restrictions
                 .clone()
@@ -1404,60 +1512,62 @@ impl From<GqlWorkspace> for Workspace {
     }
 }
 
-impl From<GqlUser> for WorkspacesMetadataResponse {
-    fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
-        let user_uid = UserUid::new(&gql_user.profile.uid);
-        let feature_model_choices = gql_user
-            .workspaces
-            .first()
-            .map(|gql_workspace| gql_workspace.feature_model_choice.clone());
+/// Converts the `GetWorkspacesMetadataForUser` response into [`WorkspacesMetadataResponse`].
+///
+/// `is_service_account` controls whether [`retain_authenticated_teams`] filters each
+/// workspace's teams down to the caller's own human memberships; see that function's doc
+/// comment for why service accounts must skip it.
+pub fn workspaces_metadata_response_from_gql(
+    gql_user: GqlUser,
+    is_service_account: bool,
+) -> WorkspacesMetadataResponse {
+    let user_uid = UserUid::new(&gql_user.profile.uid);
 
-        let workspaces: Vec<Workspace> = gql_user
-            .workspaces
-            .clone()
-            .into_iter()
-            .filter(|gql_workspace| {
-                // TODO(skambashi): REV-717: Clean up this code once every user always has
-                // a workspace, and the server no longer returns a placeholder workspace.
-                gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
-            })
-            .map(|gql_workspace| {
-                let mut workspace = gql_workspace.into();
-                retain_authenticated_teams(&mut workspace, user_uid);
-                workspace
-            })
-            .collect();
+    let workspaces: Vec<Workspace> = gql_user
+        .workspaces
+        .clone()
+        .into_iter()
+        .filter(|gql_workspace| {
+            // TODO(skambashi): REV-717: Clean up this code once every user always has
+            // a workspace, and the server no longer returns a placeholder workspace.
+            gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
+        })
+        .map(|gql_workspace| {
+            let mut workspace = gql_workspace.into();
+            retain_authenticated_teams(&mut workspace, user_uid, is_service_account);
+            workspace
+        })
+        .collect();
 
-        let joinable_teams = gql_user
-            .discoverable_teams
-            .clone()
-            .into_iter()
-            .map(|gql_joinable_team| gql_joinable_team.into())
-            .collect();
+    let joinable_teams = gql_user
+        .discoverable_teams
+        .clone()
+        .into_iter()
+        .map(|gql_joinable_team| gql_joinable_team.into())
+        .collect();
 
-        let experiments = gql_user
-            .experiments
-            .and_then(|experiments| convert_to_server_experiment!(experiments));
+    let experiments = gql_user
+        .experiments
+        .and_then(|experiments| convert_to_server_experiment!(experiments));
 
-        // A teamless user's only workspace is the placeholder filtered out
-        // above, so the user-level policy is the only place their add-on
-        // credits purchase policy — gating and premium pricing alike —
-        // survives (see
-        // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
-        let user_purchase_policy = gql_user
-            .billing_metadata
-            .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
-            .map(Into::into);
+    let user_tier = gql_user
+        .billing_metadata
+        .map(|billing_metadata| UserTier {
+            purchase_policy: billing_metadata
+                .tier
+                .purchase_add_on_credits_policy
+                .map(Into::into),
+            charge_unit: billing_metadata.tier.charge_unit.into(),
+        })
+        .unwrap_or_default();
 
-        // TODO(skambashi) refactor to return back workspaces, and not teams
-        WorkspacesMetadataResponse {
-            workspaces,
-            joinable_teams,
-            experiments,
-            feature_model_choices,
-            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
-            user_purchase_policy,
-        }
+    // TODO(skambashi) refactor to return back workspaces, and not teams
+    WorkspacesMetadataResponse {
+        workspaces,
+        joinable_teams,
+        experiments,
+        ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
+        user_tier,
     }
 }
 

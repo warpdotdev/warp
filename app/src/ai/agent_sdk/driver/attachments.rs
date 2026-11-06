@@ -15,7 +15,7 @@ use warp_errors::report_error;
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
-use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::ai::attachment_utils::{DownloadedAttachment, MAX_ATTACHMENT_SIZE_BYTES};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
@@ -24,9 +24,15 @@ use crate::util::image::MIN_IMAGE_HEADER_SIZE;
 /// Maximum number of file attachments for a cloud agent task.
 pub const MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY: usize = 25;
 
+#[derive(Default)]
+pub(crate) struct TaskAttachmentDownloads {
+    /// Legacy directory hint, retained even if every individual download fails.
+    pub directory: Option<String>,
+    pub files: Vec<DownloadedAttachment>,
+}
+
 /// Fetches task attachments via GraphQL and downloads them to the filesystem.
-/// Returns the attachments directory path if any attachments were downloaded,
-/// so the caller can pass it to the server via `StartFromAmbientRunPrompt`.
+/// Returns successful downloads alongside the directory hint for server-side prompts.
 ///
 /// `attachments_dir` is the per-session directory where files should be downloaded.
 ///
@@ -38,30 +44,50 @@ pub(crate) async fn fetch_and_download_attachments(
     http_client: Arc<ServerApi>,
     task_id: String,
     attachments_dir: PathBuf,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<TaskAttachmentDownloads> {
     if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-        return Ok(None);
+        return Ok(TaskAttachmentDownloads::default());
     }
 
     let attachments = ai_client
         .get_task_attachments(task_id.clone())
         .await
         .context("Failed to fetch task attachments")?;
+    download_attachments(attachments, http_client, attachments_dir).await
+}
+
+pub(crate) async fn download_attachments(
+    attachments: Vec<TaskAttachment>,
+    http_client: Arc<ServerApi>,
+    attachments_dir: PathBuf,
+) -> anyhow::Result<TaskAttachmentDownloads> {
+    if !FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
+        return Ok(TaskAttachmentDownloads::default());
+    }
 
     log::info!("Fetched {} task attachments", attachments.len());
 
     if attachments.is_empty() {
-        return Ok(None);
+        return Ok(TaskAttachmentDownloads::default());
     }
 
-    download_and_write_attachments(attachments, &attachments_dir, &http_client).await?;
+    let files = download_and_write_attachments(
+        attachments,
+        &attachments_dir,
+        http_client.external_http_client(),
+    )
+    .await?;
 
-    Ok(Some(attachments_dir.to_string_lossy().into_owned()))
+    Ok(TaskAttachmentDownloads {
+        directory: Some(attachments_dir.to_string_lossy().into_owned()),
+        files,
+    })
 }
 
 /// Fetches handoff snapshot attachments for the active execution and downloads
-/// them into `{attachments_dir}/handoff/{attachment_uuid}` so the runtime's
-/// rehydration prompt references always point at a file that exists on disk.
+/// them into `{attachments_dir}/handoff/`, each under the basename of its logical
+/// `filename`, so the runtime's rehydration prompt references always point at a
+/// file that exists on disk.
 ///
 /// Returns `Some(attachments_dir)` when at least one attachment wrote to disk, mirroring
 /// the contract of the sibling [`fetch_and_download_attachments`]. Partial failures are
@@ -98,10 +124,9 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
         .context("Failed to create handoff attachments directory")?;
 
     let attempts = attachments.len();
-    let download_futures = attachments.into_iter().map(|attachment| {
-        let file_path = handoff_dir.join(&attachment.file_id);
-        download_handoff_entry(attachment, file_path, http_client)
-    });
+    let download_futures = attachments
+        .into_iter()
+        .map(|attachment| download_handoff_entry(attachment, &handoff_dir, http_client));
     let results = join_all(download_futures).await;
 
     let mut succeeded: usize = 0;
@@ -109,7 +134,7 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     for result in results {
         match result {
             Ok(()) => succeeded += 1,
-            Err((filename, err)) => failures.push((filename, err)),
+            Err((label, err)) => failures.push((label, err)),
         }
     }
 
@@ -118,7 +143,7 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     } else {
         let detail = failures
             .iter()
-            .map(|(filename, err)| format!("{filename}: {err}"))
+            .map(|(label, err)| format!("{label}: {err}"))
             .collect::<Vec<_>>()
             .join("; ");
         log::warn!(
@@ -143,8 +168,8 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
 async fn download_and_write_attachments(
     attachments: Vec<TaskAttachment>,
     attachment_dir: &Path,
-    http_client: &ServerApi,
-) -> anyhow::Result<()> {
+    http_client: &http_client::Client,
+) -> anyhow::Result<Vec<DownloadedAttachment>> {
     fs::create_dir_all(attachment_dir)
         .await
         .context("Failed to create attachments directory")?;
@@ -153,24 +178,26 @@ async fn download_and_write_attachments(
         attachment_dir.display()
     );
 
-    let http = http_client.http_client();
     let download_futures = attachments
         .into_iter()
-        .map(|attachment| download_task_attachment(attachment, attachment_dir, http));
+        .map(|attachment| download_task_attachment(attachment, attachment_dir, http_client));
     let results = join_all(download_futures).await;
 
-    let mut successful = 0;
+    let mut downloaded = Vec::new();
     let mut failed = 0;
     for result in results {
         match result {
-            Ok(()) => successful += 1,
+            Ok(file) => downloaded.push(file),
             Err(_) => failed += 1,
         }
     }
 
-    log::info!("Attachment download complete: {successful} successful, {failed} failed");
+    log::info!(
+        "Attachment download complete: {} successful, {failed} failed",
+        downloaded.len()
+    );
 
-    Ok(())
+    Ok(downloaded)
 }
 
 /// Download a single task attachment into `attachment_dir/<sanitized filename>`.
@@ -180,7 +207,7 @@ async fn download_task_attachment(
     attachment: TaskAttachment,
     attachment_dir: &Path,
     http_client: &http_client::Client,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<DownloadedAttachment> {
     let safe_filename = Path::new(&attachment.filename)
         .file_name()
         .and_then(|n| n.to_str())
@@ -197,27 +224,52 @@ async fn download_task_attachment(
     download_attachment(http_client, &attachment.download_url, &file_path).await?;
 
     log::info!("Successfully wrote attachment to: {}", file_path.display());
-    Ok(())
+    Ok(DownloadedAttachment {
+        file_id: attachment.file_id,
+        file_name: safe_filename,
+        file_path: file_path.to_string_lossy().into_owned(),
+    })
 }
 
-/// Download a single handoff attachment into `file_path`, mapping failure to
-/// `(filename, error_message)` so the aggregator in
+/// Download a single handoff attachment into `handoff_dir`, under the basename of its logical
+/// `filename`; a name that has no basename fails before any request is sent.
+///
+/// Failures map to `("{filename} ({file_id})", error_message)` so the aggregator in
 /// [`fetch_and_download_handoff_snapshot_attachments`] can log and count per-file outcomes.
+/// Both names are carried because two checkpoint generations share one logical name, and that
+/// aggregated WARN log is the only signal a per-file failure produces.
 async fn download_handoff_entry(
     attachment: TaskAttachment,
-    file_path: PathBuf,
+    handoff_dir: &Path,
     http_client: &http_client::Client,
 ) -> Result<(), (String, String)> {
-    // Factor `file_id` and `download_url` out before the retry closure so `attachment` is fully
-    // consumed up-front. The closure borrows the two fields it needs as references.
+    // Factor the fields out before the retry closure so `attachment` is fully consumed
+    // up-front. The closure borrows the two fields it needs as references.
     let TaskAttachment {
         file_id,
+        filename,
         download_url,
         ..
     } = attachment;
+    let label = format!("{filename} ({file_id})");
+
+    // Join on the logical `filename`, not `file_id`: `file_id` is the GCS *storage* name, which
+    // for a checkpoint-mode snapshot embeds generation path segments (e.g.
+    // `checkpoint/<gen>/snapshot_state.json`). Joining on that would try to create a file inside
+    // a subdirectory that was never made and fail every download. Reduce to a basename the way
+    // the sibling [`download_task_attachment`] does, so a server-supplied name can never write
+    // outside `handoff_dir`. This assumes logical names are unique within one listing, which
+    // holds because selection returns a single checkpoint generation or the legacy set, never a
+    // mix; two entries sharing a name would stream into the same path concurrently.
+    let safe_filename = Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| (label.clone(), format!("Invalid filename '{filename}'")))?;
+    let file_path = handoff_dir.join(safe_filename);
+
     download_attachment(http_client, &download_url, &file_path)
         .await
-        .map_err(|e| (file_id, format!("{e:#}")))
+        .map_err(|e| (label, format!("{e:#}")))
 }
 
 /// Shared download primitive: GET `download_url`, write the body to `file_path`, and retry
@@ -246,11 +298,10 @@ async fn download_attachment(
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::Error::new(HttpStatusError {
-                status: status.as_u16(),
-                body: body.clone(),
-            })
-            .context(format!("Download failed with status {status}: {body}")));
+            return Err(
+                anyhow::Error::new(HttpStatusError::new(status.as_u16(), body.clone()))
+                    .context(format!("Download failed with status {status}: {body}")),
+            );
         }
 
         // Stream the response body directly to disk instead of buffering the full payload

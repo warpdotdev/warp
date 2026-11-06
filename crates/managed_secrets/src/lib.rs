@@ -10,5 +10,5 @@ pub use gcp::{
     GcpCredentials, GcpFederationConfig, GcpWorkloadIdentityFederationError,
     GcpWorkloadIdentityFederationToken, PrepareGcpCredentialsError,
 };
-pub use manager::{ActorProvider, ManagedSecretManager};
+pub use manager::{ActorProvider, ManagedSecretManager, convert_task_secrets};
 pub use secret_value::ManagedSecretValue;

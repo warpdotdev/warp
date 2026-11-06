@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
 use parking_lot::Mutex;
-use persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use persistence::model::{AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
@@ -27,7 +28,9 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
     ServerAIConversationMetadata,
 };
-use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
+use crate::ai::ambient_agents::task::{
+    HarnessConfig, TaskPrincipalInfo, TaskScope, TaskStatusMessage,
+};
 use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
     ExecutionLocation,
@@ -41,9 +44,11 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
+use crate::server::team_scope::RequestTeamScope;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -79,6 +84,8 @@ fn create_test_task(
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -241,6 +248,7 @@ fn test_title_update_refreshes_shadowing_task_title() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -348,6 +356,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -405,6 +414,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -469,6 +479,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -549,6 +560,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -604,6 +616,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -633,6 +646,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                     status: StatusFilter::Done,
                     ..Default::default()
                 },
+                &TeamlessScopeForTest,
                 ctx,
             );
             assert_eq!(done_items.len(), 1);
@@ -647,9 +661,73 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                     status: StatusFilter::Working,
                     ..Default::default()
                 },
+                &TeamlessScopeForTest,
                 ctx,
             );
             assert!(working_items.is_empty());
+        });
+    });
+}
+
+#[test]
+fn window_team_projection_keeps_matching_and_unscoped_tasks() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let now = Utc::now();
+        let team_a = ServerId::from(1);
+        let team_b = ServerId::from(2);
+        let mut model = create_test_model();
+
+        let mut team_a_task = create_test_task(&make_uuid(4100), "user-a", now);
+        team_a_task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_a.to_string(),
+        });
+        let team_a_task_id = team_a_task.task_id;
+        model.tasks.insert(team_a_task.task_id, team_a_task);
+
+        let mut team_b_task = create_test_task(&make_uuid(4101), "user-b", now);
+        team_b_task.scope = Some(TaskScope {
+            scope_type: "TEAM".to_string(),
+            uid: team_b.to_string(),
+        });
+        let team_b_task_id = team_b_task.task_id;
+        model.tasks.insert(team_b_task.task_id, team_b_task);
+
+        let mut personal_task = create_test_task(&make_uuid(4102), "user-a", now);
+        personal_task.scope = Some(TaskScope {
+            scope_type: "personal".to_string(),
+            uid: "user-a".to_string(),
+        });
+        let personal_task_id = personal_task.task_id;
+        model.tasks.insert(personal_task.task_id, personal_task);
+
+        let unscoped_task = create_test_task(&make_uuid(4103), "user-b", now);
+        let unscoped_task_id = unscoped_task.task_id;
+        model.tasks.insert(unscoped_task.task_id, unscoped_task);
+
+        app.update(|ctx| {
+            let team_a_scope = TeamContextForOperation::new_for_test(team_a);
+            let team_a_entries = model.get_entries(&all_owner_filters(), &team_a_scope, ctx);
+            let team_a_ids = team_a_entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(team_a_task_id)));
+            assert!(!team_a_ids.contains(&AgentConversationEntryId::AmbientRun(team_b_task_id)));
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(personal_task_id)));
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(unscoped_task_id)));
+
+            let teamless_entries =
+                model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+            let teamless_ids = teamless_entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            assert!(!teamless_ids.contains(&AgentConversationEntryId::AmbientRun(team_a_task_id)));
+            assert!(!teamless_ids.contains(&AgentConversationEntryId::AmbientRun(team_b_task_id)));
+            assert!(teamless_ids.contains(&AgentConversationEntryId::AmbientRun(personal_task_id)));
+            assert!(teamless_ids.contains(&AgentConversationEntryId::AmbientRun(unscoped_task_id)));
         });
     });
 }
@@ -671,6 +749,27 @@ fn create_test_model() -> AgentConversationsModel {
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
     }
+}
+
+#[test]
+fn filter_fetch_skips_sdk_runs() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, false, ctx));
+        let model = app.add_singleton_model(|_| create_test_model());
+
+        // No ServerApiProvider is installed, so trying to create a request would panic.
+        model.update(&mut app, |model, ctx| {
+            model.fetch_tasks_for_filters(
+                &AgentManagementFilters {
+                    owners: OwnerFilter::All,
+                    ..Default::default()
+                },
+                "user-a",
+                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                ctx,
+            );
+        });
+    });
 }
 
 #[test]
@@ -717,7 +816,7 @@ fn conversation_query_caps_recent_entries_and_places_newest_last() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "");
 
             assert_eq!(results.len(), DEFAULT_RESULT_COUNT);
@@ -761,7 +860,7 @@ fn conversation_query_filters_titles_and_caps_best_fuzzy_results() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "deploy");
 
             assert_eq!(results.len(), MAX_SEARCH_RESULTS);
@@ -793,7 +892,7 @@ fn conversation_query_orders_equal_fuzzy_scores_by_recency() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "deploy");
 
             assert!(results.windows(2).all(|window| {
@@ -926,8 +1025,10 @@ fn create_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
-            total_provider_cost_in_cents: None,
+            total_billed_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -954,7 +1055,7 @@ fn test_get_entries_includes_task_only_entry() {
         model.tasks.insert(task.task_id, task.clone());
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -967,6 +1068,32 @@ fn test_get_entries_includes_task_only_entry() {
             assert!(entry.backing.has_ambient_run);
             assert!(!entry.backing.has_loaded_conversation);
             assert!(entry.is_cloud_agent_run());
+        });
+    });
+}
+
+#[test]
+fn test_task_entry_includes_server_reported_dollar_cost() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let mut task = create_test_task(&make_uuid(8104), "user-a", Utc::now());
+        task.request_usage = Some(crate::ai::ambient_agents::task::RequestUsage {
+            inference_cost: Some(10.0),
+            compute_cost: Some(2.0),
+            platform_cost: Some(3.0),
+            inference_cost_usd: Some(0.18),
+            compute_cost_usd: Some(0.036),
+            platform_cost_usd: Some(0.054),
+        });
+        model.tasks.insert(task.task_id, task);
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+
+            assert_eq!(entries[0].display.request_usage, Some(15.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(27.0));
         });
     });
 }
@@ -985,7 +1112,7 @@ fn test_task_entry_preserves_execution_location_independently_of_task_backing() 
         model.tasks.insert(remote_task.task_id, remote_task);
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let local_entry = entries
                 .iter()
                 .find(|entry| entry.execution_location == Some(ExecutionLocation::Local))
@@ -1031,7 +1158,7 @@ fn test_ambient_conversation_without_task_preserves_cloud_classification() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1056,7 +1183,7 @@ fn test_get_entries_includes_local_only_entry() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1071,6 +1198,40 @@ fn test_get_entries_includes_local_only_entry() {
                 AgentConversationProvenance::LocalInteractive
             );
             assert_eq!(entry.display.title, "Local conversation");
+        });
+    });
+}
+
+#[test]
+fn test_local_conversation_entry_uses_charged_usage_dollar_total() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_credits_spent_for_test(20.0);
+        conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
+            input_cost_in_cents: 10.0,
+            output_cost_in_cents: 12.0,
+            platform_cost_in_cents: 8.0,
+            web_search_cost_in_cents: 6.0,
+            ..Default::default()
+        }));
+        let conversation_id = conversation.id();
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.restore_conversations(EntityId::new(), vec![conversation], ctx);
+        });
+
+        let mut model = create_test_model();
+        model.conversations.insert(
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Local conversation"),
+        );
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+
+            assert_eq!(entries[0].display.request_usage, Some(20.0));
+            assert_eq!(entries[0].display.cost_in_cents, Some(36.0));
         });
     });
 }
@@ -1093,7 +1254,7 @@ fn test_get_entries_excludes_child_agent_task() {
         model.tasks.insert(child_task.task_id, child_task.clone());
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             assert_eq!(entries.len(), 1);
             assert_eq!(
                 entries[0].id,
@@ -1134,6 +1295,7 @@ fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
         history_model.update(&mut app, |model, ctx| {
@@ -1152,11 +1314,13 @@ fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
 
         app.update(|ctx| {
             assert!(
-                model.get_entries(&all_owner_filters(), ctx).is_empty(),
+                model
+                    .get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx)
+                    .is_empty(),
                 "a conversation shadowed by a child task must be hidden with it"
             );
             assert!(
-                !model.has_items(ctx),
+                !model.has_items(&TeamlessScopeForTest, ctx),
                 "a conversation shadowed by a child task must not count as a visible item"
             );
         });
@@ -1207,11 +1371,11 @@ fn test_has_items_ignores_child_agent_tasks() {
 
         app.update(|ctx| {
             assert!(
-                !child_only.has_items(ctx),
+                !child_only.has_items(&TeamlessScopeForTest, ctx),
                 "a child-only model should be treated as empty"
             );
             assert!(
-                with_parent.has_items(ctx),
+                with_parent.has_items(&TeamlessScopeForTest, ctx),
                 "a model with a non-child task should have items"
             );
         });
@@ -1234,7 +1398,7 @@ fn test_get_entries_includes_cloud_metadata_only_entry() {
         let model = create_test_model();
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1284,6 +1448,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1300,7 +1465,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1339,6 +1504,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1356,7 +1522,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1391,7 +1557,7 @@ fn test_get_entries_keeps_unrelated_task_and_conversation_entries() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 2);
             assert!(
@@ -1634,6 +1800,7 @@ fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -1751,8 +1918,11 @@ fn test_resolve_open_action_opens_metadata_only_cloud_conversation_by_server_tok
         app.add_singleton_model(|_| create_test_model());
 
         app.update(|ctx| {
-            let entries =
-                AgentConversationsModel::as_ref(ctx).get_entries(&all_owner_filters(), ctx);
+            let entries = AgentConversationsModel::as_ref(ctx).get_entries(
+                &all_owner_filters(),
+                &TeamlessScopeForTest,
+                ctx,
+            );
             let entry = entries
                 .iter()
                 .find(|entry| {
@@ -1989,6 +2159,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2151,6 +2322,7 @@ fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_tok
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2345,6 +2517,55 @@ fn test_eviction_noop_when_under_cap() {
 }
 
 #[test]
+fn test_eviction_caps_explicit_teams_independently() {
+    let now = Utc::now();
+    let team_a = ServerId::from(10);
+    let team_b = ServerId::from(20);
+    let mut model = create_test_model();
+
+    for i in 0..350 {
+        let mut task = create_test_task(
+            &make_uuid(10_000 + i),
+            "team-a-user",
+            now - Duration::hours(i as i64),
+        );
+        task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_a.to_string(),
+        });
+        model.tasks.insert(task.task_id, task);
+    }
+    for i in 0..350 {
+        let mut task = create_test_task(
+            &make_uuid(20_000 + i),
+            "team-b-user",
+            now - Duration::hours(i as i64),
+        );
+        task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_b.to_string(),
+        });
+        model.tasks.insert(task.task_id, task);
+    }
+
+    model.enforce_task_cap("current-user");
+
+    let count_for_team = |team_uid: ServerId| {
+        model
+            .tasks
+            .values()
+            .filter(|task| {
+                task.scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.is_team() && scope.uid == team_uid.to_string())
+            })
+            .count()
+    };
+    assert_eq!(count_for_team(team_a), MAX_TEAM_TASKS);
+    assert_eq!(count_for_team(team_b), MAX_TEAM_TASKS);
+}
+
+#[test]
 fn test_environment_none_filter_includes_conversations() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
@@ -2377,7 +2598,7 @@ fn test_environment_none_filter_includes_conversations() {
         };
 
         app.update(|ctx| {
-            let entries = model.get_entries(&filters, ctx);
+            let entries = model.get_entries(&filters, &TeamlessScopeForTest, ctx);
 
             assert!(
                 entries.iter().any(
@@ -2437,6 +2658,8 @@ fn test_task_status_maps_blocked_state_to_blocked() {
         task.status_message = Some(TaskStatusMessage {
             message: "Needs clarification".to_string(),
             error_code: None,
+            session_debug_until: None,
+            debug_agent_active: false,
         });
 
         app.update(|ctx| {
@@ -2480,6 +2703,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2497,7 +2721,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             assert_eq!(
@@ -2541,6 +2765,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                use_warp_credits_instead_of_chatgpt: false,
             },
         );
 
@@ -2558,7 +2783,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             assert_eq!(
@@ -2590,7 +2815,7 @@ fn test_get_entries_keeps_unrelated_tasks_and_conversations() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 2);
             assert!(
@@ -2654,6 +2879,7 @@ fn test_harness_filter_matches_only_selected_harness() {
                             harness: filter,
                             ..Default::default()
                         },
+                        &TeamlessScopeForTest,
                         ctx,
                     )
                     .into_iter()
@@ -2710,11 +2936,8 @@ fn test_harness_filter_is_filtering_and_reset() {
 #[test]
 fn test_task_fetch_error_extracts_access_denied_http_status() {
     for status in [401, 403] {
-        let error = anyhow::Error::new(HttpStatusError {
-            status,
-            body: String::new(),
-        })
-        .context("run metadata unavailable");
+        let error = anyhow::Error::new(HttpStatusError::new(status, String::new()))
+            .context("run metadata unavailable");
         let fetch_error = TaskFetchError::from_error(&error);
 
         assert_eq!(fetch_error.message(), "run metadata unavailable");
@@ -2725,11 +2948,8 @@ fn test_task_fetch_error_extracts_access_denied_http_status() {
     }
 
     for error in [
-        anyhow::Error::new(HttpStatusError {
-            status: 404,
-            body: String::new(),
-        })
-        .context("permission denied text alone should not decide the UI"),
+        anyhow::Error::new(HttpStatusError::new(404, String::new()))
+            .context("permission denied text alone should not decide the UI"),
         anyhow::anyhow!("API error 403: forbidden"),
     ] {
         assert!(!TaskFetchError::from_error(&error).is_access_denied());

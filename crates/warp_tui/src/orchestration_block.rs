@@ -19,11 +19,12 @@ use warp::tui_export::{
     BlocklistOrchestrationTelemetryEvent, Harness, HarnessAvailabilityEvent,
     HarnessAvailabilityModel, LLMPreferences, LLMPreferencesEvent, ORCHESTRATION_WARP_WORKER_HOST,
     OptionSnapshot, OrchestrationConfig, OrchestrationConfigState, OrchestrationConfigStatus,
-    OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource,
+    OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource, ResolvedTeamScope,
     RunAgentsCardDecision, RunAgentsExecutionMode, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsRequest, RunAgentsSpawningSnapshot, persist_host_selection,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, run_agents_card_decision_event, should_show_auth_secret_picker,
+    RunAgentsRequest, RunAgentsSpawningSnapshot, TeamContextResolver, UserWorkspaces,
+    UserWorkspacesEvent, persist_host_selection, resolve_auth_secret_selection_for_harness,
+    resolve_default_environment_id, resolve_default_host_slug, run_agents_card_decision_event,
+    should_show_auth_secret_picker,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::TuiElement;
@@ -167,6 +168,9 @@ pub(crate) struct TuiOrchestrationBlock {
     /// Identity palette pinned at construction so identities stay stable
     /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
+    /// Resolves this card's team context on demand, so host-slug reads follow the window's team
+    /// rather than an ambient, unscoped workspace read.
+    team_context_resolver: TeamContextResolver,
 }
 
 impl TuiOrchestrationBlock {
@@ -238,20 +242,22 @@ impl TuiOrchestrationBlock {
         // so revalidate the edit state and rebuild the active page.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
-            |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
-                | HarnessAvailabilityEvent::AuthSecretCreated { .. }
-                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                    me.orchestration_edit_state
-                        .orchestration_config_state
-                        .revalidate_after_catalog_change(ctx);
-                    me.refresh_active_page(ctx);
-                    ctx.notify();
+            |me, _, event, ctx| {
+                let team_context = (me.team_context_resolver)(ctx);
+                match event {
+                    HarnessAvailabilityEvent::Changed
+                    | HarnessAvailabilityEvent::AuthSecretsChanged => {
+                        me.orchestration_edit_state
+                            .orchestration_config_state
+                            .revalidate_after_catalog_change(&team_context, ctx);
+                        me.refresh_active_page(ctx);
+                        ctx.notify();
+                    }
+                    HarnessAvailabilityEvent::AuthSecretCreated { .. }
+                    | HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
-                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -259,11 +265,24 @@ impl TuiOrchestrationBlock {
         // revalidate the edit state and rebuild the active model page.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
+                let team_context = (me.team_context_resolver)(ctx);
                 me.orchestration_edit_state
                     .orchestration_config_state
-                    .revalidate_after_catalog_change(ctx);
+                    .revalidate_after_catalog_change(&team_context, ctx);
                 me.refresh_active_page(ctx);
                 ctx.notify();
+            }
+        });
+
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.handle_team_scope_change(ctx);
             }
         });
 
@@ -315,6 +334,7 @@ impl TuiOrchestrationBlock {
         let orchestration_edit_state = OrchestrationEditState::new(
             Self::config_state_from_request(request, active_config.as_ref()),
         );
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         Self {
             conversation_id,
             action_id: action.id.clone(),
@@ -334,6 +354,7 @@ impl TuiOrchestrationBlock {
             entered_event_emitted: false,
             decision_event_emitted: false,
             identity_palette,
+            team_context_resolver,
         }
     }
 
@@ -370,6 +391,7 @@ impl TuiOrchestrationBlock {
     /// environment, and an `Unset` auth selection re-seeds from persisted
     /// per-harness settings.
     fn resolve_interactive_defaults(&mut self, ctx: &AppContext) {
+        let team_context = (self.team_context_resolver)(ctx);
         let state = &mut self.orchestration_edit_state.orchestration_config_state;
         if state.model_id.is_empty() {
             let harness = Harness::parse_orchestration_harness(&state.harness_type);
@@ -388,7 +410,7 @@ impl TuiOrchestrationBlock {
             let needs_host = worker_host.is_empty();
             let needs_env = environment_id.is_empty();
             if needs_host {
-                let default_host = resolve_default_host_slug(ctx)
+                let default_host = resolve_default_host_slug(&team_context, ctx)
                     .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());
                 state.set_worker_host(default_host);
             }
@@ -398,8 +420,30 @@ impl TuiOrchestrationBlock {
         }
         if matches!(state.auth_secret_selection, AuthSecretSelection::Unset) {
             state.auth_secret_selection =
-                resolve_auth_secret_selection_for_harness(&state.harness_type, ctx);
+                resolve_auth_secret_selection_for_harness(&team_context, &state.harness_type, ctx);
         }
+    }
+
+    fn handle_team_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let state = &mut self.orchestration_edit_state.orchestration_config_state;
+        state.auth_secret_selection = AuthSecretSelection::Unset;
+        state.revalidate_after_catalog_change(&team_scope, ctx);
+
+        if self.accept_error.is_some() {
+            self.accept_error = self.controller.accept_disabled_reason(state, ctx);
+        }
+        if matches!(
+            self.mode,
+            CardMode::Configuring {
+                page: ConfigPage::ApiKey
+            }
+        ) {
+            self.ensure_auth_secrets_fetched(ctx);
+        }
+        self.refresh_active_page(ctx);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
+        ctx.notify();
     }
 
     /// Re-syncs edit state from the latest streaming request chunk
@@ -412,7 +456,7 @@ impl TuiOrchestrationBlock {
         if self.spawning.is_some() || self.decided {
             return;
         }
-        self.action.action = AIAgentActionType::RunAgents(request.clone());
+        self.action.action = AIAgentActionType::RunAgents(Box::new(request.clone()));
         let new_state = Self::config_state_from_request(request, self.active_config.as_ref());
         let changed = self.request_fields != *request
             || self.orchestration_edit_state.orchestration_config_state != new_state;
@@ -491,9 +535,11 @@ impl TuiOrchestrationBlock {
 
     /// Builds the option snapshot for `page` from the shared builders.
     fn snapshot_for_page(&self, page: ConfigPage, ctx: &AppContext) -> OptionSnapshot {
+        let team_context = (self.team_context_resolver)(ctx);
         self.controller.snapshot_for_page(
             page,
             &self.orchestration_edit_state.orchestration_config_state,
+            &team_context,
             ctx,
         )
     }
@@ -530,9 +576,12 @@ impl TuiOrchestrationBlock {
 
     /// Returns from configuration to the interactive acceptance card.
     fn return_to_acceptance(&mut self, ctx: &mut ViewContext<Self>) {
+        let retain_focus = ctx.is_self_or_child_focused();
         self.mode = CardMode::Acceptance;
         self.pending_page_navigation = None;
-        ctx.focus_self();
+        if retain_focus {
+            ctx.focus_self();
+        }
         ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
@@ -569,8 +618,9 @@ impl TuiOrchestrationBlock {
         ) else {
             return;
         };
+        let team_scope = ResolvedTeamScope::from_scope(&(self.team_context_resolver)(ctx));
         HarnessAvailabilityModel::handle(ctx).update(ctx, |availability, ctx| {
-            availability.ensure_auth_secrets_fetched(harness, ctx);
+            availability.ensure_auth_secrets_fetched(&team_scope, harness, ctx);
         });
     }
 
@@ -629,11 +679,16 @@ impl TuiOrchestrationBlock {
                 let CardMode::Configuring { page } = self.mode else {
                     return;
                 };
+                let team_scope = {
+                    let team_context = (self.team_context_resolver)(ctx);
+                    ResolvedTeamScope::from_scope(&team_context)
+                };
                 self.controller.apply_page_selection(
                     page,
                     id,
                     &mut self.orchestration_edit_state,
                     self.fallback_base_model_id.clone(),
+                    &team_scope,
                     ctx,
                 );
                 self.finish_page_confirmation(page, ctx);

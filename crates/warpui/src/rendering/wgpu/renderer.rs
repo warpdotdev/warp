@@ -4,6 +4,8 @@ mod image;
 mod rect;
 mod util;
 
+use std::sync::atomic::Ordering;
+
 use frame::Frame;
 use pathfinder_geometry::vector::Vector2F;
 use util::with_error_scope;
@@ -78,6 +80,12 @@ impl Renderer {
         // zero-sized window.
         if window_size.is_zero() {
             return Ok(());
+        }
+
+        // Surface acquisition can degrade to persistent validation errors after the device-lost
+        // callback fires, which bypasses the event loop's renderer-recovery branch.
+        if resources.device_lost.load(Ordering::SeqCst) {
+            return Err(Error::DeviceLost);
         }
 
         let mut ctx = WGPUContext {

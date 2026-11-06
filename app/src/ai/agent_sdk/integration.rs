@@ -2,6 +2,7 @@ use futures::future;
 use warp_cli::GlobalOptions;
 use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
 use warp_cli::provider::ProviderType;
+use warp_cli::scope::TeamSelection;
 use warp_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::get_simple_integrations::SimpleIntegrationsOutput;
@@ -73,6 +74,14 @@ impl IntegrationCommandRunner {
                 ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                 return;
             }
+            let team_scope =
+                match super::common::resolve_team_scope(&TeamSelection { team: None }, ctx) {
+                    Ok(team_scope) => team_scope,
+                    Err(err) => {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                        return;
+                    }
+                };
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -101,6 +110,7 @@ impl IntegrationCommandRunner {
             let mut merged_config = super::config_file::merge_with_precedence(
                 loaded_file.as_ref(),
                 crate::ai::ambient_agents::AgentConfigSnapshot {
+                    experimental: None,
                     name: None,
                     environment_id: args.environment.environment.clone(),
                     // TODO(REMOTE-1936): support a runner for integrations.
@@ -154,26 +164,26 @@ impl IntegrationCommandRunner {
                 environment_args.environment = merged_config.environment_id.take();
             }
 
-            let environment_uid = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
-                Ok(EnvironmentChoice::None) => {
-                    eprintln!("Creating integration without an environment.");
-                    None
-                }
-                Ok(EnvironmentChoice::Environment { id, .. }) => {
-                    eprintln!("Creating integration with environment {id}.");
-                    Some(id)
-                }
-                Err(ResolveConfigurationError::Canceled) => {
-                    eprintln!("Integration creation canceled.");
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                    return;
-                }
-                Err(err) => {
-                    super::report_fatal_error(anyhow::anyhow!(err), ctx);
-                    return;
-                }
-            };
+            let environment_uid =
+                match EnvironmentChoice::resolve_for_create(environment_args, &team_scope, ctx) {
+                    Ok(EnvironmentChoice::None) => {
+                        eprintln!("Creating integration without an environment.");
+                        None
+                    }
+                    Ok(EnvironmentChoice::Environment { id, .. }) => {
+                        eprintln!("Creating integration with environment {id}.");
+                        Some(id)
+                    }
+                    Err(ResolveConfigurationError::Canceled) => {
+                        eprintln!("Integration creation canceled.");
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                        return;
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(anyhow::anyhow!(err), ctx);
+                        return;
+                    }
+                };
 
             runner.start_create_or_update_flow(
                 ctx,
@@ -416,6 +426,7 @@ impl IntegrationCommandRunner {
             let mut merged_config = super::config_file::merge_with_precedence(
                 loaded_file.as_ref(),
                 crate::ai::ambient_agents::AgentConfigSnapshot {
+                    experimental: None,
                     name: None,
                     environment_id: args.environment.environment.clone(),
                     // TODO(REMOTE-1936): support a runner for integrations.

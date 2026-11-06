@@ -157,6 +157,67 @@ impl Workspace {
         }
     }
 
+    /// Re-anchors a freshly restored block of tabs past `host_group_id`'s last
+    /// member, so restoring into a window whose active tab was already grouped
+    /// does not leave that group split around the new tabs. `restored_indices`
+    /// indexes the current tab list and must be read before any other move.
+    ///
+    /// A no-op while the host group is still contiguous: `NewTabPlacement` can
+    /// land the block outside the group entirely, and that placement is the
+    /// user's setting, not something to override.
+    pub(super) fn move_restored_block_past_group(
+        &mut self,
+        restored_indices: &[usize],
+        host_group_id: TabGroupId,
+    ) {
+        if restored_indices.is_empty() {
+            return;
+        }
+
+        // Restored tabs never join the host group -- their ids are minted
+        // fresh -- so these are exactly the pre-existing members.
+        let member_indices: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| tab.group_id == Some(host_group_id))
+            .map(|(index, _)| index)
+            .collect();
+        let (Some(&first), Some(&last)) = (member_indices.first(), member_indices.last()) else {
+            return;
+        };
+        if last - first + 1 == member_indices.len() {
+            return;
+        }
+
+        let restored: HashSet<usize> = restored_indices.iter().copied().collect();
+        let active_pane_group_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.id());
+
+        let mut restored_tabs = Vec::with_capacity(restored.len());
+        let mut other_tabs = Vec::with_capacity(self.tabs.len());
+        for (index, tab) in self.tabs.drain(..).enumerate() {
+            if restored.contains(&index) {
+                restored_tabs.push(tab);
+            } else {
+                other_tabs.push(tab);
+            }
+        }
+
+        // Mirrors `new_tab_group_from_selected_tabs`: search from the right for
+        // the host group's last surviving member and insert just past it.
+        let insert_at = other_tabs
+            .iter()
+            .rposition(|tab| tab.group_id == Some(host_group_id))
+            .map_or(other_tabs.len(), |last| last + 1);
+        other_tabs.splice(insert_at..insert_at, restored_tabs);
+        self.tabs = other_tabs;
+
+        self.restore_active_tab_index(active_pane_group_id);
+    }
+
     /// Context-aware "create group" entry point used by the
     /// `workspace:new_tab_group_from_active_or_selected_tabs` keybinding. When
     /// the multi-selection covers 2+ tabs, groups the selection; otherwise

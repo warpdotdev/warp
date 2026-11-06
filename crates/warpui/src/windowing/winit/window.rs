@@ -37,8 +37,8 @@ use super::windows::{WindowAttributeErr, get_system_caption_button_bounds, set_w
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
-    self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
-    WindowOptions, WindowStyle,
+    self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowBackdrop,
+    WindowFocusBehavior, WindowOptions, WindowStyle,
 };
 use crate::rendering::wgpu::{
     Renderer, Resources, adapter_has_rendering_offset_bug, from_wgpu_backend, renderer,
@@ -65,6 +65,16 @@ pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = Logica
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);
+}
+
+#[cfg(windows)]
+fn winit_backdrop(backdrop: WindowBackdrop) -> BackdropType {
+    match backdrop {
+        WindowBackdrop::None => BackdropType::None,
+        WindowBackdrop::Mica => BackdropType::MainWindow,
+        WindowBackdrop::Acrylic => BackdropType::TransientWindow,
+        WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,
+    }
 }
 
 pub(crate) struct WindowManager {
@@ -285,23 +295,6 @@ impl platform::WindowManager for WindowManager {
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
         // unsupported on Linux and Windows
         // https://docs.rs/winit/latest/winit/window/struct.Window.html#method.set_blur
-    }
-
-    #[cfg_attr(not(windows), allow(unused_variables))]
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        #[cfg(windows)]
-        {
-            let new_backdrop_texture = if use_blur_texture {
-                BackdropType::TransientWindow
-            } else {
-                BackdropType::None
-            };
-            for window in self.windows.values() {
-                if let Some(inner) = window.inner.borrow().as_ref() {
-                    inner.window.set_system_backdrop(new_backdrop_texture);
-                }
-            }
-        }
     }
 
     fn set_window_title(&self, window_id: WindowId, title: &str) {
@@ -596,11 +589,6 @@ impl platform::WindowManager for IntegrationTestWindowManager {
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
         self.window_manager
             .set_all_windows_background_blur_radius(blur_radius_pixels)
-    }
-
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool) {
-        self.window_manager
-            .set_all_windows_background_blur_texture(use_blur_texture)
     }
 
     fn set_window_title(&self, window_id: WindowId, title: &str) {
@@ -1353,12 +1341,8 @@ fn create_window(
 
         use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
 
-        let background_texture = if window_options.background_blur_texture {
-            BackdropType::TransientWindow
-        } else {
-            BackdropType::None
-        };
-        window_attributes = window_attributes.with_system_backdrop(background_texture);
+        window_attributes = window_attributes
+            .with_system_backdrop(winit_backdrop(window_options.background_backdrop));
 
         // On Windows, don't set the window to be visible until after it has been marked as
         // "cloaked". Winit doesn't support initializing a window as cloaked--so we temporarily set
@@ -1602,6 +1586,16 @@ impl crate::platform::Window for Window {
                     .or(window.is_maximized().then_some(FullscreenState::Maximized))
             })
             .unwrap_or_default()
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn set_background_backdrop(&self, backdrop: WindowBackdrop) {
+        #[cfg(windows)]
+        {
+            if let Some(inner) = self.inner.borrow().as_ref() {
+                inner.window.set_system_backdrop(winit_backdrop(backdrop));
+            }
+        }
     }
 
     fn supports_transparency(&self) -> bool {

@@ -1,9 +1,10 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
-use crate::server::server_api::ai::TaskStatusUpdate;
+use crate::server::server_api::ai::{TaskGitCredentialsError, TaskStatusUpdate};
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
 /// suitable for reporting via `update_agent_task`.
@@ -137,6 +138,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "MCP server '{server_name}' references secret(s) that are not available to this run: {}. Check that each secret exists and is attached to this agent or run.",
+                    secret_names.join(", ")
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::ProfileError(name) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -170,6 +184,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 format!(
                     "Environment setup failed: {msg}. Check your repository URLs and setup commands."
                 ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
+        AgentDriverError::SetupCommandFailed {
+            command, output, ..
+        } => (
+            AgentTaskState::Failed,
+            setup_command_status_update(error, command, output.as_deref()),
+        ),
+        AgentDriverError::SetupCommandTimedOut { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
@@ -225,10 +252,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         ),
 
         // --- Setup errors ---
-        AgentDriverError::TeamMetadataRefreshTimeout => (
+        AgentDriverError::TeamMetadataRefreshFailed(err) => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Timed out refreshing team metadata. Please check your network connection and try again.",
+                format!("Failed to refresh team metadata: {err:#}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -239,6 +266,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
+        AgentDriverError::GitCredentialsFetchFailed(error) => classify_git_credentials_error(error),
         AgentDriverError::ConfigBuildFailed(err) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -322,17 +350,23 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
-        AgentDriverError::HarnessCommandFailed { exit_code } => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
-                format!("Harness command exited with code {exit_code}"),
-                PlatformErrorCode::InternalError,
-            ),
-        ),
+        AgentDriverError::HarnessCommandFailed { exit_code, output } => {
+            let mut platform_error =
+                PlatformErrorInfo::new(PlatformErrorCode::InternalError, false);
+            platform_error.detail.clone_from(output);
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate {
+                    message: format!("Harness command exited with code {exit_code}"),
+                    error_code: Some(PlatformErrorCode::InternalError),
+                    platform_error: Some(Box::new(platform_error)),
+                },
+            )
+        }
         AgentDriverError::HarnessSetupFailed { harness, reason } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
-                format!("Harness '{harness}' validation failed: {reason}"),
+                format!("Harness '{harness}' setup failed: {reason}"),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
@@ -343,11 +377,14 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+            let detail_separator = match detail.chars().last() {
+                Some('.' | '!' | '?') => " ",
+                _ => ". ",
+            };
             let message = format!(
-                "Harness '{harness}' authentication check failed: login credentials \
-                 are invalid or expired. Verify that the authentication secret \
-                 configured for this harness is correct."
+                "Harness '{harness}' authentication check failed: {detail}{detail_separator}\
+                 Verify that the authentication secret configured for this harness is correct."
             );
             (
                 AgentTaskState::Failed,
@@ -376,6 +413,143 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+
+        // The harness didn't respond to any graceful exit attempt and had to
+        // be forcibly killed. This is a Warp/CLI interaction gap rather than
+        // something the user misconfigured, but the run's own outcome was
+        // already decided before shutdown, so classify like other harness
+        // command-failure variants (FAILED) rather than an internal ERROR.
+        AgentDriverError::HarnessExitTimedOut { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Harness '{harness}' did not exit gracefully and was forcibly terminated."),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
+
+        // The sandbox deadline is either a fixed limit (free plan) the user can
+        // remove by upgrading, or a configurable limit (paid plan) they can adjust.
+        // Either way, it's a task outcome: the user's work didn't fit in the allowed
+        // time, so report as FAILED with no error code.
+        AgentDriverError::SandboxDeadlineReached { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
+    }
+}
+
+pub(super) fn setup_command_status_update(
+    error: &AgentDriverError,
+    command: &str,
+    output: Option<&str>,
+) -> TaskStatusUpdate {
+    let plain_text = format!("{error}. Check your repository URLs and setup commands.");
+    let mut update = TaskStatusUpdate::with_error_code(
+        plain_text.clone(),
+        PlatformErrorCode::EnvironmentSetupFailed,
+    );
+
+    if let Some(output) = output {
+        // Indentation keeps arbitrary backticks in the output from closing a fenced code block.
+        let markdown = format!(
+            "Failed to run setup command {}:\n\n    {}\n\nCheck your repository URLs and setup commands.",
+            markdown_code_span(command),
+            output.replace('\n', "\n    "),
+        );
+        let info = update.platform_error.as_mut().expect("platform error");
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::PlainText, plain_text);
+        info.user_facing_messages
+            .insert(PlatformErrorMessageFormat::Markdown, markdown);
+    }
+    update
+}
+
+fn markdown_code_span(text: &str) -> String {
+    let longest_run = text
+        .split(|character| character != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    let text = text.replace("\r\n", " ").replace(&['\r', '\n'][..], " ");
+    let padding = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{padding}{text}{padding}{fence}")
+}
+
+/// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific
+/// to any one error source: callers translate their own error into a
+/// `PlatformErrorCode` first, then share this mapping.
+fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState {
+    match code {
+        PlatformErrorCode::AgentStreamFailure
+        | PlatformErrorCode::AgentStreamNetworkError
+        | PlatformErrorCode::AuthenticationRequired
+        | PlatformErrorCode::InternalError
+        | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
+        PlatformErrorCode::BudgetExceeded
+        | PlatformErrorCode::ContentPolicyViolation
+        | PlatformErrorCode::EnvironmentSetupFailed
+        | PlatformErrorCode::ExternalAuthenticationRequired
+        | PlatformErrorCode::FeatureNotAvailable
+        | PlatformErrorCode::InsufficientCredits
+        | PlatformErrorCode::IntegrationDisabled
+        | PlatformErrorCode::IntegrationNotConfigured
+        | PlatformErrorCode::InvalidRequest
+        | PlatformErrorCode::NotAuthorized
+        | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+    }
+}
+
+/// Classify a `TaskGitCredentialsError` into a task state and a `TaskStatusUpdate`.
+fn classify_git_credentials_error(
+    error: &TaskGitCredentialsError,
+) -> (AgentTaskState, TaskStatusUpdate) {
+    match error {
+        TaskGitCredentialsError::Platform {
+            message,
+            detail,
+            info,
+        } => {
+            let message = match detail {
+                Some(detail) if !detail.is_empty() => format!("{message} ({detail})"),
+                _ => message.clone(),
+            };
+            (
+                task_state_for_platform_error_code(info.code),
+                TaskStatusUpdate {
+                    message,
+                    error_code: Some(info.code),
+                    platform_error: Some(info.clone()),
+                },
+            )
+        }
+        TaskGitCredentialsError::Unstructured { message } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate {
+                message: message.clone(),
+                error_code: Some(PlatformErrorCode::InvalidRequest),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InvalidRequest,
+                    false,
+                ))),
+            },
+        ),
+        TaskGitCredentialsError::Request(_) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate {
+                message: error.to_string(),
+                error_code: Some(PlatformErrorCode::InternalError),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InternalError,
+                    true,
+                ))),
+            },
+        ),
     }
 }
 

@@ -8,13 +8,13 @@ use anyhow::Context;
 use tempfile::{Builder, NamedTempFile};
 use vec1::Vec1;
 use warp_core::safe_info;
-use warp_managed_secrets::ManagedSecretManager;
 use warpui::{ModelSpawner, SingletonEntity};
 
 use super::super::terminal::TerminalDriver;
 use super::{CloudProvider, CloudProviderSetupError, Result};
 use crate::ai::aws_credentials::aws_role_session_name;
 use crate::ai::cloud_environments::AwsProviderConfig;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 
 /// Default duration for OIDC identity tokens issued for cloud provider auth.
 /// The AWS CLI doesn't offer a mechanism for refreshing web identity tokens, so we
@@ -36,10 +36,10 @@ pub(crate) struct AwsCloudProvider {
 impl AwsCloudProvider {
     const PROVIDER_NAME: &'static str = "aws";
 
-    pub fn new(config: &AwsProviderConfig, run_id: &str) -> Result<Self> {
+    pub fn new(config: &AwsProviderConfig, run_id: Option<&str>) -> Result<Self> {
         // The `tempfile` crate defaults to creating temporary files with user-only permissions.
         let token_file = Builder::new()
-            .prefix(&format!("oz_aws_oidc_{run_id}_"))
+            .prefix(&format!("oz_aws_oidc_{}_", run_id.unwrap_or("standby")))
             .suffix(".token")
             .tempfile()
             .context("Failed to create temporary AWS OIDC token file")
@@ -47,7 +47,9 @@ impl AwsCloudProvider {
 
         Ok(Self {
             role_arn: config.role_arn.clone(),
-            session_name: aws_role_session_name(run_id),
+            session_name: run_id
+                .map(aws_role_session_name)
+                .unwrap_or_else(|| "Oz_Standby".into()),
             token_file,
         })
     }
@@ -96,6 +98,7 @@ impl CloudProvider for AwsCloudProvider {
                     ManagedSecretManager::handle(ctx)
                         .as_ref(ctx)
                         .issue_task_identity_token(
+                            None,
                             warp_managed_secrets::client::IdentityTokenOptions {
                                 audience,
                                 requested_duration: duration,

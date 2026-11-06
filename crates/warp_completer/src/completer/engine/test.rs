@@ -9,7 +9,9 @@ use crate::meta::{Span, SpannedItem};
 use crate::parsers::simple::{command_at_cursor_position, parse_for_completions};
 use crate::parsers::{ParsedToken, classify_command};
 use crate::signatures::CommandRegistry;
-use crate::signatures::testing::{create_test_command_registry, test_signature};
+use crate::signatures::testing::{
+    add_content_signature, create_test_command_registry, git_signature, test_signature,
+};
 
 fn location(line: &str, registry: CommandRegistry, pos: usize) -> Vec<LocationType> {
     let ctx = FakeCompletionContext::new(registry);
@@ -210,6 +212,72 @@ fn completes_flags_having_one_hyphen() {
             LocationType::Flag {
                 command_name: "clang".to_owned().spanned(Span::new(12, 17)),
                 flag_name: Some("-".to_owned().spanned(Span::new(18, 19)))
+            },
+        ]
+    );
+}
+
+#[test]
+fn completes_only_arguments_after_end_of_options() {
+    let command = "git".to_owned().spanned(Span::new(0, 3));
+    let registry = create_test_command_registry([git_signature()]);
+
+    assert_eq!(
+        location("git -- ", registry, 7),
+        vec![LocationType::Argument {
+            command_name: command,
+            argument_name: None,
+            parsed_token: ParsedToken::empty(),
+        }]
+    );
+}
+
+#[test]
+fn treats_dash_prefixed_tokens_after_end_of_options_as_arguments() {
+    let command = "git".to_owned().spanned(Span::new(0, 3));
+    let registry = create_test_command_registry([git_signature()]);
+
+    assert_eq!(
+        location("git -- -operand", registry, 15),
+        vec![LocationType::Argument {
+            command_name: command,
+            argument_name: None,
+            parsed_token: ParsedToken::new("-operand"),
+        }]
+    );
+}
+
+#[test]
+fn treats_single_dash_after_end_of_options_as_an_argument() {
+    let command = "git".to_owned().spanned(Span::new(0, 3));
+    let registry = create_test_command_registry([git_signature()]);
+
+    assert_eq!(
+        location("git -- -", registry, 8),
+        vec![LocationType::Argument {
+            command_name: command,
+            argument_name: None,
+            parsed_token: ParsedToken::new("-"),
+        }]
+    );
+}
+
+#[test]
+fn completes_flags_after_double_dash_for_posix_noncompliant_commands() {
+    let command = "Add-Content".to_owned().spanned(Span::new(0, 11));
+    let registry = create_test_command_registry([add_content_signature()]);
+
+    assert_eq!(
+        location("Add-Content -- ", registry, 15),
+        vec![
+            LocationType::Argument {
+                command_name: command.clone(),
+                argument_name: None,
+                parsed_token: ParsedToken::empty(),
+            },
+            LocationType::Flag {
+                command_name: command,
+                flag_name: None,
             },
         ]
     );

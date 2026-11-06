@@ -167,18 +167,6 @@ impl NotebookManager {
         }
     }
 
-    /// Returns a shared handle to the parsed raw text.
-    pub fn notebook_raw_text_shared(&self, notebook_id: SyncId) -> Option<Arc<str>> {
-        match self
-            .raw_text_by_hashed_id
-            .get(&notebook_id.uid())
-            .unwrap_or(&NotebookRawTextStatus::NotParsed)
-        {
-            NotebookRawTextStatus::Parsed(text) => Some(text.clone()),
-            _ => None,
-        }
-    }
-
     /// Unconditionally create a new notebook pane.
     pub fn create_pane(
         &mut self,

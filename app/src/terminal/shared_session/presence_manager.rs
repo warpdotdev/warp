@@ -11,7 +11,7 @@ use rand::Rng;
 use session_sharing_protocol::common::Viewer;
 use session_sharing_protocol::common::{
     InputReplicaId, ParticipantId, ParticipantInfo, ParticipantList, ParticipantPresenceUpdate,
-    PresenceUpdate, Role, RoleRequestId, Selection,
+    PresenceUpdate, ProfileData, Role, RoleRequestId, Selection,
 };
 use warpui::assets::asset_cache::{AssetCache, AssetState};
 use warpui::r#async::SpawnedFutureHandle;
@@ -725,6 +725,16 @@ impl PresenceManager {
 
     pub fn absent_viewers(&self) -> impl Iterator<Item = &AbsentViewer> + '_ {
         self.absent_viewers.values()
+    }
+
+    pub fn participant_profile(&self, id: &ParticipantId) -> Option<&ProfileData> {
+        self.get_participant(id)
+            .map(|participant| &participant.info.profile_data)
+            .or_else(|| {
+                self.absent_viewers
+                    .get(id)
+                    .map(|viewer| &viewer.participant_info.profile_data)
+            })
     }
 
     /// Returns a viewer's firebase uid, if the viewer is known to us.

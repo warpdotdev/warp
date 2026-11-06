@@ -10,7 +10,9 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
 use crate::ai::blocklist::action_model::RecordingTelemetryEvent;
-use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::action_model::recording_controller::{
+    RecordingController, video_recording_enabled,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
 use crate::send_telemetry_from_ctx;
@@ -31,7 +33,7 @@ impl StartRecordingExecutor {
         // Recording is only offered within an already-approved computer-use
         // subagent, so approval extends to it. Still require the feature flag.
         matches!(action.action, AIAgentActionType::StartRecording { .. })
-            && FeatureFlag::VideoRecording.is_enabled()
+            && video_recording_enabled()
     }
 
     pub(super) fn execute(

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
 use thiserror::Error;
+use warp_completer::meta::Span;
 #[cfg(feature = "local_fs")]
 use warp_errors::report_error;
 use warp_util::path::ShellFamily;
@@ -59,23 +60,11 @@ enum PtyWrite {
         /// The `mode` for the agent's write.
         mode: AIAgentPtyWriteMode,
     },
-    RunNativeShellCompletions(NativeShellCompletionsState),
-}
-
-enum NativeShellCompletionsState {
-    AwaitingPrompt {
-        buffer_text: String,
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+    RunNativeShellCompletions {
+        command: String,
+        shell_type: ShellType,
+        results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
     },
-    AwaitingResults {
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
-    },
-}
-
-impl NativeShellCompletionsState {
-    fn is_awaiting_prompt(&self) -> bool {
-        matches!(self, Self::AwaitingPrompt { .. })
-    }
 }
 
 /// Controller for writes to the PTY.
@@ -97,7 +86,8 @@ pub struct PtyController<T: EventLoopSender> {
     /// complete, it will be dropped to clean up the temporary file.
     #[cfg(not(target_family = "wasm"))]
     bootstrap_file: Option<TempBootstrapFile>,
-    in_flight_native_completions_state: Option<NativeShellCompletionsState>,
+    in_flight_native_completions_results_tx:
+        Option<async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>>,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -138,40 +128,12 @@ impl<T: EventLoopSender> PtyController<T> {
                     me.send_switch_to_warp_prompt_bindkey(ctx);
                 }
             }
-            ModelEvent::CompletionsFinished(data) => {
-                let Some(NativeShellCompletionsState::AwaitingResults { results_tx }) = me.in_flight_native_completions_state.take() else {
+            ModelEvent::CompletionsFinished(data, replacement_span) => {
+                let Some(results_tx) = me.in_flight_native_completions_results_tx.take() else {
                     log::warn!("Received CompletionsFinished event but didn't have a channel to send results over!");
                     return;
                 };
-                let _ = block_on(results_tx.send(data.clone()));
-            }
-            ModelEvent::SendCompletionsPrompt => {
-                let Some(NativeShellCompletionsState::AwaitingPrompt {
-                    buffer_text,
-                    results_tx,
-                }) = me.in_flight_native_completions_state.take() else {
-                    log::warn!("Received SendCompletionsPrompt event but didn't have a prompt to send!");
-                    return;
-                };
-                me.in_flight_native_completions_state = Some(NativeShellCompletionsState::AwaitingResults { results_tx });
-
-                let mut bytes = buffer_text.into_bytes();
-                // We use the EOT character to signal the end of the prompt.
-                bytes.push(escape_sequences::C0::EOT);
-
-                // We send the write directly to the event loop without
-                // queueing, as we currently have exclusive control over pty
-                // writes.
-                me.send_write_to_event_loop(
-                    PtyWrite::Bytes {
-                        bytes: bytes.into(),
-                    },
-                    ctx,
-                );
-
-                // Now that we've provided the prompt, we can start executing
-                // other queued writes.
-                me.execute_next_queued_write(ctx);
+                let _ = block_on(results_tx.send((data.clone(), *replacement_span)));
             }
             _ => (),
         });
@@ -223,7 +185,7 @@ impl<T: EventLoopSender> PtyController<T> {
             is_bracketed_paste_enabled: false,
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
-            in_flight_native_completions_state: None,
+            in_flight_native_completions_results_tx: None,
         }
     }
 
@@ -335,9 +297,6 @@ impl<T: EventLoopSender> PtyController<T> {
     /// enqueue writes for later.
     fn can_write_to_pty(&self, ctx: &mut ModelContext<Self>) -> bool {
         self.line_editor_status.as_ref(ctx).is_line_editor_active()
-            // If we're in the middle of a native completions request, we should not send any more
-            // writes to the shell until we've sent the string to complete.
-            && !self.in_flight_native_completions_state.as_ref().is_some_and(|state| state.is_awaiting_prompt())
     }
 
     /// Executes the next queued `PtyWrite`, if able.
@@ -351,7 +310,10 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(write) = self.pending_writes.pop_front() {
-            let is_command = matches!(write, PtyWrite::Command { .. });
+            let is_command = matches!(
+                &write,
+                PtyWrite::Command { .. } | PtyWrite::RunNativeShellCompletions { .. }
+            );
             let did_write = self.send_write_to_event_loop(write, ctx);
             if !is_command || !did_write {
                 self.execute_next_queued_write(ctx);
@@ -652,7 +614,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
     fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) -> bool {
-        let (bytes_to_write, is_for_command, on_write_fn) = match write {
+        let (bytes_to_write, is_for_command, on_write_fn, shell_type_for_split) = match write {
             PtyWrite::Command {
                 command,
                 shell_type,
@@ -666,21 +628,35 @@ impl<T: EventLoopSender> PtyController<T> {
                 )),
                 true,
                 on_write_fn,
+                Some(shell_type),
             ),
             PtyWrite::AgentInput { bytes, mode } => {
                 let decorated_bytes =
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None)
+                (decorated_bytes.into(), false, None, None)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None),
-            PtyWrite::RunNativeShellCompletions(state) => {
-                self.in_flight_native_completions_state = Some(state);
+            PtyWrite::Bytes { bytes } => (bytes, false, None, None),
+            PtyWrite::RunNativeShellCompletions {
+                command,
+                shell_type,
+                results_tx,
+            } => {
+                self.in_flight_native_completions_results_tx = Some(results_tx);
 
-                // Send a ^Y control code to trigger the right bindkey.  We
-                // then wait for an OSC-based signal from the shell before we
-                // send the text that needs to be completed.
-                let bytes = vec![0x19_u8];
-                (bytes.into(), false, None)
+                let terminal_model = self.terminal_model.clone();
+                (
+                    Cow::Owned(bytes_to_execute_command(
+                        command.as_str(),
+                        shell_type,
+                        self.is_bracketed_paste_enabled,
+                    )),
+                    true,
+                    Some(
+                        Box::new(move || terminal_model.lock().start_in_band_command_execution())
+                            as Box<dyn Fn() -> StartCommandOutcome + Send + 'static>,
+                    ),
+                    Some(shell_type),
+                )
             }
         };
 
@@ -700,6 +676,14 @@ impl<T: EventLoopSender> PtyController<T> {
                 .update(ctx, |line_editor_status, ctx| {
                     line_editor_status.did_execute_command(ctx)
                 });
+        }
+
+        if let Some(shell_type) = shell_type_for_split
+            && let Some((kill_buffer, rest)) = split_kill_buffer_write(&bytes_to_write, shell_type)
+        {
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(kill_buffer.to_vec())), ctx);
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(rest.to_vec())), ctx);
+            return true;
         }
 
         self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
@@ -723,21 +707,33 @@ impl<T: EventLoopSender> PtyController<T> {
     pub fn run_native_shell_completions(
         &mut self,
         buffer_text: String,
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let Some(shell_type) = self
+            .model_event_dispatcher
+            .as_ref(ctx)
+            .active_session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+            .map(|session| session.shell().shell_type())
+        else {
+            let _ = results_tx.try_send((Vec::new(), None));
+            return;
+        };
+        let command =
+            shell_type.native_completions_generator_command(&hex::encode(buffer_text.as_bytes()));
+
         // Make sure we only have a single pending native shell completions
         // request at a time by dropping any existing ones from the queue.
         self.pending_writes
-            .retain(|write| !matches!(write, PtyWrite::RunNativeShellCompletions(_)));
+            .retain(|write| !matches!(write, PtyWrite::RunNativeShellCompletions { .. }));
 
         self.pending_writes
-            .push_back(PtyWrite::RunNativeShellCompletions(
-                NativeShellCompletionsState::AwaitingPrompt {
-                    buffer_text,
-                    results_tx,
-                },
-            ));
+            .push_back(PtyWrite::RunNativeShellCompletions {
+                command,
+                shell_type,
+                results_tx,
+            });
         self.execute_next_queued_write(ctx);
     }
 }
@@ -749,6 +745,31 @@ pub enum PtyControllerEvent {
 
 impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
+}
+
+/// Splits `shell_type`'s kill-buffer chord off the front of `bytes` (the output of
+/// `bytes_to_execute_command`, which prepends it), returning `Some((kill_buffer_bytes, rest))`, or
+/// `None` when there is nothing to split.
+///
+/// Only PowerShell needs this. Its kill-buffer chord is an ESC-prefixed sequence that PSReadLine
+/// can fail to disambiguate when it arrives in the same read as the command text, leaving the
+/// command typed on top of the buffer; writing the chord separately avoids it. The other three
+/// shells use a single unambiguous control byte. The prefix is validated rather than assumed: a
+/// non-matching prefix returns `None` (write whole) so a caller that passes something else is
+/// never mis-cut.
+fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
+    if shell_type != ShellType::PowerShell {
+        return None;
+    }
+    let kill_buffer = shell_type.kill_buffer_bytes();
+    if !bytes.starts_with(kill_buffer) {
+        return None;
+    }
+    let (kill_buffer_bytes, rest) = bytes.split_at(kill_buffer.len());
+    if rest.is_empty() {
+        return None;
+    }
+    Some((kill_buffer_bytes, rest))
 }
 
 /// Returns the shell-dependent array of bytes to be written to the PTY to execute `command`.

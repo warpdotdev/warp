@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn expands_unix_session_home_only_for_home_prefixes() {
+    assert_eq!(
+        expand_session_home("~", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/root")
+    );
+    assert_eq!(
+        expand_session_home("~/project/src", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/root/project/src")
+    );
+    assert_eq!(
+        expand_session_home("~user/project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("~user/project")
+    );
+    assert_eq!(
+        expand_session_home("~\\project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("~\\project")
+    );
+}
+
+#[test]
+fn leaves_paths_without_session_home_unchanged() {
+    assert_eq!(
+        expand_session_home("~/project", None, &['/']),
+        TypedPathBuf::from_unix("~/project")
+    );
+    assert_eq!(
+        expand_session_home("/tmp/project", Some("/root"), &['/']),
+        TypedPathBuf::from_unix("/tmp/project")
+    );
+}
+
+#[test]
+fn expands_windows_session_home_with_windows_separators() {
+    assert_eq!(
+        expand_session_home(r"~\Desktop", Some(r"C:\Users\user"), &['/', '\\']),
+        TypedPathBuf::from_windows(r"C:\Users\user\Desktop")
+    );
+}
+
+#[test]
 fn test_user_friendly_path_with_home() {
     let home = "/Users/blue";
     assert_eq!(
@@ -1038,4 +1078,87 @@ mod group_roots_by_common_ancestor_tests {
             vec![pb("/a/b"), pb("/a/b/c")]
         );
     }
+}
+/// TODO(CORE-3626): write an equivalent test with Windows paths.
+#[cfg(not(windows))]
+#[test]
+fn test_resolve_command() {
+    use std::path::Path;
+
+    use crate::path::resolve_executable;
+
+    assert_eq!(
+        &resolve_executable("/bin/sh").unwrap(),
+        Path::new("/bin/sh")
+    );
+    assert_eq!(
+        &resolve_executable("env").unwrap(),
+        Path::new("/usr/bin/env")
+    );
+    // This path exists in the Warp repo, so it should resolve. The `../../`
+    // is because Rust unit tests run from the root of the crate (`warp_util` in
+    // this case).
+    assert_eq!(
+        &resolve_executable("../../script/run").unwrap(),
+        Path::new("../../script/run")
+    );
+    // `pwd` should always exist (it's also a shell builtin), but we won't
+    // assume a specific location.
+    assert!(resolve_executable("pwd").is_some());
+    assert!(resolve_executable("unlikely-command").is_none());
+    assert!(resolve_executable("nonexistent/relative/path").is_none());
+    // src/main.rs does exist, but is not executable.
+    assert!(resolve_executable("src/main.rs").is_none());
+    // Note the trailing space.
+    assert!(resolve_executable("zsh ").is_none());
+}
+
+#[cfg(windows)]
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+#[cfg(windows)]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl Into<std::ffi::OsString>) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value.into());
+        }
+        Self { key, original }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(original) = &self.original {
+            unsafe {
+                std::env::set_var(self.key, original);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[serial_test::serial]
+fn test_resolve_command_uses_pathext() {
+    use crate::path::resolve_executable_in_path;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let command_path = temp_dir.path().join("codex.cmd");
+    std::fs::write(&command_path, "@echo off\r\n").unwrap();
+
+    let _pathext = EnvVarGuard::set("PATHEXT", ".CMD;.EXE");
+    let resolved = resolve_executable_in_path("codex", temp_dir.path().as_os_str()).unwrap();
+    assert_eq!(
+        resolved.as_ref().to_string_lossy().to_ascii_lowercase(),
+        command_path.to_string_lossy().to_ascii_lowercase()
+    );
 }

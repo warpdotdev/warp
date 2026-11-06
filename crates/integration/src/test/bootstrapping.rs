@@ -1,5 +1,9 @@
 //! Integration tests for bootstrapping logic.
 
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+
 use settings::Setting as _;
 use version_compare::Cmp;
 use warp::cmd_or_ctrl_shift;
@@ -14,7 +18,8 @@ use warp::integration_testing::terminal::util::{
 use warp::integration_testing::terminal::{
     assert_active_block_command_for_single_terminal_in_tab,
     assert_long_running_block_executing_for_single_terminal_in_tab,
-    execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_single_pane_for_tab,
+    clear_blocklist_to_remove_bootstrapped_blocks, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
@@ -23,7 +28,7 @@ use warp::terminal::session_settings::HonorPS1;
 use warp::terminal::shell::{self, ShellType};
 use warp::workspace::Workspace;
 use warpui_core::clipboard::ClipboardContent;
-use warpui_core::integration::TestStep;
+use warpui_core::integration::{AssertionCallback, TestStep};
 use warpui_core::{ViewHandle, async_assert, async_assert_eq};
 
 use super::{Builder, new_builder};
@@ -58,6 +63,61 @@ pub fn test_rc_files_only_sourced_once_during_bootstrapping() -> Builder {
             "cat ~/rc_output".to_string(),
             ExpectedExitStatus::Success,
             "foo",
+        ))
+}
+
+pub fn test_cloud_agent_fallback_commands_survive_profile_path_reset() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _version) = current_shell_starter_and_version();
+            cfg!(target_os = "linux")
+                && matches!(
+                    starter.shell_type(),
+                    ShellType::Bash | ShellType::Zsh | ShellType::Fish
+                )
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            let fallback = dir.join("fallback bin");
+            let profile = dir.join("profile-bin");
+            for (bin, output) in [
+                (&fallback, "fallback-command-selected"),
+                (&profile, "profile-command-selected"),
+            ] {
+                fs::create_dir_all(bin).expect("should create command directory");
+                let tool = bin.join("warp-fallback-probe");
+                fs::write(&tool, format!("#!/bin/sh\nprintf '{output}\\n'\n"))
+                    .expect("should write fixture command");
+                #[cfg(unix)]
+                fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))
+                    .expect("fixture command should be executable");
+            }
+            utils.set_env("WARP_CLOUD_AGENT_FALLBACK_BIN", Some(&fallback));
+            utils.set_env(
+                "PATH",
+                Some(format!(
+                    "{}:{}",
+                    fallback.display(),
+                    std::env::var("PATH").unwrap()
+                )),
+            );
+            write_rc_files_for_test(
+                &dir,
+                r#"export PATH="$HOME/profile-bin:/usr/bin:/bin""#,
+                [ShellRcType::Bash, ShellRcType::Zsh],
+            );
+            write_rc_files_for_test(
+                &dir,
+                r#"set -gx PATH "$HOME/profile-bin" /usr/bin /bin"#,
+                [ShellRcType::Fish],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "warp-fallback-probe".to_string(),
+            ExpectedExitStatus::Success,
+            "fallback-command-selected",
         ))
 }
 
@@ -203,6 +263,60 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
         )
 }
 
+fn assert_active_prompt_text(expected: &'static str) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, 0);
+        let prompt = input.read(app, |input, ctx| input.prompt_and_rprompt_text(ctx).0);
+        async_assert_eq!(
+            prompt,
+            expected,
+            "active prompt should be {expected:?}, got {prompt:?}"
+        )
+    })
+}
+
+pub fn test_bash_honor_ps1_expands_dynamic_prompt_once() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == ShellType::Bash
+        })
+        .with_user_defaults(std::collections::HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            true.to_string(),
+        )]))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "counter=0; PS1='[$((++counter))]'".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Check prompt after setting dynamic PS1")
+                .add_named_assertion(
+                    "Dynamic PS1 expanded once",
+                    assert_active_prompt_text("[1]"),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Submit first blank prompt")
+                .with_keystrokes(&["enter"])
+                .add_named_assertion(
+                    "Dynamic PS1 advanced once",
+                    assert_active_prompt_text("[2]"),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Submit second blank prompt")
+                .with_keystrokes(&["enter"])
+                .add_named_assertion(
+                    "Dynamic PS1 advanced once",
+                    assert_active_prompt_text("[3]"),
+                ),
+        )
+}
+
 pub fn test_bootstrap_with_no_script_execution_block() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
@@ -312,6 +426,86 @@ pub fn test_zsh_bootstraps_with_nounset_option() -> Builder {
             "echo 'nounset test passed'".to_string(),
             ExpectedExitStatus::Success,
             "nounset test passed",
+        ))
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/7099: a `.zshrc` that enables
+/// vi-mode key bindings via `autoload -Uz cursor_mode; cursor_mode` (mirroring the reporter's
+/// exact repro; prezto's `init.zsh` does the same thing) must not leak leftover buffer content,
+/// nor corrupt the command text, into the next command -- even when the line editor is in vi
+/// command (normal) mode, as it transiently can be after a stray byte from the bootstrap paste.
+pub fn test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            // cursor_mode/prezto are zsh-specific.
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::Zsh)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                r#"
+mkdir -p "$HOME/.zfunctions"
+cat > "$HOME/.zfunctions/cursor_mode" << 'CURSOR_MODE_EOF'
+bindkey -v
+CURSOR_MODE_EOF
+fpath=("$HOME/.zfunctions" $fpath)
+autoload -Uz cursor_mode
+cursor_mode
+function zle-line-init() { zle -K vicmd }
+zle -N zle-line-init
+"#,
+                [ShellRcType::Zsh],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        // Leaves "LEFTOVER_RESIDUE" pending in the line editor's buffer for the *next* prompt,
+        // simulating genuine leftover bootstrap-paste bytes Warp has no visibility into.
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -z LEFTOVER_RESIDUE".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo cursor_mode_vi_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "cursor_mode_vi_ok",
+        ))
+}
+
+/// Regression test for CORE-3804: a profile that selects PSReadLine's vi edit mode must not
+/// corrupt submitted commands.
+pub fn test_pwsh_vi_edit_mode_does_not_corrupt_commands() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::PowerShell)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                "Set-PSReadLineOption -EditMode Vi",
+                [ShellRcType::PowerShell],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo vi_edit_mode_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "vi_edit_mode_ok",
+        ))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "Write-Output second_command_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "second_command_ok",
         ))
 }
 

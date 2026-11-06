@@ -295,6 +295,30 @@ pub fn window_local_to_root(
     ))
 }
 
+/// Translates root (screen) coordinates to window-local pixel coordinates, validating that the
+/// point lies inside the window's content box. The inverse of [`window_local_to_root`].
+pub fn root_to_window_local(
+    conn: &RustConnection,
+    root: xproto::Window,
+    window: xproto::Window,
+    point: Vector2I,
+) -> Result<Vector2I, String> {
+    let geometry = geometry(conn, root, window)?;
+    let local = Vector2I::new(point.x() - geometry.x, point.y() - geometry.y);
+    if local.x() < 0
+        || local.y() < 0
+        || local.x() >= i32::from(geometry.width)
+        || local.y() >= i32::from(geometry.height)
+    {
+        return Err(format!(
+            "The pointer at ({}, {}) is outside target window {window}'s bounds.",
+            point.x(),
+            point.y(),
+        ));
+    }
+    Ok(local)
+}
+
 /// Reports whether a pointer event at `point` (root coordinates) would be delivered to `window`
 /// or one of its descendants.
 ///

@@ -1,7 +1,7 @@
 use instant::Instant;
 use warp::tui_export::{
     BlocklistAIHistoryModel, CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
-    ConversationStatus,
+    ConversationStatus, loaded_subtree_rollup,
 };
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -116,8 +116,14 @@ impl TuiCloudRunView {
                 let Ok(page_anchor) = page_anchor.clone().try_into() else {
                     return;
                 };
+                let Some(level_anchor) = view
+                    .compute_orchestration_tab_snapshot(ctx)
+                    .map(|snapshot| snapshot.anchor_conversation_id)
+                else {
+                    return;
+                };
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_explicit_page(page_anchor, ctx);
+                    model.set_explicit_page(level_anchor, page_anchor, ctx);
                 });
             }
         });
@@ -289,19 +295,44 @@ impl TuiCloudRunView {
         self.display_state(ctx).link_url
     }
 
-    /// Returns the child conversation id when a child tab is selected in this
-    /// view's orchestration tab bar (i.e. this cloud run spawned sub-agents).
-    fn is_child_conversation_selected(
+    /// The kill target while the bar is focused, with its loaded-descendant
+    /// count: a selected child tab of the rendered level, or the drilled-in
+    /// anchor itself when it occupies the main-tab slot (anchor ≠ root). The
+    /// root tab is never a kill target. Drives the bar-focused single-press
+    /// kill path and its footer.
+    fn bar_focused_kill_target(
         &self,
         ctx: &AppContext,
-    ) -> Option<warp::tui_export::AIConversationId> {
+    ) -> Option<(warp::tui_export::AIConversationId, usize)> {
         let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
-        (snapshot.selected_conversation_id != snapshot.root_conversation_id)
-            .then_some(snapshot.selected_conversation_id)
+        if snapshot.selected_conversation_id != snapshot.anchor_conversation_id {
+            let nested_descendants = snapshot
+                .children
+                .iter()
+                .find(|child| child.conversation_id == snapshot.selected_conversation_id)
+                .and_then(|child| child.subtree_rollup.as_ref())
+                .map(|rollup| rollup.descendant_count)
+                .unwrap_or_default();
+            return Some((snapshot.selected_conversation_id, nested_descendants));
+        }
+        // A drilled-in anchor only exists under multi-level orchestration
+        // (flag off keeps anchor == root), so single-press subtree kill
+        // cannot reach flag-off trees.
+        if snapshot.anchor_conversation_id == snapshot.root_conversation_id {
+            return None;
+        }
+        let nested_descendants = loaded_subtree_rollup(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            snapshot.anchor_conversation_id,
+        )
+        .map(|rollup| rollup.descendant_count)
+        .unwrap_or_default();
+        Some((snapshot.anchor_conversation_id, nested_descendants))
     }
 
-    /// Kills a child conversation: tombstones it, deletes it from history, and
-    /// removes its session. Equivalent to the GUI's Kill agent path.
+    /// Kills a child conversation and (with multi-level orchestration
+    /// enabled) its loaded subtree, deepest-first: tombstones them, deletes
+    /// them from history, and removes their sessions.
     fn kill_child_agent(
         &mut self,
         conversation_id: warp::tui_export::AIConversationId,
@@ -321,7 +352,7 @@ impl TuiCloudRunView {
                     .copied()
             });
         TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-            model.kill_child_agent(conversation_id, ctx);
+            model.kill_child_agent_subtree(conversation_id, ctx);
         });
         if let Some(session_id) = root_session_id {
             TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
@@ -331,9 +362,11 @@ impl TuiCloudRunView {
     }
 
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
-        // Path 1: tab-bar focused + child tab selected → single ctrl-c kills.
+        // Path 1: tab-bar focused + killable tab selected (a level child, or
+        // the drilled-in anchor occupying the main-tab slot) → single ctrl-c
+        // kills that agent and its loaded subtree, per kill_child_agent.
         if self.orchestration_tabs_focused
-            && let Some(child_id) = self.is_child_conversation_selected(ctx)
+            && let Some((child_id, _)) = self.bar_focused_kill_target(ctx)
         {
             self.kill_child_agent(child_id, ctx);
             return;
@@ -361,7 +394,7 @@ impl TuiCloudRunView {
                                 .copied()
                         });
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.kill_child_agent(conversation_id, ctx);
+                    model.kill_child_agent_subtree(conversation_id, ctx);
                 });
                 if let Some(session_id) = root_session_id {
                     TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
@@ -535,10 +568,15 @@ impl TuiView for TuiCloudRunView {
                     .finish(),
                 )
                 .child(
-                    TuiContainer::new(self.link.render(url, ctx, move |event_ctx, _| {
-                        event_ctx
-                            .dispatch_typed_action(TuiCloudRunAction::OpenUrl(click_url.clone()));
-                    }))
+                    TuiContainer::new(self.link.render(
+                        url,
+                        builder.muted_text_style(),
+                        move |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenUrl(
+                                click_url.clone(),
+                            ));
+                        },
+                    ))
                     .with_padding_top(1)
                     .finish(),
                 );
@@ -555,7 +593,11 @@ impl TuiView for TuiCloudRunView {
         };
         if self.orchestration_tab_bar.as_ref(ctx).has_tabs() {
             let footer = if self.orchestration_tabs_focused {
-                render_cloud_orchestration_tab_footer(&builder)
+                let nested_descendants = self
+                    .bar_focused_kill_target(ctx)
+                    .map(|(_, nested)| nested)
+                    .unwrap_or_default();
+                render_cloud_orchestration_tab_footer(&builder, nested_descendants)
             } else if self.child_kill_armed && self.exit_confirmation.is_armed() {
                 TuiText::new(CTRL_C_KILL_CHILD_HINT)
                     .with_style(builder.muted_text_style())
@@ -609,7 +651,7 @@ impl TypedActionView for TuiCloudRunView {
                 self.set_orchestration_tab_focus(true, ctx);
             }
             TuiCloudRunAction::NavigateOrchestrationTabs(action) => {
-                let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
+                let key = action.target(self.orchestration_tab_bar.as_ref(ctx), ctx);
                 self.switch_to_orchestration_tab(key, true, ctx);
             }
         }

@@ -37,7 +37,7 @@ Non-goals:
 
 1. When the agent response stream fails mid-turn from a transient network/server failure (connection reset, TLS close_notify EOF, truncated response, 5xx, request timeout), the conversation automatically recovers and continues. A single such failure never produces a failed run.
 
-2. If the failure happens before the agent has streamed any actions for the turn, recovery is invisible: the request is re-sent (up to 3 times) and, if an attempt succeeds, the user sees a normal uninterrupted turn.
+2. If the failure happens before the agent has streamed any actions for the failing request, recovery is invisible: the request is re-sent and, if an attempt succeeds, the user sees a normal uninterrupted turn. This covers a failure at any point ahead of the first streamed action, including one that arrives before the response starts at all — an initial connection error or a 5xx before headers.
 
 3. If the failure happens after actions have streamed, the conversation resumes from the server's authoritative state. Work that already executed (commands, tool calls) is never re-executed by the recovery.
 
@@ -55,19 +55,19 @@ Non-goals:
 
 ### Bounded failure
 
-9. Recovery is bounded: at most 3 in-request retries before actions have streamed, and at most one automatic resume after actions have streamed. A resumed request does not auto-resume again.
+9. Recovery is bounded by one budget of 3 attempts per request, shared between in-request retries and automatic resumes. A resumed request may itself be recovered, but only out of what is left of that budget — so a failing request is recovered at most 3 times, however those attempts are split between retries and resumes. The budget is per request, not per turn: a turn spans many requests (every tool-result round trip is its own) and each starts with a full budget, as it did before retries and resumes were unified. ([REMOTE-2269](https://linear.app/warpdotdev/issue/REMOTE-2269/allow-multiple-resume-attempts) raised this from "at most one automatic resume", which left a post-action failure with an effective budget of one attempt.)
 
-10. If recovery is exhausted (the resume also hits a transient failure, or pre-action retries run out while online), the run ends with a terminal error and the message "Warp lost connection while receiving the agent response. This is usually temporary." There is no retry storm: a persistent outage produces exactly one resume attempt before the terminal failure.
+10. If recovery is exhausted, the run ends with a terminal error and the message "Warp lost connection while receiving the agent response. This is usually temporary." There is no retry storm: each attempt waits a jittered exponential backoff first (~0.5s, ~1s, ~2s), so a persistent outage produces at most 3 spaced attempts before the terminal failure rather than an immediate re-send into the same failure window.
 
-11. A cloud run held open for recovery waits at most 120 seconds; if recovery has not restored progress by then, the run ends with the last recorded error.
+11. A cloud run held open for recovery waits at most 120 seconds per recovery attempt: the deadline is armed when an attempt fails and cancelled when the next one lands, so a request that recovers repeatedly is not killed by the cumulative wait. If a single attempt does not restore progress within that window, the run ends with the last recorded error.
 
 12. Application-level failures are never auto-recovered: out-of-credits and server-overload failures end the turn immediately with their specific messages (a recovery attempt would fail identically or add load the server shed). Non-transient errors (4xx, malformed responses) likewise fail immediately.
 
 ### Offline behavior
 
-13. If the client is offline when a pre-action failure occurs, the retry waits for connectivity to return instead of failing, showing the "Reconnecting" state while parked. The retry fires automatically when the client comes back online.
+13. If the client is offline when a pre-action failure occurs, the retry waits for connectivity to return instead of failing, showing the "Reconnecting" state while parked. The retry fires automatically when the client comes back online. A parked retry waits for connectivity rather than the backoff, since the backoff exists to space out attempts against a struggling server.
 
-14. An automatic resume likewise waits for connectivity before sending.
+14. An automatic resume likewise waits for connectivity before sending, after its backoff.
 
 ### Cancellation and interaction during recovery
 

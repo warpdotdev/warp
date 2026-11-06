@@ -3,6 +3,7 @@ use onboarding::{
     AgentOnboardingView, OfferVariant, OnboardingAuthState, OnboardingIntention, SelectedSettings,
     UICustomizationSettings,
 };
+use session_sharing_protocol::common::SessionId;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::elements::Empty;
@@ -86,7 +87,6 @@ fn account_first_requires_login_even_without_ai_or_drive_settings() {
 #[test]
 fn fallback_flow_only_requires_login_for_account_backed_settings() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(false);
-    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
 
     assert!(!requires_post_onboarding_login(false, false, false));
     assert!(requires_post_onboarding_login(false, true, false));
@@ -139,8 +139,8 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
         (
             AccountFirstCompletion::FreeStandardCreditsPurchased,
             "free_standard_credits_purchased",
-            // Buying an ad-hoc credit pack does not put the user on a plan, so
-            // they stay free-standard.
+            // Buying one-time credits does not put the user on a plan, so they
+            // stay free-standard.
             Some(FtueAccountClass::FreeStandard),
             true,
         ),
@@ -351,7 +351,6 @@ fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
                     Vec::new(),
                     LLMId::from("auto"),
                     false,
-                    false,
                     OnboardingAuthState::LoggedOut,
                     ctx,
                 )
@@ -434,5 +433,229 @@ fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
             marker,
             "PostAuthOnboarding",
         );
+    });
+}
+
+/// A logged-out shared-session cold start must bypass product onboarding.
+#[test]
+fn root_view_new_skips_onboarding_for_shared_session_cold_start() {
+    let _agent_onboarding = FeatureFlag::AgentOnboarding.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        crate::workspace::view::tests::initialize_app(&mut app);
+        app.update(|ctx| {
+            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            auth_state.set_credentials(None);
+            auth_state.set_user(None);
+        });
+
+        let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        let session_id = SessionId::new();
+        let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            RootView::new(
+                global_resource_handles,
+                NewWorkspaceSource::SharedSessionAsViewer { session_id },
+                ctx,
+            )
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !matches!(
+                    root_view.as_ref(ctx).auth_onboarding_state,
+                    AuthOnboardingState::Onboarding { .. }
+                ),
+                "a cold-started shared-session window must not enter onboarding"
+            );
+        });
+    });
+}
+
+fn pending_target(state: &AuthOnboardingState) -> Option<&AuthOnboardingTarget> {
+    match state {
+        AuthOnboardingState::Onboarding { target, .. }
+        | AuthOnboardingState::LoginSlide { target, .. }
+        | AuthOnboardingState::PostAuthOnboarding { target, .. } => Some(target),
+        AuthOnboardingState::NeedsSsoLink(target) => Some(target),
+        _ => None,
+    }
+}
+
+fn assert_pending_workspace_retargeted(
+    target: &AuthOnboardingTarget,
+    session_id: SessionId,
+    case: &str,
+) {
+    let AuthOnboardingTarget::Workspace(args) = target else {
+        panic!("{case}: expected a pending workspace target, found an existing terminal");
+    };
+    assert!(
+        matches!(
+            args.workspace_setting,
+            NewWorkspaceSource::SharedSessionAsViewer { session_id: id } if id == session_id
+        ),
+        "{case}: should retarget to the requested session"
+    );
+}
+
+fn pending_workspace_args(app: &mut App) -> Box<WorkspaceArgs> {
+    Box::new(WorkspaceArgs {
+        global_resource_handles: GlobalResourceHandles::mock(app),
+        server_time: None,
+        workspace_setting: NewWorkspaceSource::Empty {
+            previous_active_window: None,
+            shell: None,
+        },
+    })
+}
+
+fn root_view_for_join_test(app: &mut App) -> ViewHandle<RootView> {
+    crate::workspace::view::tests::initialize_app(app);
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        RootView::new(
+            global_resource_handles,
+            NewWorkspaceSource::Empty {
+                previous_active_window: None,
+                shell: None,
+            },
+            ctx,
+        )
+    });
+    root_view
+}
+
+fn act_join_shared_session(
+    app: &mut App,
+    root_view: &ViewHandle<RootView>,
+    session_id: SessionId,
+    case: &str,
+) {
+    let handled = root_view.update(app, |root_view, ctx| {
+        root_view.join_shared_session_in_existing_window(&session_id, ctx)
+    });
+    assert!(handled, "{case}: expected the link to be handled");
+}
+
+fn assert_join_shared_session_retargets_pending(
+    app: &mut App,
+    root_view: &ViewHandle<RootView>,
+    session_id: SessionId,
+    case: &str,
+) {
+    act_join_shared_session(app, root_view, session_id, case);
+    app.read(|ctx| {
+        let state = &root_view.as_ref(ctx).auth_onboarding_state;
+        let target = pending_target(state)
+            .unwrap_or_else(|| panic!("{case}: expected to remain pre-terminal"));
+        assert_pending_workspace_retargeted(target, session_id, case);
+    });
+}
+
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_auth_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let args = pending_workspace_args(&mut app);
+        root_view.update(&mut app, |root_view, _| {
+            root_view.auth_onboarding_state = AuthOnboardingState::Auth(args);
+        });
+
+        act_join_shared_session(&mut app, &root_view, session_id, "Auth");
+        app.read(|ctx| {
+            let AuthOnboardingState::Auth(args) = &root_view.as_ref(ctx).auth_onboarding_state
+            else {
+                panic!("expected to remain in Auth");
+            };
+            assert!(matches!(
+                args.workspace_setting,
+                NewWorkspaceSource::SharedSessionAsViewer { session_id: id } if id == session_id
+            ));
+        });
+    });
+}
+
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_onboarding_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let target = AuthOnboardingTarget::Workspace(pending_workspace_args(&mut app));
+        root_view.update(&mut app, |root_view, ctx| {
+            let onboarding_view = RootView::create_agent_onboarding_view(ctx);
+            root_view.auth_onboarding_state = AuthOnboardingState::Onboarding {
+                onboarding_view,
+                target,
+            };
+        });
+
+        assert_join_shared_session_retargets_pending(
+            &mut app,
+            &root_view,
+            session_id,
+            "Onboarding",
+        );
+    });
+}
+
+#[test]
+fn onboarding_slides_skip_content_deep_link_terminal() {
+    App::test((), |mut app| async move {
+        crate::workspace::view::tests::initialize_app(&mut app);
+        let deep_link_workspace =
+            crate::workspace::view::tests::mock_workspace_viewing_shared_session(&mut app);
+        let plain_workspace = crate::workspace::view::tests::mock_workspace(&mut app);
+
+        let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            RootView::new(
+                global_resource_handles,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+                ctx,
+            )
+        });
+
+        root_view.update(&mut app, |root_view, ctx| {
+            root_view.auth_onboarding_state =
+                AuthOnboardingState::Terminal(deep_link_workspace.clone());
+            root_view
+                .auth_onboarding_state
+                .try_open_onboarding_slides(ctx);
+        });
+        app.read(|ctx| {
+            let AuthOnboardingState::Terminal(workspace) =
+                &root_view.as_ref(ctx).auth_onboarding_state
+            else {
+                panic!("a shared-session workspace must not be wrapped in onboarding");
+            };
+            assert_eq!(
+                workspace.id(),
+                deep_link_workspace.id(),
+                "a shared-session workspace must not be replaced by onboarding"
+            );
+        });
+
+        root_view.update(&mut app, |root_view, ctx| {
+            root_view.auth_onboarding_state =
+                AuthOnboardingState::Terminal(plain_workspace.clone());
+            root_view
+                .auth_onboarding_state
+                .try_open_onboarding_slides(ctx);
+        });
+        app.read(|ctx| {
+            assert!(
+                matches!(
+                    root_view.as_ref(ctx).auth_onboarding_state,
+                    AuthOnboardingState::Onboarding { .. }
+                ),
+                "a workspace opened with no content deep link should still get onboarding"
+            );
+        });
     });
 }

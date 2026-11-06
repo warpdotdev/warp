@@ -1,5 +1,6 @@
 use super::billing::{BillingCycleUsageHistory, BillingMetadata, BonusGrantsInfo};
 use crate::schema;
+use crate::user::DiscoverableTeamData;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Workspace {
@@ -8,12 +9,12 @@ pub struct Workspace {
     pub stripe_customer_id: Option<cynic::Id>,
     pub members: Vec<WorkspaceMember>,
     pub teams: Vec<Team>,
+    pub open_teams: Vec<DiscoverableTeamData>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_info: BonusGrantsInfo,
     pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
-    pub invite_code: Option<String>,
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub is_eligible_for_discovery: bool,
@@ -112,6 +113,7 @@ pub struct WorkspaceMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 
@@ -120,6 +122,8 @@ pub struct WorkspaceMemberUsageInfo {
     pub is_unlimited: bool,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    pub included_usage_cents: Option<f64>,
+    pub usage_cents_used_since_last_refresh: Option<f64>,
     pub is_request_limit_prorated: bool,
 }
 
@@ -301,6 +305,20 @@ pub struct Team {
     pub members: Vec<TeamMember>,
     pub settings: TeamSettings,
     pub color: Option<String>,
+    pub invite_link: Option<String>,
+    pub visibility: TeamVisibility,
+    pub feature_model_choice: FeatureModelChoice,
+}
+
+/// Governs which workspace members can discover and join a team. Orthogonal to
+/// workspace-level discoverability (`is_discoverable`).
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum TeamVisibility {
+    Open,
+    Private,
+    Hidden,
+    #[cynic(fallback)]
+    Other(String),
 }
 
 /// The effective settings that apply to a team, combining the workspace layer
@@ -416,6 +434,7 @@ pub struct TeamMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq, Copy)]
@@ -475,6 +494,7 @@ pub struct InviteLinkDomainRestriction {
 pub struct EmailInvite {
     pub email: String,
     pub expired: bool,
+    pub team_uid: Option<cynic::Id>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -488,4 +508,5 @@ pub struct AddonCreditsSettings {
     pub auto_reload_enabled: bool,
     pub max_monthly_spend_cents: Option<i32>,
     pub selected_auto_reload_credit_denomination: Option<i32>,
+    pub selected_auto_reload_usage_cents: Option<i32>,
 }

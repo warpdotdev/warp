@@ -326,10 +326,11 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut outer_stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.is_pane_focused(app),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
+            &model,
             app,
         );
 
@@ -486,10 +487,11 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut outer_stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.is_pane_focused(app),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
+            &model,
             app,
         );
 
@@ -579,9 +581,10 @@ impl Input {
         app: &AppContext,
     ) -> Option<&ViewHandle<HostSelector>> {
         let host_selector = self.host_selector()?;
+        let scope = self.team_scope(app);
         let should_show = host_selector.as_ref(app).has_default_host()
             || !ConnectedSelfHostedWorkersModel::as_ref(app)
-                .worker_hosts_excluding(None)
+                .worker_hosts_excluding(&scope, None)
                 .is_empty();
         should_show.then_some(host_selector)
     }
@@ -691,10 +694,11 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app)),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
+            &model,
             app,
         );
 

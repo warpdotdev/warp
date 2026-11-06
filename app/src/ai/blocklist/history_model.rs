@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_multi_agent_api::RequestCharges;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
@@ -27,8 +28,8 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
-    UpdateConversationError,
+    AIConversation, AIConversationId, ConversationDriver, ConversationStatus,
+    ServerAIConversationMetadata, TodoStatus, UpdateConversationError,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
@@ -38,6 +39,7 @@ use crate::ai::agent::{
     AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
     RequestCost, Suggestions,
 };
+use crate::ai::ambient_agents::AmbientAgentTask;
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
@@ -327,6 +329,8 @@ pub struct BlocklistAIHistoryModel {
 
     /// In-flight optimistic conversation rename state keyed by conversation.
     in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
+    /// Conversations with a server metadata request in progress.
+    in_flight_server_metadata_fetches: HashSet<AIConversationId>,
 
     #[cfg(feature = "local_fs")]
     db_connection: Option<Arc<Mutex<SqliteConnection>>>,
@@ -541,12 +545,22 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Creates a new child agent conversation.
+    ///
+    /// `is_remote` must be `true` for children executing on a remote worker.
+    /// It is applied *before* the first persist below so that, if this
+    /// conversation is ever written to disk, the very first row already
+    /// carries the correct `is_remote_child` value — remote children must
+    /// never be persisted (see `write_updated_conversation_state`), and
+    /// setting the flag only after this initial persist would write a
+    /// garbage `is_remote_child=false`/`run_id=None` row that then blocks
+    /// all later, correct persists via that same guard.
     pub fn start_new_child_conversation(
         &mut self,
         terminal_surface_id: EntityId,
         name: String,
         parent_conversation_id: AIConversationId,
         orchestration_harness: Option<Harness>,
+        is_remote: bool,
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
         let parent_agent_id = self
@@ -573,10 +587,87 @@ impl BlocklistAIHistoryModel {
             if let Some(harness) = orchestration_harness {
                 conversation.set_orchestration_harness(harness);
             }
+            if is_remote {
+                conversation.mark_as_remote_child();
+            }
         }
         self.set_parent_for_conversation(conversation_id, parent_conversation_id);
         self.persist_conversation_state(conversation_id, ctx);
         conversation_id
+    }
+
+    /// Returns the existing run-id mapping for a remote child, creating one
+    /// from the supplied task metadata if none exists yet. Idempotent: racing
+    /// `ChildStarted`, lifecycle, and viewer metadata callbacks all converge
+    /// on the same entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_remote_child_conversation(
+        &mut self,
+        terminal_surface_id: EntityId,
+        parent_conversation_id: AIConversationId,
+        run_id: String,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        name: String,
+        fallback_title: String,
+        orchestration_harness: Option<Harness>,
+        ctx: &mut ModelContext<Self>,
+    ) -> AIConversationId {
+        if let Some(conversation_id) = self.conversation_id_for_agent_id(&run_id) {
+            // Re-index under the new parent if the recorded parent has changed.
+            // This happens on a live-session rejoin: the viewer creates a fresh
+            // conversation ID, while children in the DB still point at the
+            // previous session's parent ID.
+            let current_parent = self
+                .conversations_by_id
+                .get(&conversation_id)
+                .and_then(|c| c.parent_conversation_id());
+            if current_parent != Some(parent_conversation_id) {
+                self.set_parent_for_conversation(conversation_id, parent_conversation_id);
+            }
+            return conversation_id;
+        }
+
+        let conversation_id = self.start_new_child_conversation(
+            terminal_surface_id,
+            name,
+            parent_conversation_id,
+            orchestration_harness,
+            true,
+            ctx,
+        );
+        if !fallback_title.is_empty()
+            && let Some(conversation) = self.conversation_mut(&conversation_id)
+        {
+            conversation.set_fallback_display_title(fallback_title);
+        }
+        self.assign_run_id_for_conversation(
+            conversation_id,
+            run_id,
+            Some(task_id),
+            terminal_surface_id,
+            ctx,
+        );
+        conversation_id
+    }
+
+    /// Applies a remote child's server task snapshot to its placeholder conversation: the run's
+    /// update time (pill ordering) and its state (pill status badge).
+    pub fn apply_remote_child_task_snapshot(
+        &mut self,
+        terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
+        task: &AmbientAgentTask,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
+        }
+        self.update_conversation_status(
+            terminal_surface_id,
+            conversation_id,
+            task.state.conversation_status(),
+            ctx,
+        );
     }
 
     /// Sets the parent conversation ID on a child conversation and updates
@@ -587,8 +678,21 @@ impl BlocklistAIHistoryModel {
         child_id: AIConversationId,
         parent_id: AIConversationId,
     ) {
+        let old_parent = self
+            .conversations_by_id
+            .get(&child_id)
+            .and_then(|c| c.parent_conversation_id());
         if let Some(conversation) = self.conversations_by_id.get_mut(&child_id) {
             conversation.set_parent_conversation_id(parent_id);
+        }
+        // Remove from the old parent's index when re-parenting to keep the
+        // index consistent. For initial creation the old parent is None so
+        // this is a no-op.
+        if let Some(old_parent) = old_parent
+            && old_parent != parent_id
+            && let Some(siblings) = self.children_by_parent.get_mut(&old_parent)
+        {
+            siblings.retain(|id| *id != child_id);
         }
         self.index_child_conversation(child_id, parent_id);
     }
@@ -795,19 +899,6 @@ impl BlocklistAIHistoryModel {
             title,
         });
     }
-    pub fn mark_conversation_as_remote_child(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        {
-            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-                return;
-            };
-            conversation.mark_as_remote_child();
-        }
-        self.persist_conversation_state(conversation_id, ctx);
-    }
 
     /// Updates the persisted `last_event_sequence` for a conversation and
     /// writes the updated conversation state to SQLite. Used by the
@@ -848,6 +939,31 @@ impl BlocklistAIHistoryModel {
             return;
         }
         conversation.set_pinned(pinned);
+        conversation.write_updated_conversation_state(ctx);
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
+            conversation_id,
+        });
+    }
+
+    /// Switches the rest of a conversation to Warp-funded inference instead of the user's
+    /// ChatGPT subscription and persists the change to SQLite.
+    pub fn set_conversation_use_warp_credits_instead_of_chatgpt(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            log::warn!(
+                "set_conversation_use_warp_credits_instead_of_chatgpt called for conversation \
+                 {conversation_id:?} that is not loaded; the change will not be persisted."
+            );
+            return;
+        };
+        if conversation.use_warp_credits_instead_of_chatgpt() {
+            return;
+        }
+        conversation.set_use_warp_credits_instead_of_chatgpt();
         conversation.write_updated_conversation_state(ctx);
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
             terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
@@ -1062,6 +1178,25 @@ impl BlocklistAIHistoryModel {
         self.conversations_by_id
             .get(&conversation_id)
             .is_some_and(|c| c.is_exchange_hidden(exchange_id))
+    }
+
+    /// Test-only, crate-visible wrapper around [`Self::update_conversation_for_new_request_input`]
+    /// so tests outside this module (e.g. `agent_sdk::driver_tests`) can attach an in-flight
+    /// request to a conversation without widening that method's production visibility.
+    #[cfg(test)]
+    pub(crate) fn update_conversation_for_new_request_input_for_test(
+        &mut self,
+        request_input: RequestInput,
+        stream_id: ResponseStreamId,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), UpdateHistoryError> {
+        self.update_conversation_for_new_request_input(
+            request_input,
+            stream_id,
+            terminal_surface_id,
+            ctx,
+        )
     }
 
     /// Add a new [`AIAgentExchange`] to the [`AIConversation`] with the given [`AIConversationId`].
@@ -1455,6 +1590,20 @@ impl BlocklistAIHistoryModel {
         };
 
         if let Some(key) = agent_key {
+            // The server emits `child_agent_started` on the parent for every
+            // child, local ones included, so the SSE family drain cannot
+            // tell this conversation's own child apart from one spawned
+            // out-of-band (CLI/API) and may have already fetched task
+            // metadata and materialized an `is_remote_child` placeholder for
+            // this run_id (`ensure_remote_child_placeholder`) before this
+            // conversation claimed it. Discard that stale placeholder so
+            // exactly one conversation ever represents this run_id,
+            // regardless of which side wins the race.
+            if let Some(existing) = self.agent_id_to_conversation_id.get(&key).copied()
+                && existing != conversation_id
+            {
+                self.discard_stale_placeholder_for_run_id(existing, conversation_id, &key, ctx);
+            }
             self.agent_id_to_conversation_id
                 .insert(key, conversation_id);
         }
@@ -1468,6 +1617,39 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             terminal_surface_id,
         });
+    }
+
+    /// Discards `stale_conversation_id` when it is a remote-child placeholder
+    /// left behind by a `run_id` that `conversation_id` is now authoritatively
+    /// claiming. Only ever discards a placeholder (`is_remote_child`) — if the
+    /// existing mapping instead points at a real conversation, that would be
+    /// an unrelated bug, so it's logged rather than silently deleted.
+    fn discard_stale_placeholder_for_run_id(
+        &mut self,
+        stale_conversation_id: AIConversationId,
+        conversation_id: AIConversationId,
+        run_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let is_placeholder = self
+            .conversations_by_id
+            .get(&stale_conversation_id)
+            .is_some_and(|conversation| conversation.is_remote_child());
+        if !is_placeholder {
+            log::warn!(
+                "assign_run_id_for_conversation: run_id={run_id} already mapped to \
+                 non-placeholder conversation {stale_conversation_id:?}; leaving it in place \
+                 and rebinding the run-id index to {conversation_id:?}."
+            );
+            return;
+        }
+        log::info!(
+            "assign_run_id_for_conversation: discarding stale remote-child placeholder \
+             {stale_conversation_id:?} for run_id={run_id}, superseded by local conversation \
+             {conversation_id:?}."
+        );
+        let terminal_surface_id = self.terminal_surface_id_for_conversation(&stale_conversation_id);
+        self.remove_conversation_from_memory(stale_conversation_id, terminal_surface_id, ctx);
     }
 
     /// Resolves a server-side agent identifier to a local conversation ID.
@@ -1656,6 +1838,8 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: source_conversation
+                .use_warp_credits_instead_of_chatgpt(),
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1834,6 +2018,7 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            use_warp_credits_instead_of_chatgpt: conversation.use_warp_credits_instead_of_chatgpt(),
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -1903,10 +2088,12 @@ impl BlocklistAIHistoryModel {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_conversation_cost_and_usage_for_request(
         &mut self,
         conversation_id: AIConversationId,
         request_cost: Option<RequestCost>,
+        request_charges: Option<RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -1917,11 +2104,14 @@ impl BlocklistAIHistoryModel {
         // subscribers (e.g. the orchestration credit rollup or the TUI
         // footer's usage entry). We emit the event only when there's actual
         // data to react to.
-        let emits_usage_event =
-            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
+        let emits_usage_event = request_cost.is_some()
+            || request_charges.is_some()
+            || usage_metadata.is_some()
+            || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
+                request_charges,
                 token_usage,
                 usage_metadata,
                 was_user_initiated_request,
@@ -1969,6 +2159,12 @@ impl BlocklistAIHistoryModel {
                 .unwrap()
                 .as_str()
                 .to_string();
+            if !self
+                .in_flight_server_metadata_fetches
+                .insert(conversation_id)
+            {
+                return;
+            }
 
             let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
             ctx.spawn(
@@ -1977,24 +2173,28 @@ impl BlocklistAIHistoryModel {
                         .list_ai_conversation_metadata(Some(vec![server_token]))
                         .await
                 },
-                move |model, result, ctx| match result {
-                    Ok(mut metadata_list) if !metadata_list.is_empty() => {
-                        if let Some(metadata) = metadata_list.pop() {
-                            model.set_server_metadata_for_conversation(
-                                conversation_id,
-                                metadata,
-                                ctx,
+                move |model, result, ctx| {
+                    model
+                        .in_flight_server_metadata_fetches
+                        .remove(&conversation_id);
+                    match result {
+                        Ok(mut metadata_list) if !metadata_list.is_empty() => {
+                            if let Some(metadata) = metadata_list.pop() {
+                                model.set_server_metadata_for_conversation(
+                                    conversation_id,
+                                    metadata,
+                                    ctx,
+                                );
+                            }
+                        }
+                        Ok(_) => {
+                            log::warn!("No metadata returned for conversation {conversation_id}");
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to fetch metadata for conversation {conversation_id}: {e:#}"
                             );
                         }
-                    }
-                    Ok(_) => {
-                        log::warn!("No metadata returned for conversation {}", conversation_id);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to fetch metadata for conversation {}: {e:#}",
-                            conversation_id
-                        );
                     }
                 },
             );
@@ -2092,6 +2292,26 @@ impl BlocklistAIHistoryModel {
                 cleared_conversation_ids,
             },
         );
+    }
+
+    /// Clears a closed surface without notifying a controller whose conversations moved elsewhere.
+    pub(crate) fn clear_conversations_for_closed_terminal_surface(
+        &mut self,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .live_conversation_ids_for_terminal_surface
+            .get(&terminal_surface_id)
+            .is_none_or(Vec::is_empty)
+        {
+            self.active_conversation_for_terminal_surface
+                .remove(&terminal_surface_id);
+            self.live_conversation_ids_for_terminal_surface
+                .remove(&terminal_surface_id);
+            return;
+        }
+        self.clear_conversations_for_terminal_surface(terminal_surface_id, ctx);
     }
 
     /// Handle removing a conversation from the history model, blocklist and in-memory.
@@ -2457,6 +2677,16 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    pub fn set_driver_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        driver: ConversationDriver,
+    ) {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.set_driver(driver);
+        }
+    }
+
     pub fn set_has_code_review_opened_to_true(&mut self, conversation_id: AIConversationId) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             conversation.mark_code_review_as_opened();
@@ -2745,9 +2975,8 @@ impl BlocklistAIHistoryModel {
     /// authoritative. Cloud supplies the transcript and server-side metadata.
     ///
     /// Narrowly scoped to the remote-child placeholder hydration path
-    /// (`pane_group::hydrate_remote_child_transcript_in_place`). Returns
-    /// `Err` when the placeholder isn't loaded so the caller can fall back
-    /// instead of silently producing a detached conversation.
+    /// (`PaneGroup::hydrate_child_transcript`). Returns `Err` when the placeholder isn't loaded,
+    /// so the caller can stop instead of silently producing a detached conversation.
     pub fn hydrate_remote_child_placeholder_with_cloud_transcript(
         &mut self,
         local_placeholder_id: AIConversationId,
@@ -2775,6 +3004,9 @@ impl BlocklistAIHistoryModel {
             Some(merged_conversation_data),
         )?;
         merged.reassign_exchange_ids();
+        if let Some(updated_at) = placeholder.remote_run_updated_at() {
+            merged.set_remote_run_updated_at(updated_at);
+        }
 
         if let Some(metadata) = cloud_conversation.server_metadata() {
             merged.set_server_metadata(metadata.clone());
@@ -2833,7 +3065,7 @@ impl BlocklistAIHistoryModel {
 ///
 /// **Reset on merge** (rebuild-from-cloud invariants):
 /// - `reverted_action_ids = None`, `root_task_is_optimistic = None`,
-///   `autoexecute_override = None`
+///   `autoexecute_override = None`, `use_warp_credits_instead_of_chatgpt = false`
 fn merged_remote_child_placeholder_conversation_data(
     placeholder: &AIConversation,
     cloud_conversation: &AIConversation,
@@ -2884,6 +3116,7 @@ fn merged_remote_child_placeholder_conversation_data(
         reverted_action_ids: None,
         root_task_is_optimistic: None,
         autoexecute_override: None,
+        use_warp_credits_instead_of_chatgpt: false,
     }
 }
 
@@ -2988,6 +3221,7 @@ pub enum BlocklistAIHistoryEvent {
 
     UpdatedTodoList {
         terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
     },
 
     UpdatedAutoexecuteOverride {

@@ -8,7 +8,6 @@ use cloud_object_client::MockObjectClient;
 use cloud_objects::cloud_object::ServerPermissions;
 use firebase::FirebaseError;
 use itertools::Itertools;
-use warpui::r#async::Timer;
 use warpui::{App, Entity, ModelHandle, SingletonEntity};
 
 use super::QueueDependency;
@@ -33,6 +32,7 @@ use crate::server::sync_queue::{
     SyncQueueEvent,
 };
 use crate::system::SystemStats;
+use crate::test_util::assert_eventually;
 use crate::workflows::CloudWorkflowModel;
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::{NetworkStatus, QueueItem, SyncQueue};
@@ -438,18 +438,10 @@ fn test_dequeue_after_transient_failure() {
         // Wait for the first notebook's creation to fail.
         // The failures are retried, but their futures are spawned on background threads,
         // so we can't access them. Instead, we wait for a SyncQueue event to appear in the model.
-        let mut timeout = Timer::after(std::time::Duration::from_secs(20));
-        let mut has_event = false;
-        while !has_event {
-            if futures::poll!(&mut timeout).is_ready() {
-                panic!("Timed out waiting for failure");
-            }
-
-            Timer::after(std::time::Duration::from_millis(500)).await;
-            sync_queue_events.read(&app, |events, _ctx| {
-                has_event = !events.0.is_empty();
-            });
-        }
+        assert_eventually!(
+            4000 => sync_queue_events.read(&app, |events, _ctx| !events.0.is_empty()),
+            "Timed out waiting for failure"
+        );
 
         sync_queue_events.read(&app, |events, _| {
             assert_eq!(
@@ -588,18 +580,10 @@ fn test_no_dequeue_after_intransient_failure() {
         // Wait for the first notebook's creation to fail.
         // The failures are retried, but their futures are spawned on background threads,
         // so we can't access them. Instead, we wait for a SyncQueue event to appear in the model.
-        let mut timeout = Timer::after(std::time::Duration::from_secs(20));
-        let mut has_event = false;
-        while !has_event {
-            if futures::poll!(&mut timeout).is_ready() {
-                panic!("Timed out waiting for failure");
-            }
-
-            Timer::after(std::time::Duration::from_millis(500)).await;
-            sync_queue_events.read(&app, |events, _ctx| {
-                has_event = !events.0.is_empty();
-            });
-        }
+        assert_eventually!(
+            4000 => sync_queue_events.read(&app, |events, _ctx| !events.0.is_empty()),
+            "Timed out waiting for failure"
+        );
 
         sync_queue_events.read(&app, |events, _| {
             assert_eq!(
@@ -646,8 +630,8 @@ fn test_create_and_update_notebook() {
         let (tx, rx) = std::sync::mpsc::channel();
 
         let mut cloud_objects_client_mock = MockObjectClient::new();
-        let notebook_revision_after_create_clone = notebook_revision_after_create.clone();
-        let notebook_revision_after_update_clone = notebook_revision_after_update.clone();
+        let notebook_revision_after_create_clone = notebook_revision_after_create;
+        let notebook_revision_after_update_clone = notebook_revision_after_update;
         cloud_objects_client_mock
             .expect_create_notebook()
             .times(1)
@@ -1123,7 +1107,7 @@ fn test_sync_queue_dependency_failure() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1138,7 +1122,7 @@ fn test_sync_queue_dependency_failure() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1248,7 +1232,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1272,7 +1256,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     creation_result: super::CreationResponseType::Success {
                         client_id,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1306,7 +1290,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     }
                     .into(),
                     id: server_id,
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1359,7 +1343,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                     }))
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1381,7 +1365,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                     creation_result: super::CreationResponseType::Success {
                         client_id,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1432,7 +1416,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 super::ResponseType::Update {
                     update_result: super::UpdateResponseType::Success {
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_update.clone(),
+                            revision: revision_after_update,
                             last_editor_uid: None,
                         },
                     },
@@ -1447,9 +1431,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 &HashSet::<QueueDependency>::new()
             );
             let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
-                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => {
-                    Some(revision.clone())
-                }
+                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => Some(*revision),
                 _ => None,
             });
             assert_eq!(queued_revision, Some(Some(revision_after_update)));
@@ -1515,7 +1497,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                     }))
                     .into(),
                     id: SyncId::ClientId(client_id_b),
-                    revision: Some(revision_after_create_a.clone()),
+                    revision: Some(revision_after_create_a),
                 },
                 ctx,
             );
@@ -1568,7 +1550,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                     creation_result: super::CreationResponseType::Success {
                         client_id: client_id_b,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create_b.clone(),
+                            revision: revision_after_create_b,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1600,7 +1582,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                 QueueItem::UpdateAIFact { id, revision, .. }
                     if *id == SyncId::ClientId(client_id_b) =>
                 {
-                    Some(revision.clone())
+                    Some(*revision)
                 }
                 _ => None,
             });
@@ -1725,7 +1707,7 @@ fn test_sync_queue_enum_dependency() {
                     creation_result: super::CreationResponseType::Success {
                         client_id: enum_id_1,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1798,7 +1780,7 @@ fn test_sync_queue_enum_dependency() {
                     creation_result: super::CreationResponseType::Success {
                         client_id: enum_id_2,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),

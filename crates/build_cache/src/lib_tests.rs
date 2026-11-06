@@ -1,21 +1,23 @@
-use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
-use std::rc::Rc;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_io::Timer;
 use command::r#async::Command;
-use futures::executor::block_on;
 #[cfg(unix)]
 use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
-    CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
-    RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
-    is_valid_env_name, run_command_with_timeout, setup_cache,
+    CacheConfiguration, CacheScope, CacheSetupError, CacheSetupPlan, CacheSetupReport,
+    CandidateKey, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
+    aggregate_mode_stats, construct_plan, create_retained_scratch_directory, is_valid_env_name,
+    produce_candidates, run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
 use super::{create_cache_dir_all, current_owner};
@@ -36,8 +38,13 @@ fn source(root: &Path, host: &str, owner: &str, repo: &str) -> RepositoryCacheSo
 }
 
 fn detection(source: RepositoryCacheSource, modes: &[&str]) -> DetectedCacheModes {
+    let key = RepoCacheKey::derive(&source.identity);
     DetectedCacheModes {
-        key: RepoCacheKey::derive(&source.identity),
+        order: CandidateKey {
+            repo_key: key.clone(),
+            normalized_relative_path: None,
+        },
+        relative_cache_dir: Path::new("repos").join(key.as_str()),
         source,
         modes: modes.iter().map(ToString::to_string).collect(),
     }
@@ -68,12 +75,19 @@ fn response(modes: &[&str], envs: &[(&str, &str)], mounts: &[(&str, bool)]) -> V
 fn command_args(command: &Command) -> Vec<OsString> {
     command.get_args().map(ToOwned::to_owned).collect()
 }
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(future)
+}
 #[cfg(unix)]
 #[test]
 fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() {
     use std::os::unix::fs::PermissionsExt as _;
-
-    if !super::has_command("sudo") {
+    if nix::unistd::geteuid().is_root() {
         return;
     }
 
@@ -82,25 +96,35 @@ fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() 
     fs::create_dir(&locked).unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
     let target = locked.join("child").join("grandchild");
-    let commands = Rc::new(RefCell::new(Vec::new()));
-    let result = block_on(create_cache_dir_all(&target, &mut {
-        let commands = Rc::clone(&commands);
-        move |command| {
-            commands.borrow_mut().push(command_args(&command));
-            futures::future::ready(Ok(Vec::new()))
+    let commands = Mutex::new(Vec::new());
+    let result = block_on(create_cache_dir_all(&target, &|command| {
+        let args = command_args(&command);
+        let directory = Path::new(args.last().unwrap());
+        if args[1] == "mkdir" {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::create_dir_all(directory).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+            for created in directory.ancestors().take_while(|path| *path != locked) {
+                fs::set_permissions(created, fs::Permissions::from_mode(0o500)).unwrap();
+            }
+        } else {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        commands.lock().unwrap().push(args);
+        futures::future::ready(Ok(Vec::new()))
     }));
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
 
     assert_eq!(result, Ok(()));
-    let commands = commands.borrow();
-    assert_eq!(commands.len(), 2);
+    let commands = commands.lock().unwrap();
+    assert_eq!(commands.len(), 3);
     assert_eq!(
         commands[0],
         [
             OsString::from("-n"),
             OsString::from("mkdir"),
             OsString::from("-p"),
+            OsString::from("--"),
             target.clone().into_os_string()
         ]
     );
@@ -109,10 +133,99 @@ fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() 
         [
             OsString::from("-n"),
             OsString::from("chown"),
+            OsString::from("-h"),
+            OsString::from("--"),
             OsString::from(current_owner()),
-            target.into_os_string()
+            locked.join("child").into_os_string()
         ]
     );
+    assert_eq!(commands[2].last(), Some(&target.clone().into_os_string()));
+    fs::create_dir(target.join("home")).unwrap();
+    fs::create_dir(locked.join("child/sibling")).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_cache_directory_repairs_ownership_and_rechecks_access() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let commands = Mutex::new(Vec::new());
+    let result = block_on(create_cache_dir_all(temp.path(), &|command| {
+        assert_eq!(command.get_program(), "sudo");
+        let args = command_args(&command);
+        assert_eq!(
+            args,
+            [
+                OsString::from("-n"),
+                OsString::from("chown"),
+                OsString::from("-h"),
+                OsString::from("--"),
+                OsString::from(current_owner()),
+                temp.path().as_os_str().to_owned(),
+            ]
+        );
+        commands.lock().unwrap().push(args);
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        futures::future::ready(Ok(Vec::new()))
+    }));
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        commands.lock().unwrap().len(),
+        usize::from(!nix::unistd::geteuid().is_root())
+    );
+    fs::create_dir(temp.path().join("home")).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn unsuccessful_ownership_repair_degrades_without_claiming_writability() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    for result in [
+        Err(CacheSetupError::SpawnFailed),
+        Err(CacheSetupError::NonzeroExit {
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: "sudo denied".to_owned(),
+        }),
+        Ok(Vec::new()),
+    ] {
+        assert_eq!(
+            block_on(create_cache_dir_all(temp.path(), &|_| {
+                futures::future::ready(result.clone())
+            })),
+            Err(CacheSetupError::RootCreationFailed)
+        );
+    }
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_sudo_creation_degrades_without_attempting_chown() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let target = temp.path().join("child");
+    let result = block_on(create_cache_dir_all(&target, &|command| {
+        assert_eq!(command_args(&command)[1], "mkdir");
+        futures::future::ready(Err(CacheSetupError::SpawnFailed))
+    }));
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result, Err(CacheSetupError::RootCreationFailed));
+    assert!(!target.exists());
 }
 
 fn is_detect(command: &Command) -> bool {
@@ -298,16 +411,16 @@ fn json_parse_failure_is_classified_and_does_not_abort_later_repos() {
         source(temp.path(), "github.com", "warp", "one"),
         source(temp.path(), "github.com", "warp", "two"),
     ];
-    let calls = Rc::new(RefCell::new(0usize));
+    let calls = Arc::new(Mutex::new(0usize));
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         repositories,
         Vec::new(),
         {
-            let calls = Rc::clone(&calls);
+            let calls = Arc::clone(&calls);
             move |_| {
                 let call = {
-                    let mut count = calls.borrow_mut();
+                    let mut count = calls.lock().unwrap();
                     *count += 1;
                     *count
                 };
@@ -319,7 +432,7 @@ fn json_parse_failure_is_classified_and_does_not_abort_later_repos() {
             }
         },
     ));
-    assert_eq!(*calls.borrow(), 4);
+    assert_eq!(*calls.lock().unwrap(), 4);
     assert_eq!(
         report.invocations[0].error,
         Some(CacheSetupError::JsonParseFailed)
@@ -330,16 +443,16 @@ fn json_parse_failure_is_classified_and_does_not_abort_later_repos() {
 #[test]
 fn destructive_execution_uses_resolved_modes_without_redetection() {
     let temp = tempfile::tempdir().unwrap();
-    let commands = Rc::new(RefCell::new(Vec::new()));
+    let commands = Arc::new(Mutex::new(Vec::new()));
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![source(temp.path(), "github.com", "warp", "client")],
         Vec::new(),
         {
-            let commands = Rc::clone(&commands);
+            let commands = Arc::clone(&commands);
             move |command| {
                 let detect = is_detect(&command);
-                commands.borrow_mut().push(command_args(&command));
+                commands.lock().unwrap().push(command_args(&command));
                 futures::future::ready(Ok(if detect {
                     response(&["go", "cargo", "go"], &[], &[])
                 } else {
@@ -349,7 +462,7 @@ fn destructive_execution_uses_resolved_modes_without_redetection() {
         },
     ));
     assert!(report.plan.is_some());
-    let commands = commands.borrow();
+    let commands = commands.lock().unwrap();
     assert_eq!(commands.len(), 3);
     for args in &commands[1..] {
         assert!(args.iter().any(|arg| arg == "--mode=cargo,go"));
@@ -361,7 +474,7 @@ fn destructive_execution_uses_resolved_modes_without_redetection() {
 #[test]
 fn repo_failure_continues_and_global_still_executes() {
     let temp = tempfile::tempdir().unwrap();
-    let destructive_calls = Rc::new(RefCell::new(0));
+    let destructive_calls = Arc::new(Mutex::new(0));
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![
@@ -370,22 +483,26 @@ fn repo_failure_continues_and_global_still_executes() {
         ],
         Vec::new(),
         {
-            let destructive_calls = Rc::clone(&destructive_calls);
+            let destructive_calls = Arc::clone(&destructive_calls);
             move |command| {
                 if is_detect(&command) {
                     return futures::future::ready(Ok(response(&["cargo"], &[], &[])));
                 }
-                let mut calls = destructive_calls.borrow_mut();
+                let mut calls = destructive_calls.lock().unwrap();
                 *calls += 1;
                 if *calls == 1 {
-                    futures::future::ready(Err(CacheSetupError::NonzeroExit { exit_code: Some(1) }))
+                    futures::future::ready(Err(CacheSetupError::NonzeroExit {
+                        exit_code: Some(1),
+                        stdout: String::new(),
+                        stderr: "repository mount failed".to_owned(),
+                    }))
                 } else {
                     futures::future::ready(Ok(response(&["cargo"], &[], &[])))
                 }
             }
         },
     ));
-    assert_eq!(*destructive_calls.borrow(), 3);
+    assert_eq!(*destructive_calls.lock().unwrap(), 3);
     assert!(
         report
             .invocations
@@ -397,7 +514,7 @@ fn repo_failure_continues_and_global_still_executes() {
 #[test]
 fn spacectl_calls_are_bounded_by_two_repos_plus_one_global() {
     let temp = tempfile::tempdir().unwrap();
-    let calls = Rc::new(RefCell::new(0));
+    let calls = Arc::new(Mutex::new(0));
     let report = block_on(setup_cache(
         temp.path().join("cache"),
         vec![
@@ -406,15 +523,196 @@ fn spacectl_calls_are_bounded_by_two_repos_plus_one_global() {
         ],
         Vec::new(),
         {
-            let calls = Rc::clone(&calls);
+            let calls = Arc::clone(&calls);
             move |_| {
-                *calls.borrow_mut() += 1;
+                *calls.lock().unwrap() += 1;
                 futures::future::ready(Ok(response(&["cargo"], &[], &[])))
             }
         },
     ));
-    assert_eq!(*calls.borrow(), 5);
+    assert_eq!(*calls.lock().unwrap(), 5);
     assert_eq!(report.invocations.len(), 5);
+}
+#[test]
+fn nested_roots_share_one_bounded_detection_pool_and_mount_serially() {
+    let temp = tempfile::tempdir().unwrap();
+    let repositories = vec![
+        source(temp.path(), "github.com", "warp", "client-a"),
+        source(temp.path(), "github.com", "warp", "client-b"),
+    ];
+    for repository in &repositories {
+        for index in 0..6 {
+            let child = repository.cwd.join(format!("child-{index:02}"));
+            fs::create_dir_all(&child).unwrap();
+            fs::write(child.join("Cargo.toml"), "").unwrap();
+        }
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+    produce_candidates(repositories.clone(), sender);
+    let mut expected_candidates =
+        std::iter::from_fn(|| receiver.blocking_recv()).collect::<Vec<_>>();
+    expected_candidates.sort_by(|left, right| left.key.cmp(&right.key));
+    let expected_detection_order = expected_candidates
+        .iter()
+        .map(|candidate| candidate.relative_cache_dir.clone())
+        .collect::<Vec<_>>();
+    let detect_delays = expected_candidates
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, candidate)| (candidate.source.cwd.clone(), index as u64 + 1))
+        .collect::<BTreeMap<_, _>>();
+    let active_detects = Arc::new(AtomicUsize::new(0));
+    let max_active_detects = Arc::new(AtomicUsize::new(0));
+    let detect_count = Arc::new(AtomicUsize::new(0));
+    let active_mounts = Arc::new(AtomicUsize::new(0));
+    let max_active_mounts = Arc::new(AtomicUsize::new(0));
+    let mount_order = Arc::new(Mutex::new(Vec::new()));
+    let report = block_on(setup_cache(
+        temp.path().join("cache"),
+        repositories,
+        Vec::new(),
+        {
+            let active_detects = Arc::clone(&active_detects);
+            let max_active_detects = Arc::clone(&max_active_detects);
+            let detect_count = Arc::clone(&detect_count);
+            let active_mounts = Arc::clone(&active_mounts);
+            let max_active_mounts = Arc::clone(&max_active_mounts);
+            let mount_order = Arc::clone(&mount_order);
+            move |command| {
+                let active_detects = Arc::clone(&active_detects);
+                let max_active_detects = Arc::clone(&max_active_detects);
+                let detect_count = Arc::clone(&detect_count);
+                let active_mounts = Arc::clone(&active_mounts);
+                let max_active_mounts = Arc::clone(&max_active_mounts);
+                let mount_order = Arc::clone(&mount_order);
+                let delay = command
+                    .get_current_dir()
+                    .and_then(|cwd| detect_delays.get(cwd))
+                    .copied()
+                    .unwrap_or_default();
+                async move {
+                    if is_detect(&command) {
+                        detect_count.fetch_add(1, Ordering::SeqCst);
+                        let active = active_detects.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active_detects.fetch_max(active, Ordering::SeqCst);
+                        Timer::after(Duration::from_millis(delay)).await;
+                        active_detects.fetch_sub(1, Ordering::SeqCst);
+                    } else {
+                        let active = active_mounts.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active_mounts.fetch_max(active, Ordering::SeqCst);
+                        Timer::after(Duration::from_millis(1)).await;
+                        mount_order
+                            .lock()
+                            .unwrap()
+                            .push(command.get_current_dir().unwrap().to_path_buf());
+                        active_mounts.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    Ok(response(&["cargo"], &[], &[]))
+                }
+            }
+        },
+    ));
+
+    assert_eq!(detect_count.load(Ordering::SeqCst), 14);
+    assert!(max_active_detects.load(Ordering::SeqCst) > 1);
+    assert!(max_active_detects.load(Ordering::SeqCst) <= 8);
+    assert_eq!(max_active_mounts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        report.invocations[..expected_detection_order.len()]
+            .iter()
+            .map(|invocation| invocation.relative_cache_dir.clone())
+            .collect::<Vec<_>>(),
+        expected_detection_order
+    );
+    let plan = report.plan.as_ref().unwrap();
+    assert_eq!(plan.configurations.len(), 15);
+    assert_eq!(
+        plan.configurations
+            .iter()
+            .filter(|configuration| matches!(configuration.scope, CacheScope::Repository { .. }))
+            .count(),
+        14
+    );
+    let mount_order = mount_order.lock().unwrap();
+    assert_eq!(
+        mount_order.as_slice(),
+        plan.configurations
+            .iter()
+            .map(|configuration| configuration.cwd.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn plan_accepts_repeated_repo_keys_with_distinct_roots_and_cache_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = source(temp.path(), "github.com", "warp", "client");
+    let mut child = root.clone();
+    child.cwd = root.cwd.join("nested");
+    fs::create_dir_all(&child.cwd).unwrap();
+    let key = RepoCacheKey::derive(&root.identity);
+    let plan = CacheSetupPlan::try_new(
+        temp.path().join("cache"),
+        vec![
+            CacheConfiguration {
+                scope: CacheScope::Repository {
+                    name: root.name,
+                    key: key.clone(),
+                },
+                cwd: root.cwd,
+                relative_cache_dir: Path::new("repos").join(key.as_str()),
+                modes: vec!["cargo".to_owned()],
+            },
+            CacheConfiguration {
+                scope: CacheScope::Repository {
+                    name: child.name,
+                    key,
+                },
+                cwd: child.cwd,
+                relative_cache_dir: PathBuf::from("repos/key/nested/id"),
+                modes: vec!["cargo".to_owned()],
+            },
+            CacheConfiguration {
+                scope: CacheScope::Global,
+                cwd: temp.path().join("scratch"),
+                relative_cache_dir: PathBuf::from("shared"),
+                modes: vec!["cargo".to_owned()],
+            },
+        ],
+    );
+
+    assert!(plan.is_ok());
+}
+
+#[test]
+fn plan_rejects_duplicate_repository_working_or_cache_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = source(temp.path(), "github.com", "warp", "client");
+    let key = RepoCacheKey::derive(&repo.identity);
+    let configuration = CacheConfiguration {
+        scope: CacheScope::Repository {
+            name: repo.name,
+            key,
+        },
+        cwd: repo.cwd,
+        relative_cache_dir: PathBuf::from("repos/key"),
+        modes: vec!["cargo".to_owned()],
+    };
+    let global = CacheConfiguration {
+        scope: CacheScope::Global,
+        cwd: temp.path().join("scratch"),
+        relative_cache_dir: PathBuf::from("shared"),
+        modes: vec!["cargo".to_owned()],
+    };
+
+    assert!(
+        CacheSetupPlan::try_new(
+            temp.path().join("cache"),
+            vec![configuration.clone(), configuration, global],
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -463,6 +761,143 @@ fn shared_failure_keeps_canonical_repo_env_overlay() {
     );
 }
 
+#[test]
+fn only_successful_real_mounts_contribute_usage_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache_root = temp.path().join("cache");
+    let mounted_path = cache_root.join("repos/real/target");
+    let mounted_path_json = serde_json::to_value(&mounted_path).unwrap();
+    let report = block_on(setup_cache(
+        cache_root.clone(),
+        vec![source(temp.path(), "github.com", "warp", "client")],
+        Vec::new(),
+        move |command| {
+            futures::future::ready(if is_detect(&command) {
+                Ok(br#"{"input":{"modes":["rust"]},"output":{"mounts":[{"cache_hit":true,"cache_path":"/dry-run","mount_path":"/work/dry-run","mode":"rust"}]}}"#.to_vec())
+            } else if is_global(&command) {
+                Err(CacheSetupError::Timeout)
+            } else {
+                Ok(serde_json::to_vec(&serde_json::json!({
+                    "output": {"mounts": [{
+                        "cache_hit": false,
+                        "cache_path": mounted_path_json,
+                        "mount_path": "/work/target",
+                        "mode": "rust"
+                    }]}
+                }))
+                .unwrap())
+            })
+        },
+    ));
+
+    assert_eq!(report.degradations().count(), 1);
+    assert_eq!(
+        report.mounted_paths,
+        [Mount {
+            mode: "rust".to_owned(),
+            cache_path: mounted_path,
+            mount_path: PathBuf::from("/work/target"),
+            cache_hit: false,
+        }]
+    );
+    let usage = report.cache_usage(&cache_root.join("child/..")).unwrap();
+    assert_eq!(
+        usage,
+        [crate::metadata::CacheUsage {
+            path: PathBuf::from("repos/real/target"),
+            cache_framework: Some("rust".to_owned()),
+            mount_target: vec!["/work/target".to_owned()],
+        }]
+    );
+    crate::metadata::write_cache_metadata(&cache_root, usage).unwrap();
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        document["user_request"],
+        serde_json::json!({"repos/real/target": {"source": "warp", "cache_framework": "rust", "mount_target": ["/work/target"]}})
+    );
+}
+
+#[test]
+fn no_detected_modes_still_allows_additional_usage_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let cache_root = temp.path().join("cache");
+    let report = block_on(setup_cache(
+        cache_root.clone(),
+        vec![source(temp.path(), "github.com", "warp", "client")],
+        Vec::new(),
+        |_command| futures::future::ready(Ok(response(&[], &[], &[]))),
+    ));
+    assert!(report.plan.is_none());
+    assert!(report.mounted_paths.is_empty());
+
+    crate::metadata::write_cache_metadata(
+        &cache_root,
+        report
+            .cache_usage(&cache_root)
+            .unwrap()
+            .into_iter()
+            .chain([crate::metadata::CacheUsage {
+                path: PathBuf::from("git-mirrors"),
+                cache_framework: Some("git".to_owned()),
+                mount_target: Vec::new(),
+            }]),
+    )
+    .unwrap();
+
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(cache_root.join(".ns/cache-metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        document["user_request"],
+        serde_json::json!({"git-mirrors": {"source": "warp", "cache_framework": "git", "mount_target": []}})
+    );
+}
+
+#[test]
+fn usage_ignores_mounts_without_complete_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let report = CacheSetupReport {
+        mounted_paths: vec![
+            Mount {
+                mode: "rust".to_owned(),
+                cache_path: PathBuf::new(),
+                mount_path: PathBuf::from("/work/target"),
+                cache_hit: false,
+            },
+            Mount {
+                mode: "go".to_owned(),
+                cache_path: root.path().join("cache"),
+                mount_path: PathBuf::new(),
+                cache_hit: false,
+            },
+        ],
+        ..CacheSetupReport::default()
+    };
+
+    assert!(report.cache_usage(root.path()).unwrap().is_empty());
+}
+
+#[test]
+fn usage_rejects_mounts_outside_cache_volume() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let report = CacheSetupReport {
+        mounted_paths: vec![Mount {
+            mode: "rust".to_owned(),
+            cache_path: outside.path().join("target"),
+            mount_path: PathBuf::from("/work/target"),
+            cache_hit: false,
+        }],
+        ..CacheSetupReport::default()
+    };
+
+    assert!(matches!(
+        report.cache_usage(root.path()),
+        Err(crate::metadata::CacheMetadataError::InvalidPath)
+    ));
+}
 #[test]
 fn repo_env_conflict_resolves_by_key_order() {
     let temp = tempfile::tempdir().unwrap();
@@ -538,14 +973,20 @@ fn hit_miss_aggregation_retains_zero_mount_modes() {
             mounts: vec![
                 Mount {
                     mode: "cargo".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: true,
                 },
                 Mount {
                     mode: "cargo".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: false,
                 },
                 Mount {
                     mode: "unknown".to_owned(),
+                    cache_path: PathBuf::new(),
+                    mount_path: PathBuf::new(),
                     cache_hit: true,
                 },
             ],
@@ -588,27 +1029,76 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
+/// A budget no spawn or immediate exit can plausibly exceed, used by the tests that classify a
+/// finished process. They assert on the classification, not on the clock, so the timeout must
+/// never be the thing that wins the race — process-spawn latency varies by orders of magnitude
+/// under load, and a tight budget made this suite flaky on Windows CI.
+const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[test]
-fn process_runner_classifies_spawn_nonzero_and_timeout() {
-    let missing = block_on(run_command_with_timeout(
+fn process_runner_classifies_spawn_failed() {
+    let result = block_on(run_command_with_timeout(
         Command::new_with_process_group("/definitely/missing/spacectl"),
-        Duration::from_millis(50),
+        UNREACHABLE_TIMEOUT,
     ));
-    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
+    assert_eq!(result, Err(CacheSetupError::SpawnFailed));
+}
 
+#[test]
+fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
-    nonzero.args(["-c", "exit 17"]);
-    assert_eq!(
-        block_on(run_command_with_timeout(nonzero, Duration::from_secs(1))),
-        Err(CacheSetupError::NonzeroExit {
-            exit_code: Some(17)
-        })
-    );
+    nonzero.args([
+        "-c",
+        "printf '\\377mount output\\n'; printf 'mount failed\\n' >&2; exit 17",
+    ]);
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
 
-    let mut timeout = Command::new_with_process_group("sh");
-    timeout.args(["-c", "sleep 1"]);
     assert_eq!(
-        block_on(run_command_with_timeout(timeout, Duration::from_millis(10))),
+        error,
+        CacheSetupError::NonzeroExit {
+            exit_code: Some(17),
+            stdout: "\u{fffd}mount output".to_owned(),
+            stderr: "mount failed".to_owned(),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "spacectl exited unsuccessfully (exit code Some(17)): stdout: \u{fffd}mount output; stderr: mount failed"
+    );
+}
+
+#[test]
+fn process_runner_bounds_failure_output() {
+    let mut nonzero = Command::new_with_process_group("sh");
+    nonzero.args([
+        "-c",
+        "printf 'out%4097s' ''; printf 'err%4097s' '' >&2; exit 17",
+    ]);
+
+    let error = block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)).unwrap_err();
+
+    assert_eq!(
+        error,
+        CacheSetupError::NonzeroExit {
+            exit_code: Some(17),
+            stdout: "out\n[stdout truncated]".to_owned(),
+            stderr: "err\n[stderr truncated]".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn process_runner_classifies_timeout() {
+    // This must stay a shell builtin loop rather than a shelled-out `sleep`: process-group kill
+    // is Unix-only (see the `TODO(roland)` in `Command::new_with_process_group`), so on Windows a
+    // subprocess spawned by `sh` could survive when only the immediate `sh` process is killed.
+    let mut timeout = Command::new_with_process_group("sh");
+    timeout.args(["-c", "while :; do :; done"]);
+    assert_eq!(
+        block_on(run_command_with_timeout(
+            timeout,
+            Duration::from_millis(100)
+        )),
         Err(CacheSetupError::Timeout)
     );
 }
@@ -632,10 +1122,18 @@ fn timeout_returns_bounded_when_descendant_keeps_stdout_open() {
 fn cache_setup_error_variants_have_expected_is_actionable_classification() {
     assert!(!CacheSetupError::RootCreationFailed.is_actionable());
     assert!(!CacheSetupError::SpawnFailed.is_actionable());
-    assert!(!CacheSetupError::NonzeroExit { exit_code: Some(1) }.is_actionable());
+    assert!(
+        !CacheSetupError::NonzeroExit {
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+        .is_actionable()
+    );
     assert!(!CacheSetupError::Timeout.is_actionable());
     assert!(CacheSetupError::JsonParseFailed.is_actionable());
     assert!(CacheSetupError::EnvExportFailed.is_actionable());
+    assert!(CacheSetupError::PlanInvariantFailed.is_actionable());
 }
 
 #[test]
@@ -645,6 +1143,8 @@ fn failure_categories_are_preserved() {
         CacheSetupError::SpawnFailed,
         CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stdout: "mount output".to_owned(),
+            stderr: "mount failed".to_owned(),
         },
         CacheSetupError::Timeout,
     ] {
@@ -682,7 +1182,7 @@ fn failure_categories_are_preserved() {
 #[test]
 fn queued_executor_can_return_each_failure_category() {
     let temp = tempfile::tempdir().unwrap();
-    let queue = Rc::new(RefCell::new(VecDeque::from([
+    let queue = Arc::new(Mutex::new(VecDeque::from([
         Err(CacheSetupError::JsonParseFailed),
         Err(CacheSetupError::Timeout),
     ])));
@@ -694,8 +1194,8 @@ fn queued_executor_can_return_each_failure_category() {
         ],
         Vec::new(),
         {
-            let queue = Rc::clone(&queue);
-            move |_| futures::future::ready(queue.borrow_mut().pop_front().unwrap())
+            let queue = Arc::clone(&queue);
+            move |_| futures::future::ready(queue.lock().unwrap().pop_front().unwrap())
         },
     ));
     assert_eq!(report.invocations.len(), 2);

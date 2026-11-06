@@ -14,6 +14,60 @@ use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::TeamContextForOperation;
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
+
+#[test]
+fn pi_remote_child_forwards_auth_and_model_without_computer_use() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let request = StartAgentRequest {
+            metadata: Default::default(),
+            id: Default::default(),
+            name: "child".to_string(),
+            prompt: "Inspect the code".to_string(),
+            execution_mode: StartAgentExecutionMode::Local {
+                harness_type: None,
+                model_id: None,
+            },
+            lifecycle_subscription: None,
+            parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+            parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
+        };
+        app.read(|ctx| {
+            for model_id in ["anthropic/claude-opus-4-6", ""] {
+                let launch = RemoteChildLaunchConfig {
+                    model_id: model_id.to_string(),
+                    auth_secret_name: Some("pi-key".to_string()),
+                    computer_use_enabled: true,
+                    ..config("pi")
+                };
+                let prepared =
+                    prepare_remote_child_launch(&request, launch, request_team_scope(), ctx)
+                        .unwrap();
+                let wire = serde_json::to_value(prepared.spawn_request).unwrap();
+                assert_eq!(wire["parent_run_id"], "parent-run");
+                assert_eq!(wire["config"]["harness"]["type"], "pi");
+                if model_id.is_empty() {
+                    assert!(wire["config"]["harness"].get("model_id").is_none());
+                } else {
+                    assert_eq!(wire["config"]["harness"]["model_id"], model_id);
+                }
+                assert!(wire["config"].get("model_id").is_none());
+                assert_eq!(
+                    wire["config"]["harness_auth_secrets"]["pi_auth_secret_name"],
+                    "pi-key"
+                );
+                assert!(wire["config"].get("computer_use_enabled").is_none());
+            }
+        });
+    });
+}
 
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {
     RemoteChildLaunchConfig {
@@ -48,6 +102,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            metadata: [("ticket_id".to_string(), "ENG-42".to_string())].into(),
             id: Default::default(),
             name: "  researcher  ".to_string(),
             prompt: "Inspect the code".to_string(),
@@ -66,6 +121,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         app.read(|ctx| {
             let prepared = prepare_remote_child_launch(
@@ -83,6 +139,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                     runner_id: "runner-1".to_string(),
                     agent_identity_uid: Some("researcher-agent".to_string()),
                 },
+                request_team_scope(),
                 ctx,
             )
             .unwrap();
@@ -100,6 +157,9 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                 prepared.spawn_request.agent_identity_uid.as_deref(),
                 Some("researcher-agent")
             );
+            assert_eq!(prepared.spawn_request.team, Some(true));
+            let wire = serde_json::to_value(&prepared.spawn_request).unwrap();
+            assert_eq!(wire["metadata"]["ticket_id"], "ENG-42");
             let config = prepared.spawn_request.config.unwrap();
             assert_eq!(config.environment_id.as_deref(), Some("env-1"));
             assert_eq!(config.runner_id.as_deref(), Some("runner-1"));
@@ -150,6 +210,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             SkillReference::BundledSkillId("bundled-test".to_string()),
         ];
         let request = StartAgentRequest {
+            metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
             prompt: "Run".to_string(),
@@ -168,6 +229,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         app.read(|ctx| {
             let prepared = prepare_remote_child_launch(
@@ -185,6 +247,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
                     runner_id: String::new(),
                     agent_identity_uid: None,
                 },
+                request_team_scope(),
                 ctx,
             )
             .unwrap();
@@ -200,6 +263,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
             prompt: "Run".to_string(),
@@ -218,6 +282,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
             lifecycle_subscription: None,
             parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
             parent_run_id: Some("parent-run".to_string()),
+            request_team_scope: request_team_scope(),
         };
         let error = app.read(|ctx| {
             prepare_remote_child_launch(
@@ -231,6 +296,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
                     working_dir: temp.path().to_path_buf(),
                     ..config("")
                 },
+                request_team_scope(),
                 ctx,
             )
             .unwrap_err()

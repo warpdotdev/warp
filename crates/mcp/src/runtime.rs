@@ -7,11 +7,20 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::time::Duration;
 
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
-use futures::FutureExt as _;
+use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
 use rmcp::ServiceExt as _;
+use rmcp::model::{
+    ClientConfig, ClientJsonRpcMessage, ClientRequest, DiscoverRequest, DiscoverRequestParams,
+    ErrorCode, Implementation, InitializeRequest, ProtocolVersion, RequestId, RequestMetaObject,
+    ServerJsonRpcMessage, ServerResult,
+};
+use rmcp::service::{
+    ClientInitializeError, ClientLifecycleMode, ClientServiceExt as _, select_protocol_version,
+};
 use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
@@ -77,6 +86,94 @@ fn build_header_map(headers: &HashMap<String, String>) -> reqwest::header::Heade
     headers.try_into().unwrap_or_default()
 }
 
+/// Header names whose value Warp treats as a caller-supplied credential when
+/// deciding whether a `401` means "authenticate me" or "your token was
+/// rejected".
+///
+/// `Authorization` is the standard, but MCP servers behind API gateways
+/// commonly take a bearer-equivalent in a bespoke key header instead.
+const CREDENTIAL_HEADER_NAMES: [&str; 3] = ["authorization", "x-api-key", "api-key"];
+
+/// Reports whether the caller configured a header that carries its own
+/// credential, i.e. whether a `401` should be read as a rejection of that
+/// credential rather than as an invitation to start OAuth.
+fn has_caller_supplied_credential(headers: &HashMap<String, String>) -> bool {
+    headers.iter().any(|(name, value)| {
+        !value.trim().is_empty()
+            && CREDENTIAL_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
+    })
+}
+
+/// Reports whether a `WWW-Authenticate` value is an OAuth protected-resource
+/// challenge, which is what the MCP authorization spec (via RFC 9728) requires
+/// a server to return when it wants a client to begin an OAuth flow.
+///
+/// The `resource_metadata` parameter is the discriminator: a server that simply
+/// rejected a bearer token answers with a plain `Bearer` challenge (often
+/// `error="invalid_token"`) and no discovery pointer.
+///
+/// Matching is on the parameter *name*. A substring test over the raw value
+/// would also fire on a rejection whose quoted `error_description` happened to
+/// mention the term, routing that rejection back into OAuth and undoing the
+/// distinction this function exists to draw.
+fn is_oauth_challenge(www_authenticate: &str) -> bool {
+    challenge_parameter_names(www_authenticate)
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("resource_metadata"))
+}
+
+/// Collects the parameter names of a `WWW-Authenticate` value, stepping over
+/// quoted parameter values so their contents never contribute structure.
+///
+/// Deliberately lenient rather than a full RFC 9110 parser: the only question
+/// asked of it is whether a given parameter name was present, and anything it
+/// cannot make sense of yields no name, which fails safe toward treating the
+/// challenge as a plain rejection.
+fn challenge_parameter_names(www_authenticate: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = www_authenticate;
+
+    while let Some(equals) = rest.find('=') {
+        // The name is the last delimiter-separated token before `=`; anything
+        // earlier belongs to a previous parameter or to the auth scheme (the
+        // `Bearer` in `Bearer realm="x", error="y"`).
+        let name = rest[..equals]
+            .trim_end()
+            .rsplit([',', ' ', '\t'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !name.is_empty() {
+            names.push(name);
+        }
+
+        let after_equals = rest[equals + 1..].trim_start();
+        rest = match after_equals.strip_prefix('"') {
+            Some(unquoted) => {
+                let mut escaped = false;
+                let closing_quote = unquoted.char_indices().find_map(|(index, character)| {
+                    if escaped {
+                        escaped = false;
+                        return None;
+                    }
+                    if character == '\\' {
+                        escaped = true;
+                        return None;
+                    }
+                    (character == '"').then_some(index)
+                });
+                closing_quote.map_or("", |closing| &unquoted[closing + 1..])
+            }
+            None => match after_equals.find(',') {
+                Some(comma) => &after_equals[comma + 1..],
+                None => "",
+            },
+        };
+    }
+
+    names
+}
+
 /// Builds a reqwest client with custom headers for MCP HTTP/SSE connections.
 #[allow(clippy::result_large_err)]
 pub fn build_client_with_headers(
@@ -100,6 +197,7 @@ pub async fn spawn_server(
     server_name: String,
     description: Option<String>,
     uuid: Uuid,
+    warp_id: Option<String>,
     transport_type: TransportType,
     logger: SimpleLogger,
     auth_context: Option<crate::oauth::AuthContext>,
@@ -210,7 +308,18 @@ pub async fn spawn_server(
             };
 
             // Create the MCP client and connect to the server.
-            Ok::<_, rmcp::RmcpError>(make_client_info().into_dyn().serve(transport).await?)
+            Ok::<_, rmcp::RmcpError>(
+                make_client_info()
+                    .into_dyn()
+                    .serve_with_lifecycle(
+                        transport,
+                        ClientLifecycleMode::Auto {
+                            preferred_versions: supported_versions(false),
+                            legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
+                        },
+                    )
+                    .await?,
+            )
         }
         TransportType::ServerSentEvents(sse_server) => {
             let headers: HashMap<String, String> = sse_server
@@ -222,7 +331,7 @@ pub async fn spawn_server(
                 .await
             {
                 // TODO: these need headers also?
-                Ok(Transport::Http(Some(client))) => {
+                Ok(Transport::Http(Some(client), protocol)) => {
                     is_authenticated_transport = true;
 
                     logger.log("[info] MCP: Using Streaming HTTP transport".to_string());
@@ -236,9 +345,13 @@ pub async fn spawn_server(
                         transport,
                         logger: logger.clone(),
                     };
-                    Ok(make_client_info().into_dyn().serve(transport).await?)
+                    Ok(make_client_info()
+                        .with_protocol_version(protocol.version.clone())
+                        .into_dyn()
+                        .serve_with_lifecycle(transport, protocol.lifecycle())
+                        .await?)
                 }
-                Ok(Transport::Http(None)) => {
+                Ok(Transport::Http(None, protocol)) => {
                     logger.log("[info] MCP: Using Streaming HTTP transport".to_string());
                     let transport = if headers.is_empty() {
                         rmcp::transport::StreamableHttpClientTransport::from_uri(
@@ -257,7 +370,11 @@ pub async fn spawn_server(
                         transport,
                         logger: logger.clone(),
                     };
-                    Ok(make_client_info().into_dyn().serve(transport).await?)
+                    Ok(make_client_info()
+                        .with_protocol_version(protocol.version.clone())
+                        .into_dyn()
+                        .serve_with_lifecycle(transport, protocol.lifecycle())
+                        .await?)
                 }
                 Ok(Transport::Sse(Some(client))) => {
                     is_authenticated_transport = true;
@@ -276,7 +393,11 @@ pub async fn spawn_server(
                         transport,
                         logger: logger.clone(),
                     };
-                    Ok(make_client_info().into_dyn().serve(transport).await?)
+                    Ok(make_client_info()
+                        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+                        .into_dyn()
+                        .serve(transport)
+                        .await?)
                 }
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
@@ -302,7 +423,11 @@ pub async fn spawn_server(
                         transport,
                         logger: logger.clone(),
                     };
-                    Ok(make_client_info().into_dyn().serve(transport).await?)
+                    Ok(make_client_info()
+                        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+                        .into_dyn()
+                        .serve(transport)
+                        .await?)
                 }
                 Err(err) => {
                     logger.log(format!(
@@ -317,7 +442,7 @@ pub async fn spawn_server(
     let server_info = service.peer_info();
     logger.log(format!("[info] MCP: Connected to server: {server_info:#?}"));
 
-    let capabilities = server_info.map(|info| &info.capabilities);
+    let capabilities = server_info.as_ref().map(|info| &info.capabilities);
 
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
@@ -329,6 +454,7 @@ pub async fn spawn_server(
         resources,
         tools,
         installation_id: uuid,
+        warp_id,
         description,
         is_authenticated_transport,
     })
@@ -337,16 +463,17 @@ pub async fn spawn_server(
 /// The transport to use for MCP.
 enum Transport {
     /// The HTTP transport, with an optional authenticated client.
-    Http(Option<rmcp::transport::auth::AuthClient<reqwest::Client>>),
+    Http(
+        Option<rmcp::transport::auth::AuthClient<reqwest::Client>>,
+        NegotiatedProtocol,
+    ),
     /// The SSE transport, with an optional authenticated client.
     Sse(Option<rmcp::transport::auth::AuthClient<reqwest::Client>>),
 }
 
 /// Determines which transport to use.
 ///
-/// This sends a "preflight" InitializeRequest to the server to determine whether the
-/// server supports the HTTP transport (or needs to use the SSE transport), and if
-/// authentication is required.
+/// Negotiates the protocol revision while retaining the authentication challenges needed for OAuth.
 #[allow(clippy::result_large_err)]
 async fn determine_transport(
     server_name: String,
@@ -361,10 +488,33 @@ async fn determine_transport(
             "Unexpected status code: {status}"
         ))
     }
-    match send_initialize_request(url, headers, None).await? {
-        StatusCode::OK => Ok(Transport::Http(None)),
+
+    let preflight = negotiate_protocol(url, headers, None).await?;
+    match preflight.status {
+        StatusCode::OK => Ok(Transport::Http(None, preflight.protocol)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
+            // A server that wants OAuth says so with a protected-resource
+            // challenge. Without one, a `401` on a request that already carried
+            // the caller's own credential means that credential was rejected —
+            // starting an OAuth flow there would replace an accurate error with
+            // a misleading one.
+            if !preflight
+                .www_authenticate
+                .iter()
+                .any(|value| is_oauth_challenge(value))
+                && has_caller_supplied_credential(headers)
+            {
+                return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
+                    format!(
+                        "MCP server '{server_name}' rejected the configured credentials (HTTP 401). \
+                         The request included the credential header(s) you configured, so the \
+                         server did not accept that value — check the token itself, its expiry, \
+                         and its scope. The server did not ask for OAuth."
+                    ),
+                ));
+            }
+
             let Some(mut auth_context) = auth_context else {
                 return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
                     "Server requires authentication, which is not yet supported.".to_string(),
@@ -372,7 +522,7 @@ async fn determine_transport(
             };
 
             // Grab the post-authentication callback so we can invoke it once we know for sure that we successfully
-            // went through the OAuth flow for a server and were able to successfully send an initialize request.
+            // went through the OAuth flow for a server and negotiated a compatible protocol.
             let authenticated_callback = std::mem::take(&mut auth_context.authenticated);
 
             // Go through the OAuth flow to get an authenticated client.
@@ -393,10 +543,11 @@ async fn determine_transport(
                 }
             };
 
-            match send_initialize_request(url, headers, Some(&client)).await? {
+            let preflight = negotiate_protocol(url, headers, Some(&client)).await?;
+            match preflight.status {
                 StatusCode::OK => {
                     emit_authenticated_notification().await;
-                    Ok(Transport::Http(Some(client)))
+                    Ok(Transport::Http(Some(client), preflight.protocol))
                 }
                 StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
                     emit_authenticated_notification().await;
@@ -409,28 +560,216 @@ async fn determine_transport(
     }
 }
 
-/// Sends an InitializeRequest to the server, and returns the HTTP status code from the response.
+fn supported_versions(legacy_only: bool) -> Vec<ProtocolVersion> {
+    ProtocolVersion::KNOWN_VERSIONS
+        .iter()
+        .rev()
+        .filter(|version| !legacy_only || version.has_initialize())
+        .cloned()
+        .collect()
+}
+
+#[derive(Clone)]
+struct NegotiatedProtocol {
+    version: ProtocolVersion,
+    discover: bool,
+}
+
+impl NegotiatedProtocol {
+    fn lifecycle(&self) -> ClientLifecycleMode {
+        if self.discover {
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![self.version.clone()],
+            }
+        } else {
+            ClientLifecycleMode::Initialize
+        }
+    }
+}
+struct PreflightResponse {
+    status: reqwest::StatusCode,
+    protocol: NegotiatedProtocol,
+    /// The `WWW-Authenticate` challenges the server sent. Retained because
+    /// they are the only reliable way to tell an OAuth-protected resource apart
+    /// from a server that merely rejected the credential we sent.
+    www_authenticate: Vec<String>,
+}
+
 #[allow(clippy::result_large_err)]
-async fn send_initialize_request(
+async fn negotiate_protocol(
     url: &str,
     headers: &HashMap<String, String>,
     auth_client: Option<&rmcp::transport::auth::AuthClient<reqwest::Client>>,
-) -> Result<reqwest::StatusCode, rmcp::RmcpError> {
-    use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
+) -> Result<PreflightResponse, rmcp::RmcpError> {
+    let mut protocol = NegotiatedProtocol {
+        version: ProtocolVersion::LATEST,
+        discover: true,
+    };
+    let mut attempted = Vec::new();
+    loop {
+        attempted.push(protocol.version.clone());
+        let (mut preflight, message) =
+            send_preflight_request(url, headers, auth_client, protocol.clone()).await?;
+        if (!protocol.discover
+            && matches!(
+                preflight.status,
+                reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
+            ))
+            || preflight.status == reqwest::StatusCode::UNAUTHORIZED
+            || preflight.status == reqwest::StatusCode::FORBIDDEN
+            || preflight.status.is_server_error()
+        {
+            return Ok(preflight);
+        }
+        match message {
+            Some(ServerJsonRpcMessage::Response(response)) => {
+                if response.id != RequestId::Number(0) {
+                    return Err(ClientInitializeError::ConflictInitResponseId(
+                        RequestId::Number(0),
+                        response.id,
+                    )
+                    .into());
+                }
+                if !preflight.status.is_success() {
+                    return Ok(preflight);
+                }
+                let server_supported = match response.result {
+                    ServerResult::InitializeResult(result) if !protocol.discover => {
+                        vec![result.protocol_version]
+                    }
+                    ServerResult::DiscoverResult(result) if protocol.discover => {
+                        result.supported_versions
+                    }
+                    other => {
+                        return Err(ClientInitializeError::ExpectedInitResult(Some(other)).into());
+                    }
+                };
+                preflight.protocol.version = select_protocol_version(
+                    &supported_versions(!protocol.discover),
+                    &server_supported,
+                )
+                .ok_or_else(|| {
+                    ClientInitializeError::NoCompatibleProtocolVersion {
+                        client_supported: supported_versions(!protocol.discover),
+                        server_supported,
+                    }
+                })?;
+                return Ok(preflight);
+            }
+            Some(ServerJsonRpcMessage::Error(error)) => {
+                // Python MCP servers reject newer HTTP revisions before reading the request ID.
+                let legacy_version_rejection = protocol.discover
+                    && preflight.status == reqwest::StatusCode::BAD_REQUEST
+                    && matches!(error.id.as_ref(), Some(RequestId::String(id)) if id.as_ref() == "server-error")
+                    && error.error.code == ErrorCode::INVALID_REQUEST
+                    && error.error.message.starts_with(&format!(
+                        "Bad Request: Unsupported protocol version: {}. Supported versions: ",
+                        protocol.version.as_str()
+                    ));
+                if let Some(id) = error.id
+                    && id != RequestId::Number(0)
+                    && !legacy_version_rejection
+                {
+                    return Err(ClientInitializeError::UncorrelatedErrorResponse {
+                        expected: RequestId::Number(0),
+                        received: id,
+                    }
+                    .into());
+                }
+                let error = error.error;
+                let server_supported = error
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("supported"))
+                    .and_then(|value| {
+                        serde_json::from_value::<Vec<ProtocolVersion>>(value.clone()).ok()
+                    });
+                if error.code == ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+                    || (!protocol.discover
+                        && error.code == ErrorCode::INVALID_PARAMS
+                        && server_supported.is_some())
+                {
+                    let server_supported = server_supported.unwrap_or_default();
+                    let candidates = supported_versions(!protocol.discover)
+                        .into_iter()
+                        .filter(|candidate| !attempted.contains(candidate))
+                        .collect::<Vec<_>>();
+                    protocol.version = select_protocol_version(&candidates, &server_supported)
+                        .ok_or_else(|| ClientInitializeError::NoCompatibleProtocolVersion {
+                            client_supported: supported_versions(!protocol.discover),
+                            server_supported,
+                        })?;
+                    continue;
+                }
+                if !protocol.discover
+                    || matches!(
+                        error.code,
+                        ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY | ErrorCode::HEADER_MISMATCH
+                    )
+                {
+                    return Err(ClientInitializeError::JsonRpcError(error).into());
+                }
+            }
+            None if !protocol.discover && !preflight.status.is_success() => return Ok(preflight),
+            None if !preflight.status.is_client_error() => {
+                return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
+                    "MCP preflight did not return a JSON-RPC response",
+                ));
+            }
+            None => {}
+            Some(other) => {
+                return Err(ClientInitializeError::ExpectedInitResponse(Some(other)).into());
+            }
+        }
+        // A legacy signal, not a recognized modern version error, switches lifecycle.
+        protocol = NegotiatedProtocol {
+            version: ProtocolVersion::LATEST_WITH_INITIALIZE,
+            discover: false,
+        };
+        attempted.clear();
+    }
+}
 
-    let request = rmcp::model::InitializeRequest::new(make_client_info());
-    let request = rmcp::model::ClientJsonRpcMessage::request(
-        rmcp::model::ClientRequest::InitializeRequest(request),
-        rmcp::model::RequestId::Number(0),
-    );
+#[allow(clippy::result_large_err)]
+async fn send_preflight_request(
+    url: &str,
+    headers: &HashMap<String, String>,
+    auth_client: Option<&rmcp::transport::auth::AuthClient<reqwest::Client>>,
+    protocol: NegotiatedProtocol,
+) -> Result<(PreflightResponse, Option<ServerJsonRpcMessage>), rmcp::RmcpError> {
+    use rmcp::transport::common::http_header::{
+        EVENT_STREAM_MIME_TYPE, HEADER_MCP_METHOD, HEADER_MCP_PROTOCOL_VERSION, JSON_MIME_TYPE,
+    };
+    let info = make_client_info().with_protocol_version(protocol.version.clone());
+    let request = if protocol.discover {
+        let mut request = DiscoverRequest::new(DiscoverRequestParams {});
+        request
+            .extensions
+            .insert(RequestMetaObject::with_client_context(
+                protocol.version.clone(),
+                info.client_info,
+                info.capabilities,
+            ));
+        ClientRequest::DiscoverRequest(request)
+    } else {
+        ClientRequest::InitializeRequest(InitializeRequest::new(info))
+    };
+    let message = ClientJsonRpcMessage::request(request, RequestId::Number(0));
 
     let mut request = build_client_with_headers(headers)?
         .post(url)
+        .timeout(Duration::from_secs(10))
         .header(
             http::header::ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
         )
-        .json(&request);
+        .json(&message);
+    if protocol.discover {
+        // Legacy initialize negotiates in its body; an unsupported header prevents a counteroffer.
+        request = request
+            .header(HEADER_MCP_PROTOCOL_VERSION, protocol.version.as_str())
+            .header(HEADER_MCP_METHOD, "server/discover");
+    }
 
     if let Some(auth_client) = auth_client.as_ref() {
         let access_token = auth_client
@@ -445,16 +784,80 @@ async fn send_initialize_request(
         .await
         .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
 
-    Ok(response.status())
+    let www_authenticate = response
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(ToString::to_string)
+        .collect();
+
+    let preflight = PreflightResponse {
+        status: response.status(),
+        protocol,
+        www_authenticate,
+    };
+    if preflight.status == reqwest::StatusCode::UNAUTHORIZED
+        || preflight.status == reqwest::StatusCode::FORBIDDEN
+        || preflight.status.is_server_error()
+    {
+        return Ok((preflight, None));
+    }
+    let message = read_preflight_response(response)
+        .await
+        .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+    Ok((preflight, message))
 }
 
-/// Creates a [`ClientInfo`] for the MCP client.
+async fn read_preflight_response(
+    response: reqwest::Response,
+) -> anyhow::Result<Option<ServerJsonRpcMessage>> {
+    let is_sse = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(';').next() == Some("text/event-stream"));
+    let mut remaining: usize = 1024 * 1024;
+    let stream = response.bytes_stream().map(move |chunk| {
+        let chunk = chunk.map_err(std::io::Error::other)?;
+        remaining = remaining
+            .checked_sub(chunk.len())
+            .ok_or_else(|| std::io::Error::other("MCP preflight response exceeds 1 MiB"))?;
+        Ok::<_, std::io::Error>(chunk)
+    });
+    if is_sse {
+        let mut events = Box::pin(sse_stream::SseStream::from_bytes_stream(stream));
+        while let Some(event) = events.try_next().await? {
+            if let Some(data) = event.data
+                && !data.is_empty()
+            {
+                let message = serde_json::from_str(&data)?;
+                if matches!(
+                    message,
+                    ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
+                ) {
+                    return Ok(Some(message));
+                }
+            }
+        }
+        Ok(None)
+    } else {
+        let mut stream = Box::pin(stream);
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.try_next().await? {
+            body.extend_from_slice(&chunk);
+        }
+        Ok(serde_json::from_slice(&body).ok())
+    }
+}
+
+/// Creates a [`ClientConfig`] for the MCP client.
 ///
 /// This tells the MCP server who we are and what capabilities we have.
-fn make_client_info() -> rmcp::model::ClientInfo {
-    rmcp::model::ClientInfo::new(
+fn make_client_info() -> ClientConfig {
+    ClientConfig::new(
         Default::default(),
-        rmcp::model::Implementation::new(
+        Implementation::new(
             warp_core::channel::ChannelState::app_id().to_string(),
             warp_core::channel::ChannelState::app_version()
                 .map(|v| v.to_string())

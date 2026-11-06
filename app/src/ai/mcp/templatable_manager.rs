@@ -28,6 +28,8 @@ use warpui::{Entity, SingletonEntity};
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 use crate::ai::mcp::{FileBasedMCPManager, MCPServerState};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::{StaticEnvVar, TransportType};
 
 #[cfg(not(target_family = "wasm"))]
 type ReconnectResultSender =
@@ -48,9 +50,13 @@ pub struct TemplatableMCPServerManager {
     locally_installed_servers: HashMap<Uuid, TemplatableMCPServerInstallation>,
     server_states: HashMap<Uuid, MCPServerState>,
     active_servers: HashMap<Uuid, TemplatableMCPServerInfo>,
+    #[cfg(not(target_family = "wasm"))]
+    runtime_environment: HashMap<String, String>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
+    #[cfg(not(target_family = "wasm"))]
+    reconnectable_ephemeral_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     /// Cached credentials for each server.
     ///
     /// We persist these to secure storage, and if they are present when the server is started,
@@ -134,6 +140,25 @@ pub enum FigmaMcpStatus {
 }
 
 impl TemplatableMCPServerManager {
+    #[cfg(not(target_family = "wasm"))]
+    fn apply_runtime_environment(&self, transport: &mut TransportType) {
+        if let TransportType::CLIServer(server) = transport {
+            server
+                .static_env_vars
+                .retain(|variable| !self.runtime_environment.contains_key(&variable.name));
+            server
+                .static_env_vars
+                .extend(
+                    self.runtime_environment
+                        .iter()
+                        .map(|(name, value)| StaticEnvVar {
+                            name: name.clone(),
+                            value: value.clone(),
+                        }),
+                );
+        }
+    }
+
     pub fn get_installed_templatable_servers(
         &self,
     ) -> &HashMap<Uuid, TemplatableMCPServerInstallation> {
@@ -187,6 +212,47 @@ impl TemplatableMCPServerManager {
     #[cfg(not(target_family = "wasm"))]
     pub fn is_server_active_or_pending(&self, uuid: Uuid) -> bool {
         self.is_server_active(uuid) || self.spawned_servers.contains_key(&uuid)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn reconnectable_installation(
+        &self,
+        installation_uuid: Uuid,
+    ) -> Option<&TemplatableMCPServerInstallation> {
+        self.locally_installed_servers
+            .get(&installation_uuid)
+            .or_else(|| {
+                self.reconnectable_ephemeral_installations
+                    .get(&installation_uuid)
+            })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn register_reconnect_waiter(
+        &mut self,
+        installation_uuid: Uuid,
+        result_tx: ReconnectResultSender,
+    ) -> bool {
+        let should_start_reconnect = !self.pending_reconnections.contains_key(&installation_uuid)
+            && !self.spawned_servers.contains_key(&installation_uuid);
+        self.pending_reconnections
+            .entry(installation_uuid)
+            .or_default()
+            .push(result_tx);
+        should_start_reconnect
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn notify_reconnect_waiters(
+        &mut self,
+        installation_uuid: Uuid,
+        result: Result<rmcp::Peer<rmcp::RoleClient>, String>,
+    ) {
+        if let Some(waiters) = self.pending_reconnections.remove(&installation_uuid) {
+            for tx in waiters {
+                let _ = tx.send(result.clone());
+            }
+        }
     }
 
     pub fn get_server_state(&self, installation_uuid: Uuid) -> Option<MCPServerState> {
@@ -381,3 +447,7 @@ impl Entity for TemplatableMCPServerManager {
 }
 
 impl SingletonEntity for TemplatableMCPServerManager {}
+
+#[cfg(test)]
+#[path = "templatable_manager_tests.rs"]
+mod tests;

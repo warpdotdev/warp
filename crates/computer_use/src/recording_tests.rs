@@ -19,6 +19,7 @@ fn removes_unclaimed_output_when_handle_is_dropped() {
     let handle = RecordingHandle {
         width: 1,
         height: 1,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
         started_at: instant::Instant::now(),
@@ -29,6 +30,30 @@ fn removes_unclaimed_output_when_handle_is_dropped() {
     drop(handle);
 
     assert!(!path.exists());
+}
+#[cfg(windows)]
+#[test]
+fn removes_unclaimed_output_when_handle_is_dropped_windows() {
+    let path =
+        std::env::temp_dir().join(format!("warp-recording-drop-test-{}", std::process::id()));
+    let log_path = path.with_extension("log");
+    std::fs::write(&path, b"video").unwrap();
+    std::fs::write(&log_path, b"log").unwrap();
+    let handle = RecordingHandle {
+        width: 1,
+        height: 1,
+        capture_origin: Vector2I::new(0, 0),
+        exit_state: Arc::new(Mutex::new(None)),
+        path: path.clone(),
+        started_at: instant::Instant::now(),
+        process: None,
+        cleanup_on_drop: true,
+    };
+
+    drop(handle);
+
+    assert!(!path.exists());
+    assert!(!log_path.exists());
 }
 
 #[cfg(macos)]
@@ -43,6 +68,7 @@ fn removes_unclaimed_output_when_handle_is_dropped_macos() {
     let handle = RecordingHandle {
         width: 1,
         height: 1,
+        capture_origin: Vector2I::new(0, 0),
         exit_state: Arc::new(Mutex::new(None)),
         path: path.clone(),
         started_at: instant::Instant::now(),

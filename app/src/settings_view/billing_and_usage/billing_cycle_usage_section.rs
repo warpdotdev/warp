@@ -1,13 +1,11 @@
 use chrono::{DateTime, Datelike, Local, Utc};
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DropShadow, Empty, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkLens,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    DropShadow, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -33,6 +31,7 @@ use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
+use crate::settings_view::settings_page::render_cta_banner;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
@@ -673,10 +672,9 @@ impl BillingCycleUsageSectionView {
     }
 
     fn viewer_is_native_workspaces_admin(&self, workspace: &Workspace, app: &AppContext) -> bool {
-        workspace.is_native_workspaces_enabled()
-            && Self::resolved_viewer_email(app)
-                .as_deref()
-                .is_some_and(|email| workspace.is_workspace_admin(email))
+        Self::resolved_viewer_email(app)
+            .as_deref()
+            .is_some_and(|email| workspace.is_native_workspaces_admin(email))
     }
 
     /// Renders the CTA banner that sits between the team-totals block and
@@ -712,48 +710,13 @@ impl BillingCycleUsageSectionView {
                 visibility_cta_for(admin_granularity)?
             };
 
-        let theme = appearance.theme();
-        let sub_text = theme.sub_text_color(theme.background());
-        let body = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(vec![
-                FormattedTextFragment::hyperlink_action(link_text, action),
-                FormattedTextFragment::plain_text(format!(" {trailing_copy}")),
-            ])]),
-            appearance.ui_font_size(),
-            appearance.ui_font_family(),
-            appearance.ui_font_family(),
-            sub_text.into(),
-            HighlightedHyperlink::default(),
-        )
-        .with_hyperlink_font_color(theme.accent().into_solid())
-        .register_default_click_handlers_with_action_support(|lens, event, ctx| match lens {
-            HyperlinkLens::Url(u) => ctx.open_url(u),
-            HyperlinkLens::Action(a) => {
-                if let Some(act) = a.as_any().downcast_ref::<BillingCycleUsageAction>() {
-                    event.dispatch_typed_action(act.clone());
-                }
-            }
-        })
-        .finish();
-
-        let icon = ConstrainedBox::new(leading_icon.to_warpui_icon(sub_text).finish())
-            .with_width(14.)
-            .with_height(14.)
-            .finish();
-
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Container::new(icon).with_margin_right(8.).finish())
-            .with_child(body)
-            .finish();
-
-        Some(
-            Container::new(row)
-                .with_background_color(theme.surface_1().into_solid())
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .with_uniform_padding(12.)
-                .finish(),
-        )
+        Some(render_cta_banner(
+            leading_icon,
+            link_text,
+            trailing_copy,
+            action,
+            appearance,
+        ))
     }
 }
 

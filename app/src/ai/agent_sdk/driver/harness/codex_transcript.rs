@@ -20,7 +20,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::json_utils::entries_to_jsonl;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 
 /// Env var codex honors to override `~/.codex` (see codex `core/src/config/mod.rs`).
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
@@ -28,10 +28,10 @@ const CODEX_HOME_DIRNAME: &str = ".codex";
 /// Subdirectory under `$CODEX_HOME` where rollouts live.
 const CODEX_SESSIONS_SUBDIR: &str = "sessions";
 
-/// JSON envelope sent to the server representing a complete Codex session.
+/// JSON envelope sent to the server for one captured Codex rollout.
 ///
-/// The transcript is the parsed JSONL content of the rollout file; codex's resume
-/// path re-reads this JSONL line by line.
+/// Valid records are retained when the rollout is incomplete. Completeness diagnostics are not
+/// serialized into this raw transcript shape, and usage version 1 covers only this root rollout.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CodexTranscriptEnvelope {
     /// The directory the codex session started in (recovered from the `SessionMeta` line).
@@ -78,7 +78,7 @@ pub(crate) struct CodexSessionMetadata {
 pub(crate) struct CodexResumeInfo {
     /// Warp server-side conversation id. Reused so subsequent transcript/block-snapshot
     /// uploads overwrite the same GCS objects.
-    pub(crate) conversation_id: AIConversationId,
+    pub(crate) conversation_id: ServerConversationToken,
     /// Codex session uuid passed to `codex resume <session_id>`. Matches `envelope.session_id`.
     pub(crate) session_id: Uuid,
     /// Envelope fetched from the server, written back to disk before launching codex.
@@ -105,7 +105,7 @@ pub(crate) fn codex_sessions_root() -> anyhow::Result<PathBuf> {
 
 /// Walk `<sessions_root>/YYYY/MM/DD/` looking for a `rollout-*-<session_id>.jsonl`.
 ///
-/// Returns `None` if `sessions_root` doesn't exist yet or no matching file is found.
+/// Returns `None` if no match is found. Unreadable traversal entries and directories are skipped.
 pub(crate) fn find_session_file(sessions_root: &Path, session_id: Uuid) -> Option<PathBuf> {
     if !sessions_root.exists() {
         return None;

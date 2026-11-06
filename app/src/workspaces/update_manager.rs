@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use warp_errors::{report_error, report_if_error};
-use warpui::r#async::Timer;
+use warpui::r#async::{Spawnable, Timer};
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, SingletonEntity, duration_with_jitter,
 };
@@ -15,7 +17,6 @@ use super::user_workspaces::{
     CreateTeamResponse, UserWorkspaces, WorkspacesMetadataResponse, WorkspacesMetadataWithPricing,
 };
 use super::workspace::WorkspaceUid;
-use crate::ai::llms::LLMPreferences;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
@@ -25,7 +26,7 @@ use crate::pricing::PricingInfoModel;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::retry_strategies::{
-    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY, with_retry,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::TeamClient;
@@ -35,6 +36,13 @@ pub enum TeamUpdateManagerEvent {
     LeaveError,
     RenameTeamSuccess,
     RenameTeamError,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WorkspaceMetadataRetryPolicy {
+    OutOfBand,
+    #[cfg(not(target_family = "wasm"))]
+    TimeBudget(Duration),
 }
 
 /// TeamUpdateManager is a singleton model responsible for communicating with the server and local
@@ -125,9 +133,8 @@ impl TeamUpdateManager {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
-                    feature_model_choices: None,
                     ai_credit_availability: None,
-                    user_purchase_policy: None,
+                    user_tier: Default::default(),
                 },
                 pricing_info: None,
             })
@@ -152,34 +159,99 @@ impl TeamUpdateManager {
     }
 
     /// Out-of-band (from the regular poll) refresh of workspace metadata.
-    /// Returns a oneshot Receiver that resolves when the refresh completes (success or final failure).
-    pub fn refresh_workspace_metadata(&mut self, ctx: &mut ModelContext<Self>) -> Receiver<()> {
+    /// Returns a oneshot Receiver that resolves with the final refresh result.
+    pub fn refresh_workspace_metadata(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Result<()>> {
         // Skip the refresh when logged out to avoid noisy auth errors.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            let (tx, rx) = oneshot::channel::<()>();
-            let _ = tx.send(());
+            let (tx, rx) = oneshot::channel::<Result<()>>();
+            let _ = tx.send(Ok(()));
             return rx;
         }
 
-        let team_client = self.team_client.clone();
-        let (tx, rx) = oneshot::channel::<()>();
-        let mut tx = Some(tx);
-        ctx.spawn_with_retry_on_error(
-            move || {
-                let team_client = team_client.clone();
-                async move { team_client.workspaces_metadata().await }
-            },
-            OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
-            move |update_manager, request_state, ctx| {
-                // Only signal once there are no more retries left.
-                let is_final = !request_state.has_pending_retries();
-                update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final && let Some(sender) = tx.take() {
-                    let _ = sender.send(());
-                }
-            },
-        );
+        let (tx, rx) = oneshot::channel::<Result<()>>();
+        let refresh = self
+            .refresh_workspace_metadata_with_retry(WorkspaceMetadataRetryPolicy::OutOfBand, ctx);
+        ctx.spawn(refresh, move |_, result, _| {
+            let _ = tx.send(result);
+        });
         rx
+    }
+
+    pub(crate) fn refresh_workspace_metadata_with_retry(
+        &mut self,
+        retry_policy: WorkspaceMetadataRetryPolicy,
+        ctx: &mut ModelContext<Self>,
+    ) -> impl Spawnable<Output = Result<()>> + use<> {
+        let team_client = AuthStateProvider::as_ref(ctx)
+            .get()
+            .is_logged_in()
+            .then(|| self.team_client.clone());
+        let foreground = ctx.spawner();
+
+        async move {
+            let Some(team_client) = team_client else {
+                return Ok(());
+            };
+            let mut retry_option = OUT_OF_BAND_REQUEST_RETRY_STRATEGY;
+            let refresh = with_retry(
+                "Workspace metadata",
+                || team_client.workspaces_metadata(),
+                // The workload token may be rejected until the execution claim is committed.
+                |_| true,
+                |delay| async move {
+                    match retry_policy {
+                        WorkspaceMetadataRetryPolicy::OutOfBand => {
+                            Timer::after(delay).await;
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        WorkspaceMetadataRetryPolicy::TimeBudget(_) => {
+                            tokio::time::sleep(delay).await
+                        }
+                    }
+                },
+                |_| match retry_policy {
+                    WorkspaceMetadataRetryPolicy::OutOfBand => {
+                        if retry_option.remaining_retries() == 0 {
+                            return None;
+                        }
+                        let delay = retry_option.duration();
+                        retry_option.advance();
+                        Some(delay)
+                    }
+                    #[cfg(not(target_family = "wasm"))]
+                    WorkspaceMetadataRetryPolicy::TimeBudget(_) => {
+                        Some(duration_with_jitter(Duration::from_secs(1), 0.5))
+                    }
+                },
+            );
+            let response = match retry_policy {
+                WorkspaceMetadataRetryPolicy::OutOfBand => refresh.await,
+                #[cfg(not(target_family = "wasm"))]
+                WorkspaceMetadataRetryPolicy::TimeBudget(timeout) => {
+                    tokio::time::timeout(timeout, refresh)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?
+                }
+            };
+
+            foreground
+                .spawn(move |manager, ctx| {
+                    manager
+                        .handle_workspace_metadata_with_request_state(
+                            match response {
+                                Ok(response) => RequestState::RequestSucceeded(response),
+                                Err(error) => RequestState::RequestFailed(error),
+                            },
+                            ctx,
+                        )
+                        .expect("Metadata refresh has a terminal result")
+                })
+                .await
+                .context("Team metadata refresh was canceled")?
+        }
     }
 
     fn abort_existing_poll(&mut self) {
@@ -232,7 +304,7 @@ impl TeamUpdateManager {
                 // Only poll if `spawn_with_retry_on_error` is not going to retry again so we don't end up with multiple
                 // polls running simultaneously.
                 let should_poll_again = !res.has_pending_retries();
-                update_manager.handle_workspace_metadata_with_request_state(res, ctx);
+                let _ = update_manager.handle_workspace_metadata_with_request_state(res, ctx);
 
                 if should_poll_again {
                     let next_poll_handle = ctx.spawn(
@@ -358,10 +430,10 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
-                let user_purchase_policy = response.metadata.user_purchase_policy;
+                let user_tier = response.metadata.user_tier;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces.set_user_tier(user_tier);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -443,7 +515,7 @@ impl TeamUpdateManager {
         &mut self,
         request_state: RequestState<WorkspacesMetadataWithPricing>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> Option<Result<()>> {
         match request_state {
             RequestState::RequestSucceeded(response) => {
                 if let Some(pricing_info) = response.pricing_info.clone() {
@@ -455,16 +527,19 @@ impl TeamUpdateManager {
                 // Right now, this function is coupled with how we handle leaving a team.
                 // TODO(zheng) refactor so we can separate these two cases and have clearer logic.
                 self.on_workspaces_updated(Ok(response.metadata), ctx);
+                Some(Ok(()))
             }
             RequestState::RequestFailedRetryPending(err) => {
                 log::info!(
                     "get_workspaces_metadata_for_user: request failed with error {err:#}. Trying again."
                 );
+                None
             }
             RequestState::RequestFailed(err) => {
                 log::info!(
                     "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
                 );
+                Some(Err(err))
             }
         }
     }
@@ -479,7 +554,7 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
-                let user_purchase_policy = user_workspaces_access.user_purchase_policy;
+                let user_tier = user_workspaces_access.user_tier;
 
                 if let Some(availability) = user_workspaces_access.ai_credit_availability {
                     AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
@@ -488,7 +563,7 @@ impl TeamUpdateManager {
                 }
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces.set_user_tier(user_tier);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });
@@ -508,13 +583,6 @@ impl TeamUpdateManager {
                 if let Some(experiments) = experiments {
                     ServerApiProvider::handle(ctx).update(ctx, |provider, ctx| {
                         provider.handle_experiments_fetched(experiments, ctx);
-                    });
-                }
-
-                if let Some(feature_model_choices) = user_workspaces_access.feature_model_choices {
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences
-                            .update_feature_model_choices(feature_model_choices.try_into(), ctx);
                     });
                 }
 

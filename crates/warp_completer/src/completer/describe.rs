@@ -254,6 +254,6 @@ fn floor_char_boundary(original_string: &str, idx: usize) -> usize {
     }
 }
 
-#[cfg(all(test, not(feature = "v2")))]
+#[cfg(test)]
 #[path = "describe_tests.rs"]
 mod tests;

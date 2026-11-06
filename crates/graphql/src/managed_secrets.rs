@@ -7,8 +7,11 @@ pub enum ManagedSecretType {
     AnthropicApiKey,
     AnthropicBedrockAccessKey,
     AnthropicBedrockApiKey,
+    AwsEcrCredential,
+    DockerRegistry,
     Dotenvx,
     OpenaiApiKey,
+    LlmProviderApiKey,
     RawValue,
 }
 
@@ -19,8 +22,11 @@ impl ManagedSecretType {
             ManagedSecretType::AnthropicApiKey => "anthropic_api_key",
             ManagedSecretType::AnthropicBedrockAccessKey => "anthropic_bedrock_access_key",
             ManagedSecretType::AnthropicBedrockApiKey => "anthropic_bedrock_api_key",
+            ManagedSecretType::AwsEcrCredential => "aws_ecr_credential",
+            ManagedSecretType::DockerRegistry => "docker_registry",
             ManagedSecretType::Dotenvx => "dotenvx",
             ManagedSecretType::OpenaiApiKey => "openai_api_key",
+            ManagedSecretType::LlmProviderApiKey => "llm_provider_api_key",
             ManagedSecretType::RawValue => "raw_value",
         }
     }
@@ -36,6 +42,7 @@ pub struct ManagedSecretConfig {
 pub struct ManagedSecret {
     pub name: String,
     pub description: Option<String>,
+    pub provider_id: Option<String>,
     pub created_at: Time,
     pub updated_at: Time,
     // In our GraphQL schema, `Space` is essentially the output type equivalent of an `Owner`.

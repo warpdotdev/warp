@@ -1938,7 +1938,7 @@ impl EventLoop {
             log::debug!("Soft keyboard callback received input: {:?}", input);
             if let Err(e) = proxy.send_event(CustomEvent::SoftKeyboardInput(input)) {
                 report_error!(
-                    anyhow::anyhow!("{e:?}").context("Failed to send SoftKeyboardInput event")
+                    anyhow::Error::new(e).context("Failed to send SoftKeyboardInput event")
                 );
             }
         });

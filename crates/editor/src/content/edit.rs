@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -52,8 +53,9 @@ pub(crate) fn layout_mermaid_block_for_test(
     layout_options: RenderLayoutOptions,
     app: &AppContext,
 ) -> Result<(BlockItem, bool)> {
+    let block = StyledBufferBlock::Text(text_block);
     let task = LayoutTask::from_styled_block(
-        StyledBufferBlock::Text(text_block),
+        &block,
         layout,
         &layout_options,
         CharOffset::from(1),
@@ -182,7 +184,7 @@ impl PreciseDelta {
 /// Delta after an edit operation recording the old range of rows that got replaced
 /// and the content of new rows changed after the edit. This is necessary for the rendering
 /// model to know what block objects need a re-layout.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditDelta {
     /// The exact replacement charoffset range where content was changed.
     pub precise_deltas: Vec<PreciseDelta>,
@@ -191,7 +193,13 @@ pub struct EditDelta {
     /// the first character after it.
     pub old_offset: Range<CharOffset>,
     /// Content of the lines that have been changed.
-    pub new_lines: Vec<StyledBufferBlock>,
+    ///
+    /// Wrapped in `Arc` so that `EditDelta::clone` is O(1). The render pipeline
+    /// often clones a delta (e.g. when storing it in `DelayRendering::edits`)
+    /// before consuming it in `layout_delta`. Without `Arc`, cloning an entire
+    /// file's worth of styled blocks can add several gigabytes of transient
+    /// allocation for large files.
+    pub new_lines: Arc<Vec<StyledBufferBlock>>,
 }
 
 /// Render Delta that has its content laid out into TextFrames.
@@ -507,11 +515,64 @@ impl LayOutArgs {
     }
 }
 
+/// Cap on the number of [`LayoutTask`]s run through a single `into_par_iter()` fan-out.
+///
+/// Rayon fans a chunk's tasks out across every CPU core, and each task can allocate a CoreText
+/// frame plus derived `Line`/`Glyph` vectors that stay live until the whole chunk's parallel
+/// collection completes. Bounding the chunk size caps how many of those allocations can be live
+/// at once (APP-5392), rather than growing with the size of the input. Inputs at or under this
+/// size (the overwhelming majority) still produce exactly one chunk, so they keep taking a
+/// single full-width parallel pass.
+const MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK: usize = 64;
+
+/// Cap on the cumulative buffer content (in `char`s) laid out through a single `into_par_iter()`
+/// fan-out.
+///
+/// A chunk of [`MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK`] short lines and a chunk of that many
+/// multi-KB lines are not equally expensive to lay out in parallel, so bound content length too:
+/// this stops a handful of unusually long lines from slipping past the task-count cap. A single
+/// task longer than this cap still gets its own chunk rather than stalling chunking.
+const MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK: usize = 64 * 1024;
+
+/// Split `tasks` into ordered chunks bounded by both [`MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK`] and
+/// [`MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK`], preserving task order within and across
+/// chunks. `T` carries per-task metadata that chunking doesn't need to inspect (e.g. hidden-range
+/// membership, or a temporary block's destination line).
+fn chunk_layout_tasks<T>(tasks: Vec<(LayoutTask, T, usize)>) -> Vec<Vec<(LayoutTask, T)>> {
+    let mut chunks = Vec::new();
+    let mut current_chunk = Vec::new();
+    let mut current_chars = 0usize;
+
+    for (task, metadata, content_chars) in tasks {
+        if !current_chunk.is_empty()
+            && (current_chunk.len() >= MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK
+                || current_chars + content_chars > MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK)
+        {
+            chunks.push(mem::take(&mut current_chunk));
+            current_chars = 0;
+        }
+        current_chars += content_chars;
+        current_chunk.push((task, metadata));
+    }
+
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
+}
+
 impl EditDelta {
     /// Lay out the given EditDelta into TextFrames.
     /// If hidden_lines is provided, lines within hidden ranges will be laid out as BlockItem::Hidden.
+    ///
+    /// Takes `&self` rather than consuming `self` so that laying out a delta never depends on
+    /// `new_lines` having a single owner. `EditDelta` can be cloned by multiple editors sharing
+    /// the same underlying buffer (each clone only bumps the `Arc` refcount), so unconditionally
+    /// borrowing here guarantees the whole `new_lines` vector is never duplicated at layout time,
+    /// regardless of how many clones of the delta are alive.
     pub fn layout_delta(
-        self,
+        &self,
         layout: &TextLayout,
         document_path: Option<&Path>,
         layout_options: &RenderLayoutOptions,
@@ -523,10 +584,13 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
-        // First, build a Vec of layout tasks with information about whether they're hidden
+        // First, build a Vec of layout tasks with information about whether they're hidden, and
+        // how much buffer content they carry (used below to bound parallel fan-out). Each task
+        // borrows its source block from `self.new_lines` rather than taking ownership, so this
+        // never clones the (potentially file-sized) block list.
         let layout_tasks: Vec<_> = self
             .new_lines
-            .into_iter()
+            .iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
                 if content_length == CharOffset::zero() {
@@ -543,39 +607,54 @@ impl EditDelta {
                     );
                     let is_hidden = hidden_ranges.contains(&current_offset);
                     current_offset += content_length;
-                    Some((task, is_hidden))
+                    Some((task, is_hidden, content_length.as_usize()))
                 }
             })
             .collect();
 
         let last_task = layout_tasks.len().saturating_sub(1);
 
-        // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
-        // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        // Then, run the tasks in bounded chunks (each chunk in parallel, chunks in sequence),
+        // collecting (a) the laid out BlockItems in order and (b) whether or not the last item
+        // ends with a newline.
+        let mut block_items = Vec::with_capacity(layout_tasks.len());
+        let mut has_trailing_newline = None;
+        let mut chunk_start = 0;
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        report_error!(
-                            e.context("Failed to lay out BlockItem"),
-                            extra: { "offset" => ?self.old_offset }
-                        );
-                        None
+        for chunk in chunk_layout_tasks(layout_tasks) {
+            let chunk_len = chunk.len();
+            let (chunk_items, chunk_trailing_newline): (Vec<_>, Last<_>) = chunk
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(local_idx, (task, is_hidden))| {
+                    let idx = chunk_start + local_idx;
+                    let location = if idx == 0 {
+                        BlockLocation::Start
+                    } else if idx >= last_task {
+                        BlockLocation::End
+                    } else {
+                        BlockLocation::Middle
+                    };
+
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            report_error!(
+                                e.context("Failed to lay out BlockItem"),
+                                extra: { "offset" => ?self.old_offset }
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .unzip();
+                })
+                .unzip();
+
+            block_items.extend(chunk_items);
+            if let Some(trailing_newline) = chunk_trailing_newline.into_inner() {
+                has_trailing_newline = Some(trailing_newline);
+            }
+            chunk_start += chunk_len;
+        }
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -596,7 +675,7 @@ impl EditDelta {
         // Trailing newline is default to true. This default value is used when
         // edit delta has no new line, which means one or multiple entire lines have
         // been deleted. We should still leave a trailing newline in this case.
-        let has_trailing_newline = has_trailing_newline.into_inner().unwrap_or(true);
+        let has_trailing_newline = has_trailing_newline.unwrap_or(true);
         let rich_text_styles = layout.rich_text_styles();
 
         LaidOutRenderDelta {
@@ -616,14 +695,19 @@ impl EditDelta {
     }
 }
 
-/// Lay out a list of temporary blocks in parallel.
+/// Lay out a list of temporary blocks, in bounded chunks (see [`chunk_layout_tasks`]).
+///
+/// Diff navigation aggregates every hunk's removed lines into a single vector with no cap
+/// (`CodeEditorModel::refresh_diff_state`), so a single large diff can drive as much unbounded
+/// fan-out here as a large paste does in [`EditDelta::layout_delta`].
 pub fn layout_temporary_blocks(
     blocks: Vec<TemporaryBlock>,
     layout: &TextLayout,
 ) -> HashMap<LineCount, Vec<BlockItem>> {
-    let layout_tasks = blocks
+    let layout_tasks: Vec<_> = blocks
         .into_iter()
         .map(|block| {
+            let content_chars = block.content.chars().count();
             (
                 LayoutTask::temporary_block(
                     block.content,
@@ -631,46 +715,60 @@ pub fn layout_temporary_blocks(
                     block.inline_text_decorations,
                 ),
                 block.insert_before,
+                content_chars,
             )
         })
-        .collect_vec();
+        .collect();
 
     let last_task = layout_tasks.len().saturating_sub(1);
+    let mut results = Vec::with_capacity(layout_tasks.len());
+    let mut chunk_start = 0;
 
-    let results: Vec<_> = layout_tasks
-        .into_par_iter()
-        .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
-            let location = if idx == 0 {
-                BlockLocation::Start
-            } else if idx >= last_task {
-                BlockLocation::End
-            } else {
-                BlockLocation::Middle
-            };
+    for chunk in chunk_layout_tasks(layout_tasks) {
+        let chunk_len = chunk.len();
+        let chunk_results: Vec<_> = chunk
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(local_idx, (task, line_count))| {
+                let idx = chunk_start + local_idx;
+                let location = if idx == 0 {
+                    BlockLocation::Start
+                } else if idx >= last_task {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
 
-            match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
-                Err(e) => {
-                    report_error!(e.context("Failed to lay out temporary blocks"));
-                    None
+                match task.run(layout, location, false) {
+                    Ok(result) => Some((line_count, result.0)),
+                    Err(e) => {
+                        report_error!(e.context("Failed to lay out temporary blocks"));
+                        None
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
+
+        results.extend(chunk_results);
+        chunk_start += chunk_len;
+    }
 
     results.into_iter().into_group_map()
 }
 
 /// A unit of work for parallel layout of an edit.
-enum LayoutTask {
+///
+/// Borrows its source text blocks (`'a`) from the `EditDelta::new_lines` they were built from,
+/// rather than owning them, so building the set of layout tasks for a delta never requires
+/// cloning the (potentially file-sized) block list.
+enum LayoutTask<'a> {
     /// An embedded item, which is laid out on the main thread so that it can access
     /// [`AppContext`].
     Embed(Box<dyn LaidOutEmbeddedItem>),
     /// A text block, which will be laid out in parallel.
-    Text(StyledTextBlock),
+    Text(&'a StyledTextBlock),
     MermaidDiagram {
-        text_block: StyledTextBlock,
+        text_block: &'a StyledTextBlock,
         asset_source: AssetSource,
         config: ImageBlockConfig,
     },
@@ -679,7 +777,7 @@ enum LayoutTask {
     /// to [`Self::Text`] but carries the Mermaid asset source so that the view layer can watch
     /// for the asset to finish loading and re-run layout if it becomes parseable.
     MermaidCodeFallback {
-        text_block: StyledTextBlock,
+        text_block: &'a StyledTextBlock,
         pending_mermaid_asset: Option<AssetSource>,
     },
     /// A horizontal rule, which requires no layout.
@@ -699,10 +797,10 @@ enum LayoutTask {
     },
 }
 
-impl LayoutTask {
+impl<'a> LayoutTask<'a> {
     /// Convert a block of styled content to the possibly-parallelizable layout work it requires.
     fn from_styled_block(
-        content: StyledBufferBlock,
+        content: &'a StyledBufferBlock,
         layout: &TextLayout,
         layout_options: &RenderLayoutOptions,
         block_start: CharOffset,
@@ -972,7 +1070,7 @@ fn calculate_hidden_block_line_count(
 /// were no paragraphs. So a `Result` is returned for now so that we can bubble
 /// up the error and add appropriate logging. See CLD-2093.
 fn layout_text_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     layout: &TextLayout,
     location: BlockLocation,
     is_hidden: bool,
@@ -980,7 +1078,7 @@ fn layout_text_block(
     if is_hidden {
         // If all text is hidden, return a BlockItem::Hidden without doing any layout
         let content_length = text_block.content_length;
-        let line_count = calculate_hidden_block_line_count(&text_block, location);
+        let line_count = calculate_hidden_block_line_count(text_block, location);
         return Ok((
             BlockItem::Hidden(HiddenBlockConfig::new(
                 line_count.into(),
@@ -1005,7 +1103,7 @@ fn layout_text_block(
     // Accumulator for the current line (paragraph) of text.
     let mut active_line = LayOutArgs::new();
     // Accumulator for fully laid-out paragraphs.
-    let mut paragraphs = Vec::with_capacity(estimate_paragraph_count(&text_block));
+    let mut paragraphs = Vec::with_capacity(estimate_paragraph_count(text_block));
 
     let rich_text_styles = layout.rich_text_styles();
     let spacing = rich_text_styles
@@ -1067,22 +1165,27 @@ fn layout_text_block(
         true
     };
 
-    let block_item = match text_block.style.clone() {
-        BufferBlockStyle::CodeBlock { code_block_type } => Vec1::try_from_vec(paragraphs)
-            .ok()
-            .map(|p| {
-                let paragraph_block = ParagraphBlock::new(p);
-                BlockItem::RunnableCodeBlock {
-                    paragraph_block,
-                    code_block_type,
-                    pending_mermaid_asset: None,
-                }
-            })
-            .ok_or_else(|| anyhow!("Code block should have at least one paragraph")),
+    let block_item = match &text_block.style {
+        BufferBlockStyle::CodeBlock { code_block_type } => {
+            let code_block_type = code_block_type.clone();
+            Vec1::try_from_vec(paragraphs)
+                .ok()
+                .map(|p| {
+                    let paragraph_block = ParagraphBlock::new(p);
+                    BlockItem::RunnableCodeBlock {
+                        paragraph_block,
+                        code_block_type,
+                        pending_mermaid_asset: None,
+                    }
+                })
+                .ok_or_else(|| anyhow!("Code block should have at least one paragraph"))
+        }
         BufferBlockStyle::TaskList {
             indent_level,
             complete,
         } => {
+            let indent_level = *indent_level;
+            let complete = *complete;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1099,6 +1202,7 @@ fn layout_text_block(
                 .ok_or_else(|| anyhow!("Task list item should have one paragraph"))
         }
         BufferBlockStyle::UnorderedList { indent_level } => {
+            let indent_level = *indent_level;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1116,6 +1220,8 @@ fn layout_text_block(
             indent_level,
             number,
         } => {
+            let indent_level = *indent_level;
+            let number = *number;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1131,6 +1237,7 @@ fn layout_text_block(
                 .ok_or_else(|| anyhow!("Ordered list item should have one paragraph"))
         }
         BufferBlockStyle::Header { header_size } => {
+            let header_size = *header_size;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1166,14 +1273,14 @@ fn layout_text_block(
 }
 
 fn layout_mermaid_diagram_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     asset_source: AssetSource,
     config: ImageBlockConfig,
     location: BlockLocation,
     is_hidden: bool,
 ) -> Result<(BlockItem, bool)> {
     if is_hidden {
-        let line_count = calculate_hidden_block_line_count(&text_block, location);
+        let line_count = calculate_hidden_block_line_count(text_block, location);
         return Ok((
             BlockItem::Hidden(HiddenBlockConfig::new(
                 line_count.into(),
@@ -1200,7 +1307,7 @@ fn layout_mermaid_diagram_block(
 }
 
 fn layout_table_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     layout: &TextLayout,
     spacing: BlockSpacing,
 ) -> Result<BlockItem> {

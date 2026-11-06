@@ -81,7 +81,7 @@ fn remap_action_for_target(action: &Action, target: Target) -> Result<Action, St
         Action::MouseMove { to } => Action::MouseMove { to: remap(*to)? },
         Action::MouseDown { button, at } => Action::MouseDown {
             button: *button,
-            at: remap(*at)?,
+            at: at.map(remap).transpose()?,
         },
         Action::MouseWheel {
             at,
@@ -186,7 +186,9 @@ impl super::Actor for Actor {
                     Timer::after(*duration).await;
                 }
                 Action::MouseDown { button, at } => {
-                    self.mouse.move_to(*at).await?;
+                    if let Some(at) = at {
+                        self.mouse.move_to(*at).await?;
+                    }
                     self.mouse.button_down(button)?;
                 }
                 Action::MouseUp { button } => self.mouse.button_up(button)?,

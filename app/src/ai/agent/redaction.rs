@@ -1,28 +1,12 @@
 use std::sync::Arc;
 
-use super::super::blocklist::block::secret_redaction::{
-    SECRET_REDACTION_REPLACEMENT_CHARACTER, find_secrets_in_text,
-};
+pub(crate) use secret_redaction::redact_secrets;
+
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
     AskUserQuestionAnswerItem, AskUserQuestionResult, BlockContext, PassiveSuggestionResultType,
     PassiveSuggestionTrigger, RequestCommandOutputResult, TransferShellCommandControlToUserResult,
 };
-
-/// Redact all detected secrets in-place within the given string.
-pub(crate) fn redact_secrets(input: &mut String) {
-    let mut secrets: Vec<_> = find_secrets_in_text(input)
-        .into_iter()
-        .map(|r| r.byte_range)
-        .collect();
-    // Replace from the end to preserve indices
-    secrets.sort_by_key(|range| range.start);
-    for range in secrets.into_iter().rev() {
-        let replacement =
-            SECRET_REDACTION_REPLACEMENT_CHARACTER.repeat(range.end.saturating_sub(range.start));
-        input.replace_range(range.start..range.end, &replacement);
-    }
-}
 
 /// Redact secrets in-place for all user-provided text fields inside the inputs that will be
 /// sent to the server.
@@ -106,15 +90,24 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             // No user-provided text to redact in inter-agent relay inputs.
             AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => {}
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::AgentWake => {}
             AIAgentInput::ActionResult { result, context } => {
                 redact_context(Arc::make_mut(context));
                 match &mut result.result {
-                    AIAgentActionResultType::RequestCommandOutput(output) => {
-                        if let RequestCommandOutputResult::Completed { output, .. } = output {
+                    AIAgentActionResultType::RequestCommandOutput(output) => match output {
+                        RequestCommandOutputResult::Completed { output, .. }
+                        | RequestCommandOutputResult::ShellRecovered { output, .. } => {
                             redact_secrets(output);
                         }
-                    }
+                        RequestCommandOutputResult::LongRunningCommandSnapshot {
+                            grid_contents,
+                            ..
+                        } => redact_secrets(grid_contents),
+                        RequestCommandOutputResult::CancelledBeforeExecution
+                        | RequestCommandOutputResult::Denylisted { .. }
+                        | RequestCommandOutputResult::TerminalBusy { .. } => {}
+                    },
                     AIAgentActionResultType::WriteToLongRunningShellCommand(result) => {
                         use crate::ai::agent::WriteToLongRunningShellCommandResult::*;
                         match result {
@@ -126,7 +119,9 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     AIAgentActionResultType::ReadShellCommandOutput(result) => {
                         use crate::ai::agent::ReadShellCommandOutputResult::*;
                         match result {
-                            CommandFinished { output, .. } => redact_secrets(output),
+                            CommandFinished { output, .. } | ShellRecovered { output, .. } => {
+                                redact_secrets(output)
+                            }
                             LongRunningCommandSnapshot { grid_contents, .. } => {
                                 redact_secrets(grid_contents)
                             }

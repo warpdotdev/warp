@@ -12,7 +12,7 @@ fn aws_provider_env_vars_before_setup() {
     let config = AwsProviderConfig {
         role_arn: "arn:aws:iam::123456789012:role/MyRole".to_string(),
     };
-    let provider = AwsCloudProvider::new(&config, "abc-123").unwrap();
+    let provider = AwsCloudProvider::new(&config, Some("abc-123")).unwrap();
     let vars = provider.env_vars().unwrap();
 
     assert_eq!(
@@ -40,7 +40,7 @@ fn extract_cloud_providers_empty_when_no_providers() {
         gcp: None,
         aws: None,
     };
-    let providers = load_providers(&config, "run-1").unwrap();
+    let providers = load_providers(&config, Some("run-1")).unwrap();
     assert!(providers.is_empty());
 }
 
@@ -52,7 +52,7 @@ fn extract_cloud_providers_creates_aws_provider() {
             role_arn: "arn:aws:iam::111111111111:role/TestRole".to_string(),
         }),
     };
-    let providers = load_providers(&config, "run-42").unwrap();
+    let providers = load_providers(&config, Some("run-42")).unwrap();
     assert_eq!(providers.len(), 1);
 
     let vars = providers[0].env_vars().unwrap();
@@ -74,7 +74,7 @@ fn gcp_provider_env_vars() {
         workload_identity_federation_provider_id: "my-provider".to_string(),
         service_account_email: None,
     };
-    let provider = GcpCloudProvider::new(&config, "run-99").unwrap();
+    let provider = GcpCloudProvider::new(&config, None).unwrap();
     let vars = provider.env_vars().unwrap();
 
     assert!(vars.contains_key(&OsString::from("GOOGLE_APPLICATION_CREDENTIALS")));
@@ -95,7 +95,7 @@ fn extract_cloud_providers_creates_gcp_provider() {
         }),
         aws: None,
     };
-    let providers = load_providers(&config, "run-1").unwrap();
+    let providers = load_providers(&config, Some("run-1")).unwrap();
     assert_eq!(providers.len(), 1);
 
     let vars = providers[0].env_vars().unwrap();
@@ -115,7 +115,7 @@ fn collect_provider_env_vars_merges_all_providers() {
             role_arn: "arn:aws:iam::999:role/R".to_string(),
         }),
     };
-    let providers = load_providers(&config, "id-7").unwrap();
+    let providers = load_providers(&config, None).unwrap();
     assert_eq!(providers.len(), 2);
 
     let mut vars = HashMap::new();
@@ -126,4 +126,27 @@ fn collect_provider_env_vars_merges_all_providers() {
     assert!(vars.contains_key(&OsString::from("AWS_ROLE_SESSION_NAME")));
     // GCP variables.
     assert!(vars.contains_key(&OsString::from("GOOGLE_APPLICATION_CREDENTIALS")));
+    assert_eq!(vars[&OsString::from("AWS_ROLE_SESSION_NAME")], "Oz_Standby");
+    let aws_token = PathBuf::from(&vars[&OsString::from("AWS_WEB_IDENTITY_TOKEN_FILE")]);
+    let gcp_config = PathBuf::from(&vars[&OsString::from("GOOGLE_APPLICATION_CREDENTIALS")]);
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&gcp_config).unwrap()).unwrap();
+    let executable = &config["credential_source"]["executable"];
+    assert!(!executable["command"].as_str().unwrap().contains("--run-id"));
+    assert!(
+        executable["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("--duration 1800s")
+    );
+    let gcp_output = PathBuf::from(executable["output_file"].as_str().unwrap());
+    std::fs::write(&gcp_output, "cached-standby-token").unwrap();
+    warpui::r#async::block_on(async {
+        for provider in providers {
+            provider.cleanup().await.unwrap();
+        }
+    });
+    assert!(!aws_token.exists());
+    assert!(!gcp_config.exists());
+    assert!(!gcp_output.exists());
 }

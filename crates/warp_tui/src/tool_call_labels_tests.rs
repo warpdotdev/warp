@@ -19,6 +19,24 @@ use super::{
 };
 use crate::tui_builder::TuiUiBuilder;
 
+#[test]
+fn terminal_busy_label_reports_not_started_instead_of_cancelled() {
+    let status = finished(AIAgentActionResultType::RequestCommandOutput(
+        RequestCommandOutputResult::TerminalBusy {
+            command: "ls".into(),
+            block_id: BlockId::new(),
+        },
+    ));
+    assert_eq!(
+        tool_call_display_state(Some(&status), false, None),
+        ToolCallDisplayState::Failed
+    );
+    assert_eq!(
+        tool_call_label(&command_action("ls"), Some(&status), false, None),
+        "`ls` not started (terminal busy)"
+    );
+}
+
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
     AIActionStatus::Finished(Arc::new(AIAgentActionResult {
@@ -169,6 +187,7 @@ fn label_changes_across_action_lifecycle() {
             grid_contents: String::new(),
             cursor: String::new(),
             is_alt_screen_active: false,
+            activity: None,
         },
     ));
     assert_eq!(

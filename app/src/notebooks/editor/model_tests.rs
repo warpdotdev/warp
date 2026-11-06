@@ -85,6 +85,19 @@ fn model_from_markdown(
     app: &mut App,
     should_initialize_cloud_model: bool,
 ) -> ModelHandle<NotebooksEditorModel> {
+    let window = setup_editor_window(app, should_initialize_cloud_model);
+    app.add_model(|ctx| {
+        let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+        let mut model = NotebooksEditorModel::new(styles, window, ctx);
+        model.reset_with_markdown(markdown, ctx);
+
+        model
+    })
+}
+
+/// Register the singletons and host window that a [`NotebooksEditorModel`] depends on, returning
+/// the window a model should bind to.
+fn setup_editor_window(app: &mut App, should_initialize_cloud_model: bool) -> warpui::WindowId {
     let global_resources = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
     app.add_singleton_model(|_| ActiveSession::default());
@@ -119,13 +132,7 @@ fn model_from_markdown(
         });
         TestView { editor }
     });
-    app.add_model(|ctx| {
-        let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-        let mut model = NotebooksEditorModel::new(styles, window, ctx);
-        model.reset_with_markdown(markdown, ctx);
-
-        model
-    })
+    window
 }
 
 fn initialize_deps(app: &mut App) {
@@ -2816,6 +2823,34 @@ fn test_default_mermaid_display_mode_renders_initial_mermaid_blocks() {
         assert!(is_mermaid_diagram);
     });
 }
+
+#[test]
+fn test_rendered_mermaid_offsets_ignore_shell_commands() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _enabled = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let markdown = "```\necho two\n```\n\n```mermaid\ngraph TD\n  C-->D\n```";
+
+        let model_handle = model_from_markdown(markdown, &mut app, true);
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+        layout_model(&mut app, &model_handle).await;
+
+        assert_eq!(command_models(&model_handle, &mut app).len(), 2);
+        let mermaid_offset_count = model_handle.read(&app, |model, ctx| {
+            model
+                .render_state
+                .as_ref(ctx)
+                .layout_options()
+                .mermaid_render_offsets
+                .len()
+        });
+        assert_eq!(mermaid_offset_count, 1);
+    });
+}
+
 #[test]
 fn test_dont_invalidate_command_selection() {
     App::test((), |mut app| async move {

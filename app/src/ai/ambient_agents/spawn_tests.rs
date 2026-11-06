@@ -11,7 +11,9 @@ use super::{
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn task_with(
     state: AmbientAgentTaskState,
@@ -42,6 +44,8 @@ fn task_with(
         is_sandbox_running: true,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -209,6 +213,8 @@ async fn followup_terminal_failure_surfaces_status_message() {
                 task.status_message = Some(TaskStatusMessage {
                     message: "failed to provision runtime".to_string(),
                     error_code: None,
+                    session_debug_until: None,
+                    debug_agent_active: false,
                 });
                 Ok(task)
             }
@@ -416,6 +422,8 @@ async fn followup_skips_prior_terminal_state_until_working_then_attaches() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "prior agent question".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }
@@ -502,6 +510,8 @@ async fn followup_skips_prior_terminal_then_surfaces_real_failure() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "prior agent question — must not surface".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }
@@ -511,6 +521,8 @@ async fn followup_skips_prior_terminal_then_surfaces_real_failure() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "new run failed".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }
@@ -680,23 +692,78 @@ async fn followup_bounded_skip_for_server_stall() {
 fn run_id() -> crate::ai::ambient_agents::AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
+
+#[tokio::test]
+async fn spawn_uses_resolved_team_scope() {
+    use futures::StreamExt;
+
+    let team_uid = 7.into();
+    let mut mock = MockAIClient::new();
+    mock.expect_spawn_agent()
+        .times(1)
+        .withf(move |request, team_scope| {
+            request.team == Some(true) && team_scope.team_uid() == Some(team_uid)
+        })
+        .returning(|_, _| {
+            Ok(SpawnAgentResponse {
+                task_id: run_id(),
+                run_id: run_id().to_string(),
+                at_capacity: false,
+            })
+        });
+    mock.expect_get_ambient_agent_task()
+        .times(1)
+        .returning(|_| Ok(task_with(AmbientAgentTaskState::Succeeded, None, None)));
+
+    let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
+        prompt: Some("test".to_string()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: Some(true),
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let mut stream = Box::pin(spawn_task(request, team_scope, Arc::new(mock), None));
+
+    assert!(matches!(
+        stream.next().await.expect("spawned event").expect("ok"),
+        AmbientAgentEvent::TaskSpawned { .. }
+    ));
+    assert!(matches!(
+        stream.next().await.expect("state event").expect("ok"),
+        AmbientAgentEvent::StateChanged {
+            state: AmbientAgentTaskState::Succeeded,
+            ..
+        }
+    ));
+    assert!(stream.next().await.is_none());
+}
 
 fn transient_http_error() -> anyhow::Error {
     use crate::server::server_api::presigned_upload::HttpStatusError;
-    anyhow::Error::new(HttpStatusError {
-        status: 429,
-        body: "Too Many Requests".to_string(),
-    })
-    .context("API request failed with status 429 Too Many Requests")
+    anyhow::Error::new(HttpStatusError::new(429, "Too Many Requests".to_string()))
+        .context("API request failed with status 429 Too Many Requests")
 }
 
 fn permanent_http_error() -> anyhow::Error {
     use crate::server::server_api::presigned_upload::HttpStatusError;
-    anyhow::Error::new(HttpStatusError {
-        status: 403,
-        body: "Forbidden".to_string(),
-    })
-    .context("API request failed with status 403 Forbidden")
+    anyhow::Error::new(HttpStatusError::new(403, "Forbidden".to_string()))
+        .context("API request failed with status 403 Forbidden")
 }
 
 #[tokio::test]
@@ -708,7 +775,7 @@ async fn poll_retries_transient_429_errors() {
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -731,11 +798,12 @@ async fn poll_retries_transient_429_errors() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -749,7 +817,7 @@ async fn poll_retries_transient_429_errors() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -785,7 +853,7 @@ async fn poll_fails_on_permanent_http_error() {
 
     let mut mock = MockAIClient::new();
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -800,11 +868,12 @@ async fn poll_fails_on_permanent_http_error() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -818,7 +887,7 @@ async fn poll_fails_on_permanent_http_error() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -851,7 +920,7 @@ async fn poll_gives_up_after_max_transient_retries() {
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -870,11 +939,12 @@ async fn poll_gives_up_after_max_transient_retries() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -888,7 +958,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -920,7 +990,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     let mut mock = MockAIClient::new();
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -934,11 +1004,12 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -952,7 +1023,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     let event = stream
         .next()
@@ -1053,7 +1124,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -1081,11 +1152,12 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     let ai_client = Arc::new(mock);
     let request = crate::server::server_api::ai::SpawnAgentRequest {
+        metadata: Default::default(),
         prompt: Some("test".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -1099,7 +1171,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event should be TaskSpawned
     let event = stream

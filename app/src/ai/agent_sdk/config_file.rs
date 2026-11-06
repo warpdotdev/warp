@@ -176,6 +176,7 @@ pub fn merge_with_precedence(
     let computer_use_enabled = cli.computer_use_enabled.or(file.computer_use_enabled);
 
     AgentConfigSnapshot {
+        experimental: cli.experimental,
         name,
         environment_id,
         runner_id,

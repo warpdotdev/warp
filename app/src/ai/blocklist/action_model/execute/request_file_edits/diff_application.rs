@@ -3,12 +3,13 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::future::Future;
 use std::sync::Arc;
 
 use ai::diff_validation::{
-    AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, DiffType, ParsedDiff, SearchAndReplace,
-    V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
+    AIRequestedCodeDiff, DiffDelta, DiffMatchFailure, DiffMatchFailures, DiffType, ParsedDiff,
+    SearchAndReplace, V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
 };
 use itertools::Itertools;
 use vec1::Vec1;
@@ -16,7 +17,7 @@ use warpui::r#async::executor::Background;
 
 use super::telemetry::{
     DiffInvalidFileEvent, DiffMatchFailedEvent, MissingLineNumbersEvent,
-    RequestFileEditsTelemetryEvent,
+    RequestFileEditsTelemetryEvent, V4AMatchFinishedEvent, V4AMatchOutcomes,
 };
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
@@ -97,15 +98,20 @@ impl DiffApplicationError {
                 file,
                 match_failures,
             } => {
-                use std::fmt::Write;
                 let mut message = String::new();
                 if match_failures.fuzzy_match_failures > 0 {
                     let _ = write!(message, "Could not apply all diffs to {file}.");
+                    append_fuzzy_match_failure_details(&mut message, match_failures);
                 }
 
                 if match_failures.noop_deltas > 0 {
                     if !message.is_empty() {
-                        message.push(' ');
+                        if match_failures.fuzzy_match_failure_details.is_empty() {
+                            message.push(' ');
+                        } else {
+                            // Fuzzy match failures render as a multi-line message, so add a newline.
+                            message.push('\n');
+                        }
                     }
                     let _ = write!(message, "The changes to {file} were already made.");
                 }
@@ -151,6 +157,22 @@ impl DiffApplicationError {
     }
 }
 
+fn append_fuzzy_match_failure_details(message: &mut String, match_failures: &DiffMatchFailures) {
+    if match_failures.fuzzy_match_failure_details.is_empty() {
+        return;
+    }
+
+    message.push_str(" The following search blocks did not match the current file contents:");
+    for failure in &match_failures.fuzzy_match_failure_details {
+        message.push('\n');
+        append_fuzzy_match_failure(message, failure);
+    }
+}
+
+fn append_fuzzy_match_failure(message: &mut String, failure: &DiffMatchFailure) {
+    let _ = write!(message, "Search block {}.", failure.block_number);
+}
+
 /// Given a list of suggested edits from the server API, parse it into applicable diffs to be shown
 /// to the user as a series of code diffs.
 ///
@@ -172,6 +194,16 @@ where
     Fut: Future<Output = FileReadResult>,
 {
     let result = apply_edits_internal(edits, session_context, &read_file).await;
+    if let Some(outcomes) = result.v4a_outcomes {
+        send_telemetry_on_executor!(
+            auth_state,
+            RequestFileEditsTelemetryEvent::V4AMatchFinished(V4AMatchFinishedEvent {
+                identifiers: ai_identifiers.clone(),
+                outcomes,
+            }),
+            background_executor
+        );
+    }
 
     // Send telemetry for all diff application errors.
 
@@ -185,7 +217,7 @@ where
                     auth_state,
                     RequestFileEditsTelemetryEvent::DiffMatchFailed(DiffMatchFailedEvent {
                         identifiers: ai_identifiers.clone(),
-                        failures: *match_failures,
+                        failures: match_failures.clone(),
                         passive_diff,
                     }),
                     background_executor
@@ -263,6 +295,14 @@ struct DiffResult {
     errors: Vec<DiffApplicationError>,
     /// All warnings that occurred while applying diffs.
     warnings: Vec<DiffWarning>,
+    v4a_outcomes: Option<V4AMatchOutcomes>,
+}
+
+/// A pending file-creation request. Allow content replacement on existing file when
+/// `allow_overwrite` is set to true
+struct NewFileRequest {
+    content: String,
+    allow_overwrite: bool,
 }
 
 /// You generally want to use `apply_edits`, however, if you don't want to report telemetry or be as
@@ -278,7 +318,7 @@ where
 {
     let mut search_replace_deltas: HashMap<String, Vec<SearchAndReplace>> = HashMap::new();
     let mut v4a_deltas: HashMap<String, Vec<V4AHunk>> = HashMap::new();
-    let mut new_files: HashMap<String, String> = HashMap::new();
+    let mut new_files: HashMap<String, NewFileRequest> = HashMap::new();
     let mut deleted_files: HashSet<String> = HashSet::new();
     let mut file_renames: HashMap<String, String> = HashMap::new();
     let mut result = DiffResult::default();
@@ -317,7 +357,11 @@ where
                     }
                 };
             }
-            FileEdit::Create { file, content } => {
+            FileEdit::Create {
+                file,
+                content,
+                allow_overwrite,
+            } => {
                 let Some(file_path) = file else { continue };
 
                 match new_files.entry(file_path) {
@@ -333,7 +377,10 @@ where
                         let Some(content) = content else {
                             continue;
                         };
-                        entry.insert(content);
+                        entry.insert(NewFileRequest {
+                            content,
+                            allow_overwrite,
+                        });
                     }
                 }
             }
@@ -381,7 +428,7 @@ where
         .await;
     }
 
-    for (file, content) in new_files {
+    for (file, request) in new_files {
         if search_replace_files.contains(&file)
             || v4a_files.contains(&file)
             || file_renames.contains_key(&file)
@@ -390,9 +437,24 @@ where
                 .errors
                 .push(DiffApplicationError::MultipleFileCreation { file });
         } else if replacement_file_paths.contains(&file) {
-            apply_replace_file(file, content, session_context, read_file, &mut result).await;
+            apply_replace_file(
+                file,
+                request.content,
+                session_context,
+                read_file,
+                &mut result,
+            )
+            .await;
         } else {
-            apply_create_file(file, content, session_context, read_file, &mut result).await;
+            apply_create_file(
+                file,
+                request.content,
+                request.allow_overwrite,
+                session_context,
+                read_file,
+                &mut result,
+            )
+            .await;
         }
     }
 
@@ -417,6 +479,35 @@ where
     result
 }
 
+/// Records a diff that fully replaces `file_path`'s existing `original_content` with
+/// `new_content`.
+fn push_full_replace_diff(
+    result: &mut DiffResult,
+    file_path: String,
+    original_content: String,
+    new_content: String,
+) {
+    let num_lines = original_content.lines().count();
+    let replacement_line_range = if num_lines == 0 {
+        0..0
+    } else {
+        1..num_lines.saturating_add(1)
+    };
+
+    result.diffs.push(AIRequestedCodeDiff {
+        file_name: file_path,
+        diff_type: DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range,
+                insertion: new_content,
+            }],
+            None,
+        ),
+        failures: None,
+        original_content,
+    });
+}
+
 async fn apply_replace_file<F, Fut>(
     file_path: String,
     content: String,
@@ -435,25 +526,7 @@ async fn apply_replace_file<F, Fut>(
 
     match read_file(absolute_path.clone()).await {
         FileReadResult::Found(file_content) => {
-            let num_lines = file_content.lines().count();
-            let replacement_line_range = if num_lines == 0 {
-                0..0
-            } else {
-                1..num_lines.saturating_add(1)
-            };
-
-            result.diffs.push(AIRequestedCodeDiff {
-                file_name: file_path,
-                diff_type: DiffType::update(
-                    vec![DiffDelta {
-                        replacement_line_range,
-                        insertion: content,
-                    }],
-                    None,
-                ),
-                failures: None,
-                original_content: file_content,
-            });
+            push_full_replace_diff(result, file_path, file_content, content);
         }
         FileReadResult::NotFound => {
             result
@@ -473,10 +546,12 @@ async fn apply_replace_file<F, Fut>(
     }
 }
 
-/// Converts a file-creation request into a diff.
+/// Converts a file-creation request into a diff. If `allow_overwrite` is `true` and the file
+/// already exists, its contents are fully replaced instead of raising an already-exists error.
 async fn apply_create_file<F, Fut>(
     file_path: String,
     content: String,
+    allow_overwrite: bool,
     session_context: &SessionContext,
     read_file: &F,
     result: &mut DiffResult,
@@ -491,14 +566,18 @@ async fn apply_create_file<F, Fut>(
     );
 
     match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(_) => {
-            safe_warn!(
-                safe: ("Agent Code tried to create a file that already exists"),
-                full: ("Agent Code tried to create a file that already exists: {absolute_path:?}")
-            );
-            result
-                .errors
-                .push(DiffApplicationError::AlreadyExists { file: file_path });
+        FileReadResult::Found(existing_content) => {
+            if allow_overwrite {
+                push_full_replace_diff(result, file_path, existing_content, content);
+            } else {
+                safe_warn!(
+                    safe: ("Agent Code tried to create a file that already exists"),
+                    full: ("Agent Code tried to create a file that already exists: {absolute_path:?}")
+                );
+                result
+                    .errors
+                    .push(DiffApplicationError::AlreadyExists { file: file_path });
+            }
         }
         FileReadResult::NotFound => {
             result.diffs.push(AIRequestedCodeDiff {
@@ -648,12 +727,17 @@ async fn apply_search_replace<F, Fut>(
                 && let Some(failures) = fuzzy_match_diffs.failures.as_ref()
             {
                 safe_warn!(
-                    safe: ("Failure(s) applying diff: {failures:?}"),
+                    safe: (
+                        "Failure(s) applying diff: {} unmatched, {} noop, {} missing line numbers",
+                        failures.fuzzy_match_failures,
+                        failures.noop_deltas,
+                        failures.missing_line_numbers
+                    ),
                     full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
                     file: file_path.clone(),
-                    match_failures: *failures,
+                    match_failures: failures.clone(),
                 });
             }
             result.diffs.push(fuzzy_match_diffs);
@@ -743,15 +827,21 @@ async fn apply_v4a_update<F, Fut>(
 
         // First, match the V4A diffs against the source file (without rename)
         let source_diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, None, file_content.clone());
+        record_v4a_match_outcomes(&source_diffs, deltas.len(), result);
         if source_diffs.warrants_failure() {
             if let Some(failures) = source_diffs.failures.as_ref() {
                 safe_warn!(
-                    safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                    safe: (
+                        "Failure(s) applying V4A diff: {} unmatched, {} noop, {} missing line numbers",
+                        failures.fuzzy_match_failures,
+                        failures.noop_deltas,
+                        failures.missing_line_numbers
+                    ),
                     full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
                     file: file_path.clone(),
-                    match_failures: *failures,
+                    match_failures: failures.clone(),
                 });
             }
             return;
@@ -804,19 +894,37 @@ async fn apply_v4a_update<F, Fut>(
     } else {
         // Normal case: no rename or rename to non-existent file
         let diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, rename_to, file_content);
+        record_v4a_match_outcomes(&diffs, deltas.len(), result);
         if diffs.warrants_failure()
             && let Some(failures) = diffs.failures.as_ref()
         {
             safe_warn!(
-                safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                safe: (
+                    "Failure(s) applying V4A diff: {} unmatched, {} noop, {} missing line numbers",
+                    failures.fuzzy_match_failures,
+                    failures.noop_deltas,
+                    failures.missing_line_numbers
+                ),
                 full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
             );
             result.errors.push(DiffApplicationError::UnmatchedDiffs {
                 file: file_path.clone(),
-                match_failures: *failures,
+                match_failures: failures.clone(),
             });
         }
         result.diffs.push(diffs);
+    }
+}
+fn record_v4a_match_outcomes(
+    diffs: &AIRequestedCodeDiff,
+    total_hunks: usize,
+    result: &mut DiffResult,
+) {
+    let outcomes = result.v4a_outcomes.get_or_insert_with(Default::default);
+    outcomes.total_hunks += total_hunks;
+    if let Some(failures) = &diffs.failures {
+        outcomes.noop_hunks += failures.noop_deltas;
+        outcomes.unmatched_hunks += failures.fuzzy_match_failures;
     }
 }
 

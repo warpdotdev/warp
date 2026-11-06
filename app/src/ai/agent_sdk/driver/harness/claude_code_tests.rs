@@ -12,8 +12,9 @@ use super::*;
 use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
 use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::agent_sdk::driver::harness::claude_transcript::{
-    encode_cwd, write_session_index_entry,
+    encode_cwd, read_envelope_with_diagnostics, write_session_index_entry,
 };
+use crate::ai::agent_sdk::test_support::EnvVarGuard;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
 
@@ -191,22 +192,25 @@ fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
 }
 
 #[test]
-fn serialize_claude_mcp_config_sse_server() {
+fn serialize_claude_mcp_config_preserves_factory_mcp_auth() {
     let servers = HashMap::from([(
-        "remote".to_string(),
+        "warp-factory".to_string(),
         JSONMCPServer {
             transport_type: JSONTransportType::SSEServer {
-                url: "https://mcp.example.com".to_string(),
-                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+                headers: HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer wk-test-key".to_string(),
+                )]),
             },
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let server = &parsed["mcpServers"]["remote"];
+    let server = &parsed["mcpServers"]["warp-factory"];
     assert_eq!(server["type"], "http");
-    assert_eq!(server["url"], "https://mcp.example.com");
-    assert_eq!(server["headers"]["Authorization"], "Bearer tok");
+    assert_eq!(server["url"], "https://app.warp.dev/api/v1/mcp/factory");
+    assert_eq!(server["headers"]["Authorization"], "Bearer wk-test-key");
 }
 
 #[test]
@@ -679,15 +683,19 @@ fn prepare_claude_config_none_suffix_preserves_existing_responses() {
 #[serial_test::serial]
 fn prepare_claude_environment_config_without_config_dir_uses_home_global_config() {
     let home_dir = TempDir::new().unwrap();
-    let old_home = std::env::var_os("HOME");
-    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", home_dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+    let _home = EnvVarGuard::set("HOME", home_dir.path());
+    let _config_dir = EnvVarGuard::remove("CLAUDE_CONFIG_DIR");
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(
+        &working_dir,
+        &working_dir,
+        &HashMap::new(),
+        &[],
+        false,
+        HarnessSupportSkills::Plugin,
+    )
+    .unwrap();
 
     assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
     assert!(
@@ -704,19 +712,6 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
             .join(CLAUDE_JSON_FILE_NAME)
             .exists()
     );
-
-    match old_home {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("HOME") },
-    }
-    match old_config_dir {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
-    }
 }
 
 #[test]
@@ -724,15 +719,19 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
 fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     let home_dir = TempDir::new().unwrap();
     let claude_config_dir = TempDir::new().unwrap();
-    let old_home = std::env::var_os("HOME");
-    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("HOME", home_dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path()) };
+    let _home = EnvVarGuard::set("HOME", home_dir.path());
+    let _config_dir = EnvVarGuard::set("CLAUDE_CONFIG_DIR", claude_config_dir.path());
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(
+        &working_dir,
+        &working_dir,
+        &HashMap::new(),
+        &[],
+        false,
+        HarnessSupportSkills::Plugin,
+    )
+    .unwrap();
 
     assert!(
         claude_config_dir
@@ -747,20 +746,8 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
             .exists()
     );
     assert!(!home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
-
-    match old_home {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(home) => unsafe { std::env::set_var("HOME", home) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("HOME") },
-    }
-    match old_config_dir {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
-    }
 }
+
 #[test]
 #[serial_test::serial]
 fn resolve_suffix_from_resolved_env_vars() {
@@ -849,14 +836,18 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     assert!(command.contains(&format!("{OZ_HARNESS_ENV}={}", shell_quote("claude"))));
     assert!(!command.contains(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV));
     assert!(!command.contains("OZ_PARENT_LISTENER_MANAGED_EXTERNALLY"));
+    // The WARP_ aliases are injected alongside the OZ_ names, so they must be dropped with them.
+    assert!(!command.contains("WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY"));
+    assert!(!command.contains("WARP_PARENT_LISTENER_MANAGED_EXTERNALLY"));
     assert_eq!(
         fs::read_to_string(&prompt_path).unwrap(),
         "resume prompt\n\nwake prompt"
     );
     assert!(!parent_bridge_hook_output_file(&state_dir).exists());
 
-    let restored_envelope =
-        read_envelope(session_id, &working_dir, claude_config_dir.path()).unwrap();
+    let (restored_envelope, _) =
+        read_envelope_with_diagnostics(session_id, &working_dir, claude_config_dir.path(), false)
+            .unwrap();
     assert_eq!(restored_envelope.cwd, working_dir);
     assert_eq!(
         restored_envelope.entries,

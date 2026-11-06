@@ -58,7 +58,9 @@ impl HttpServer {
             };
 
             if let Err(err) = axum::serve(listener, root.layer(TraceLayer::new_for_http())).await {
-                report_error!("Local HTTP server exited with error", extra: { "error" => %err });
+                report_error!(
+                    anyhow::Error::new(err).context("Local HTTP server exited with error")
+                );
             }
         });
 

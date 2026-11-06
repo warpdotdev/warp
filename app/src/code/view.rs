@@ -45,7 +45,11 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{MarkdownDisplayMode, renders_in_warp_notebook_viewer};
+use crate::notebooks::file::{
+    MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT, MarkdownDisplayMode,
+    TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION, TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+    TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING, renders_in_warp_notebook_viewer,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
     CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
@@ -122,6 +126,14 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
+        #[cfg(feature = "local_fs")]
+        EditableBinding::new(
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_NAME,
+            TOGGLE_MARKDOWN_DISPLAY_MODE_BINDING_DESCRIPTION,
+            CodeViewAction::RenderMarkdown,
+        )
+        .with_context_predicate(id!("CodeView") & id!(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT))
+        .with_key_binding(TOGGLE_MARKDOWN_DISPLAY_MODE_KEY_BINDING),
     ]);
 }
 
@@ -779,6 +791,25 @@ impl CodeView {
         tab.editor_view.update(ctx, |editor, ctx| {
             editor.set_pending_scroll(position, ctx);
         });
+    }
+
+    /// Seed a pending scroll fraction on the active tab, restoring scroll after a markdown
+    /// rendered->raw toggle. Applied on the next `ViewportUpdated` (after layout), overriding the
+    /// default top-of-file scroll. The fraction is used rather than a line/column because the
+    /// rendered and raw documents differ.
+    pub(crate) fn set_pending_scroll_fraction(&self, fraction: f32, ctx: &mut ViewContext<Self>) {
+        let Some(tab) = self.tab_group.get(self.active_tab_index) else {
+            return;
+        };
+        tab.editor_view.update(ctx, |editor, ctx| {
+            editor.set_pending_scroll(ScrollPosition::Fraction(fraction), ctx);
+        });
+    }
+
+    /// The current vertical scroll fraction of the active tab's editor, in `0..=1`.
+    fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
+        let tab = self.tab_group.get(self.active_tab_index)?;
+        Some(tab.editor_view.as_ref(ctx).scroll_fraction(ctx))
     }
 
     fn open_new_tab(
@@ -2223,6 +2254,14 @@ impl View for CodeView {
         "CodeView"
     }
 
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.markdown_mode_segmented_control.is_some() {
+            context.set.insert(MARKDOWN_DISPLAY_MODE_TOGGLE_CONTEXT);
+        }
+        context
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let tab = self.tab_at(self.active_tab_index);
         let body = if let Some(tab) = tab {
@@ -2343,6 +2382,8 @@ impl TypedActionView for CodeView {
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
+                    let scroll_fraction =
+                        self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
                     if self.active_tab_has_unsaved_changes(ctx) {
                         self.save_local(
                             self.active_tab_index,
@@ -2351,6 +2392,7 @@ impl TypedActionView for CodeView {
                                     ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
                                         path: lor_path.clone(),
                                         source: Some(source.clone()),
+                                        scroll_fraction,
                                     }));
                                 }
                             })),
@@ -2360,6 +2402,7 @@ impl TypedActionView for CodeView {
                         ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
                             path: lor_path,
                             source: Some(source),
+                            scroll_fraction,
                         }));
                     }
                 }

@@ -1,8 +1,14 @@
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
 #[cfg(not(target_family = "wasm"))]
 use futures::channel::oneshot;
-use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
+use url::Url;
 use uuid::Uuid;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
@@ -24,16 +30,54 @@ use crate::telemetry::{
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
+const CUSTOM_ENDPOINT_KEYS_SECURE_STORAGE_KEY: &str = "AiCustomEndpointKeys";
+const GENERATED_ENDPOINT_PREFIX: &str = "endpoint-";
+const LEGACY_ENDPOINT_PREFIX: &str = "legacy-";
 
 /// Secure-storage key for the connected xAI/Grok subscription's OAuth tokens.
 /// Kept separate from [`SECURE_STORAGE_KEY`] because these are OAuth tokens with
 /// a refresh lifecycle, not a user-pasted static key.
 const GROK_SECURE_STORAGE_KEY: &str = "GrokOAuthTokens";
 
-/// Emitted when user-provided API keys are updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiKeyManagerEvent {
+    /// User-provided API keys were updated in-memory.
     KeysUpdated,
+    /// The ChatGPT connection status or an in-flight connect attempt changed.
+    ChatGPTConnectionUpdated,
+    /// A connect attempt started from this client finished without a linked
+    /// ChatGPT account.
+    ChatGPTConnectFailed(ChatGPTConnectFailure),
+}
+
+/// Why a ChatGPT connect attempt did not end with a linked account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatGPTConnectFailure {
+    /// The ChatGPT account is linked to another Warp account, or this Warp
+    /// account already has a different ChatGPT account linked.
+    AlreadyLinked,
+    /// The ChatGPT account's email is not verified with OpenAI.
+    EmailUnverified,
+    /// The user declined OpenAI's authorization prompt.
+    Denied,
+    /// The browser is signed in to a different Warp account than this client, so the link was
+    /// refused rather than attached to the wrong account.
+    AccountMismatch,
+    /// The flow finished without a specific reason being reported.
+    Unknown,
+}
+
+impl ChatGPTConnectFailure {
+    /// Parses the `chatgpt_error` code warp-server appends to the link deep link.
+    pub fn from_deep_link_code(code: &str) -> Self {
+        match code {
+            "already_linked" => Self::AlreadyLinked,
+            "email_unverified" => Self::EmailUnverified,
+            "denied" => Self::Denied,
+            "account_mismatch" => Self::AccountMismatch,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// User-provided API keys for AI providers.
@@ -61,7 +105,9 @@ pub struct CustomEndpoint {
 }
 
 /// The request/response protocol used by a custom inference endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CustomEndpointSchema {
     /// OpenAI Chat Completions, retained as the legacy/default protocol.
@@ -105,7 +151,265 @@ impl CustomEndpointSchema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Stable file-safe identity for a custom endpoint definition.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct CustomEndpointId(String);
+
+impl CustomEndpointId {
+    pub fn generated() -> Self {
+        Self(format!("{GENERATED_ENDPOINT_PREFIX}{}", Uuid::new_v4()))
+    }
+
+    pub fn from_legacy(endpoint: &CustomEndpoint, index: usize) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(index.to_le_bytes());
+        hasher.update(endpoint.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(endpoint.url.as_bytes());
+        for model in &endpoint.models {
+            hasher.update([0]);
+            hasher.update(model.config_key.as_bytes());
+        }
+        let digest = hex::encode(hasher.finalize());
+        Self(format!("{LEGACY_ENDPOINT_PREFIX}{}", &digest[..24]))
+    }
+
+    pub fn parse(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        (!value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+        .then_some(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CustomEndpointId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).ok_or_else(|| serde::de::Error::custom("invalid custom endpoint key"))
+    }
+}
+
+impl fmt::Display for CustomEndpointId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Non-secret custom endpoint configuration stored in `settings.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CustomEndpointDefinition {
+    pub name: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub schema: CustomEndpointSchema,
+    pub models: Vec<CustomEndpointModel>,
+}
+
+impl CustomEndpointDefinition {
+    pub fn from_legacy(endpoint: &CustomEndpoint) -> Self {
+        Self {
+            name: endpoint.name.clone(),
+            base_url: endpoint.url.clone(),
+            schema: endpoint.schema,
+            models: endpoint.models.clone(),
+        }
+    }
+
+    pub fn into_endpoint(self, api_key: String) -> CustomEndpoint {
+        CustomEndpoint {
+            name: self.name,
+            url: self.base_url,
+            api_key,
+            models: self.models,
+            schema: self.schema,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        !self.name.trim().is_empty()
+            && validate_custom_endpoint_url(&self.base_url).is_ok()
+            && !self.models.is_empty()
+            && self.models.iter().all(|model| {
+                !model.name.trim().is_empty()
+                    && !model.config_key.trim().is_empty()
+                    && model
+                        .alias
+                        .as_deref()
+                        .is_none_or(|alias| !alias.trim().is_empty())
+            })
+    }
+}
+
+/// Complete ordered collection of custom endpoint definitions.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CustomEndpointDefinitions(IndexMap<CustomEndpointId, CustomEndpointDefinition>);
+
+impl CustomEndpointDefinitions {
+    pub fn definitions(
+        &self,
+    ) -> impl Iterator<Item = (&CustomEndpointId, &CustomEndpointDefinition)> {
+        self.0.iter()
+    }
+
+    pub fn get(&self, id: &CustomEndpointId) -> Option<&CustomEndpointDefinition> {
+        self.0.get(id)
+    }
+
+    pub fn id_at(&self, index: usize) -> Option<&CustomEndpointId> {
+        self.0.get_index(index).map(|(id, _)| id)
+    }
+
+    pub fn insert(
+        &mut self,
+        id: CustomEndpointId,
+        definition: CustomEndpointDefinition,
+    ) -> anyhow::Result<Option<CustomEndpointDefinition>> {
+        let mut definitions = self.0.clone();
+        let previous = definitions.insert(id, definition);
+        *self = Self::validated(definitions)
+            .ok_or_else(|| anyhow::anyhow!("invalid custom endpoint definition"))?;
+        Ok(previous)
+    }
+
+    pub fn remove(&mut self, id: &CustomEndpointId) -> Option<CustomEndpointDefinition> {
+        self.0.shift_remove(id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn from_legacy(
+        endpoints: &[CustomEndpoint],
+    ) -> anyhow::Result<(Self, HashMap<CustomEndpointId, String>)> {
+        let mut definitions = IndexMap::new();
+        let mut keys = HashMap::new();
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            let id = CustomEndpointId::from_legacy(endpoint, index);
+            definitions.insert(id.clone(), CustomEndpointDefinition::from_legacy(endpoint));
+            if !endpoint.api_key.trim().is_empty() {
+                keys.insert(id, endpoint.api_key.clone());
+            }
+        }
+        let definitions = Self::validated(definitions)
+            .ok_or_else(|| anyhow::anyhow!("legacy custom endpoints are invalid"))?;
+        Ok((definitions, keys))
+    }
+
+    fn validated(
+        definitions: IndexMap<CustomEndpointId, CustomEndpointDefinition>,
+    ) -> Option<Self> {
+        let mut config_keys = HashSet::new();
+        if definitions.values().all(CustomEndpointDefinition::is_valid)
+            && definitions
+                .values()
+                .flat_map(|definition| &definition.models)
+                .all(|model| config_keys.insert(model.config_key.clone()))
+        {
+            Some(Self(definitions))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CustomEndpointDefinitions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let definitions =
+            IndexMap::<CustomEndpointId, CustomEndpointDefinition>::deserialize(deserializer)?;
+        Self::validated(definitions)
+            .ok_or_else(|| serde::de::Error::custom("invalid custom endpoint definitions"))
+    }
+}
+
+impl settings_value::SettingsValue for CustomEndpointDefinitions {
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        let definitions = serde_json::from_value::<
+            IndexMap<CustomEndpointId, CustomEndpointDefinition>,
+        >(value.clone())
+        .ok()?;
+        Self::validated(definitions)
+    }
+
+    fn file_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema
+    where
+        Self: schemars::JsonSchema,
+    {
+        generator.subschema_for::<HashMap<String, CustomEndpointDefinition>>()
+    }
+}
+
+impl schemars::JsonSchema for CustomEndpointDefinitions {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CustomEndpointDefinitions")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<HashMap<String, CustomEndpointDefinition>>()
+    }
+}
+
+pub fn validate_custom_endpoint_url(value: &str) -> Result<(), &'static str> {
+    let parsed = Url::parse(value).map_err(|_| "Invalid URL")?;
+    if parsed.scheme() != "https" {
+        return Err("URL must use HTTPS");
+    }
+    let Some(host) = parsed.host_str().filter(|host| !host.is_empty()) else {
+        return Err("URL must include a host");
+    };
+    if is_restricted_host(host) {
+        return Err("URL must not use a local or private host");
+    }
+    Ok(())
+}
+
+fn is_restricted_host(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost") || host.parse::<IpAddr>().is_ok_and(is_restricted_ip)
+}
+
+fn is_restricted_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_restricted_ipv4(ip),
+        IpAddr::V6(ip) => is_restricted_ipv6(ip),
+    }
+}
+
+fn is_restricted_ipv4(ip: Ipv4Addr) -> bool {
+    ip.is_loopback() || ip.is_unspecified() || ip.is_private() || ip.is_link_local()
+}
+
+fn is_restricted_ipv6(ip: Ipv6Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.segments()[0] & 0xfe00 == 0xfc00
+        || ip.segments()[0] & 0xffc0 == 0xfe80
+        || ip.to_ipv4_mapped().is_some_and(is_restricted_ipv4)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct CustomEndpointModel {
     pub name: String,
@@ -179,6 +483,28 @@ pub struct GrokTokens {
     pub connected_at: Option<SystemTime>,
 }
 
+/// A ChatGPT account linked to the Warp user, as reported by warp-server. The
+/// server owns the link and any delegated credentials; nothing is stored
+/// locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGPTConnection {
+    pub email: Option<String>,
+    pub connected_at: SystemTime,
+    /// Whether the server currently holds delegated credentials it can attach
+    /// to OpenAI requests on the user's behalf.
+    pub token_sharing_active: bool,
+}
+
+/// The last server-reported ChatGPT connection state.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ChatGPTConnectionStatus {
+    /// Not fetched yet (or the fetch failed and nothing is cached).
+    #[default]
+    Unknown,
+    NotConnected,
+    Connected(ChatGPTConnection),
+}
+
 impl GrokTokens {
     /// Returns the access token whenever it is non-empty, regardless of
     /// expiry. Possibly-expired tokens are still sent so the server stays the
@@ -225,23 +551,29 @@ pub enum AwsCredentialsRefreshStrategy {
     /// Load credentials from the local AWS credential chain (~/.aws). This is the default.
     #[default]
     LocalChain,
-    /// Credentials are managed externally via OIDC/STS.
-    /// The task ID is used to scope the STS AssumeRoleWithWebIdentity session.
-    /// The role ARN + region are the info used to assume the IAM role via STS.
-    OidcManaged {
-        task_id: Option<String>,
-        role_arn: String,
-        region: String,
-    },
+    /// An agent run mints them via OIDC/STS and refreshes them itself; ambient triggers must
+    /// leave them alone. Also forces them onto requests regardless of the per-user setting.
+    OidcManaged,
+}
+
+struct CustomEndpointState {
+    definitions: Option<CustomEndpointDefinitions>,
+    settings_valid: bool,
+    keys: HashMap<CustomEndpointId, String>,
+    resolved: Vec<CustomEndpoint>,
 }
 
 /// A structure that manages API keys for AI providers.
 pub struct ApiKeyManager {
     keys: ApiKeys,
+    custom_endpoints: CustomEndpointState,
     /// OAuth tokens for a connected xAI/Grok subscription, if any. Persisted
     /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
     /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
+    chatgpt_connection: ChatGPTConnectionStatus,
+    /// True while a ChatGPT OAuth attempt is waiting on the browser callback.
+    chatgpt_oauth_pending: bool,
     /// Whether background refresh of `grok_tokens` is currently allowed.
     /// Mirrors the BYO API key policy, which lives in the app layer; wired in
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
@@ -275,6 +607,7 @@ pub struct ApiKeyManager {
     grok_secure_storage_write_version: u64,
 }
 
+#[derive(Clone)]
 pub struct CustomEndpointParams {
     pub name: String,
     pub url: String,
@@ -324,10 +657,20 @@ fn send_provider_credential_telemetry(
 impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let keys = Self::load_keys_from_secure_storage(ctx);
+        let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
+        let resolved_custom_endpoints = keys.custom_endpoints.clone();
         let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
         Self {
             keys,
+            custom_endpoints: CustomEndpointState {
+                definitions: None,
+                settings_valid: true,
+                keys: custom_endpoint_keys,
+                resolved: resolved_custom_endpoints,
+            },
             grok_tokens,
+            chatgpt_connection: ChatGPTConnectionStatus::Unknown,
+            chatgpt_oauth_pending: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
@@ -348,6 +691,92 @@ impl ApiKeyManager {
         &self.keys
     }
 
+    pub fn custom_endpoints(&self) -> &[CustomEndpoint] {
+        &self.custom_endpoints.resolved
+    }
+
+    pub fn custom_endpoint_definitions(&self) -> Option<&CustomEndpointDefinitions> {
+        self.custom_endpoints.definitions.as_ref()
+    }
+
+    pub fn custom_endpoint_settings_valid(&self) -> bool {
+        self.custom_endpoints.settings_valid
+    }
+
+    pub fn custom_endpoint_key(&self, id: &CustomEndpointId) -> Option<&str> {
+        self.custom_endpoints
+            .keys
+            .get(id)
+            .map(String::as_str)
+            .filter(|key| !key.trim().is_empty())
+    }
+
+    pub fn set_custom_endpoint_definitions(
+        &mut self,
+        definitions: CustomEndpointDefinitions,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.custom_endpoints.settings_valid
+            && self.custom_endpoints.definitions.as_ref() == Some(&definitions)
+        {
+            return;
+        }
+        self.custom_endpoints.settings_valid = true;
+        self.custom_endpoints.definitions = Some(definitions);
+        self.rebuild_custom_endpoints();
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn invalidate_custom_endpoint_definitions(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.custom_endpoints.settings_valid {
+            return;
+        }
+        self.custom_endpoints.settings_valid = false;
+        self.custom_endpoints.definitions = Some(CustomEndpointDefinitions::default());
+        self.custom_endpoints.resolved.clear();
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn persist_custom_endpoint_key(
+        &mut self,
+        id: CustomEndpointId,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let mut keys = self.custom_endpoints.keys.clone();
+        match key.filter(|key| !key.trim().is_empty()) {
+            Some(key) => {
+                keys.insert(id, key);
+            }
+            None => {
+                keys.remove(&id);
+            }
+        }
+        self.persist_custom_endpoint_keys(keys, ctx)
+    }
+
+    pub fn persist_custom_endpoint_keys(
+        &mut self,
+        keys: HashMap<CustomEndpointId, String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let json = serde_json::to_string(&keys).map_err(|error| {
+            anyhow::Error::new(error).context("Failed to serialize custom endpoint keys")
+        })?;
+        ctx.secure_storage()
+            .write_value(CUSTOM_ENDPOINT_KEYS_SECURE_STORAGE_KEY, &json)
+            .map_err(|error| {
+                anyhow::Error::new(error)
+                    .context("Failed to write custom endpoint keys to secure storage")
+            })?;
+        if self.custom_endpoints.keys != keys {
+            self.custom_endpoints.keys = keys;
+            self.rebuild_custom_endpoints();
+            ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        }
+        Ok(())
+    }
+
     /// Reloads API keys after another process updates the active secure-storage namespace.
     ///
     /// GUI edits mutate this manager directly before persisting, so they do not
@@ -355,10 +784,13 @@ impl ApiKeyManager {
     /// the live TUI to refresh its cached keys after a successful write.
     pub fn reload_keys_from_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
         let keys = Self::load_keys_from_secure_storage(ctx);
-        if self.keys == keys {
+        let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
+        if self.keys == keys && self.custom_endpoints.keys == custom_endpoint_keys {
             return;
         }
         self.keys = keys;
+        self.custom_endpoints.keys = custom_endpoint_keys;
+        self.rebuild_custom_endpoints();
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
     }
 
@@ -415,15 +847,104 @@ impl ApiKeyManager {
             .is_some()
     }
 
-    /// Returns `true` when the user has any usable BYO credential: a pasted
-    /// provider or custom-endpoint key, or a connected Grok subscription.
-    pub fn has_any_key(&self) -> bool {
-        self.keys.has_any_key() || self.has_grok_subscription()
+    /// Returns `true` when a ChatGPT subscription is connected and the server
+    /// holds delegated credentials it can attach to OpenAI requests.
+    pub fn has_chatgpt_subscription(&self) -> bool {
+        self.chatgpt_connection()
+            .is_some_and(|connection| connection.token_sharing_active)
     }
 
-    /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
-    /// them to secure storage. No-op when the value is unchanged so we don't
-    /// emit spurious events or schedule redundant keychain writes.
+    /// Returns `true` when the user has any usable BYO credential: a pasted
+    /// provider or custom-endpoint key, or a connected Grok or ChatGPT
+    /// subscription.
+    pub fn has_any_key(&self) -> bool {
+        self.keys.provider_key_count() > 0
+            || self
+                .custom_endpoints
+                .resolved
+                .iter()
+                .any(|endpoint| !endpoint.api_key.trim().is_empty())
+            || self.has_grok_subscription()
+            || self.has_chatgpt_subscription()
+    }
+
+    pub fn chatgpt_connection_status(&self) -> &ChatGPTConnectionStatus {
+        &self.chatgpt_connection
+    }
+
+    pub fn chatgpt_connection(&self) -> Option<&ChatGPTConnection> {
+        match &self.chatgpt_connection {
+            ChatGPTConnectionStatus::Connected(connection) => Some(connection),
+            ChatGPTConnectionStatus::Unknown | ChatGPTConnectionStatus::NotConnected => None,
+        }
+    }
+
+    pub fn chatgpt_oauth_pending(&self) -> bool {
+        self.chatgpt_oauth_pending
+    }
+
+    pub fn set_chatgpt_oauth_pending(&mut self, pending: bool, ctx: &mut ModelContext<Self>) {
+        if self.chatgpt_oauth_pending == pending {
+            return;
+        }
+        self.chatgpt_oauth_pending = pending;
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+    }
+
+    /// Replaces the cached server-reported connection status. Does not touch an
+    /// in-flight connect attempt.
+    pub fn set_chatgpt_connection_status(
+        &mut self,
+        status: ChatGPTConnectionStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.chatgpt_connection == status {
+            return;
+        }
+        self.chatgpt_connection = status;
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+    }
+
+    /// Finishes a connect attempt started from this client using the status the
+    /// server reported once the browser flow handed control back. `None` means
+    /// the status could not be fetched; the cached status is left as-is.
+    pub fn resolve_chatgpt_oauth(
+        &mut self,
+        status: Option<ChatGPTConnectionStatus>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let was_pending = std::mem::replace(&mut self.chatgpt_oauth_pending, false);
+        let status_changed = match status {
+            Some(status) if self.chatgpt_connection != status => {
+                self.chatgpt_connection = status;
+                true
+            }
+            Some(_) | None => false,
+        };
+        if was_pending || status_changed {
+            ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+        }
+        if was_pending && self.chatgpt_connection().is_none() {
+            ctx.emit(ApiKeyManagerEvent::ChatGPTConnectFailed(
+                ChatGPTConnectFailure::Unknown,
+            ));
+        }
+    }
+
+    /// Finishes a connect attempt started from this client that the browser flow reported as
+    /// failed. No-op when no attempt is pending.
+    pub fn fail_chatgpt_oauth(
+        &mut self,
+        failure: ChatGPTConnectFailure,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !std::mem::replace(&mut self.chatgpt_oauth_pending, false) {
+            return;
+        }
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectionUpdated);
+        ctx.emit(ApiKeyManagerEvent::ChatGPTConnectFailed(failure));
+    }
+
     pub fn set_grok_tokens(&mut self, tokens: Option<GrokTokens>, ctx: &mut ModelContext<Self>) {
         if self.grok_tokens == tokens {
             return;
@@ -494,6 +1015,9 @@ impl ApiKeyManager {
                 })
                 .collect(),
         });
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -530,6 +1054,9 @@ impl ApiKeyManager {
                 })
                 .collect(),
         };
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -539,6 +1066,9 @@ impl ApiKeyManager {
             return;
         }
         self.keys.custom_endpoints.remove(index);
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -548,6 +1078,9 @@ impl ApiKeyManager {
             return;
         }
         self.keys.custom_endpoints.clear();
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved.clear();
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -572,8 +1105,12 @@ impl ApiKeyManager {
     pub fn set_aws_credentials_refresh_strategy(
         &mut self,
         strategy: AwsCredentialsRefreshStrategy,
+        ctx: &mut ModelContext<Self>,
     ) {
-        self.aws_credentials_refresh_strategy = strategy;
+        if self.aws_credentials_refresh_strategy != strategy {
+            self.aws_credentials_refresh_strategy = strategy;
+            self.set_aws_credentials_state(AwsCredentialsState::Missing, ctx);
+        }
     }
 
     /// Builds the `CustomModelProviders` registry that ships with every agent request.
@@ -594,8 +1131,8 @@ impl ApiKeyManager {
         }
 
         let providers: Vec<_> = self
-            .keys
             .custom_endpoints
+            .resolved
             .iter()
             .filter(|endpoint| !endpoint.url.trim().is_empty() && !endpoint.api_key.is_empty())
             .map(
@@ -611,6 +1148,7 @@ impl ApiKeyManager {
                             |m| api::request::settings::custom_model_providers::CustomModel {
                                 slug: m.name.clone(),
                                 config_key: m.config_key.clone(),
+                                reasoning_effort: String::new(),
                             },
                         )
                         .collect(),
@@ -669,7 +1207,7 @@ impl ApiKeyManager {
         let include_aws = include_aws_bedrock_credentials
             || matches!(
                 self.aws_credentials_refresh_strategy,
-                AwsCredentialsRefreshStrategy::OidcManaged { .. }
+                AwsCredentialsRefreshStrategy::OidcManaged
             );
         let aws_credentials = include_aws
             .then(|| match self.aws_credentials_state {
@@ -704,9 +1242,9 @@ impl ApiKeyManager {
                 google,
                 open_router,
                 grok_oauth_access_token,
-                allow_use_of_warp_credits: false,
                 aws_credentials,
                 google_cloud_credentials,
+                ..Default::default()
             })
         }
     }
@@ -732,6 +1270,54 @@ impl ApiKeyManager {
                 ApiKeys::default()
             }
         }
+    }
+
+    fn load_custom_endpoint_keys_from_secure_storage(
+        ctx: &mut ModelContext<Self>,
+    ) -> HashMap<CustomEndpointId, String> {
+        let json = match ctx
+            .secure_storage()
+            .read_value(CUSTOM_ENDPOINT_KEYS_SECURE_STORAGE_KEY)
+        {
+            Ok(json) => json,
+            Err(error) => {
+                if !matches!(error, secure_storage::Error::NotFound) {
+                    report_error!(
+                        anyhow::Error::new(error)
+                            .context("Failed to read custom endpoint keys from secure storage")
+                    );
+                }
+                return HashMap::new();
+            }
+        };
+        match serde_json::from_str(&json) {
+            Ok(keys) => keys,
+            Err(error) => {
+                report_error!(
+                    anyhow::Error::new(error).context("Failed to deserialize custom endpoint keys")
+                );
+                HashMap::new()
+            }
+        }
+    }
+
+    fn rebuild_custom_endpoints(&mut self) {
+        let Some(definitions) = &self.custom_endpoints.definitions else {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
+            return;
+        };
+        self.custom_endpoints.resolved = definitions
+            .definitions()
+            .map(|(id, definition)| {
+                definition.clone().into_endpoint(
+                    self.custom_endpoints
+                        .keys
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
     }
 
     fn write_keys_to_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {

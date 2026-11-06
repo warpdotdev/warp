@@ -1,9 +1,9 @@
 use super::*;
 use crate::proto::{
     DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
-    DiscardFilesSuccess, FileOperationError, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
-    WriteFileResponse, WriteFileSuccess, delete_file_response, discard_files_response,
-    save_buffer_response, server_message, write_file_response,
+    DiscardFilesSuccess, FileOperationError, RenameFileResponse, SaveBufferResponse,
+    SaveBufferSuccess, ServerMessage, WriteFileResponse, WriteFileSuccess, delete_file_response,
+    discard_files_response, save_buffer_response, server_message, write_file_response,
 };
 
 fn msg(inner: server_message::Message) -> ServerMessage {
@@ -48,6 +48,20 @@ fn write_file_wrong_variant_is_err() {
         },
     ));
     assert!(write_file_result(&wrong).is_err());
+}
+#[test]
+fn rename_file_rejects_missing_result_and_wrong_response() {
+    let empty = msg(server_message::Message::RenameFileResponse(
+        RenameFileResponse { result: None },
+    ));
+    assert!(rename_file_result(&empty).is_err());
+
+    let wrong = msg(server_message::Message::WriteFileResponse(
+        WriteFileResponse {
+            result: Some(write_file_response::Result::Success(WriteFileSuccess {})),
+        },
+    ));
+    assert!(rename_file_result(&wrong).is_err());
 }
 
 #[test]
@@ -149,6 +163,7 @@ fn every_host_scoped_request_has_a_response_disposition() {
         match m {
             // Parsed via the helpers in this module.
             M::WriteFile(_) => "host_response::write_file_result",
+            M::RenameFile(_) => "host_response::rename_file_result",
             M::SaveBuffer(_) => "host_response::save_buffer_result",
             M::DeleteFile(_) => "host_response::delete_file_result",
             M::DiscardFiles(_) => "host_response::discard_files_result",

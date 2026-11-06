@@ -40,6 +40,7 @@ impl CompactAgentInput {
                 propagate_and_no_op_vertical_navigation_keys:
                     PropagateAndNoOpNavigationKeys::Always,
                 propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
+                supports_vim_mode: true,
                 ..Default::default()
             };
             let mut editor = EditorView::new(options, ctx);

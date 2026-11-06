@@ -21,6 +21,7 @@ use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles};
 use crate::ai::outline::{OutlineStatus, RepoOutlines};
 use crate::server::server_api::{AIApiError, ServerApiProvider};
+use crate::server::team_scope::RequestTeamScope;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 #[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
 #[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
@@ -208,15 +209,21 @@ impl GetRelevantFilesController {
         query: String,
         partial_path_segments: Option<&Vec<String>>,
         action_id: AIAgentActionId,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), GetRelevantFilesError> {
         // Cancel any previous request for this action before dispatching to either the local or
         // remote implementation.
         self.cancel_request_for_action(&action_id, ctx);
         match target {
-            GetRelevantFilesRequestTarget::Local { directory } => {
-                self.send_local_request(&directory, query, partial_path_segments, action_id, ctx)
-            }
+            GetRelevantFilesRequestTarget::Local { directory } => self.send_local_request(
+                &directory,
+                query,
+                partial_path_segments,
+                action_id,
+                team_scope,
+                ctx,
+            ),
             GetRelevantFilesRequestTarget::Remote {
                 session_context,
                 requested_codebase_path,
@@ -237,6 +244,7 @@ impl GetRelevantFilesController {
         query: String,
         partial_path_segments: Option<&Vec<String>>,
         action_id: AIAgentActionId,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), GetRelevantFilesError> {
         const MINIMUM_FILE_COUNT_FOR_API_CALL: usize = 2;
@@ -302,8 +310,9 @@ impl GetRelevantFilesController {
                     let request_abort_handle = ctx
                         .spawn(
                             async move {
-                                let response =
-                                    server_api.get_relevant_files(&outline_request).await?;
+                                let response = server_api
+                                    .get_relevant_files(&outline_request, team_scope)
+                                    .await?;
                                 Ok(Arc::new(
                                     response
                                         .relevant_file_paths

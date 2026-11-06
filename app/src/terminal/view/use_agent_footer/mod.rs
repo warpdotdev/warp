@@ -51,7 +51,7 @@ use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::server::telemetry::{CLIAgentType, CLISubagentControlState, TelemetryEvent};
+use crate::server::telemetry::{CLISubagentControlState, FileTreeSource, TelemetryEvent};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CompiledCommandsForCodingAgentToolbar, InputModeSettings,
 };
@@ -129,14 +129,16 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
-        | CLIAgent::CursorCli => RichInputSubmitStrategy::DelayedEnter,
-        CLIAgent::Hermes => RichInputSubmitStrategy::BracketedPaste,
+        | CLIAgent::Grok
+        | CLIAgent::CursorCli
+        | CLIAgent::Antigravity => RichInputSubmitStrategy::DelayedEnter,
+        CLIAgent::Hermes | CLIAgent::Muse => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Pi
+        | CLIAgent::Kiro
         | CLIAgent::Goose
         | CLIAgent::Vibe
-        | CLIAgent::Antigravity
         | CLIAgent::WarpTui
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
@@ -241,7 +243,11 @@ impl TerminalView {
                 );
             }
             UseAgentToolbarEvent::ToggleFileExplorer(cli_agent) => {
-                self.toggle_file_tree(Some((*cli_agent).into()), ctx);
+                let source = match cli_agent {
+                    Some(_) => FileTreeSource::CLIAgentView,
+                    None => FileTreeSource::AgentToolbelt,
+                };
+                self.toggle_file_tree(source, *cli_agent, ctx);
             }
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
@@ -540,10 +546,9 @@ impl TerminalView {
 
         // Send telemetry when showing CLI agent footer
         if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(self.view_id) {
-            let cli_agent_type: CLIAgentType = session.agent.into();
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentToolbarShown {
-                    cli_agent: cli_agent_type,
+                    cli_agent: session.agent,
                 },
                 ctx
             );
@@ -604,10 +609,10 @@ impl TerminalView {
             sessions_model.close_input(view_id, should_auto_toggle_input, ctx);
         });
 
-        let cli_agent_type: Option<CLIAgentType> = CLIAgentSessionsModel::as_ref(ctx)
+        let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.into());
-        if let Some(cli_agent) = cli_agent_type {
+            .map(|s| s.agent);
+        if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputClosed { cli_agent, reason },
                 ctx
@@ -657,9 +662,9 @@ impl TerminalView {
         }
 
         let prompt_length = text.chars().count();
-        let cli_agent: Option<CLIAgentType> = CLIAgentSessionsModel::as_ref(ctx)
+        let cli_agent = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| s.agent.into());
+            .map(|s| s.agent);
         if let Some(cli_agent) = cli_agent {
             send_telemetry_from_ctx!(
                 TelemetryEvent::CLIAgentRichInputSubmitted {
@@ -755,6 +760,25 @@ impl TerminalView {
 
         let strategy = rich_input_submit_strategy(agent);
         self.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
+    }
+
+    /// Sends a raw Enter (`\r`) directly to the active CLI agent's PTY,
+    /// bypassing the rich-input submission pipeline used by
+    /// [`Self::submit_text_to_cli_agent_pty`] (which no-ops on empty text).
+    ///
+    /// Used by harness exit escalation to retry a bare Enter without
+    /// composing input text — e.g. to dismiss a confirmation dialog, or in
+    /// case a prior write to the pty was silently dropped. Returns without
+    /// writing if there is no active CLI agent session.
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn submit_bare_enter_to_cli_agent_pty(&mut self, ctx: &mut ViewContext<Self>) {
+        if CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .is_none()
+        {
+            return;
+        }
+        self.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
     }
 
     /// Inserts `text` into the active CLI agent's input without submitting it.
@@ -1078,7 +1102,7 @@ impl TerminalView {
 
         send_telemetry_from_ctx!(
             TelemetryEvent::CLIAgentRichInputOpened {
-                cli_agent: cli_agent.into(),
+                cli_agent,
                 entrypoint,
             },
             ctx
@@ -1345,8 +1369,9 @@ pub enum UseAgentToolbarEvent {
     InsertIntoRichInput(String),
     /// Toggle the code review pane (from CLI agent view).
     ToggleCodeReviewPane(CLIAgent),
-    /// Toggle the file explorer (from CLI agent view).
-    ToggleFileExplorer(CLIAgent),
+    /// Toggle the file explorer. `None` when no CLI agent session is attached
+    /// to this pane.
+    ToggleFileExplorer(Option<CLIAgent>),
     /// Start remote control (one-click share without modal).
     StartRemoteControl {
         scrollback_type: SharedSessionScrollbackType,

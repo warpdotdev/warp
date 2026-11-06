@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
+use warp_cli::agent::Harness;
 use warp_core::SessionId;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity as _};
@@ -19,18 +20,18 @@ use crate::ai::blocklist::history_model::AIQueryHistoryOutputStatus;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, PersistedAIInput,
     PersistedAIInputType, QueuedQueryModel,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
-#[cfg(feature = "voice_input")]
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -39,6 +40,7 @@ use crate::code_review::git_repo_model::GitRepoModels;
 use crate::network::NetworkStatus;
 use crate::persistence::PersistenceWriter;
 use crate::server::experiments::ServerExperiments;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 #[cfg(feature = "voice_input")]
@@ -65,7 +67,7 @@ use crate::user_config::WarpConfig;
 #[cfg(feature = "voice_input")]
 use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 
 /// Builds a history model with persisted AI queries for TUI tests.
@@ -111,6 +113,7 @@ pub fn forkable_tui_conversation_for_test(query: &str) -> AIConversation {
                     referenced_attachments: HashMap::new(),
                     mode: None,
                     intended_agent: Default::default(),
+                    ..Default::default()
                 },
             )),
             request_id: request_id.to_owned(),
@@ -271,21 +274,57 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
     let auth = AuthStateProvider::as_ref(ctx).get();
     let user_uid = auth.user_id().expect("test user should have an id");
     let user_email = auth.user_email().expect("test user should have an email");
-    let mut team = Team::from_local_cache(123.into(), "test team".to_owned(), None, None, None);
+    let mut team =
+        Team::from_local_cache(123.into(), "test team".to_owned(), None, None, None, None);
     team.members.push(TeamMember {
         uid: user_uid,
         email: user_email,
         role: MembershipRole::Owner,
+        is_disabled: false,
     });
     let workspace = Workspace::from_local_cache(
         "workspace_uid123456789".to_owned().into(),
         "test workspace".to_owned(),
         Some(vec![team]),
+        None,
     );
     let workspace_uid = workspace.uid;
     UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
         workspaces.update_workspaces(vec![workspace], ctx);
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+
+pub fn set_tui_workspace_teams_for_test(teams: Vec<(ServerId, String)>, ctx: &mut AppContext) {
+    let teams = teams
+        .into_iter()
+        .map(|(uid, name)| Team::from_local_cache(uid, name, None, None, None, None))
+        .collect();
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_owned().into(),
+        "test workspace".to_owned(),
+        Some(teams),
+        None,
+    );
+    let workspace_uid = workspace.uid;
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+pub fn set_tui_auth_secret_preference_for_test<S: TeamScope + ?Sized>(
+    team_scope: &S,
+    harness: Harness,
+    name: String,
+    ctx: &mut AppContext,
+) {
+    CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+        settings.persist_auth_secret_preference(
+            team_scope,
+            harness,
+            Some(AuthSecretPreference::Named(name)),
+            ctx,
+        );
     });
 }
 
@@ -342,11 +381,11 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
     });
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
     #[cfg(feature = "voice_input")]
     {
-        app.add_singleton_model(|ctx| {
-            AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-        });
         app.add_singleton_model(voice_input::VoiceInput::new);
         app.add_singleton_model(|ctx| {
             VoiceTranscriber::new(Arc::new(ServerVoiceTranscriber::new(
@@ -365,6 +404,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
+    app.add_singleton_model(PendingCliHarnessPromptQueue::new);
     app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(|_| GitRepoModels::new());

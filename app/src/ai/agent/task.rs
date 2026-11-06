@@ -2,16 +2,14 @@ pub mod helper;
 pub mod transaction;
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::ops::Deref;
 
 use ai::skills::SkillPathOrigin;
+pub use ai_types::TaskId;
 use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
 use prost_types::FieldMask;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_errors::report_error;
 use warp_multi_agent_api::message::Message;
@@ -32,35 +30,6 @@ use super::{
 use crate::AIAgentTodoList;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::terminal::model::block::BlockId;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId(String);
-
-impl TaskId {
-    pub fn new(id: String) -> Self {
-        TaskId(id)
-    }
-}
-
-impl From<TaskId> for String {
-    fn from(id: TaskId) -> Self {
-        id.0
-    }
-}
-
-impl Deref for TaskId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Display for TaskId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateTaskError {
@@ -269,7 +238,7 @@ impl Task {
         restored_exchanges.sort_by_key(|exchange| exchange.start_time);
 
         Self {
-            id: TaskId(task.id.clone()),
+            id: TaskId::new(task.id.clone()),
             data: TaskImpl::Server(ServerTask {
                 source: task,
                 subagent_params: None,
@@ -326,7 +295,7 @@ impl Task {
         let messages_clone = subtask.messages.clone();
         let new_exchange_id = new_exchange.id;
         let mut me = Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: vec![new_exchange],
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -361,7 +330,7 @@ impl Task {
         });
 
         Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: restored_exchanges,
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -386,7 +355,7 @@ impl Task {
         });
 
         Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: vec![],
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -470,7 +439,7 @@ impl Task {
     pub fn parent_id(&self) -> Option<TaskId> {
         self.source()
             .and_then(|source| source.dependencies.as_ref())
-            .map(|dependencies| TaskId(dependencies.parent_task_id.clone()))
+            .map(|dependencies| TaskId::new(dependencies.parent_task_id.clone()))
     }
 
     pub fn is_root_task(&self) -> bool {
@@ -678,14 +647,21 @@ impl Task {
         Ok(())
     }
 
+    /// Upserts `message` into the task, returning the exchange whose rendered output was
+    /// updated along with the resulting task message.
+    ///
+    /// An update for an existing message is applied to the exchange that added that message,
+    /// which may predate the current response stream (e.g. the server swapping an earlier
+    /// screenshot's inline bytes for a stored ref). Only a genuinely new message requires
+    /// `current_stream_exchange_id`, the exchange the current stream added for this task.
     pub(super) fn upsert_message(
         &mut self,
         message: api::Message,
-        exchange_id: AIAgentExchangeId,
+        current_stream_exchange_id: Option<AIAgentExchangeId>,
         message_context: TaskMessageContext<'_>,
         mask: FieldMask,
         should_convert_input_messages: bool,
-    ) -> Result<&api::Message, UpdateTaskError> {
+    ) -> Result<(AIAgentExchangeId, &api::Message), UpdateTaskError> {
         let Some((idx, existing_message)) = self
             .try_get_source()?
             .messages
@@ -693,6 +669,8 @@ impl Task {
             .enumerate()
             .find(|(_, m)| message.id == m.id)
         else {
+            let exchange_id =
+                current_stream_exchange_id.ok_or(UpdateTaskError::ExchangeNotFound)?;
             self.add_messages(
                 vec![message.clone()],
                 exchange_id,
@@ -703,6 +681,7 @@ impl Task {
                 .try_get_source()?
                 .messages
                 .last()
+                .map(|message| (exchange_id, message))
                 .ok_or(UpdateTaskError::MessageNotFound);
         };
         let updated_message =
@@ -711,6 +690,14 @@ impl Task {
                 .map_err(UpdateTaskError::from)?;
 
         let id = self.id.clone();
+        let message_id = MessageId::new(message.id.clone());
+        let exchange_id = self
+            .exchanges
+            .iter()
+            .find(|exchange| exchange.added_message_ids.contains(&message_id))
+            .map(|exchange| exchange.id)
+            .or(current_stream_exchange_id)
+            .ok_or(UpdateTaskError::ExchangeNotFound)?;
         let exchange_to_update = self
             .exchange_mut(exchange_id)
             .ok_or(UpdateTaskError::ExchangeNotFound)?;
@@ -757,7 +744,7 @@ impl Task {
 
         let source = self.try_get_source_mut()?;
         source.messages[idx] = updated_message;
-        Ok(&source.messages[idx])
+        Ok((exchange_id, &source.messages[idx]))
     }
 
     pub(super) fn append_to_message_content(
@@ -999,10 +986,10 @@ impl AIAgentExchange {
         task_message: &api::Message,
         conversion_params: super::api::ConversionParams<'_>,
     ) -> Result<(), UpdateTaskError> {
-        if let AIAgentOutputStatus::Streaming {
-            output: Some(output),
-        } = &self.output_status
-        {
+        // Applies to finished outputs as well as streaming ones: updates can target
+        // messages owned by exchanges whose output already completed (e.g. a stored-ref
+        // swap for a screenshot from an earlier exchange).
+        if let Some(output) = self.output_status.output() {
             let mut output = output.get_mut();
             let message_idx = output
                 .messages

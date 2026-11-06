@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 
-use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType};
+use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType, TabTemplate};
 use crate::app_state::{
     AppState, BranchSnapshot, LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneFlex,
-    PaneNodeSnapshot, SplitDirection, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    PaneNodeSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot,
+    WindowSnapshot,
 };
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::tab::SelectedTabColor;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 
 fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
     AppState {
@@ -527,4 +530,221 @@ fn test_config_with_active_tab_being_filtered() {
 
     let template = LaunchConfig::from_snapshot("Test".into(), &state);
     assert_eq!(template.windows[0].active_tab_index, None)
+}
+
+// ---------------------------------------------------------------------------
+// Tab groups (#13898)
+// ---------------------------------------------------------------------------
+
+fn terminal_tab(cwd: &str, group_id: Option<TabGroupId>) -> TabSnapshot {
+    TabSnapshot {
+        custom_title: None,
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![],
+                cwd: Some(cwd.into()),
+                is_active: true,
+                is_read_only: false,
+                shell_launch_data: None,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        left_panel: None,
+        right_panel: None,
+        group_id,
+        pinned: false,
+    }
+}
+
+/// A tab that cannot be saved into a launch config, so it drops out of the
+/// template and shifts every later tab's index.
+fn unsaveable_tab(group_id: Option<TabGroupId>) -> TabSnapshot {
+    TabSnapshot {
+        custom_title: None,
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Notebook(NotebookPaneSnapshot::CloudNotebook {
+                notebook_id: None,
+                settings: OpenWarpDriveObjectSettings::default(),
+            }),
+        }),
+        left_panel: None,
+        right_panel: None,
+        group_id,
+        pinned: false,
+    }
+}
+
+fn grouped_snapshot(tabs: Vec<TabSnapshot>, tab_groups: Vec<TabGroupSnapshot>) -> AppState {
+    let mut state = multi_tab_snapshot(0, tabs);
+    state.windows[0].tab_groups = tab_groups;
+    state
+}
+
+fn group(name: &str, id: TabGroupId) -> TabGroupSnapshot {
+    TabGroupSnapshot {
+        id,
+        name: Some(name.to_string()),
+        color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+        collapsed: false,
+        pinned: false,
+    }
+}
+
+#[test]
+fn test_config_from_snapshot_preserves_tab_groups() {
+    let group_id = TabGroupId::new();
+    let state = grouped_snapshot(
+        vec![
+            terminal_tab("/a", Some(group_id)),
+            terminal_tab("/b", None),
+            terminal_tab("/c", Some(group_id)),
+        ],
+        vec![group("backend", group_id)],
+    );
+
+    let config = LaunchConfig::from_snapshot("test".to_string(), &state);
+    let window = &config.windows[0];
+
+    assert_eq!(window.tab_groups.len(), 1);
+    assert_eq!(window.tab_groups[0].name.as_deref(), Some("backend"));
+    assert_eq!(window.tab_groups[0].color, Some(AnsiColorIdentifier::Blue));
+
+    // Membership survives, and an ungrouped tab stays ungrouped.
+    assert_eq!(window.tabs[0].group, Some(0));
+    assert_eq!(window.tabs[1].group, None);
+    assert_eq!(window.tabs[2].group, Some(0));
+}
+
+#[test]
+fn test_config_from_snapshot_remaps_groups_around_unsaveable_tabs() {
+    // The first group's only tab cannot be saved, so that group must not
+    // survive -- and the second group's index must shift down with it.
+    // Membership is carried on each tab's `group_id`, never on its position,
+    // which is what makes this hold once the tab list is renumbered.
+    let dropped_group = TabGroupId::new();
+    let kept_group = TabGroupId::new();
+
+    let state = grouped_snapshot(
+        vec![
+            unsaveable_tab(Some(dropped_group)),
+            terminal_tab("/a", None),
+            terminal_tab("/b", Some(kept_group)),
+        ],
+        vec![group("cloud", dropped_group), group("local", kept_group)],
+    );
+
+    let config = LaunchConfig::from_snapshot("test".to_string(), &state);
+    let window = &config.windows[0];
+
+    assert_eq!(window.tabs.len(), 2);
+    assert_eq!(window.tab_groups.len(), 1, "empty group must be dropped");
+    assert_eq!(window.tab_groups[0].name.as_deref(), Some("local"));
+
+    assert_eq!(window.tabs[0].group, None);
+    assert_eq!(
+        window.tabs[1].group,
+        Some(0),
+        "the surviving group moved from index 1 to 0"
+    );
+}
+
+#[test]
+fn test_config_from_snapshot_omits_tab_groups_when_there_are_none() {
+    // Configs saved from ungrouped windows must serialize exactly as before,
+    // so existing launch configs keep round-tripping unchanged.
+    let state = grouped_snapshot(vec![terminal_tab("/a", None)], vec![]);
+
+    let config = LaunchConfig::from_snapshot("test".to_string(), &state);
+
+    assert!(config.windows[0].tab_groups.is_empty());
+    assert_eq!(config.windows[0].tabs[0].group, None);
+
+    let yaml = serde_yaml::to_string(&config).expect("serializes");
+    assert!(!yaml.contains("tab_groups"), "got:\n{yaml}");
+    assert!(!yaml.contains("group:"), "got:\n{yaml}");
+}
+
+fn tab_in_group(group: Option<usize>) -> TabTemplate {
+    TabTemplate {
+        title: None,
+        layout: PaneTemplateType::PaneTemplate {
+            cwd: PathBuf::from("/tmp"),
+            commands: vec![],
+            is_focused: None,
+            pane_mode: PaneMode::Terminal,
+            shell: None,
+        },
+        commands: vec![],
+        color: None,
+        group,
+    }
+}
+
+#[test]
+fn test_resolve_group_memberships_keeps_contiguous_runs_intact() {
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(Some(0)),
+        tab_in_group(None),
+        tab_in_group(Some(1)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 2),
+        vec![Some(0), Some(0), None, Some(1)]
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_ungroups_a_split_run() {
+    // The tab bar renders each contiguous run as its own container, so
+    // honoring the second run would draw two containers with one group id.
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(None),
+        tab_in_group(Some(0)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 1),
+        vec![Some(0), None, None],
+        "the group's second run must not reopen it"
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_ungroups_a_run_split_by_another_group() {
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(Some(1)),
+        tab_in_group(Some(0)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 2),
+        vec![Some(0), Some(1), None]
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_drops_out_of_range_indices() {
+    // Hand-edited YAML pointing past the end of `tab_groups`.
+    let tabs = vec![tab_in_group(Some(7)), tab_in_group(Some(0))];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 1),
+        vec![None, Some(0)]
+    );
 }

@@ -36,7 +36,11 @@ pub(super) fn classify_clipboard_content(
     content: ClipboardContent,
     cwd: &Path,
 ) -> ClipboardPasteContent {
-    if content.has_image_data() {
+    if content.images.as_ref().is_some_and(|images| {
+        images
+            .iter()
+            .any(|image| CLIPBOARD_IMAGE_MIME_TYPES.contains(&image.mime_type.as_str()))
+    }) {
         return ClipboardPasteContent::Image(content);
     }
 

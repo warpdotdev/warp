@@ -32,7 +32,6 @@ windows = { workspace = true, features = [
 cfg_aliases.workspace = true
 
 [features]
-plugin_host = []
 integration_tests = []
 
 

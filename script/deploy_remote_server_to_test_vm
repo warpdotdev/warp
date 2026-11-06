@@ -98,10 +98,9 @@ echo "==> Build complete ($BINARY_SIZE)"
 rm -rf "$LOCAL_BUNDLE_DIR"
 mkdir -p "$LOCAL_BUNDLE_DIR"
 cp "$BUILT_BINARY" "$LOCAL_BUNDLE_DIR/$BUNDLE_BINARY_NAME"
-"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
   "$LOCAL_BUNDLE_DIR/resources" \
-  integration \
-  "$CARGO_PROFILE"
+  integration
 tar -czf "$LOCAL_BUNDLE_TARBALL" -C "$LOCAL_BUNDLE_DIR" .
 
 # ── Upload via SCP through GCP IAP tunnel ─────────────────────────
@@ -197,6 +196,7 @@ mv resources bundled_resources
 
 chmod 755 "$3"
 mv -f "$3" "$4"
+"./$4" dump-settings-schema bundled_resources/settings_schema.json
 "./$4" --version
 REMOTE_SCRIPT
 done

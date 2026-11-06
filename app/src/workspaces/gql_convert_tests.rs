@@ -13,9 +13,11 @@ fn team(name: &str, member_uids: &[&str]) -> Team {
                     uid: UserUid::new(uid),
                     email: format!("{uid}@example.com"),
                     role: MembershipRole::User,
+                    is_disabled: false,
                 })
                 .collect(),
         ),
+        None,
     )
 }
 
@@ -24,6 +26,7 @@ fn workspace(teams: Vec<Team>) -> Workspace {
         format!("{:0>22}", "workspace").into(),
         "workspace".to_string(),
         Some(teams),
+        None,
     )
 }
 
@@ -42,7 +45,7 @@ fn drop_teams_the_user_is_not_a_member_of() {
         team("member", &["current-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert_eq!(team_names(&workspace), ["member"]);
 }
@@ -56,7 +59,7 @@ fn preserve_server_order_across_member_teams() {
         team("member-two", &["current-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert_eq!(team_names(&workspace), ["member-one", "member-two"]);
 }
@@ -70,9 +73,243 @@ fn drop_every_team_when_user_has_no_team_membership() {
         team("second", &["another-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert!(team_names(&workspace).is_empty());
+}
+
+#[test]
+fn service_accounts_keep_every_server_returned_team() {
+    // Service accounts aren't recorded as a human `TeamMember`, so the membership check
+    // must be skipped entirely and the server-returned teams trusted as-is.
+    let mut workspace = workspace(vec![
+        team("first", &["other-user"]),
+        team("second", &["another-user"]),
+    ]);
+
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), true);
+
+    assert_eq!(team_names(&workspace), ["first", "second"]);
+}
+
+#[test]
+fn team_member_conversion_preserves_is_disabled() {
+    let enabled_member = GqlTeamMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+    };
+    let disabled_member = GqlTeamMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+    };
+
+    assert!(!TeamMember::from(enabled_member).is_disabled);
+    assert!(TeamMember::from(disabled_member).is_disabled);
+}
+
+#[test]
+fn workspace_member_conversion_preserves_is_disabled() {
+    let usage_info = || GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 0,
+        requests_used_since_last_refresh: 0,
+        included_usage_cents: None,
+        usage_cents_used_since_last_refresh: None,
+        is_request_limit_prorated: false,
+    };
+    let enabled_member = GqlWorkspaceMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+        usage_info: usage_info(),
+    };
+    let disabled_member = GqlWorkspaceMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+        usage_info: usage_info(),
+    };
+
+    assert!(!WorkspaceMember::from(enabled_member).is_disabled);
+    assert!(WorkspaceMember::from(disabled_member).is_disabled);
+}
+
+#[test]
+fn workspace_member_usage_conversion_preserves_billed_cents() {
+    let dollars_first = WorkspaceMemberUsageInfo::from(GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 1000,
+        requests_used_since_last_refresh: 250,
+        included_usage_cents: Some(1800.0),
+        usage_cents_used_since_last_refresh: Some(450.5),
+        is_request_limit_prorated: false,
+    });
+    assert_eq!(
+        dollars_first.included_usage_cents,
+        Some(OrderedFloat(1800.0))
+    );
+    assert_eq!(
+        dollars_first.usage_cents_used_since_last_refresh,
+        Some(OrderedFloat(450.5))
+    );
+
+    let credits_first = WorkspaceMemberUsageInfo::from(GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 1000,
+        requests_used_since_last_refresh: 250,
+        included_usage_cents: None,
+        usage_cents_used_since_last_refresh: None,
+        is_request_limit_prorated: false,
+    });
+    assert_eq!(credits_first.included_usage_cents, None);
+    assert_eq!(credits_first.usage_cents_used_since_last_refresh, None);
+}
+
+#[test]
+fn tier_conversion_maps_the_charge_unit() {
+    let gql_tier = |charge_unit: GqlChargeUnit| GqlTier {
+        name: "Build".to_string(),
+        description: "Build tier".to_string(),
+        charge_unit,
+        warp_ai_policy: None,
+        team_size_policy: None,
+        shared_notebooks_policy: None,
+        shared_workflows_policy: None,
+        session_sharing_policy: None,
+        ai_autonomy_policy: None,
+        telemetry_data_collection_policy: None,
+        ugc_data_collection_policy: None,
+        usage_based_pricing_policy: None,
+        codebase_context_policy: None,
+        byo_api_key_policy: None,
+        byo_endpoint_policy: None,
+        managed_byok_byoe_policy: None,
+        purchase_add_on_credits_policy: None,
+        enterprise_pay_as_you_go_policy: None,
+        enterprise_credits_auto_reload_policy: None,
+        multi_admin_policy: None,
+        native_workspaces_policy: None,
+        ambient_agents_policy: None,
+        usage_visibility_policy: None,
+    };
+
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Cents)).charge_unit,
+        ChargeUnit::Cents
+    );
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Credits)).charge_unit,
+        ChargeUnit::Credits
+    );
+    // A unit from a newer server fails closed to credits.
+    assert_eq!(
+        Tier::from(gql_tier(GqlChargeUnit::Other("TOKENS".to_string()))).charge_unit,
+        ChargeUnit::Credits
+    );
+}
+
+#[test]
+fn addon_credits_settings_conversion_preserves_auto_reload_usage_cents() {
+    let settings = AddonCreditsSettings::from(GqlAddonCreditsSettings {
+        auto_reload_enabled: true,
+        max_monthly_spend_cents: Some(10_000),
+        selected_auto_reload_credit_denomination: Some(1000),
+        selected_auto_reload_usage_cents: Some(1000),
+    });
+
+    assert_eq!(
+        settings.selected_auto_reload_credit_denomination,
+        Some(1000)
+    );
+    assert_eq!(settings.selected_auto_reload_usage_cents, Some(1000));
+}
+
+#[test]
+fn bonus_grant_conversion_preserves_usage_cents() {
+    let gql_grant = |usage_cents: Option<(f64, f64)>| GqlBonusGrant {
+        created_at: chrono::Utc::now().into(),
+        cost_cents: 1000,
+        expiration: None,
+        grant_type: warp_graphql::billing::BonusGrantType::Any,
+        scope: GqlBonusGrantScope::User,
+        reason: "purchase".to_string(),
+        user_facing_message: None,
+        request_credits_granted: 1000,
+        request_credits_remaining: 400,
+        usage_cents_granted: usage_cents.map(|(granted, _)| granted),
+        usage_cents_remaining: usage_cents.map(|(_, remaining)| remaining),
+    };
+
+    let dollars_first = BonusGrant::from_gql_user_bonus_grant(gql_grant(Some((1800.0, 720.0))));
+    assert_eq!(dollars_first.usage_cents_granted, Some(1800.0));
+    assert_eq!(dollars_first.usage_cents_remaining, Some(720.0));
+    assert_eq!(dollars_first.request_credits_remaining, 400);
+
+    let credits_first = BonusGrant::from_gql_user_bonus_grant(gql_grant(None));
+    assert_eq!(credits_first.usage_cents_granted, None);
+    assert_eq!(credits_first.usage_cents_remaining, None);
+}
+
+mod pending_email_invites_conversion {
+    use warp_graphql::workspace::EmailInvite as GqlEmailInvite;
+
+    use crate::workspaces::gql_convert::team_pending_email_invites_from_gql;
+
+    fn gql_invite(email: &str, team_uid: Option<&str>) -> GqlEmailInvite {
+        GqlEmailInvite {
+            email: email.to_string(),
+            expired: false,
+            team_uid: team_uid.map(cynic::Id::new),
+        }
+    }
+
+    #[test]
+    fn keeps_only_invites_sent_for_the_given_team() {
+        let team_a_uid = format!("{:0>22}", "team-a");
+        let team_b_uid = format!("{:0>22}", "team-b");
+        let team_a = cynic::Id::new(team_a_uid.clone());
+        let team_b = cynic::Id::new(team_b_uid.clone());
+        let workspace_invites = vec![
+            gql_invite("alice@example.com", Some(team_a_uid.as_str())),
+            gql_invite("bob@example.com", Some(team_b_uid.as_str())),
+            gql_invite("carol@example.com", Some(team_a_uid.as_str())),
+        ];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert_eq!(
+            team_a_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alice@example.com", "carol@example.com"],
+            "team A's page must not show team B's pending invite"
+        );
+
+        let team_b_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_b);
+        assert_eq!(
+            team_b_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bob@example.com"],
+            "team B's page must not show team A's pending invites"
+        );
+    }
+
+    #[test]
+    fn drops_invites_with_no_team_uid() {
+        let team_a = cynic::Id::new(format!("{:0>22}", "team-a"));
+        let workspace_invites = vec![gql_invite("dangling@example.com", None)];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert!(team_a_invites.is_empty());
+    }
 }
 
 mod team_settings_conversion {
@@ -194,6 +431,7 @@ mod team_settings_conversion {
                 auto_reload_enabled: true,
                 max_monthly_spend_cents: Some(100),
                 selected_auto_reload_credit_denomination: Some(50),
+                selected_auto_reload_usage_cents: None,
             },
             ambient_agent_settings: Some(gqlws::AmbientAgentSettings {
                 enable_warp_attribution: gqlws::AdminEnablementSetting::Enable,
@@ -223,7 +461,7 @@ mod team_settings_conversion {
             AdminEnablementSetting::Enable
         );
 
-        // AI permissions preserve the enforcement bit and the list split entries.
+        // AI permissions preserve the enforcement bit and compile the merged patterns.
         assert!(settings.ai_permissions.allow_ai_in_remote_sessions.value);
         assert!(
             settings
@@ -232,22 +470,15 @@ mod team_settings_conversion {
                 .is_enforced_by_workspace
         );
         assert_eq!(
-            settings.ai_permissions.remote_session_regex_list.values,
-            vec!["foo.*".to_string()]
-        );
-        assert_eq!(
             settings
                 .ai_permissions
                 .remote_session_regex_list
-                .workspace_entries,
-            vec!["ws.*".to_string()]
-        );
-        assert_eq!(
-            settings
-                .ai_permissions
-                .remote_session_regex_list
-                .team_entries,
-            vec!["team.*".to_string()]
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"],
+            "only the merged `values` compile into the effective list; the workspace/team \
+             split entries have no Rust-client reader to preserve them for"
         );
 
         // Secret redaction keeps the merged values and the workspace split entries.
@@ -320,6 +551,26 @@ mod team_settings_conversion {
     }
 
     #[test]
+    fn drops_an_uncompilable_remote_session_pattern_without_failing_the_rest() {
+        // Compilation now happens at convert time (mirroring the workspace-level path), so an
+        // org's one bad pattern must not take down the rest of its list.
+        let mut gql = sample_gql_team_settings();
+        gql.ai_permissions.remote_session_regex_list = str_list(&["foo.*", "("], &[], &[]);
+
+        let settings = team_settings_from_gql(gql);
+
+        assert_eq!(
+            settings
+                .ai_permissions
+                .remote_session_regex_list
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"]
+        );
+    }
+
+    #[test]
     fn team_settings_from_gql_uses_team_payload() {
         // The team payload carries distinctive values (llm enabled, codebase
         // context Enable, ugc enforced). `team_settings_from_gql` derives
@@ -341,5 +592,44 @@ mod team_settings_conversion {
             settings.ugc_collection.is_enforced_by_workspace,
             "enforcement metadata from the team payload must be preserved"
         );
+    }
+}
+
+mod team_visibility_conversion {
+    use warp_graphql::workspace::TeamVisibility as GqlTeamVisibility;
+
+    use crate::workspaces::team::TeamVisibility;
+
+    #[test]
+    fn maps_known_values() {
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Open),
+            TeamVisibility::Open
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Private),
+            TeamVisibility::Private
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Hidden),
+            TeamVisibility::Hidden
+        );
+    }
+
+    #[test]
+    fn fails_closed_on_unrecognized_value() {
+        // An unrecognized value must never be treated as Open, since that
+        // would surface the invite-by-link control the server doesn't
+        // actually support for it.
+        let visibility = TeamVisibility::from(GqlTeamVisibility::Other("future-value".to_string()));
+        assert_eq!(visibility, TeamVisibility::Private);
+        assert!(!visibility.supports_invite_link());
+    }
+
+    #[test]
+    fn only_open_supports_invite_link() {
+        assert!(TeamVisibility::Open.supports_invite_link());
+        assert!(!TeamVisibility::Private.supports_invite_link());
+        assert!(!TeamVisibility::Hidden.supports_invite_link());
     }
 }

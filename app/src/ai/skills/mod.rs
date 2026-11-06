@@ -13,6 +13,10 @@ pub(crate) use remote::bundled_skill_snapshot_protos;
 mod bundled;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
 pub(crate) use bundled::{BundledSkill, BundledSkillActivation};
+#[cfg(feature = "local_fs")]
+pub(crate) use bundled::{
+    FACTORY_DEFERRED_REPOSITORIES_SKILL, factory_deferred_repositories_skill_path,
+};
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -53,11 +57,9 @@ impl ActiveSkillLookupError {
 
 #[cfg(not(target_family = "wasm"))]
 mod global_skills;
+pub use ai::skills::SkillDescriptor;
 #[cfg(not(target_family = "wasm"))]
 pub use global_skills::{filter_skills_by_spec, resolve_skill_repos};
-
-mod listed_skill;
-pub use listed_skill::SkillDescriptor;
 
 mod skill_utils;
 pub use skill_utils::{

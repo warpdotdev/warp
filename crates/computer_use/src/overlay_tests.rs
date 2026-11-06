@@ -82,7 +82,7 @@ fn redacts_printable_keys_and_omits_pointer_actions() {
         }),
         screen(Action::MouseDown {
             button: MouseButton::Left,
-            at: Vector2I::new(3, 4),
+            at: Some(Vector2I::new(3, 4)),
         }),
         screen(Action::MouseUp {
             button: MouseButton::Left,
@@ -113,7 +113,7 @@ fn maps_all_scroll_directions_without_distance() {
 fn is_meaningful_action_group_true_for_real_interactions() {
     let click = [screen(Action::MouseDown {
         button: MouseButton::Left,
-        at: Vector2I::new(1, 1),
+        at: Some(Vector2I::new(1, 1)),
     })];
     assert!(is_meaningful_action_group(&click));
 

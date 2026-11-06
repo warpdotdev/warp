@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use prost::Message as _;
 use tracing_futures::Instrument as _;
 use warp_core::channel::ChannelState;
-use warp_server_client::base_client::{AmbientHeaderPolicy, BaseClient};
+use warp_server_client::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -41,9 +41,14 @@ cfg_if::cfg_if! {
 }
 
 /// Opens a decoded multi-agent response event stream.
+///
+/// `team_uid` is the raw team UID already extracted from the caller's `TeamContext`; this
+/// crate has no visibility into that type, only the wire value. See
+/// `specs/multi-team-api-context/TECH.md`.
 pub async fn generate_multi_agent_output(
     client: &BaseClient,
     request: &warp_multi_agent_api::Request,
+    team_uid: Option<String>,
 ) -> Result<OutputStream, Error> {
     let auth_token = client
         .get_or_refresh_access_token()
@@ -67,6 +72,9 @@ pub async fn generate_multi_agent_output(
         .map_err(Error::AmbientHeaders)?
     {
         request_builder = request_builder.header(name, value);
+    }
+    if let Some(team_uid) = team_uid {
+        request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
     }
 
     let raw_stream = client.wrap_eventsource_with_iap_detection(request_builder.eventsource());
