@@ -36,6 +36,9 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::custom_usage_controls::{
+    CustomUsageControls, CustomUsageEvent, CustomUsagePurpose,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -241,6 +244,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    custom_usage: ViewHandle<CustomUsageControls>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -423,7 +427,22 @@ impl BillingAndUsagePageView {
         let chatgpt_manage_usage_button =
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
+        let custom_usage = ctx.add_typed_action_view(|ctx| {
+            CustomUsageControls::new(CustomUsagePurpose::Billing, ctx)
+        });
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            if matches!(event, CustomUsageEvent::Selected) {
+                me.selected_addon_denomination = usize::MAX;
+                me.update_denomination_buttons_focus(ctx);
+                ctx.notify();
+            } else if matches!(event, CustomUsageEvent::PresetRestored) {
+                me.selected_addon_denomination = 0;
+                me.refresh_addon_credits_settings(ctx);
+                ctx.notify();
+            }
+        });
         let mut me = Self {
+            custom_usage,
             self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
@@ -472,17 +491,23 @@ impl BillingAndUsagePageView {
         };
         me.update_addon_credits_options(ctx);
         me.refresh_addon_credits_settings(ctx);
+        if me.custom_usage.as_ref(ctx).is_selected() {
+            me.selected_addon_denomination = usize::MAX;
+            me.update_denomination_buttons_focus(ctx);
+        }
         me.update_prorated_mouse_states(ctx);
         me
     }
 
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
+        if self.custom_usage.as_ref(ctx).is_selected() {
+            self.selected_addon_denomination = usize::MAX;
+        } else if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
             let addon_credits_settings = &workspace.settings.addon_credits_settings;
             if addon_credits_settings.auto_reload_enabled {
                 self.selected_addon_denomination = addon_credits_settings
                     .selected_auto_reload_option_index(&self.addon_credits_options)
-                    .unwrap_or(0);
+                    .unwrap_or(usize::MAX);
             }
         }
         self.update_denomination_buttons_focus(ctx);
@@ -746,9 +771,12 @@ impl BillingAndUsagePageView {
         {
             return;
         }
-        self.selected_addon_denomination = self
-            .selected_addon_denomination
-            .min(options.len().saturating_sub(1));
+        self.selected_addon_denomination = if self.custom_usage.as_ref(ctx).is_selected() {
+            usize::MAX
+        } else {
+            self.selected_addon_denomination
+                .min(options.len().saturating_sub(1))
+        };
         self.addon_credits_options = options;
         self.addon_display_unit = unit;
         self.addon_credit_denomination_buttons =
@@ -1029,6 +1057,8 @@ impl TypedActionView for BillingAndUsagePageView {
                     .update(ctx, |m, ctx| m.load_more_usage_history_async(ctx));
             }
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
+                self.custom_usage
+                    .update(ctx, |view, ctx| view.select_preset(ctx));
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
@@ -1970,6 +2000,7 @@ impl BillingAndUsagePageView {
                 .with_children([
                     Container::new(card_header).with_margin_bottom(8.).finish(),
                     no_credits_access_explanation,
+                    ChildView::new(&self.custom_usage).finish(),
                 ])
                 .finish();
             return Container::new(card_content)
@@ -2157,7 +2188,7 @@ impl BillingAndUsagePageView {
         let auto_reload_switch = ui_builder
             .switch(self.auto_reload_switch.clone())
             .check(auto_reload_enabled);
-        let auto_reload_switch = if delinquent_due_to_payment_issue {
+        let auto_reload_switch = if delinquent_due_to_payment_issue && !auto_reload_enabled {
             auto_reload_switch.disable().build().finish()
         } else {
             auto_reload_switch
@@ -2209,6 +2240,7 @@ impl BillingAndUsagePageView {
         if team_uid.is_some() {
             card_content_upper.add_child(auto_reload_switch);
         }
+        card_content_upper.add_child(ChildView::new(&self.custom_usage).finish());
 
         let base_rate = addon_credits_options
             .first()
@@ -2263,8 +2295,10 @@ impl BillingAndUsagePageView {
                     (already_spent_cents + purchase_cost_cents) > monthly_limit_cents
                 });
 
-        let is_buy_button_disabled =
-            purchase_addon_credits_loading || would_exceed_limit || delinquent_due_to_payment_issue;
+        let is_buy_button_disabled = selected_option.is_none()
+            || purchase_addon_credits_loading
+            || would_exceed_limit
+            || delinquent_due_to_payment_issue;
 
         let button_font_color = is_buy_button_disabled.then_some(
             appearance
@@ -2337,7 +2371,9 @@ impl BillingAndUsagePageView {
                 .with_margin_bottom(16.)
                 .finish()
         } else {
-            buy_row.add_child(buy_button);
+            if selected_option.is_some() {
+                buy_row.add_child(buy_button);
+            }
             let card_upper = Container::new(card_content_upper.finish())
                 .with_horizontal_padding(16.)
                 .with_padding_top(16.)

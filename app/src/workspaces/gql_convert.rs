@@ -855,6 +855,7 @@ impl BonusGrant {
 impl From<GqlBillingMetadata> for BillingMetadata {
     fn from(gql_billing_metadata: GqlBillingMetadata) -> BillingMetadata {
         Self {
+            custom_usage_amounts: gql_billing_metadata.custom_usage_amounts,
             tier: gql_billing_metadata.tier.into(),
             customer_type: gql_billing_metadata.customer_type.into(),
             delinquency_status: gql_billing_metadata.delinquency_status.into(),

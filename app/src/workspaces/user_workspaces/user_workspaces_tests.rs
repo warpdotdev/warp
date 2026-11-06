@@ -3774,14 +3774,51 @@ fn test_team_billing_metadata_disabled_policy_stays_disabled_without_team() {
 }
 
 #[test]
+fn test_purchase_custom_usage_forwards_cents_and_blocks_duplicate_requests() {
+    App::test((), |mut app| async move {
+        let (sent, received) = futures::channel::oneshot::channel();
+        let mut sent = Some(sent);
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_purchase_addon_credits()
+            .withf(|team_uid, credits, usage_cents| {
+                *team_uid == Some(123.into()) && *credits == 0 && *usage_cents == Some(3700)
+            })
+            .times(1)
+            .returning(move |_, _, _| {
+                sent.take().unwrap().send(()).unwrap();
+                Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
+                    checkout_url: "https://example.com/checkout".to_string(),
+                })
+            });
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![],
+                ctx,
+            )
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.purchase_addon_usage(Some(123.into()), 3700, uuid::Uuid::new_v4(), ctx);
+            workspaces.purchase_addon_credits(Some(123.into()), 1000, ctx);
+            workspaces.purchase_addon_usage(Some(123.into()), 4300, uuid::Uuid::new_v4(), ctx);
+        });
+        received.await.unwrap();
+    })
+}
+
+#[test]
 fn test_purchase_addon_credits_forwards_teamless_team_uid() {
     App::test((), |mut app| async move {
         let mut workspace_client = MockWorkspaceClient::new();
         workspace_client
             .expect_purchase_addon_credits()
-            .withf(|team_uid, credits| team_uid.is_none() && *credits == 1_000)
+            .withf(|team_uid, credits, usage_cents| {
+                team_uid.is_none() && *credits == 1_000 && usage_cents.is_none()
+            })
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
                     checkout_url: "https://example.com/checkout".to_string(),
                 })
@@ -3812,9 +3849,11 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
         let mut workspace_client = MockWorkspaceClient::new();
         workspace_client
             .expect_purchase_addon_credits()
-            .withf(|team_uid, credits| *team_uid == Some(123.into()) && *credits == 2_000)
+            .withf(|team_uid, credits, usage_cents| {
+                *team_uid == Some(123.into()) && *credits == 2_000 && usage_cents.is_none()
+            })
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
                     checkout_url: "https://example.com/checkout".to_string(),
                 })
@@ -4172,6 +4211,7 @@ fn gql_workspace(
         teams: vec![],
         open_teams: vec![],
         billing_metadata: GqlBillingMetadata {
+            custom_usage_amounts: None,
             customer_type: GqlCustomerType::Free,
             delinquency_status: GqlDelinquencyStatus::NoDelinquency,
             tier: gql_tier(purchase_policy),

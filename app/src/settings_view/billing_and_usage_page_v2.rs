@@ -31,6 +31,9 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::custom_usage_controls::{
+    CustomUsageControls, CustomUsageEvent, CustomUsagePurpose,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -332,6 +335,7 @@ impl ClassifiedGrants {
 }
 
 pub struct BillingAndUsagePageV2View {
+    custom_usage: ViewHandle<CustomUsageControls>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -435,7 +439,22 @@ impl BillingAndUsagePageV2View {
         let chatgpt_manage_usage_button =
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
+        let custom_usage = ctx.add_typed_action_view(|ctx| {
+            CustomUsageControls::new(CustomUsagePurpose::Billing, ctx)
+        });
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            if matches!(event, CustomUsageEvent::Selected) {
+                me.addon_credits.selected_denomination = usize::MAX;
+                me.update_denomination_buttons_focus(ctx);
+                ctx.notify();
+            } else if matches!(event, CustomUsageEvent::PresetRestored) {
+                me.addon_credits.selected_denomination = 0;
+                me.refresh_addon_credits_settings(ctx);
+                ctx.notify();
+            }
+        });
         let mut me = Self {
+            custom_usage,
             self_handle: ctx.handle(),
             auth_state,
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -464,16 +483,22 @@ impl BillingAndUsagePageV2View {
         };
         me.update_addon_credits_options(ctx);
         me.refresh_addon_credits_settings(ctx);
+        if me.custom_usage.as_ref(ctx).is_selected() {
+            me.addon_credits.selected_denomination = usize::MAX;
+            me.update_denomination_buttons_focus(ctx);
+        }
         me
     }
 
     fn refresh_addon_credits_settings(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
+        if self.custom_usage.as_ref(ctx).is_selected() {
+            self.addon_credits.selected_denomination = usize::MAX;
+        } else if let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
             let addon_credits_settings = &workspace.settings.addon_credits_settings;
             if addon_credits_settings.auto_reload_enabled {
                 self.addon_credits.selected_denomination = addon_credits_settings
                     .selected_auto_reload_option_index(&self.addon_credits.options)
-                    .unwrap_or(0);
+                    .unwrap_or(usize::MAX);
             }
         }
         self.update_denomination_buttons_focus(ctx);
@@ -653,10 +678,13 @@ impl BillingAndUsagePageV2View {
         {
             return;
         }
-        self.addon_credits.selected_denomination = self
-            .addon_credits
-            .selected_denomination
-            .min(options.len().saturating_sub(1));
+        self.addon_credits.selected_denomination = if self.custom_usage.as_ref(ctx).is_selected() {
+            usize::MAX
+        } else {
+            self.addon_credits
+                .selected_denomination
+                .min(options.len().saturating_sub(1))
+        };
         self.addon_credits.options = options;
         self.addon_credits.display_unit = unit;
         self.addon_credits.denomination_buttons =
@@ -1280,12 +1308,13 @@ impl BillingAndUsagePageV2View {
                     + opt.price_usd_cents_with_premium(premium_bps))
                     > limit
             });
-        let purchase_disabled = self.addon_credits.purchase_loading
+        let purchase_disabled = selected_credit_option.is_none()
+            || self.addon_credits.purchase_loading
             || would_exceed
             || delinquent
             || auto_reload_enabled;
         let auto_reload_switch_disabled = !has_admin_permissions
-            || delinquent
+            || (!auto_reload_enabled && delinquent)
             || (!auto_reload_enabled && selected_credit_option.is_none());
         let price_label = selected_credit_option
             .map(|opt| {
@@ -1483,6 +1512,7 @@ impl BillingAndUsagePageV2View {
             .with_children([
                 Container::new(header).with_margin_bottom(8.).finish(),
                 explanation,
+                ChildView::new(&self.custom_usage).finish(),
             ])
             .finish();
 
@@ -1519,7 +1549,11 @@ impl BillingAndUsagePageV2View {
             })
             .build()
             .finish();
-        let mut card_children = vec![auto_reload_header, auto_reload_description];
+        let mut card_children = vec![
+            auto_reload_header,
+            auto_reload_description,
+            ChildView::new(&self.custom_usage).finish(),
+        ];
         if let Some(warning_text) = warning_text {
             card_children.push(self.render_warning_row(appearance, warning_text.to_string()));
         }
@@ -1663,6 +1697,7 @@ impl BillingAndUsagePageV2View {
             );
         }
 
+        upper_section.add_child(ChildView::new(&self.custom_usage).finish());
         Container::new(upper_section.finish())
             .with_horizontal_padding(16.)
             .with_padding_top(16.)
@@ -1835,15 +1870,17 @@ impl BillingAndUsagePageV2View {
                     .finish(),
             ]);
         }
-        right_group.add_child(
-            Container::new(purchase_button)
-                .with_margin_left(if state.can_edit_team_settings {
-                    16.
-                } else {
-                    0.
-                })
-                .finish(),
-        );
+        if self.addon_credits.selected_denomination != usize::MAX {
+            right_group.add_child(
+                Container::new(purchase_button)
+                    .with_margin_left(if state.can_edit_team_settings {
+                        16.
+                    } else {
+                        0.
+                    })
+                    .finish(),
+            );
+        }
         let lower_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -2289,6 +2326,8 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     .update(ctx, |m, ctx| m.load_more_usage_history_async(ctx));
             }
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
+                self.custom_usage
+                    .update(ctx, |view, ctx| view.select_preset(ctx));
                 self.addon_credits.selected_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 let workspaces = UserWorkspaces::as_ref(ctx);
