@@ -278,6 +278,15 @@ impl TerminalDriver {
         Ok(driver)
     }
 
+    pub(super) fn session_path(&self, ctx: &AppContext) -> Option<String> {
+        self.terminal_view.read(ctx, |terminal, ctx| {
+            let session = terminal
+                .active_block_session_id()
+                .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id))?;
+            session.path().clone()
+        })
+    }
+
     /// Wrap an already-created terminal view in a new `TerminalDriver` model.
     ///
     /// Unlike [`Self::create`], this does not open a new window — it reuses an
