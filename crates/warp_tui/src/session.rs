@@ -18,7 +18,10 @@ use sha2::{Digest, Sha256};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{authenticate_then_execute, AIConversationAutoexecuteMode, Appearance, AuthStateProvider, FactoryGitTokenResponse, ServerApiProvider, ServerConversationToken};
+use warp::tui_export::{
+    AIConversationAutoexecuteMode, Appearance, AuthStateProvider, FactoryGitTokenResponse,
+    ServerApiProvider, ServerConversationToken, authenticate_then_execute,
+};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::settings::Setting as _;
@@ -227,33 +230,41 @@ pub fn run() -> Result<()> {
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         return;
                     };
-                    if let Err(error) = authenticate_then_execute(None, ctx, move |ctx| {
-                        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
-                        let app = ctx.weak_app();
-                        ctx.foreground_executor()
-                            .spawn(async move {
-                                let result =
-                                    factory.get_factory_git_token(factory_id.clone()).await;
-                                let Some(mut app) = app.upgrade() else {
-                                    return;
-                                };
-                                app.update(|ctx| match result {
-                                    Ok(response) => {
-                                        let _ = cache_git_jwt_response(ctx, &response, &factory_id);
-                                        println!("{}", response.token);
-                                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                                    }
-                                    Err(error) => {
-                                        ctx.terminate_app(
-                                            TerminationMode::ForceTerminate,
-                                            Some(Err(error)),
-                                        );
-                                    }
-                                });
-                            })
-                            .detach();
-                        Ok(())
-                    }) {
+                    let login_hint =
+                        "You are not logged in - please open Warp Agent CLI to log in.";
+                    if let Err(error) =
+                        authenticate_then_execute(None, login_hint, ctx, move |ctx| {
+                            let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+                            let app = ctx.weak_app();
+                            ctx.foreground_executor()
+                                .spawn(async move {
+                                    let result =
+                                        factory.get_factory_git_token(factory_id.clone()).await;
+                                    let Some(mut app) = app.upgrade() else {
+                                        return;
+                                    };
+                                    app.update(|ctx| match result {
+                                        Ok(response) => {
+                                            let _ =
+                                                cache_git_jwt_response(ctx, &response, &factory_id);
+                                            println!("{}", response.token);
+                                            ctx.terminate_app(
+                                                TerminationMode::ForceTerminate,
+                                                None,
+                                            );
+                                        }
+                                        Err(error) => {
+                                            ctx.terminate_app(
+                                                TerminationMode::ForceTerminate,
+                                                Some(Err(error)),
+                                            );
+                                        }
+                                    });
+                                })
+                                .detach();
+                            Ok(())
+                        })
+                    {
                         ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
                     }
                 }))

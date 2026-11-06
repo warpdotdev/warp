@@ -28,7 +28,7 @@ fn command_auth_gate_waits_before_executing() {
         initialize_tui_command_auth(&mut app);
         let (executed, mut completion) = futures::channel::oneshot::channel();
         app.update(|ctx| {
-            authenticate_then_execute(None, ctx, move |_| {
+            authenticate_then_execute(None, "", ctx, move |_| {
                 executed.send(()).unwrap();
                 Ok(())
             })

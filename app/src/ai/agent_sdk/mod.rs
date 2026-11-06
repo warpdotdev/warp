@@ -2296,26 +2296,28 @@ fn launch_command(
         return dispatch_command(ctx, command, global_options);
     }
 
-    authenticate_then_execute(global_options.api_key.clone(), ctx, move |ctx| {
-        dispatch_command(ctx, command.clone(), global_options.clone())
-    })
+    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    authenticate_then_execute(
+        global_options.api_key.clone(),
+        &format!("You are not logged in - please log in with `{cli_name} login` to continue."),
+        ctx,
+        move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()),
+    )
 }
 
 /// Establishes IAP access and validates credentials before executing a command once.
 pub fn authenticate_then_execute(
     pending_api_key: Option<String>,
+    login_hint: &str,
     ctx: &mut AppContext,
     execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) -> anyhow::Result<()> {
     let parent_span = tracing::Span::current();
-    let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
     let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!(
-            "You are not logged in - please log into `{cli_name}` to continue."
-        ));
+        return Err(anyhow::anyhow!("{}", login_hint));
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
