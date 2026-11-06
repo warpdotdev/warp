@@ -28,7 +28,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
-use crate::pane_group::NewTerminalOptions;
+use crate::pane_group::{NewTerminalOptions, PaneGroup};
 use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
 use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
@@ -165,6 +165,7 @@ struct WaitingCommand {
 /// - Detecting block completion
 pub(crate) struct TerminalDriver {
     terminal_view: ViewHandle<TerminalView>,
+    pane_group: Option<ViewHandle<PaneGroup>>,
     #[cfg(test)]
     pub(super) launch_env_vars_for_test: Option<HashMap<OsString, OsString>>,
     /// Sender half of the bootstrap result channel. Exactly one of
@@ -222,7 +223,7 @@ impl Entity for TerminalDriver {
 fn create_terminal_view(
     options: TerminalDriverOptions<'_>,
     ctx: &mut AppContext,
-) -> Result<ViewHandle<TerminalView>, AgentDriverError> {
+) -> Result<(ViewHandle<TerminalView>, ViewHandle<PaneGroup>), AgentDriverError> {
     let is_shared_session_creator = if options.should_share {
         IsSharedSessionCreator::Yes {
             source: SharedSessionSource::ambient_agent(options.task_id.map(|t| t.to_string())),
@@ -246,15 +247,18 @@ fn create_terminal_view(
         ctx,
     );
 
-    root_view
+    let pane_group = root_view
         .as_ref(ctx)
         .workspace_view()
         .ok_or(AgentDriverError::TerminalUnavailable)?
         .as_ref(ctx)
         .active_tab_pane_group()
+        .clone();
+    let terminal_view = pane_group
         .as_ref(ctx)
         .active_session_view(ctx)
-        .ok_or(AgentDriverError::TerminalUnavailable)
+        .ok_or(AgentDriverError::TerminalUnavailable)?;
+    Ok((terminal_view, pane_group))
 }
 
 impl TerminalDriver {
@@ -268,9 +272,10 @@ impl TerminalDriver {
         let should_share = options.should_share;
         let task_id = options.task_id;
         let working_dir = options.working_dir.clone();
-        let terminal_view = create_terminal_view(options, ctx)?;
+        let (terminal_view, pane_group) = create_terminal_view(options, ctx)?;
         let driver =
             ctx.add_model(|ctx| Self::new(terminal_view, should_share, task_id, working_dir, ctx));
+        driver.update(ctx, |driver, _| driver.pane_group = Some(pane_group));
         #[cfg(test)]
         driver.update(ctx, |driver, _| {
             driver.launch_env_vars_for_test = Some(launch_env_vars_for_test);
@@ -363,6 +368,7 @@ impl TerminalDriver {
 
         Self {
             terminal_view,
+            pane_group: None,
             #[cfg(test)]
             launch_env_vars_for_test: None,
             bootstrap_tx,
@@ -383,6 +389,10 @@ impl TerminalDriver {
     /// Get a handle to the backing terminal view.
     pub fn terminal_view(&self) -> &ViewHandle<TerminalView> {
         &self.terminal_view
+    }
+
+    pub(crate) fn pane_group(&self) -> Option<&ViewHandle<PaneGroup>> {
+        self.pane_group.as_ref()
     }
 
     pub(super) fn bind_prewarmed_task(

@@ -621,7 +621,11 @@ impl BlocklistAIHistoryModel {
                 .conversations_by_id
                 .get(&conversation_id)
                 .and_then(|c| c.parent_conversation_id());
-            if current_parent != Some(parent_conversation_id) {
+            if current_parent != Some(parent_conversation_id)
+                && self
+                    .conversation(&conversation_id)
+                    .is_some_and(AIConversation::is_remote_child)
+            {
                 self.set_parent_for_conversation(conversation_id, parent_conversation_id);
             }
             return conversation_id;
@@ -659,9 +663,14 @@ impl BlocklistAIHistoryModel {
         task: &AmbientAgentTask,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
-            conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
-        }
+        let Some(conversation) = self
+            .conversations_by_id
+            .get_mut(&conversation_id)
+            .filter(|conversation| conversation.is_remote_child())
+        else {
+            return;
+        };
+        conversation.set_remote_run_updated_at(task.updated_at.with_timezone(&Local));
         self.update_conversation_status(
             terminal_surface_id,
             conversation_id,
