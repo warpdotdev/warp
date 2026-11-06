@@ -231,6 +231,7 @@ pub(super) fn convert_input(
                                     origin: attribution.origin,
                                     author: attribution.author,
                                     source_message: attribution.source_message,
+                                    input_uid: Default::default(),
                                 }
                             }),
                         },
