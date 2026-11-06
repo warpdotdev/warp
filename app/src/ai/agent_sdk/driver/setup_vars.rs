@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use tempfile::NamedTempFile;
+use tempfile::TempPath;
 use uuid::Uuid;
 use warpui::ModelSpawner;
 use warpui::r#async::FutureExt as _;
@@ -274,7 +274,7 @@ fn assignment_script(values: &HashMap<OsString, OsString>, shell: ShellType) -> 
 fn private_assignment_script(
     values: &HashMap<OsString, OsString>,
     shell: ShellType,
-) -> io::Result<(NamedTempFile, String)> {
+) -> io::Result<(TempPath, String)> {
     let suffix = match shell {
         ShellType::Bash | ShellType::Zsh => ".sh",
         ShellType::Fish => ".fish",
@@ -285,7 +285,8 @@ fn private_assignment_script(
         .suffix(suffix)
         .tempfile()?;
     file.write_all(assignment_script(values, shell).as_bytes())?;
-    let path = quote(&file.path().to_string_lossy(), shell);
+    let file = file.into_temp_path();
+    let path = quote(&file.to_string_lossy(), shell);
     let command = match shell {
         ShellType::Bash | ShellType::Zsh => format!(". {path}"),
         ShellType::Fish => format!("source {path}"),

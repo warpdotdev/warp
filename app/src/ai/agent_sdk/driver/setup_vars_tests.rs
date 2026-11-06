@@ -219,13 +219,17 @@ fn cold_powershell_assignments_preserve_unicode_and_literal_metacharacters() {
     let output = command::blocking::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command"])
         .arg(format!(
-            "$env:EXISTING='kept'; {command}; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [Console]::Write($env:VALUE + \"`n\" + $env:EXISTING)"
+            "$ErrorActionPreference='Stop'; $env:EXISTING='kept'; {command}; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [Console]::Write($env:VALUE + \"`n\" + $env:EXISTING)"
         ))
         .output()
         .unwrap();
     drop(file);
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "’$(exit 41); ‘`exit 42` \"quoted\" = literal\nkept"
