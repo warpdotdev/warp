@@ -138,7 +138,7 @@ use warp_graphql::queries::task_git_credentials::{
 };
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
-use warp_multi_agent_api::ConversationData;
+use warp_multi_agent_api::{ConversationData, LifecycleEventType};
 use warp_server_client::PresignedDownloadResponse;
 
 use super::ServerApi;
@@ -454,31 +454,219 @@ pub struct AgentMessageHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
-    pub event_type: String,
+    #[serde(flatten)]
+    pub kind: AgentRunEventKind,
     pub run_id: String,
     pub ref_id: Option<String>,
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
-    /// Optional structured lifecycle detail. Servers that predate the field
-    /// omit it, so deserialization must default to `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<AgentRunEventDetail>,
 }
 
-/// Structured detail attached to lifecycle events by the server:
-/// `reason` (stable error code for run_failed/run_errored, cancellation
-/// reason for run_cancelled), `error_message` (user-facing description for
-/// run_failed/run_errored), and `blocked_action` (what a run_blocked run is
-/// waiting on).
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct AgentRunEventDetail {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked_action: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentRunEventKind {
+    InProgress,
+    Succeeded,
+    Failed {
+        reason: Option<String>,
+        error_message: Option<String>,
+    },
+    Errored {
+        reason: Option<String>,
+        error_message: Option<String>,
+    },
+    Blocked {
+        blocked_action: Option<String>,
+    },
+    Cancelled {
+        reason: Option<String>,
+    },
+    NewMessage,
+    ChildAgentStarted,
+    RunSessionLinked,
+    LegacyStarted,
+    LegacyIdle,
+    LegacyRestarted,
+    Unknown,
+}
+
+impl AgentRunEventKind {
+    pub fn lifecycle_type(&self) -> Option<LifecycleEventType> {
+        match self {
+            Self::InProgress | Self::LegacyStarted | Self::LegacyRestarted => {
+                Some(LifecycleEventType::InProgress)
+            }
+            Self::Succeeded | Self::LegacyIdle => Some(LifecycleEventType::Succeeded),
+            Self::Failed { .. } => Some(LifecycleEventType::Failed),
+            Self::Errored { .. } => Some(LifecycleEventType::Errored),
+            Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
+            Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
+            Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
+                None
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct WireEvent {
+            event_type: WireEventType,
+            detail: Option<serde_json::Value>,
+        }
+        #[derive(serde::Deserialize)]
+        enum WireEventType {
+            #[serde(rename = "run_in_progress")]
+            InProgress,
+            #[serde(rename = "run_succeeded")]
+            Succeeded,
+            #[serde(rename = "run_failed")]
+            Failed,
+            #[serde(rename = "run_errored")]
+            Errored,
+            #[serde(rename = "run_blocked")]
+            Blocked,
+            #[serde(rename = "run_cancelled")]
+            Cancelled,
+            #[serde(rename = "new_message")]
+            NewMessage,
+            #[serde(rename = "child_agent_started")]
+            ChildAgentStarted,
+            #[serde(rename = "run_session_linked")]
+            RunSessionLinked,
+            #[serde(rename = "run_started")]
+            LegacyStarted,
+            #[serde(rename = "run_idle")]
+            LegacyIdle,
+            #[serde(rename = "run_restarted")]
+            LegacyRestarted,
+            #[serde(other)]
+            Unknown,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Failure {
+            reason: Option<String>,
+            error_message: Option<String>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Blocked {
+            blocked_action: Option<String>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct Cancelled {
+            reason: Option<String>,
+        }
+        fn detail<T: serde::de::DeserializeOwned + Default, E: serde::de::Error>(
+            value: Option<serde_json::Value>,
+        ) -> Result<T, E> {
+            if value.as_ref().is_some_and(|value| !value.is_object()) {
+                return Err(E::custom("lifecycle detail must be an object"));
+            }
+            value
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(E::custom)
+                .map(Option::unwrap_or_default)
+        }
+
+        let wire = WireEvent::deserialize(deserializer)?;
+        Ok(match wire.event_type {
+            WireEventType::InProgress => Self::InProgress,
+            WireEventType::Succeeded => Self::Succeeded,
+            WireEventType::Failed => {
+                let Failure {
+                    reason,
+                    error_message,
+                } = detail::<Failure, D::Error>(wire.detail)?;
+                Self::Failed {
+                    reason,
+                    error_message,
+                }
+            }
+            WireEventType::Errored => {
+                let Failure {
+                    reason,
+                    error_message,
+                } = detail::<Failure, D::Error>(wire.detail)?;
+                Self::Errored {
+                    reason,
+                    error_message,
+                }
+            }
+            WireEventType::Blocked => {
+                let Blocked { blocked_action } = detail::<Blocked, D::Error>(wire.detail)?;
+                Self::Blocked { blocked_action }
+            }
+            WireEventType::Cancelled => {
+                let Cancelled { reason } = detail::<Cancelled, D::Error>(wire.detail)?;
+                Self::Cancelled { reason }
+            }
+            WireEventType::NewMessage => Self::NewMessage,
+            WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
+            WireEventType::RunSessionLinked => Self::RunSessionLinked,
+            WireEventType::LegacyStarted => Self::LegacyStarted,
+            WireEventType::LegacyIdle => Self::LegacyIdle,
+            WireEventType::LegacyRestarted => Self::LegacyRestarted,
+            WireEventType::Unknown => Self::Unknown,
+        })
+    }
+}
+
+impl serde::Serialize for AgentRunEventKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut detail = serde_json::Map::new();
+        let event_type = match self {
+            Self::InProgress => "run_in_progress",
+            Self::Succeeded => "run_succeeded",
+            Self::Failed {
+                reason,
+                error_message,
+            }
+            | Self::Errored {
+                reason,
+                error_message,
+            } => {
+                if let Some(reason) = reason {
+                    detail.insert("reason".into(), reason.clone().into());
+                }
+                if let Some(message) = error_message {
+                    detail.insert("error_message".into(), message.clone().into());
+                }
+                if matches!(self, Self::Failed { .. }) {
+                    "run_failed"
+                } else {
+                    "run_errored"
+                }
+            }
+            Self::Blocked { blocked_action } => {
+                if let Some(action) = blocked_action {
+                    detail.insert("blocked_action".into(), action.clone().into());
+                }
+                "run_blocked"
+            }
+            Self::Cancelled { reason } => {
+                if let Some(reason) = reason {
+                    detail.insert("reason".into(), reason.clone().into());
+                }
+                "run_cancelled"
+            }
+            Self::NewMessage => "new_message",
+            Self::ChildAgentStarted => "child_agent_started",
+            Self::RunSessionLinked => "run_session_linked",
+            Self::LegacyStarted => "run_started",
+            Self::LegacyIdle => "run_idle",
+            Self::LegacyRestarted => "run_restarted",
+            Self::Unknown => "unknown",
+        };
+        let mut map = serializer.serialize_map(Some(if detail.is_empty() { 1 } else { 2 }))?;
+        map.serialize_entry("event_type", event_type)?;
+        if !detail.is_empty() {
+            map.serialize_entry("detail", &detail)?;
+        }
+        map.end()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -4140,3 +4328,7 @@ impl StoreClient for ServerApi {
 #[cfg(test)]
 #[path = "ai_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_run_event_tests.rs"]
+mod agent_run_event_tests;
