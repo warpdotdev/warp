@@ -1269,11 +1269,10 @@ pub fn token_usage_category_display_name(category: &str) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ModelTokenUsage {
-    /// Identifier used for both display and replay. For warp/byok rows this is the
-    /// server-known model id; for custom endpoint rows this is the resolved alias
-    /// (or fallback label) — the upstream `config_key` is translated into this
-    /// label once at ingestion time and is not retained separately.
+    /// Server model ID, or a readable custom endpoint label for legacy readers.
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_endpoint_config_key: Option<String>,
     /// Alias for backward compat: old persisted data used `total_tokens` for warp usage.
     #[serde(default, alias = "total_tokens")]
     pub warp_tokens: u32,
@@ -1326,10 +1325,14 @@ impl ModelTokenUsage {
         if self.custom_endpoint_tokens == 0 {
             return None;
         }
+        let config_key = self
+            .custom_endpoint_config_key
+            .as_ref()
+            .unwrap_or(&self.model_id);
         Some((
-            self.model_id.clone(),
+            config_key.clone(),
             stream_finished::ModelTokenUsage {
-                model_id: self.model_id.clone(),
+                model_id: config_key.clone(),
                 total_tokens: u64::from(self.custom_endpoint_tokens),
                 token_usage_by_category: self
                     .custom_endpoint_token_usage_by_category
