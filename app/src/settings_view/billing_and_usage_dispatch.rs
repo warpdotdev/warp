@@ -240,32 +240,24 @@ impl SettingsWidget for BillingAndUsageWidget {
         };
         let mut page = Flex::column();
 
-        // The unit choice only means something for a tier charged in cents; credits tiers
-        // always display credits.
-        let offers_unit_choice = match UserWorkspaces::as_ref(app).charge_unit() {
-            ChargeUnit::Cents => true,
-            ChargeUnit::Credits => false,
-        };
-        if offers_unit_choice {
-            page.add_child(
-                Container::new(render_dropdown_item(
-                    appearance,
-                    "Usage display unit",
-                    Some("Select the unit for usage and spend amounts."),
-                    None,
-                    LocalOnlyIconState::for_setting(
-                        UsageDisplayUnit::storage_key(),
-                        UsageDisplayUnit::sync_to_cloud(),
-                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
-                    None,
-                    &view.usage_display_unit_dropdown,
-                ))
-                .with_margin_bottom(24.)
-                .finish(),
-            );
-        }
+        page.add_child(
+            Container::new(render_dropdown_item(
+                appearance,
+                "Usage display unit",
+                Some("Select the unit for usage and spend amounts."),
+                None,
+                LocalOnlyIconState::for_setting(
+                    UsageDisplayUnit::storage_key(),
+                    UsageDisplayUnit::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                None,
+                &view.usage_display_unit_dropdown,
+            ))
+            .with_margin_bottom(24.)
+            .finish(),
+        );
 
         page.with_child(billing_page).finish()
     }
