@@ -11,6 +11,16 @@ Let Warp drive a tmux session through tmux **control mode** (`tmux -CC`) so tmux
 
 Running tmux inside Warp today replaces Warp's UI with tmux's text TUI. Native tabs/splits, command search, and block affordances stop working, and `Ctrl-R` falls through to the shell. Developers who rely on tmux to run and persist multiple CLI agents must choose between Warp's UX and tmux's multiplexing/persistence. Control mode removes that tradeoff: tmux becomes a backend that drives Warp's native UI instead of painting a TUI.
 
+## Why now: agent harnesses multiplex terminals
+
+The multi-agent workflow this unblocks is no longer niche. The coding harnesses developers run in 2026 drive several terminal sessions at once and increasingly assume a multiplexer:
+
+- **Claude Code** ships experimental *agent teams* whose "split panes" mode gives each teammate its own tmux pane and **requires tmux or iTerm2**; its docs name `tmux -CC` in iTerm2 as "the suggested entrypoint into tmux," and it tracks tmux pane IDs and cleans up orphaned sessions on exit ([agent teams docs](https://code.claude.com/docs/en/agent-teams)).
+- **OpenAI Codex** added an agent command center (`codex agents`) that runs and switches between multiple agent sessions from one terminal ([codex releases](https://github.com/openai/codex/releases)).
+- **Orca**, an agent development environment, runs many CLI agents side-by-side, each in its own git worktree and terminal, and already reads `~/.warp/themes` ([onorca.dev](https://www.onorca.dev/docs/terminal)).
+
+Today a developer who wants Warp's UX *and* these tools' multiplexing must either drop to a raw tmux TUI inside Warp or leave Warp for iTerm2 to get native `tmux -CC` panes. Native control mode removes that choice: Warp becomes the native `-CC` host these harnesses already target, keeping tabs/splits, block affordances, command search, and persistence while the agents multiplex underneath.
+
 ## Goals
 
 - tmux windows/panes appear as native Warp tabs/splits, driven live by tmux.
