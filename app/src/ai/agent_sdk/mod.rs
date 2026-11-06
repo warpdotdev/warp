@@ -129,6 +129,7 @@ mod telemetry;
 #[cfg(test)]
 mod test_support;
 mod text_layout;
+mod transport_report;
 
 /// Prints a non-blocking warning to stderr when the CLI is invoked with a team-scoped API key.
 fn maybe_warn_team_api_key(ctx: &AppContext) {
@@ -632,8 +633,10 @@ struct RepositoryContract {
     use_factory_repositories: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_execution_task_and_options(
     args: Option<&RunAgentArgs>,
+    harness_transport: HarnessTransport,
     config: ExecutionConfiguration,
     repository_contract: RepositoryContract,
     working_dir: PathBuf,
@@ -674,9 +677,6 @@ fn build_execution_task_and_options(
         !execution_id.is_empty() && config.execution_id.inner() == execution_id,
         "Execution configuration execution mismatch"
     );
-    let harness_transport = args
-        .and_then(|args| args.harness_transport)
-        .unwrap_or_default();
     let selected_harness = execution_config::harness(&config.harness)?;
     let model = if selected_harness == Harness::Oz {
         config
@@ -712,6 +712,7 @@ fn build_execution_task_and_options(
     }
     let providers = execution_config::providers(config.providers);
     let mut factory_skill_dirs = execution_config::factory_skill_dirs(config.factory_skill_dirs)?;
+    let definition_skill_dirs = factory_skill_dirs.clone();
     merge_skill_dirs(&mut factory_skill_dirs, skill_discovery_dirs);
     let task = Task {
         prompt: AgentRunPrompt::ServerSide {
@@ -726,6 +727,7 @@ fn build_execution_task_and_options(
     let options = AgentDriverOptions {
         working_dir: working_dir.clone(),
         task_id: Some(task_id),
+        execution_id: Some(execution_id.to_owned()),
         use_factory_repositories,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
@@ -749,6 +751,7 @@ fn build_execution_task_and_options(
                 supports_deferred_repositories,
             )?;
             workspace.factory_skill_dirs = Some(factory_skill_dirs);
+            workspace.definition_skill_dirs = Some(definition_skill_dirs);
             workspace
         },
         computer_use_config: (selected_harness == Harness::Oz).then(|| {
@@ -759,6 +762,7 @@ fn build_execution_task_and_options(
         }),
         selected_harness,
         harness_transport,
+        harness_transport_fallback: None,
         third_party_harness_model_config,
         team_scope: None,
         bedrock_oidc_credentials: None,
@@ -990,7 +994,7 @@ impl AgentDriverRunner {
             // For the `--task-id` path, `task_conversation_id` is the `conversation_id` read off
             // the fetched `AmbientAgentTask` (set by the server when linking the task to an
             // existing conversation, e.g. via `run-cloud --conversation`).
-            let (mut driver_options, task, task_conversation_id) =
+            let (mut driver_options, mut task, task_conversation_id) =
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
@@ -1050,6 +1054,18 @@ impl AgentDriverRunner {
                 HarnessKind::Oz | HarnessKind::ThirdParty(_) => {}
             }
 
+            // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
+            // instead. This runs before anything reads the transport: the native prompt
+            // queue, the harness environment, the terminal launch and the resume path.
+            let transport_fallback = driver::harness::apply_transport_fallback(
+                &mut task.harness,
+                &mut driver_options.harness_transport,
+            )?;
+            if let Some(reason) = transport_fallback {
+                Self::note_transport_fallback(&foreground, task.harness.harness(), reason).await;
+            }
+            driver_options.harness_transport_fallback = transport_fallback;
+
             // Validate that the third-party harness is installed and authed.
             if let HarnessKind::ThirdParty(harness) = &task.harness {
                 harness.validate()?;
@@ -1057,6 +1073,23 @@ impl AgentDriverRunner {
 
             if let Some(task_id) = driver_options.task_id {
                 driver::write_run_started(&task_id.to_string(), output_format);
+                // Tell the server which transport the run actually got, so follow-up
+                // attachments and session links agree with it. The report is retried in the
+                // background, so setup does not wait on the server. A harness whose transport
+                // is fixed (Pi) is skipped: the server rejects a report for it.
+                if task.harness.reports_transport() {
+                    let transport = driver_options.harness_transport;
+                    foreground
+                        .spawn(move |_, ctx| {
+                            transport_report::report_transport_in_background(
+                                &ctx.background_executor(),
+                                ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                                transport,
+                                transport_fallback.map(driver::harness::TransportFallbackReason::as_str),
+                            );
+                        })
+                        .await?;
+                }
             }
 
             // Pull conversation information, if we have it
@@ -1459,6 +1492,7 @@ impl AgentDriverRunner {
                 .spawn(move |_, ctx| {
                     build_execution_task_and_options(
                         Some(&args),
+                        args.harness_transport.unwrap_or_default(),
                         config,
                         repository_contract,
                         working_dir,
@@ -1488,14 +1522,9 @@ impl AgentDriverRunner {
                 )
                 .await?;
             if FeatureFlag::OzIdentityFederation.is_enabled() {
-                options.cloud_providers = driver::cloud_provider::load_providers(
-                    &providers,
-                    &options
-                        .task_id
-                        .ok_or(AgentDriverError::InvalidRuntimeState)?
-                        .to_string(),
-                )
-                .map_err(AgentDriverError::CloudProviderSetupFailed)?;
+                options.cloud_providers =
+                    driver::cloud_provider::load_providers(&providers, Some(&task_id.to_string()))
+                        .map_err(AgentDriverError::CloudProviderSetupFailed)?;
             }
             return Ok((options, task, conversation_id));
         }
@@ -1538,6 +1567,7 @@ impl AgentDriverRunner {
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
+                    execution_id: args.execution_id.clone(),
                     use_factory_repositories,
                     experimental: None,
                     parent_run_id: None,
@@ -1552,6 +1582,7 @@ impl AgentDriverRunner {
                     computer_use_config: None,
                     selected_harness: args.harness,
                     harness_transport: args.harness_transport.unwrap_or_default(),
+                    harness_transport_fallback: None,
                     third_party_harness_model_config,
                     team_scope: None,
                     bedrock_oidc_credentials: None,
@@ -1980,6 +2011,28 @@ impl AgentDriverRunner {
         Ok((task_conversation_id, additional_source_repos))
     }
 
+    /// Logs and records in telemetry that a run requested over ACP is driven over a PTY.
+    async fn note_transport_fallback(
+        foreground: &ModelSpawner<Self>,
+        harness: Harness,
+        reason: driver::harness::TransportFallbackReason,
+    ) {
+        log::info!(
+            "No ACP adapter for the {harness} harness in this sandbox ({reason}); driving it over a PTY"
+        );
+        let harness_name = harness.to_string();
+        let _ = foreground
+            .spawn(move |_, ctx| {
+                use warp_core::telemetry::TelemetryEvent as _;
+                let event = driver::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
+                    harness: harness_name,
+                    reason: reason.as_str(),
+                };
+                crate::send_telemetry_from_app_ctx!(event, ctx);
+            })
+            .await;
+    }
+
     /// If we are starting this agent run from an existing conversation, load the conversation
     /// data from the server and return the harness-specific [`ResumeOptions`] payload that the
     /// caller plugs onto [`AgentDriverOptions::resume`].
@@ -1994,8 +2047,8 @@ impl AgentDriverRunner {
     /// [`driver::ResumeOptions::ThirdParty`]; each harness owns its server call and error
     /// mapping. Returns `None` if a third-party harness has no resume payload to surface.
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
-    async fn load_conversation_information(
-        foreground: &ModelSpawner<Self>,
+    async fn load_conversation_information<E: Entity>(
+        foreground: &ModelSpawner<E>,
         conversation_id: String,
         harness: &HarnessKind,
     ) -> Result<Option<driver::ResumeOptions>, AgentDriverError> {
@@ -2091,12 +2144,9 @@ impl AgentDriverRunner {
             .await??;
 
         if FeatureFlag::OzIdentityFederation.is_enabled() {
-            let run_id = driver_options
-                .task_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "local".to_string());
+            let run_id = driver_options.task_id.map(|id| id.to_string());
             driver_options.cloud_providers =
-                driver::cloud_provider::load_providers(&environment.providers, &run_id)
+                driver::cloud_provider::load_providers(&environment.providers, run_id.as_deref())
                     .map_err(AgentDriverError::CloudProviderSetupFailed)?;
         }
 

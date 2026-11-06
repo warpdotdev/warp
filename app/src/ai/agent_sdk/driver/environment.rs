@@ -48,6 +48,9 @@ const CLONE_FAILURE_OUTPUT_TRUNCATION_MARKER: &str = "\n… clone output truncat
 const SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER: &str = "\n… setup command output truncated …\n";
 const SETUP_COMMAND_TIMEOUT: Duration = Duration::from_mins(30);
 const SETUP_COMMAND_CWD_RESET_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECKOUT_HELPER_TIMEOUT: Duration = Duration::from_mins(30);
+/// Skill sources are optional, so a run waits much less for them.
+const SKILL_SOURCE_CHECKOUT_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Clone, Copy, Debug)]
 pub enum SetupCommandPhase {
@@ -129,6 +132,8 @@ pub enum PrepareEnvironmentError {
     UnsupportedRepositoryForge { repo_name: String },
     #[error("Environment checkout helper failed: {reason}")]
     CheckoutHelper { reason: &'static str },
+    #[error("Environment checkout helper timed out after {timeout_seconds}s")]
+    CheckoutHelperTimedOut { timeout_seconds: u64 },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -246,6 +251,9 @@ pub(crate) struct WorkspaceConfiguration {
     pub setup_commands: Vec<String>,
     /// Overrides `WARP_SKILL_DIRS` when present, including an empty list.
     pub factory_skill_dirs: Option<Vec<PathBuf>>,
+    /// The server-provided Factory definition folders within `factory_skill_dirs`, before
+    /// configured-skill folders are merged in. Only these are scanned for skill reference files.
+    pub definition_skill_dirs: Option<Vec<PathBuf>>,
     /// Retains an explicitly selected environment even when it has no repositories or commands.
     pub has_environment: bool,
     pub(super) preparation_policy: Option<PreparationPolicy>,
@@ -342,6 +350,7 @@ impl WorkspaceConfiguration {
             deferred_repos: Vec::new(),
             setup_commands,
             factory_skill_dirs: None,
+            definition_skill_dirs: None,
             has_environment: environment.is_some(),
             clone_requests,
             preparation_policy: None,
@@ -364,6 +373,7 @@ impl WorkspaceConfiguration {
             deferred_repos,
             setup_commands,
             factory_skill_dirs: None,
+            definition_skill_dirs: None,
             has_environment: false,
             clone_requests,
             preparation_policy: None,
@@ -451,6 +461,7 @@ pub(crate) fn prepare_environment(
             source_repos,
             setup_commands,
             factory_skill_dirs: _,
+            definition_skill_dirs: _,
             clone_requests,
             has_environment: _,
             deferred_repos: _,
@@ -1022,9 +1033,12 @@ async fn remove_repository_origins_from_repos(
         .cloned()
         .collect::<Vec<_>>();
     let batch = checkout_requests_batch(&selected, working_dir)?;
-    let result = execute_checkout_helper(&batch, true, spawner)
+    let result = execute_checkout_helper(&batch, true, false, spawner)
         .await
-        .map_err(|_| PrepareEnvironmentError::RemoveRepositoryOrigins)?;
+        .map_err(|error| match error {
+            error @ PrepareEnvironmentError::CheckoutHelperTimedOut { .. } => error,
+            _ => PrepareEnvironmentError::RemoveRepositoryOrigins,
+        })?;
     if result.command_result.exit_code == 0.into() {
         Ok(())
     } else {
@@ -1054,6 +1068,7 @@ fn build_checkout_helper_command(
     requests_file: &Path,
     report_file: &Path,
     remove_origins_only: bool,
+    legacy_preparation: bool,
     shell_type: ShellType,
 ) -> String {
     let quote = |path: &Path| {
@@ -1072,8 +1087,13 @@ fn build_checkout_helper_command(
     } else {
         ""
     };
+    let preparation = if legacy_preparation {
+        " --legacy-preparation"
+    } else {
+        ""
+    };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}",
+        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}{preparation}",
         quote(executable),
         quote(requests_file),
         quote(report_file)
@@ -1204,6 +1224,18 @@ struct CheckoutHelperResult {
     report: Option<CheckoutReport>,
 }
 
+async fn await_checkout_helper<T>(
+    operation: impl Future<Output = Result<T, PrepareEnvironmentError>>,
+    deadline: impl Future,
+) -> Result<T, PrepareEnvironmentError> {
+    match select(Box::pin(operation), Box::pin(deadline)).await {
+        Either::Left((result, _)) => result,
+        Either::Right((_, _)) => Err(PrepareEnvironmentError::CheckoutHelperTimedOut {
+            timeout_seconds: CHECKOUT_HELPER_TIMEOUT.as_secs(),
+        }),
+    }
+}
+
 #[tracing::instrument(skip_all, err, fields(
     tags.cloud_agent = true,
     remove_origins_only = remove_origins_only,
@@ -1211,6 +1243,7 @@ struct CheckoutHelperResult {
 async fn execute_checkout_helper(
     batch: &CheckoutBatch,
     remove_origins_only: bool,
+    legacy_preparation: bool,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<CheckoutHelperResult, PrepareEnvironmentError> {
     #[cfg(unix)]
@@ -1244,9 +1277,14 @@ async fn execute_checkout_helper(
         &requests_file,
         &report_file,
         remove_origins_only,
+        legacy_preparation,
         active_shell_type(spawner).await,
     );
-    let result = execute_command(command, spawner).await;
+    let result = await_checkout_helper(
+        execute_command(command, spawner),
+        Timer::after(CHECKOUT_HELPER_TIMEOUT),
+    )
+    .await;
     let _ = std::fs::remove_file(&requests_file);
     let command_result = result?;
     let report = read_checkout_report(&report_file, batch.repositories.len());
@@ -1257,6 +1295,45 @@ async fn execute_checkout_helper(
         command_result,
         report,
     })
+}
+
+/// Runs `batch` through the checkout helper, returning its report, or `None` when the helper
+/// produced none. Per-request failures are left in the report. A helper still running at the
+/// deadline is interrupted, so the session is free for the run.
+pub(super) fn checkout_skill_sources(
+    batch: CheckoutBatch,
+    ctx: &mut ModelContext<TerminalDriver>,
+) -> impl Future<Output = Option<CheckoutReport>> + use<> {
+    let spawner = ctx.spawner();
+    // The execution preparation policy covers only the run's own repositories, so skill sources
+    // check out under legacy preparation instead. Credentials are unchanged.
+    let legacy_preparation = true;
+    async move {
+        let checkout = Box::pin(execute_checkout_helper(
+            &batch,
+            false,
+            legacy_preparation,
+            &spawner,
+        ));
+        let deadline = Box::pin(Timer::after(SKILL_SOURCE_CHECKOUT_TIMEOUT));
+        let result = match select(checkout, deadline).await {
+            Either::Left((result, _)) => result,
+            Either::Right((_, checkout)) => {
+                log::warn!("Skill source checkout timed out; interrupting it");
+                let _ = spawner
+                    .spawn(|driver, ctx| driver.send_interrupt_to_pty(ctx))
+                    .await;
+                checkout.await
+            }
+        };
+        match result {
+            Ok(result) => result.report,
+            Err(error) => {
+                log::warn!("Skill source checkout did not run: {error}");
+                None
+            }
+        }
+    }
 }
 
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
@@ -1272,7 +1349,7 @@ async fn clone_checkout_requests(
     let CheckoutHelperResult {
         command_result,
         mut report,
-    } = execute_checkout_helper(&batch, false, spawner).await?;
+    } = execute_checkout_helper(&batch, false, false, spawner).await?;
     let identity_diagnostics = report
         .as_mut()
         .and_then(|report| report.identity_diagnostics.take())

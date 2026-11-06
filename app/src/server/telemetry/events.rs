@@ -1147,6 +1147,7 @@ pub enum LoginEventSource {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TelemetryQueuedQueryOrigin {
+    LocalSteering,
     InitialCloudMode,
     SharedSessionInjection,
     QueueSlashCommand,
@@ -1160,6 +1161,7 @@ pub enum TelemetryQueuedQueryOrigin {
 impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
     fn from(origin: QueuedQueryOrigin) -> Self {
         match origin {
+            QueuedQueryOrigin::LocalSteering => Self::LocalSteering,
             QueuedQueryOrigin::InitialCloudMode => Self::InitialCloudMode,
             QueuedQueryOrigin::SharedSessionInjection => Self::SharedSessionInjection,
             QueuedQueryOrigin::QueueSlashCommand => Self::QueueSlashCommand,

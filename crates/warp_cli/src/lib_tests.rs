@@ -640,6 +640,41 @@ fn issue_token_args(args: Args) -> crate::federate::IssueTokenArgs {
 
 #[test]
 #[serial_test::serial]
+fn federate_gcp_token_resolves_run_identity_per_invocation() {
+    let previous = std::env::var_os(OZ_RUN_ID_ENV);
+    restore_env_var(OZ_RUN_ID_ENV, None);
+    let argv = [
+        "warp",
+        "federate",
+        "issue-gcp-token",
+        "--audience",
+        "example.com",
+        "--token-type",
+        "jwt",
+    ];
+    let standby = Args::try_parse_from(argv);
+    set_env_var(OZ_RUN_ID_ENV, "run-from-env");
+    let inherited = Args::try_parse_from(argv);
+    let explicit = Args::try_parse_from(argv.into_iter().chain(["--run-id", "run-from-flag"]));
+    restore_env_var(OZ_RUN_ID_ENV, previous);
+
+    for (parsed, expected) in [
+        (standby, None),
+        (inherited, Some("run-from-env")),
+        (explicit, Some("run-from-flag")),
+    ] {
+        let Some(Command::CommandLine(command)) = parsed.unwrap().command else {
+            panic!("expected a CLI command");
+        };
+        let CliCommand::Federate(FederateCommand::IssueGcpToken(args)) = *command else {
+            panic!("expected a GCP token command");
+        };
+        assert_eq!(args.run_id.as_deref(), expected);
+    }
+}
+
+#[test]
+#[serial_test::serial]
 fn federate_issue_token_reads_run_id_from_env() {
     let previous = set_env_var(OZ_RUN_ID_ENV, "run-from-env");
 
@@ -3474,6 +3509,47 @@ fn agent_run_cloud_standby_parses_standby_id() {
 #[test]
 fn agent_run_cloud_standby_requires_standby_id() {
     assert!(Args::try_parse_from(["warp", "agent", "run-cloud-standby"]).is_err());
+}
+
+#[test]
+#[serial_test::serial]
+fn agent_run_cloud_standby_control_url_uses_env_and_flag_precedence() {
+    let previous = set_env_var(
+        PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV,
+        "https://platform.warp.dev",
+    );
+    for (extra_args, expected) in [
+        (vec![], "https://platform.warp.dev"),
+        (
+            vec!["--prewarmed-sandbox-control-url", "http://localhost:8082"],
+            "http://localhost:8082",
+        ),
+    ] {
+        let args = Args::try_parse_from(
+            [
+                "warp",
+                "agent",
+                "run-cloud-standby",
+                "--standby-id",
+                "sandbox",
+            ]
+            .into_iter()
+            .chain(extra_args),
+        )
+        .unwrap();
+        let Some(Command::CommandLine(command)) = args.command else {
+            panic!("expected a CLI command");
+        };
+        let CliCommand::Agent(AgentCommand::RunCloudStandby(standby_args)) = command.as_ref()
+        else {
+            panic!("expected run-cloud-standby");
+        };
+        assert_eq!(
+            standby_args.prewarmed_sandbox_control_url.as_deref(),
+            Some(expected)
+        );
+    }
+    restore_env_var(PREWARMED_SANDBOX_CONTROL_URL_OVERRIDE_ENV, previous);
 }
 
 /// The Namespace worker launches the standby with `--server-root-url`, which the subcommand

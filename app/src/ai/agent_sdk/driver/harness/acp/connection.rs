@@ -96,12 +96,23 @@ struct InboundRequestEntry {
     handler: AbortHandle,
 }
 
-type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<Result<Value>>>>>;
+type PendingRequests = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<(Arrival, Result<Value>)>>>>;
 type InboundRequests = Arc<Mutex<HashMap<InboundRequestId, InboundRequestEntry>>>;
 type BoxedWriter = Pin<Box<dyn AsyncWrite + Send>>;
 /// `None` once the connection has been closed; dropping the writer is what signals EOF to the
 /// agent.
 type SharedWriter = Arc<AsyncMutex<Option<BufWriter<BoxedWriter>>>>;
+
+/// Where a response stood among the messages the agent wrote: of two answers, the one with the
+/// lower arrival was written first. Their futures resolve in no particular order, so this is
+/// what a caller compares when the order matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Arrival(u64);
+
+impl Arrival {
+    /// A request that never reached the agent; later than any answer.
+    pub(super) const NEVER: Self = Self(u64::MAX);
+}
 
 pub(super) struct AcpConnection {
     writer: SharedWriter,
@@ -158,11 +169,31 @@ impl AcpConnection {
     /// must keep draining notifications while the request is in flight (a `session/prompt`
     /// whose `session/update`s stream before the response) races this future against the
     /// notification receiver rather than awaiting it alone.
-    pub(super) async fn request<P: Serialize, R: DeserializeOwned>(
+    pub(super) async fn request<P: Serialize, R: DeserializeOwned + 'static>(
         &self,
         method: &str,
         params: P,
     ) -> Result<R> {
+        self.send_request(method, params).await?.await
+    }
+
+    /// Flushes a request and returns a future for its response, deserialized as `R`.
+    pub(super) async fn send_request<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<BoxFuture<'static, Result<R>>> {
+        let response = self.send_sequenced_request(method, params).await?;
+        Ok(Box::pin(async move { response.await.1 }))
+    }
+
+    /// Like [`Self::send_request`], with the response's [`Arrival`] alongside it. A request
+    /// the agent never answers (it closed its side first) is marked as arriving with the close.
+    pub(super) async fn send_sequenced_request<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<BoxFuture<'static, (Arrival, Result<R>)>> {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
@@ -176,11 +207,23 @@ impl AcpConnection {
             self.pending.lock().await.remove(&id);
             return Err(error.context(format!("Failed to send ACP request {method}")));
         }
-        let value = rx
-            .await
-            .map_err(|_| anyhow!("ACP agent closed before responding to {method}"))??;
-        serde_json::from_value(value)
-            .with_context(|| format!("Failed to parse ACP response to {method}"))
+        let method = method.to_owned();
+        Ok(Box::pin(async move {
+            let (arrival, value) = match rx.await {
+                Ok(answer) => answer,
+                Err(_) => {
+                    return (
+                        Arrival::NEVER,
+                        Err(anyhow!("ACP agent closed before responding to {method}")),
+                    );
+                }
+            };
+            let response = value.and_then(|value| {
+                serde_json::from_value(value)
+                    .with_context(|| format!("Failed to parse ACP response to {method}"))
+            });
+            (arrival, response)
+        }))
     }
 
     pub(super) async fn notify<P: Serialize>(&self, method: &str, params: P) -> Result<()> {
@@ -365,6 +408,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     handler: AgentRequestHandler,
 ) {
     let mut line = String::new();
+    let mut arrivals = 0;
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -386,6 +430,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 continue;
             }
         };
+        arrivals += 1;
         let id = message.get("id").filter(|id| !id.is_null()).cloned();
         let method = message
             .get("method")
@@ -413,7 +458,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     (None, None) => Ok(Value::Null),
                 };
                 if let Some(tx) = pending.lock().await.remove(&id) {
-                    let _ = tx.send(result);
+                    let _ = tx.send((Arrival(arrivals), result));
                 }
             }
             (None, Some(method)) => {
@@ -428,8 +473,14 @@ async fn read_loop<R: AsyncRead + Unpin>(
             (None, None) => log::warn!("Ignoring ACP message with neither id nor method"),
         }
     }
+    // Closed before pending requests fail, so a caller that sees a request fail on EOF also
+    // sees the notification stream closed.
+    notifications.close();
     for (_, tx) in pending.lock().await.drain() {
-        let _ = tx.send(Err(anyhow!("ACP agent closed its stdout")));
+        let _ = tx.send((
+            Arrival(arrivals),
+            Err(anyhow!("ACP agent closed its stdout")),
+        ));
     }
     // Nothing is listening for answers any more; let the handlers stop where they are.
     for (_, entry) in inbound.lock().drain() {
@@ -439,4 +490,4 @@ async fn read_loop<R: AsyncRead + Unpin>(
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]
-mod tests;
+pub(super) mod tests;

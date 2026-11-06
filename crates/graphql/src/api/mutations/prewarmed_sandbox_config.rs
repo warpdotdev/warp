@@ -1,5 +1,7 @@
 use crate::error::UserFacingError;
-use crate::queries::execution_config::{ExecutionRepository, SourceRepo};
+use crate::queries::execution_config::{
+    CloudProviderClientConfigs, ExecutionRepository, SourceRepo,
+};
 use crate::queries::task_git_credentials::TaskGitCredential;
 use crate::queries::task_secrets::TaskSecretEntry;
 use crate::request_context::RequestContext;
@@ -60,6 +62,7 @@ pub struct PrewarmedSandboxSpec {
     pub skills: Vec<String>,
     pub factory_skill_dirs: Vec<String>,
     pub computer_use_enabled: bool,
+    pub providers: Option<CloudProviderClientConfigs>,
 }
 
 #[derive(cynic::QueryFragment)]

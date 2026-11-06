@@ -7,6 +7,8 @@ use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::{RepositoryForge, RepositoryHeadRef, RepositoryIdentity};
 
+pub(super) const MAX_CHECKOUT_REQUESTS: usize = 128;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutBatch {
@@ -173,7 +175,7 @@ impl CheckoutBatch {
         if !self.working_dir.is_absolute() {
             return Err("checkout working directory must be absolute");
         }
-        if self.repositories.len() > 128 {
+        if self.repositories.len() > MAX_CHECKOUT_REQUESTS {
             return Err("checkout batch exceeds repository limit");
         }
         let mut targets = HashSet::new();

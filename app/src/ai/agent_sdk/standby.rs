@@ -19,6 +19,7 @@ use futures::stream::BoxStream;
 use futures::{FutureExt as _, Sink, SinkExt as _, StreamExt as _, sink, stream};
 use warp_cli::agent::{Harness, RunCloudStandbyArgs};
 use warp_cli::skill::SkillSpec;
+use warp_core::features::FeatureFlag;
 use warp_core::{safe_info, safe_warn};
 use warp_graphql::queries::execution_config::ExecutionConfiguration;
 use warpui::r#async::Timer;
@@ -31,7 +32,7 @@ use crate::ai::agent_sdk::driver::agent_setup::configured_skills::{
 use crate::ai::agent_sdk::driver::agent_setup::resolve_global_skills;
 use crate::ai::agent_sdk::driver::environment::{WorkspaceConfiguration, merge_repos_deduped};
 use crate::ai::agent_sdk::driver::{
-    AgentDriver, AgentDriverError, AgentDriverOptions, Task, git_credentials,
+    AgentDriver, AgentDriverError, AgentDriverOptions, Task, cloud_provider, git_credentials,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::agent_sdk::{AgentDriverRunner, config_file, execution_config, mcp_config};
@@ -483,7 +484,7 @@ fn wait_window(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
         .saturating_sub(EXPIRY_MARGIN)
 }
 
-/// Prepares an Oz sandbox through the shared driver without a prompt or run-only setup.
+/// Prepares a sandbox through the shared driver without a prompt or run-only setup.
 async fn prepare(
     foreground: &ModelSpawner<AgentDriverRunner>,
     config: PrewarmedSandboxConfiguration,
@@ -491,10 +492,9 @@ async fn prepare(
 ) -> Result<ModelSpawner<AgentDriver>, AgentDriverError> {
     let preparation = config.preparation;
     let harness = Harness::from_config_name(&preparation.harness)
-        .filter(|harness| *harness == Harness::Oz)
         .with_context(|| {
             format!(
-                "Pre-warmed sandboxes support only the Oz harness, not '{}'",
+                "Unknown pre-warmed sandbox harness '{}'",
                 preparation.harness,
             )
         })
@@ -587,14 +587,23 @@ async fn prepare(
 
     let (_, discovery_dirs) =
         resolve_configured_skills(foreground, skills, true, &working_dir, setup_events).await?;
+    workspace.definition_skill_dirs = Some(skill_dirs.clone());
     merge_skill_dirs(&mut skill_dirs, discovery_dirs);
     workspace.factory_skill_dirs = Some(skill_dirs);
+    let cloud_providers = if FeatureFlag::OzIdentityFederation.is_enabled() {
+        cloud_provider::load_providers(&execution_config::providers(preparation.providers), None)
+            .map_err(AgentDriverError::CloudProviderSetupFailed)?
+    } else {
+        Vec::new()
+    };
     let options = AgentDriverOptions {
         working_dir,
         secrets,
         environment_variables: config.environment_variables,
         workspace,
-        computer_use_config: Some((preparation.computer_use_enabled, None)),
+        cloud_providers,
+        computer_use_config: (harness == Harness::Oz)
+            .then_some((preparation.computer_use_enabled, None)),
         selected_harness: harness,
         ..Default::default()
     };
@@ -604,7 +613,14 @@ async fn prepare(
             Ok::<_, AgentDriverError>(driver.update(ctx, |_, ctx| ctx.spawner()))
         })
         .await??;
-    AgentDriver::prepare_resources(&driver_spawner, mcp_specs, global_skills, setup_events).await?;
+    AgentDriver::prepare_resources(
+        &driver_spawner,
+        harness,
+        mcp_specs,
+        global_skills,
+        setup_events,
+    )
+    .await?;
     Ok(driver_spawner)
 }
 

@@ -38,7 +38,7 @@ pub struct GcpFederationConfig {
 /// Handle for GCP Workload Identity Federation credentials.
 ///
 /// The handle represents a GCP authentication config file that uses Workload
-/// Identity Federation to authenticate to GCP as a particular Oz agent run.
+/// Identity Federation to authenticate to GCP with the invoking process's Oz identity.
 ///
 /// When the handle is dropped, the backing temporary files are deleted.
 pub struct GcpCredentials {
@@ -49,15 +49,12 @@ pub struct GcpCredentials {
 }
 
 impl GcpCredentials {
-    /// Create executable-sourced GCP federation credentials for the given task.
+    /// Create executable-sourced GCP federation credentials.
     ///
     /// This writes an [AIP-4117](https://google.aip.dev/auth/4117)
     /// `external_account` config to a temporary file and returns the
     /// environment variables required for ADC to discover it.
-    pub fn federated(
-        task_id: &str,
-        config: &GcpFederationConfig,
-    ) -> Result<Self, PrepareGcpCredentialsError> {
+    pub fn federated(config: &GcpFederationConfig) -> Result<Self, PrepareGcpCredentialsError> {
         safe_debug!(
             safe: ("Configuring GCP workload identity federation"),
             full: ("Configuring GCP workload identity federation for project={}, pool={}, provider={}", config.project_number, config.pool_id, config.provider_id)
@@ -71,7 +68,7 @@ impl GcpCredentials {
             .map_err(|source| PrepareGcpCredentialsError::FileCreate { source })?;
 
         let cred_config_json =
-            generate_gcp_credential_config(task_id, config, &oz_binary_path, output_file.path())?;
+            generate_gcp_credential_config(config, &oz_binary_path, output_file.path())?;
         safe_debug!(
             safe: ("Generated federated GCP configuration"),
             full: ("Generated federated GCP configuration: {cred_config_json:#}")
@@ -142,8 +139,6 @@ pub enum PrepareGcpCredentialsError {
     NoBinaryPath,
     #[error("Cannot use executable {} for GCP executable-sourced credentials", path.display())]
     InvalidBinaryPath { path: PathBuf },
-    #[error("Cannot use run {task_id} for GCP executable-sourced credentials")]
-    InvalidTaskId { task_id: String },
     #[error("Failed to create credential config file: {source}")]
     FileCreate {
         #[source]
@@ -220,7 +215,6 @@ pub(crate) fn gcp_workload_identity_federation_audience(
 ///
 /// `oz_binary_path` should be the absolute path to the current `oz` executable.
 fn generate_gcp_credential_config(
-    task_id: &str,
     config: &GcpFederationConfig,
     oz_binary_path: &Path,
     output_file: &Path,
@@ -232,22 +226,14 @@ fn generate_gcp_credential_config(
     );
 
     let oz_binary_display = oz_binary_path.display().to_string();
-    // The executable command is embedded as a single string in the credential
-    // config. GCP SDKs split it with `strings.Fields` (Go) or `shlex.split`
-    // (Python), so whitespace in either the binary path or the task ID would
-    // cause the command to be misparsed.
+    // GCP SDKs split the executable command with `strings.Fields` (Go) or `shlex.split` (Python),
+    // so whitespace in the binary path would cause the command to be misparsed.
     if oz_binary_display.contains(' ') {
         return Err(PrepareGcpCredentialsError::InvalidBinaryPath {
             path: oz_binary_path.to_path_buf(),
         });
     }
-    if task_id.contains(' ') {
-        return Err(PrepareGcpCredentialsError::InvalidTaskId {
-            task_id: task_id.to_owned(),
-        });
-    }
-
-    let mut command = format!("{oz_binary_display} federate issue-gcp-token --run-id {task_id}");
+    let mut command = format!("{oz_binary_display} federate issue-gcp-token");
     if let Some(lifetime) = config.token_lifetime {
         command.push_str(&format!(" --duration {}s", lifetime.as_secs()));
     }

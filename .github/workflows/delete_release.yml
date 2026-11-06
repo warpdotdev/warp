@@ -26,6 +26,8 @@ jobs:
   delete_release:
     name: Delete Release Branch
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # `git push` renames the release branch to deleted/<branch> and deletes the original
     steps:
       - name: Verify confirmation
         run: |

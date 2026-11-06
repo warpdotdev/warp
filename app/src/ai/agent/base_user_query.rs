@@ -17,13 +17,13 @@
 
 use std::fmt;
 
-#[cfg(any(test, feature = "local_tty"))]
+#[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use base64::Engine as _;
-#[cfg(any(test, feature = "local_tty"))]
+#[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use prost::Message as _;
 #[cfg(any(test, feature = "local_tty"))]
 use session_sharing_protocol::common::ProfileData;
-#[cfg(any(test, feature = "local_tty"))]
+#[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warp_multi_agent_api::AgentType;
@@ -37,20 +37,20 @@ use super::{UserQueryMode, extract_user_query_mode};
 pub struct BaseUserQuery(Box<api::request::input::UserQuery>);
 
 impl BaseUserQuery {
-    /// Decodes the standard-Base64 protobuf carried on `AgentPromptRequest::user_query_b64`.
+    /// Decodes the standard-Base64 protobuf warp-server sends as `user_query_b64` (on
+    /// `AgentPromptRequest` and the harness-support resolved prompt).
     ///
     /// Returns `None` (after reporting the failure) when the payload is not valid Base64 or not
     /// a valid `Request.Input.UserQuery`; a partially decoded query is never returned. A payload
     /// that does not decode means warp-server and this client disagree on the encoding, which
     /// is a bug on one side, so it is reported rather than only logged.
-    #[cfg(any(test, feature = "local_tty"))]
+    #[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
     pub(crate) fn decode_b64(encoded: &str) -> Option<Self> {
         let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
             Ok(bytes) => bytes,
             Err(err) => {
                 report_error!(
-                    anyhow::Error::new(err)
-                        .context("Ignoring shared-session user query: payload is not base64")
+                    anyhow::Error::new(err).context("Ignoring user query: payload is not base64")
                 );
                 return None;
             }
@@ -60,7 +60,7 @@ impl BaseUserQuery {
             Err(err) => {
                 report_error!(
                     anyhow::Error::new(err)
-                        .context("Ignoring shared-session user query: payload is not a UserQuery")
+                        .context("Ignoring user query: payload is not a UserQuery")
                 );
                 None
             }

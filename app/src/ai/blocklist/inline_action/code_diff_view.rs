@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ai::diff_validation::{
     DiffDelta, DiffType, ParsedDiff, SearchAndReplace, V4AHunk, fuzzy_match_diffs,
-    fuzzy_match_v4a_diffs, parse_line_numbers,
+    fuzzy_match_v4a_preview, parse_line_numbers,
 };
 use anyhow::Result;
 use futures::FutureExt;
@@ -2817,7 +2817,13 @@ pub fn convert_file_edits_to_file_diffs(
                                 }
 
                                 // Store the search content with its line range for later use
-                                search_blocks_with_ranges.push((line_range, search_content));
+                                search_blocks_with_ranges.push((
+                                    line_range,
+                                    search_content
+                                        .lines()
+                                        .map(str::to_owned)
+                                        .collect::<Vec<_>>(),
+                                ));
 
                                 search_and_replace_diffs.push(search_replace);
                             }
@@ -2833,26 +2839,14 @@ pub fn convert_file_edits_to_file_diffs(
 
                             // Build dummy content from V4A hunks using pre_context + old + post_context
                             for hunk in hunks {
-                                let mut hunk_content = String::new();
-                                if !hunk.pre_context.is_empty() {
-                                    hunk_content.push_str(&hunk.pre_context);
-                                    if !hunk_content.ends_with('\n') {
-                                        hunk_content.push('\n');
-                                    }
-                                }
-                                if !hunk.old.is_empty() {
-                                    hunk_content.push_str(&hunk.old);
-                                    if !hunk_content.ends_with('\n') {
-                                        hunk_content.push('\n');
-                                    }
-                                }
-                                if !hunk.post_context.is_empty() {
-                                    hunk_content.push_str(&hunk.post_context);
-                                }
+                                let hunk_lines = hunk.original_lines();
                                 // We don't have line numbers for V4A hunks in restored state,
                                 // so use None for the range
-                                if !hunk_content.is_empty() {
-                                    search_blocks_with_ranges.push((None, hunk_content));
+                                if !hunk_lines.is_empty() {
+                                    search_blocks_with_ranges.push((
+                                        None,
+                                        hunk_lines.into_iter().map(str::to_owned).collect(),
+                                    ));
                                 }
                             }
                         }
@@ -2875,13 +2869,12 @@ pub fn convert_file_edits_to_file_diffs(
             }
 
             // Create dummy file content with proper line numbering
-            let mut dummy_content = if max_line_number > 0 || !search_blocks_with_ranges.is_empty()
-            {
+            let dummy_lines = if max_line_number > 0 || !search_blocks_with_ranges.is_empty() {
                 search_blocks_with_ranges.sort_unstable_by_key(|(range, _)| {
                     range.as_ref().map(|r| r.start).unwrap_or(0)
                 });
 
-                let mut dummy_content = String::new();
+                let mut dummy_lines = Vec::new();
 
                 // If the first change is not at the start of the file, prepend an ellipsis
                 let first_start = search_blocks_with_ranges
@@ -2889,25 +2882,24 @@ pub fn convert_file_edits_to_file_diffs(
                     .filter_map(|(r, _)| r.as_ref().map(|r| r.start))
                     .min();
                 if first_start.is_some_and(|s| s > 1) {
-                    dummy_content.push_str("...\n");
+                    dummy_lines.push("...");
                 }
 
-                for (index, (_, search_content)) in search_blocks_with_ranges.iter().enumerate() {
+                for (index, (_, search_lines)) in search_blocks_with_ranges.iter().enumerate() {
                     if index > 0 {
                         // add "..." between each edit to indicate the separation
-                        dummy_content.push_str("...\n");
+                        dummy_lines.push("...");
                     }
-                    for search_line in search_content.lines() {
-                        dummy_content.push_str(search_line);
-                        dummy_content.push('\n');
-                    }
+                    dummy_lines.extend(search_lines.iter().map(String::as_str));
                 }
 
-                dummy_content
+                dummy_lines
             } else {
                 // No line numbers found, create minimal dummy content
-                String::new()
+                Vec::new()
             };
+            let mut dummy_content: String =
+                dummy_lines.iter().map(|line| format!("{line}\n")).collect();
 
             // For file deletions/moves we may not have any other context to show. Provide a minimal stub.
             if show_as_deleted && dummy_content.is_empty() {
@@ -2931,15 +2923,8 @@ pub fn convert_file_edits_to_file_diffs(
                 }
             }
 
-            // Handle V4A hunks using fuzzy_match_v4a_diffs
             if !v4a_hunks.is_empty() && !show_as_deleted {
-                let v4a_match_result =
-                    fuzzy_match_v4a_diffs(&path, &v4a_hunks, v4a_move_to.clone(), &dummy_content);
-                if let ai::diff_validation::DiffType::Update { deltas, .. } =
-                    v4a_match_result.diff_type
-                {
-                    applied_diffs.extend(deltas);
-                }
+                applied_diffs.extend(fuzzy_match_v4a_preview(&v4a_hunks, &dummy_lines));
             }
 
             // Add create diffs directly
@@ -3141,3 +3126,6 @@ fn file_context_range_to_editor_range(range: Range<usize>) -> Range<usize> {
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "code_diff_persistence_tests.rs"]
 mod persistence_tests;
+#[cfg(test)]
+#[path = "code_diff_view_tests.rs"]
+mod tests;

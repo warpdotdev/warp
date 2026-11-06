@@ -18,6 +18,7 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
     CancellationReason, RequestCommandOutputResult,
 };
+use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -45,6 +46,234 @@ fn start_injection_command(
         block.id().clone()
     };
     (id, task_id, block_id, action_id)
+}
+
+#[test]
+fn local_steering_uses_one_row_per_natural_tool_or_event_request() {
+    use crate::ai::agent::ImageContext;
+    use crate::ai::blocklist::PendingAttachment;
+    for event_boundary in [false, true] {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            let terminal = add_window_with_terminal(&mut app, None);
+            let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+            let id = controller.update(&mut app, |controller, ctx| {
+                let id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+                controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+                controller.context_model.update(ctx, |context, ctx| {
+                    context.append_pending_attachments(
+                        vec![PendingAttachment::Image(ImageContext {
+                            data: "draft".into(),
+                            file_name: "draft.png".into(),
+                            mime_type: "image/png".into(),
+                            is_figma: false,
+                        })],
+                        ctx,
+                    );
+                });
+                id
+            });
+            QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+                queue.append(
+                    id,
+                    QueuedQuery::new(
+                        "after response".into(),
+                        QueuedQueryOrigin::QueueSlashCommand,
+                    ),
+                    ctx,
+                );
+                for prompt in ["first correction", "second correction"] {
+                    queue.append(
+                        id,
+                        QueuedQuery::new(prompt.into(), QueuedQueryOrigin::LocalSteering),
+                        ctx,
+                    );
+                }
+            });
+            controller.update(&mut app, |controller, ctx| {
+                for stream in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream);
+                }
+                if event_boundary {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        history
+                            .conversation_mut(&id)
+                            .unwrap()
+                            .set_status_for_test(ConversationStatus::WaitingForEvents);
+                    });
+                    OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                        service.enqueue_event_batch(
+                            id,
+                            vec![PendingEvent {
+                                event_id: "event".into(),
+                                source_agent_id: "child".into(),
+                                attempt_count: 0,
+                                detail: PendingEventDetail::Message {
+                                    message_id: "message".into(),
+                                    addresses: vec!["parent".into()],
+                                    subject: "result".into(),
+                                    message_body: "finished".into(),
+                                },
+                            }],
+                            ctx,
+                        );
+                    });
+                    controller.inject_pending_events_for_request(id, ctx);
+                } else {
+                    let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    controller.action_model.update(ctx, |actions, ctx| {
+                        actions.apply_finished_action_result(
+                            id,
+                            AIAgentActionResult {
+                                id: "command".to_owned().into(),
+                                task_id,
+                                result: AIAgentActionResultType::RequestCommandOutput(
+                                    RequestCommandOutputResult::Completed {
+                                        command: "ls".into(),
+                                        block_id: BlockId::new(),
+                                        output: "files".into(),
+                                        exit_code: ExitCode::from(0),
+                                        start_ts: None,
+                                        completed_ts: None,
+                                    },
+                                ),
+                            },
+                            ctx,
+                        );
+                    });
+                    controller.send_follow_up_for_conversation(id, ctx);
+                }
+            });
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                assert_eq!(
+                    user_queries_in_order(history, id),
+                    ["initial", "first correction"]
+                );
+            });
+            QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+                assert_eq!(
+                    queue
+                        .queue(id)
+                        .iter()
+                        .map(QueuedQuery::text)
+                        .collect::<Vec<_>>(),
+                    ["after response", "second correction"]
+                );
+            });
+            controller.read(&app, |controller, ctx| {
+                assert_eq!(
+                    controller
+                        .context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .len(),
+                    1
+                );
+            });
+        });
+    }
+}
+
+#[test]
+fn local_steering_row_filed_while_idle_dispatches_only_from_a_clean_idle_state() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        let (id, task_id, streams) = controller.update(&mut app, |controller, ctx| {
+            let id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.start_new_conversation(terminal.id(), false, false, false, ctx)
+            });
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
+            (id, task_id, streams)
+        });
+        let file_steering_row = |app: &mut App| {
+            QueuedQueryModel::handle(app).update(app, |queue, ctx| {
+                if let Some(row) = queue.pop_front(id, ctx) {
+                    queue.append(id, row, ctx);
+                } else {
+                    queue.append(
+                        id,
+                        QueuedQuery::new("correction".into(), QueuedQueryOrigin::LocalSteering),
+                        ctx,
+                    );
+                }
+            });
+        };
+        // Mid-turn with a live stream: the row waits for a request boundary.
+        file_steering_row(&mut app);
+        controller.update(&mut app, |controller, ctx| {
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
+            assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+            for stream in &streams {
+                controller.in_flight_response_streams.cleanup_stream(stream);
+            }
+        });
+        for status in [
+            ConversationStatus::InProgress,
+            ConversationStatus::Error,
+            ConversationStatus::TransientError,
+            ConversationStatus::Cancelled,
+        ] {
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+                history
+                    .conversation_mut(&id)
+                    .unwrap()
+                    .set_status_for_test(status)
+            });
+            file_steering_row(&mut app);
+            QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+                assert_eq!(queue.queue(id).len(), 1);
+            });
+        }
+        controller.update(&mut app, |controller, ctx| {
+            assert!(
+                controller
+                    .steer_head_prompt_for_request(id, &task_id, true, ctx)
+                    .is_none()
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _| {
+            history
+                .conversation_mut(&id)
+                .unwrap()
+                .set_status_for_test(ConversationStatus::Success)
+        });
+        file_steering_row(&mut app);
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                ["initial", "correction"]
+            );
+        });
+    });
 }
 
 #[test]
@@ -84,7 +313,7 @@ fn injection_interrupt_is_checked_again_at_the_next_request_boundary() {
             };
             assert!(
                 controller
-                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .steer_head_prompt_for_request(id, &task_id, false, ctx)
                     .is_none()
             );
             assert_eq!(
@@ -304,7 +533,7 @@ fn injection_interrupt_falls_back_after_grace_without_waiting_for_command_result
             controller.maybe_interrupt_command_for_injection(id, ctx);
             assert!(
                 controller
-                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .steer_head_prompt_for_request(id, &task_id, false, ctx)
                     .is_none()
             );
             assert_ne!(
@@ -333,12 +562,12 @@ fn injection_interrupt_falls_back_after_grace_without_waiting_for_command_result
         controller.update(&mut app, |controller, ctx| {
             controller.terminal_model.lock().finish_block();
             assert!(
-                matches!(controller.steer_head_prompt_for_request(id, &task_id, ctx),
+                matches!(controller.steer_head_prompt_for_request(id, &task_id, false, ctx),
                 Some(AIAgentInput::UserQuery { query, .. }) if query == "followup")
             );
             assert!(
                 controller
-                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .steer_head_prompt_for_request(id, &task_id, false, ctx)
                     .is_none()
             );
             assert!(
@@ -361,7 +590,7 @@ fn injection_interrupt_falls_back_after_grace_without_waiting_for_command_result
         });
         controller.update(&mut app, |controller, ctx| {
             assert!(
-                matches!(controller.steer_head_prompt_for_request(id, &task_id, ctx),
+                matches!(controller.steer_head_prompt_for_request(id, &task_id, false, ctx),
                 Some(AIAgentInput::UserQuery { query, .. }) if query == "second followup")
             );
         });
@@ -467,7 +696,7 @@ fn injection_interrupt_fallback_starts_cli_before_the_first_command_result() {
             );
             assert!(
                 controller
-                    .steer_head_prompt_for_request(id, &root_task_id, ctx)
+                    .steer_head_prompt_for_request(id, &root_task_id, false, ctx)
                     .is_none()
             );
         });
@@ -509,7 +738,7 @@ fn injection_exit_prompt_is_skipped_when_the_pty_interrupt_finished_the_command(
             assert_eq!(history.conversation(&id).unwrap().exchange_count(), 1);
             assert_eq!(user_queries_in_order(history, id), vec!["initial"]);
             assert!(matches!(
-                controller.steer_head_prompt_for_request(id, &task_id, ctx),
+                controller.steer_head_prompt_for_request(id, &task_id, false, ctx),
                 Some(AIAgentInput::UserQuery { query, .. }) if query == "followup"
             ));
         });
@@ -645,6 +874,27 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
         .collect()
 }
 
+fn settle_native_request(
+    controller: &mut BlocklistAIController,
+    id: AIConversationId,
+    ctx: &mut ModelContext<BlocklistAIController>,
+) {
+    for stream in controller
+        .in_flight_response_streams
+        .stream_ids_for_conversation(id, ctx)
+    {
+        controller
+            .in_flight_response_streams
+            .cleanup_stream(&stream);
+    }
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+        history
+            .conversation_mut(&id)
+            .unwrap()
+            .set_status_for_test(ConversationStatus::Success);
+    });
+}
+
 fn file_prompt(participant: ParticipantId, base: Option<BaseUserQuery>) -> QueuedQuery {
     QueuedQuery::new_shared_session_prompt(
         "file followup".into(),
@@ -697,7 +947,7 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
                 .clone();
             assert!(
                 controller
-                    .steer_head_prompt_for_request(id, &task_id, ctx)
+                    .steer_head_prompt_for_request(id, &task_id, false, ctx)
                     .is_none()
             );
             controller.dispatch_queued_warp_agent_prompt(id, Some(query_id), ctx);
@@ -717,7 +967,7 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
             assert_eq!(controller.in_flight_response_streams.stream_ids_for_conversation(id, ctx), streams);
             let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&id).unwrap().get_root_task_id().clone();
-            let input = controller.steer_head_prompt_for_request(id, &task_id, ctx).unwrap();
+            let input = controller.steer_head_prompt_for_request(id, &task_id, false, ctx).unwrap();
             let AIAgentInput::UserQuery { query, referenced_attachments, base: input_base, .. } = &input else {
                 panic!("expected a user query");
             };
@@ -731,7 +981,7 @@ fn prepared_file_prompt_steers_without_interrupting_or_redownloading() {
             ));
             assert_eq!(controller.get_current_response_initiator(), Some(participant));
             assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
-            assert!(controller.steer_head_prompt_for_request(id, &task_id, ctx).is_none());
+            assert!(controller.steer_head_prompt_for_request(id, &task_id, false, ctx).is_none());
         });
     });
 }
@@ -849,7 +1099,7 @@ fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch()
 }
 
 #[test]
-fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_time() {
+fn startup_injections_preserve_the_initial_stream_until_a_request_boundary() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -889,12 +1139,21 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
             terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
         });
 
-        // Mirrors what `AgentDriver::execute_run` does: send the initial prompt, then dispatch
-        // the head of the backlog.
-        controller.update(&mut app, |controller, ctx| {
+        let initial_streams = controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
+            streams
         });
+        assert_eq!(initial_streams.len(), 1);
 
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
             assert_eq!(
@@ -903,28 +1162,52 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                     .iter()
                     .map(QueuedQuery::text)
                     .collect::<Vec<_>>(),
-                vec!["prompt3"],
-                "only the head row (prompt2) should have been dispatched; prompt3 waits for the \
-                 next natural boundary or the conversation going idle again"
+                vec!["prompt2", "prompt3"]
             );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(user_queries_in_order(history, id), vec!["prompt1"]);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            for stream in initial_streams {
+                controller
+                    .in_flight_response_streams
+                    .cleanup_stream(&stream);
+            }
+            controller.send_follow_up_for_conversation(id, ctx);
         });
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec!["prompt1".to_owned(), "prompt2".to_owned()],
-                "prompt1 and prompt2 should both have been sent, each as its own exchange"
+                vec!["prompt1", "prompt2"]
             );
         });
-        controller.read(&app, |controller, ctx| {
-            let streams = controller
-                .in_flight_response_streams
-                .stream_ids_for_conversation(id, ctx);
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
             assert_eq!(
-                streams.len(),
-                1,
-                "prompt2's turn should be active; prompt1's was interrupted the same way a \
-                 rapid live follow-up interrupts a prior turn"
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["prompt3"]
             );
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            settle_native_request(controller, id, ctx);
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.drain_queued_prompts(id, FinishReason::Complete, ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["prompt1", "prompt2", "prompt3"]
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
         });
     });
 }
@@ -994,6 +1277,7 @@ fn agent_message_wake_origin_becomes_an_agent_wake_input_not_a_query() {
 
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1094,6 +1378,7 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
 
             controller.update(&mut app, |controller, ctx| {
                 controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+                settle_native_request(controller, id, ctx);
                 controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
             });
 
@@ -1431,10 +1716,17 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
         });
 
         controller.update(&mut app, |controller, ctx| {
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.finish_native_setup(id, ctx);
-            });
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, Some(second_row_id), ctx);
+            assert_ne!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
         });
 
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
@@ -1452,7 +1744,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec!["prompt3".to_owned()],
+                vec!["prompt1", "prompt3"],
                 "the explicitly targeted row should have been sent"
             );
         });
@@ -1494,6 +1786,7 @@ fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds(
 
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1635,6 +1928,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
         });
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1736,6 +2030,17 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     },
                     ctx,
                 );
+                let streams = controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx);
+                assert_eq!(streams.len(), 1);
+                controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+                assert_eq!(
+                    controller
+                        .in_flight_response_streams
+                        .stream_ids_for_conversation(id, ctx),
+                    streams
+                );
                 assert_eq!(
                     BlocklistAIHistoryModel::as_ref(ctx)
                         .conversation(&id)
@@ -1743,10 +2048,6 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                         .exchange_count(),
                     1
                 );
-                // The initial send finishes the setup barrier immediately (it does not wait for
-                // this turn to complete); the queued follow-up is left untouched until something
-                // explicitly drains it (`AgentDriver::execute_run` does so right after this send
-                // in production).
                 assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
                 assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
             });

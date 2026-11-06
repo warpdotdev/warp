@@ -4,6 +4,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use futures::executor::block_on;
+use serde_json::json;
 use warpui::r#async::executor::Background;
 
 use super::{OzRunTimelineEvent, SetupClientEventReporter, SetupScope, SetupStep};
@@ -17,6 +18,7 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
     (SetupStep::EnvironmentResolution, SetupScope::Agent),
     (SetupStep::SkillRepoClone, SetupScope::Agent),
     (SetupStep::TerminalBootstrap, SetupScope::Agent),
+    (SetupStep::CloudProviderSetup, SetupScope::Agent),
     (SetupStep::McpServerStartup, SetupScope::Agent),
     (SetupStep::AgentProfileConfiguration, SetupScope::Agent),
     (SetupStep::GlobalSkillResolution, SetupScope::Agent),
@@ -33,9 +35,9 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
     (SetupStep::GlobalSkillLoading, SetupScope::Agent),
     (SetupStep::SkillsDirsLoading, SetupScope::Agent),
     (SetupStep::TaskDataFetch, SetupScope::Run),
-    (SetupStep::CloudProviderSetup, SetupScope::Run),
     (SetupStep::SharedSessionEstablishment, SetupScope::Run),
     (SetupStep::ConversationResumeLoading, SetupScope::Run),
+    (SetupStep::SkillReferenceResolution, SetupScope::Run),
     (SetupStep::ThirdPartyHarnessPreparation, SetupScope::Run),
     (SetupStep::ThirdPartyHarnessStart, SetupScope::Run),
     (
@@ -196,4 +198,30 @@ fn run_reporter_allows_and_reports_all_steps() {
         assert_eq!(block_on(reporter.record_value(step, async { 42 })), 42);
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
+}
+
+#[test]
+fn payload_timeline_events_post_in_the_background_and_tolerate_rejection() {
+    let (tx, rx) = mpsc::channel();
+    let mut client = MockAIClient::new();
+    client
+        .expect_post_agent_run_client_event()
+        .times(1)
+        .returning(move |_, request| {
+            tx.send(serde_json::to_value(request).unwrap()).unwrap();
+            Err(anyhow::anyhow!("400 Bad Request: unknown event"))
+        });
+    let reporter = SetupClientEventReporter::new(
+        "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
+        Arc::new(client),
+        background(),
+    );
+    let payload = json!({"references": []});
+    reporter.post_timeline_event_with_payload(
+        OzRunTimelineEvent::SkillSourcesResolved,
+        payload.clone(),
+    );
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["event_name"], "skill_sources_resolved");
+    assert_eq!(request["payload"], payload);
 }

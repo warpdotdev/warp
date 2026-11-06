@@ -620,6 +620,53 @@ pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result
     write_git_credentials(&credentials)
 }
 
+/// Clears git and GitHub CLI authentication before a standby sandbox changes principals.
+pub(crate) fn clear_standby_credentials() -> Result<()> {
+    let home = home_dir()?;
+    for path in [
+        home.join(".git-credentials"),
+        gh_config_dir(&home).join(GH_HOSTS_FILENAME),
+    ] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to remove standby credentials at {}", path.display())
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Installs run credentials without overwriting setup-customized author identities.
+pub(crate) fn configure_assignment_git_credentials(
+    credentials: &[GitCredential],
+    repositories: &[(PathBuf, &str)],
+) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
+    let managed_repositories = repositories
+        .iter()
+        .filter(|(path, host)| repository_git_identity(path) == recorded_identity_for_host(host))
+        .collect::<Vec<_>>();
+    if global_git_identity() == recorded_identity_for_host(GITHUB_HOST) {
+        configure_git_identity(&credentials);
+    }
+    for (path, host) in managed_repositories {
+        let credential = credentials
+            .iter()
+            .find(|credential| credential.host == *host)
+            .or_else(|| credentials.first());
+        let (name, email) = identity_of(credential);
+        run_repository_git_config(path, "user.name", &name);
+        run_repository_git_config(path, "user.email", &email);
+    }
+    setup_git_config(&credentials);
+    record_host_identities(&credentials);
+    write_git_credentials(&credentials)
+}
+
 /// Run a git config command, logging a warning on failure rather than
 /// propagating the error (git may not be installed in all sandboxes).
 fn run_git_config(key: &str, value: &str) {

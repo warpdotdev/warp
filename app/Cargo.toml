@@ -110,6 +110,7 @@ futures-util.workspace = true
 futures.workspace = true
 fuzzy_match.workspace = true
 getset.workspace = true
+globset.workspace = true
 handlebars.workspace = true
 hex.workspace = true
 http.workspace = true
@@ -710,6 +711,7 @@ default = [
     "native_shell_completions",
     "history_search_ranking_v2",
     "cloud_agent_shell_respawn",
+    "acp_harness",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -998,6 +1000,7 @@ incremental_auto_reload = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
+agent_prompt_steering = []
 inline_menu_headers = []
 directory_tab_colors = []
 hoa_code_review = []
@@ -1038,6 +1041,7 @@ shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
 cloud_agent_shell_respawn = []
+acp_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

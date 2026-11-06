@@ -56,6 +56,42 @@ fn control_socket_url_uses_websocket_schemes_and_binds_the_generation() {
 }
 
 #[test]
+#[serial_test::serial]
+fn control_origin_override_leaves_status_on_the_server_root() {
+    let server_root = ChannelState::server_root_url();
+    assert_eq!(
+        control_socket_url(&ServerApi::prewarmed_sandbox_url("sb", "ws"), "abc123").unwrap(),
+        control_socket_url(
+            &format!("{server_root}/internal/prewarmed-sandboxes/sb/ws"),
+            "abc123"
+        )
+        .unwrap()
+    );
+    for (origin, expected) in [
+        (
+            "https://platform.warp.dev",
+            "wss://platform.warp.dev/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+        (
+            "http://localhost:8082",
+            "ws://localhost:8082/internal/prewarmed-sandboxes/sb/ws?generation=abc123",
+        ),
+    ] {
+        ChannelState::override_prewarmed_sandbox_control_url(origin).unwrap();
+        assert_eq!(
+            control_socket_url(&ServerApi::prewarmed_sandbox_url("sb", "ws"), "abc123").unwrap(),
+            expected
+        );
+        assert_eq!(
+            ServerApi::prewarmed_sandbox_url("sb", "status"),
+            format!("{server_root}/internal/prewarmed-sandboxes/sb/status")
+        );
+        assert_eq!(ChannelState::server_root_url(), server_root);
+    }
+    ChannelState::set(ChannelState::init());
+}
+
+#[test]
 #[cfg(not(target_family = "wasm"))]
 fn native_control_headers_are_sensitive() {
     let request =
@@ -149,6 +185,12 @@ fn deserializes_a_server_configuration() {
     assert_eq!(config.preparation.skills, ["warpdotdev/warp:review"]);
     assert_eq!(config.preparation.factory_skill_dirs, [".agents/skills"]);
     assert!(config.preparation.computer_use_enabled);
+    let providers = config.preparation.providers.as_ref().unwrap();
+    assert_eq!(providers.gcp.as_ref().unwrap().project_number, "123456789");
+    assert_eq!(
+        providers.aws.as_ref().unwrap().role_arn,
+        "arn:aws:iam::123456789012:role/OzAgent"
+    );
 
     assert_eq!(
         config.environment_variables.get("WARP_FACTORY_REPO_DIR"),

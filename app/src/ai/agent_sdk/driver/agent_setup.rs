@@ -1,5 +1,6 @@
 //! Shared resource setup for normal runs and standby sandboxes before an agent prompt starts.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -45,6 +46,7 @@ impl AgentDriver {
     #[cfg_attr(all(target_family = "wasm", not(test)), expect(dead_code))]
     pub(crate) async fn prepare_resources(
         foreground: &ModelSpawner<Self>,
+        harness: Harness,
         mcp_specs: Vec<MCPSpec>,
         global_skills: GlobalSkillResolution,
         setup_events: &SetupClientEventReporter,
@@ -59,6 +61,12 @@ impl AgentDriver {
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
         let prepared_configuration = workspace.clone();
         bootstrap_terminal(foreground, setup_events).await?;
+        setup_events
+            .record_result(
+                SetupStep::CloudProviderSetup,
+                Self::setup_cloud_providers(foreground),
+            )
+            .await?;
         setup_events
             .record_result(
                 SetupStep::GlobalSkillRepoClone,
@@ -94,7 +102,7 @@ impl AgentDriver {
             .await?;
         let prepared = prepare_workspace(
             foreground,
-            Harness::Oz,
+            harness,
             workspace,
             setup_events,
             snapshot_reporter,
@@ -106,11 +114,15 @@ impl AgentDriver {
             .spawn(move |me, _| {
                 me.harness_working_dir = working_dir;
                 me.workspace = Some(WorkspaceState::Prepared(StandbyWorkspace {
+                    harness,
                     configuration: prepared_configuration,
                     repositories,
                 }));
             })
             .await?;
+        if harness != Harness::Oz {
+            return Ok(prepared.harness_working_dir);
+        }
         let managed_mcp_client = foreground
             .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
             .await?;
@@ -540,7 +552,11 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
     let load_result = foreground
         .spawn(move |me, ctx| {
             let dirs = resolve_skills_dirs(&me.working_dir, dirs);
-            let skills = read_skills_for_skills_dirs(&dirs);
+            let mut skills = read_skills_for_skills_dirs(&dirs);
+            if me.skill_dirs_first_name_wins {
+                let mut names = HashSet::new();
+                skills.retain(|skill| names.insert(skill.name.clone()));
+            }
             if skills.is_empty() {
                 log::info!("WARP_SKILL_DIRS: no skills found");
             } else {

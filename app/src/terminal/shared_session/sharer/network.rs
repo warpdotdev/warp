@@ -43,7 +43,6 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_server_client::iap::IapManager;
 use warpui::r#async::{FutureExt as _, Spawnable, SpawnableOutput, Timer};
 use warpui::{Entity, ModelContext, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
@@ -923,11 +922,6 @@ impl Network {
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
-        let iap_headers: Vec<(&str, String)> = IapManager::as_ref(ctx)
-            .iap_state()
-            .and_then(|state| state.proxy_auth_header())
-            .into_iter()
-            .collect();
         let connect_handle = ctx.spawn(
             async move {
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
@@ -942,9 +936,7 @@ impl Network {
                         .and_then(|token| token.bearer_token()),
                 };
                 log::info!("Connecting to session sharing server");
-                let socket =
-                    WebSocket::connect_with_headers(&create_endpoint, None::<&str>, iap_headers)
-                        .await?;
+                let socket = WebSocket::connect(&create_endpoint, None::<&str>).await?;
                 log::info!("Connected to session sharing server; preparing initialization");
                 anyhow::Ok((socket.split().await, user_id))
             },
@@ -1004,9 +996,6 @@ impl Network {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
-                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.check_ws_connect_error(&e, ctx);
-                    });
                     let cause = Arc::new(e.context("Failed to create shared session"));
                     network.handle_startup_failure_with_cause(
                         StartupFailure::Transport,
@@ -1180,6 +1169,9 @@ impl Network {
         if matches!(self.stage, Stage::Finished | Stage::Reconnecting { .. }) {
             return;
         }
+        if !self.has_unconfirmed_terminal_events() {
+            self.no_progress_reconnects = 0;
+        }
         if self.no_progress_reconnects >= MAX_NO_PROGRESS_RECONNECTS {
             sharer_warn!(
                 self,
@@ -1210,7 +1202,6 @@ impl Network {
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let iap_state = IapManager::as_ref(ctx).iap_state();
         let spawner = ctx.spawner();
         self.start_reconnect_task(
             move || {
@@ -1220,36 +1211,10 @@ impl Network {
                 let reconnect_endpoint = reconnect_endpoint.clone();
                 let auth_state = auth_state.clone();
                 let auth_client = auth_client.clone();
-                let iap_state = iap_state.clone();
                 let reconnect_token = reconnect_token.clone();
                 let spawner = spawner.clone();
                 async move {
-                    // Re-read the IAP header each attempt so a refresh that
-                    // landed since the last try is picked up (staging only).
-                    let iap_headers: Vec<(&str, String)> = iap_state
-                        .as_ref()
-                        .and_then(|state| state.proxy_auth_header())
-                        .into_iter()
-                        .collect();
-                    let socket = match WebSocket::connect_with_headers(
-                        &reconnect_endpoint,
-                        None::<&str>,
-                        iap_headers,
-                    )
-                    .await
-                    {
-                        Ok(socket) => socket,
-                        Err(error) => {
-                            return Err(spawner
-                                .spawn(move |_, ctx| {
-                                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
-                                        manager.check_ws_connect_error(&error, ctx);
-                                    });
-                                    error
-                                })
-                                .await?);
-                        }
-                    };
+                    let socket = WebSocket::connect(&reconnect_endpoint, None::<&str>).await?;
                     let user_id = UserID {
                         anonymous_id: auth_state.anonymous_id(),
                         access_token: auth_client
@@ -1587,7 +1552,8 @@ impl Network {
                     return;
                 }
                 let confirmed_event_no = last_received_event_no.max(additional_confirmed_event_no);
-                if self.record_confirmed_event_progress(confirmed_event_no) {
+                let made_progress = self.record_confirmed_event_progress(confirmed_event_no);
+                if made_progress || !self.has_unconfirmed_terminal_events() {
                     self.no_progress_reconnects = 0;
                 } else {
                     self.no_progress_reconnects += 1;
@@ -1771,6 +1737,10 @@ impl Network {
             }
             DownstreamMessage::Pong { .. } => {}
         }
+    }
+
+    fn has_unconfirmed_terminal_events(&self) -> bool {
+        self.last_confirmed_event_no < usize::from(self.event_no).checked_sub(1)
     }
 
     fn record_confirmed_event_progress(&mut self, event_no: Option<usize>) -> bool {

@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
@@ -53,7 +54,7 @@ use crate::auth::AuthStateProvider;
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::server::server_api::managed_mcp::{ManagedMcpClient, MockManagedMcpClient};
 use crate::terminal::History;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::SessionInfo;
@@ -173,7 +174,8 @@ fn resolve_mcp_specs_to_json_skips_preview_urls_without_ambient_task() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         let server_root = ChannelState::server_root_url();
         assert_eq!(
@@ -220,7 +222,8 @@ fn resolve_mcp_specs_to_json_attaches_factory_and_preserves_explicit_specs() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(
@@ -278,7 +281,8 @@ fn resolve_mcp_specs_to_json_skips_factory_when_flag_disabled() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(
             resolved,
@@ -313,7 +317,8 @@ fn resolve_mcp_specs_to_json_skips_factory_without_credentials() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(
             resolved,
@@ -349,7 +354,8 @@ fn resolve_mcp_specs_to_json_preserves_exact_name_collision() {
             &foreground,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .configs;
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(
@@ -384,7 +390,9 @@ fn render_installations(
     installations: Vec<TemplatableMCPServerInstallation>,
     secrets: HashMap<String, ManagedSecretValue>,
 ) -> HashMap<String, JSONMCPServer> {
-    AgentDriver::mcp_installations_to_json(installations, &secrets).unwrap()
+    AgentDriver::mcp_installations_to_json(installations, &secrets)
+        .unwrap()
+        .configs
 }
 
 #[test]
@@ -428,6 +436,197 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 
     assert!(resolved.local_uuids.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let rendered = AgentDriver::mcp_installations_to_json(
+        resolved.ephemeral_installations,
+        &HashMap::from([("API_TOKEN".to_string(), raw_secret("token"))]),
+    )
+    .unwrap();
+    assert_eq!(
+        rendered.warp_ids,
+        HashMap::from([("GitHub MCP".to_string(), uuid.to_string())])
+    );
+}
+
+#[test]
+fn managed_resolver_rejects_invalid_json_before_network_calls() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config().never();
+    let specs = [
+        MCPSpec::Uuid(Uuid::new_v4()),
+        MCPSpec::WellKnown("linear".to_string()),
+        MCPSpec::Json(r#"{"valid":{"command":"valid"}}"#.to_string()),
+        MCPSpec::Json("invalid JSON".to_string()),
+    ];
+
+    let error = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, AgentDriverError::MCPJsonParseError(_)));
+}
+
+#[test]
+fn managed_resolver_preserves_spec_order_when_responses_arrive_out_of_order() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let managed_uuid = Uuid::new_v4();
+    let first_local_uuid = Uuid::new_v4();
+    let second_local_uuid = Uuid::new_v4();
+    let (first_tx, first_rx) = oneshot::channel();
+    let (later_tx, later_rx) = oneshot::channel();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(HashMap::from([
+            (managed_uuid.to_string(), first_rx),
+            ("linear".to_string(), later_rx),
+        ])),
+    });
+    let specs = [
+        MCPSpec::Uuid(managed_uuid),
+        MCPSpec::Uuid(first_local_uuid),
+        MCPSpec::Json(r#"{"middle":{"command":"middle"}}"#.to_string()),
+        MCPSpec::WellKnown("linear".to_string()),
+        MCPSpec::Uuid(second_local_uuid),
+        MCPSpec::Json(r#"{"last":{"command":"last"}}"#.to_string()),
+    ];
+    let local_uuids = HashSet::from([first_local_uuid, second_local_uuid]);
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client.clone(),
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    later_tx
+        .send(Ok(managed_client_config_output(
+            r#"{"linear":{"command":"linear"}}"#,
+        )))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    first_tx
+        .send(Ok(managed_client_config_output(
+            r#"{"first":{"command":"first"}}"#,
+        )))
+        .unwrap();
+    let resolved = block_on(resolution).unwrap();
+
+    assert_eq!(
+        resolved.local_uuids,
+        vec![first_local_uuid, second_local_uuid]
+    );
+    assert_eq!(
+        resolved
+            .ephemeral_installations
+            .iter()
+            .map(|installation| installation.templatable_mcp_server().name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "middle", "linear", "last"]
+    );
+}
+
+struct ControlledManagedMcpClient {
+    responses: Mutex<
+        HashMap<String, oneshot::Receiver<anyhow::Result<CreateManagedMcpClientConfigOutput>>>,
+    >,
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+impl ManagedMcpClient for ControlledManagedMcpClient {
+    async fn create_managed_mcp_client_config(
+        &self,
+        uid: String,
+    ) -> anyhow::Result<CreateManagedMcpClientConfigOutput> {
+        let response = self.responses.lock().unwrap().remove(&uid).unwrap();
+        response.await.unwrap()
+    }
+}
+
+#[test]
+fn managed_resolver_overlaps_calls_up_to_concurrency_limit() {
+    let (senders, receivers): (Vec<_>, Vec<_>) = (0..9)
+        .map(|_| {
+            let uuid = Uuid::new_v4();
+            let (sender, receiver) = oneshot::channel();
+            ((uuid, sender), (uuid.to_string(), receiver))
+        })
+        .unzip();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(receivers.into_iter().collect()),
+    });
+    let specs = senders
+        .iter()
+        .map(|(uuid, _)| MCPSpec::Uuid(*uuid))
+        .collect::<Vec<_>>();
+    let local_uuids = HashSet::new();
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client.clone(),
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    let pending = client.responses.lock().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending.contains_key(&senders.last().unwrap().0.to_string()));
+    drop(pending);
+
+    let mut senders = senders.into_iter();
+    let (_, first_sender) = senders.next().unwrap();
+    first_sender
+        .send(Ok(managed_client_config_output("{}")))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    assert!(client.responses.lock().unwrap().is_empty());
+    for (_, sender) in senders {
+        sender.send(Ok(managed_client_config_output("{}"))).unwrap();
+    }
+    let resolved = block_on(resolution).unwrap();
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn managed_resolver_returns_first_error_in_spec_order() {
+    let first_uuid = Uuid::new_v4();
+    let later_uuid = Uuid::new_v4();
+    let (first_tx, first_rx) = oneshot::channel();
+    let (later_tx, later_rx) = oneshot::channel();
+    let client = Arc::new(ControlledManagedMcpClient {
+        responses: Mutex::new(HashMap::from([
+            (first_uuid.to_string(), first_rx),
+            (later_uuid.to_string(), later_rx),
+        ])),
+    });
+    let specs = [MCPSpec::Uuid(first_uuid), MCPSpec::Uuid(later_uuid)];
+    let local_uuids = HashSet::new();
+    let mut resolution = Box::pin(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &specs,
+        &local_uuids,
+        client,
+        None,
+    ));
+
+    assert!(resolution.as_mut().now_or_never().is_none());
+    later_tx
+        .send(Err(anyhow::anyhow!("later failure")))
+        .unwrap();
+    assert!(resolution.as_mut().now_or_never().is_none());
+    first_tx
+        .send(Err(anyhow::anyhow!("first failure")))
+        .unwrap();
+    let error = block_on(resolution).unwrap_err();
+
+    assert!(matches!(
+        error,
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message }
+            if uid == first_uuid && message == "first failure"
+    ));
 }
 
 #[test]
@@ -982,8 +1181,9 @@ fn builtin_preview_urls_mcp_for_oz_attaches_when_eligible() {
         installation.templatable_mcp_server().name,
         PREVIEW_URLS_MCP_SERVER_NAME
     );
-    let resolved =
-        AgentDriver::mcp_installations_to_json(vec![installation], &HashMap::new()).unwrap();
+    let resolved = AgentDriver::mcp_installations_to_json(vec![installation], &HashMap::new())
+        .unwrap()
+        .configs;
     let JSONTransportType::SSEServer { headers, .. } =
         &resolved[PREVIEW_URLS_MCP_SERVER_NAME].transport_type
     else {

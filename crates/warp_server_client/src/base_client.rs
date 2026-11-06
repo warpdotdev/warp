@@ -212,6 +212,7 @@ impl BaseClient {
             http::header::CONTENT_TYPE.as_str(),
             http::header::CONTENT_LENGTH.as_str(),
             http_client::iap::IAP_PROXY_AUTH_HEADER,
+            http_client::iap::IAP_OPT_IN_HEADER,
             AMBIENT_WORKLOAD_TOKEN_HEADER,
             CLOUD_AGENT_ID_HEADER,
             PREWARMED_SANDBOX_ID_HEADER,
@@ -560,12 +561,12 @@ impl BaseClient {
     #[cfg(target_family = "wasm")]
     pub fn report_ws_iap_challenge(&self, _error: &anyhow::Error) {}
 
-    /// Returns the current IAP proxy authorization header for transports outside the HTTP client.
-    pub fn iap_proxy_auth_header(&self) -> Option<(&'static str, String)> {
-        self.iap_token_provider
-            .as_ref()?
-            .cached_token()
-            .map(|token| http_client::iap::proxy_auth_header(&token))
+    /// Returns IAP headers for transports outside the HTTP client.
+    pub fn iap_headers(&self) -> Vec<(&'static str, String)> {
+        let Some(provider) = self.iap_token_provider.as_ref() else {
+            return Vec::new();
+        };
+        http_client::iap::headers(provider.cached_token(), provider.routing_opt_in_enabled())
     }
 }
 

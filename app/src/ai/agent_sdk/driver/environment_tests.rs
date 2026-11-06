@@ -18,8 +18,9 @@ use super::super::environment_checkout_protocol::{
 use super::{
     CloneFailureIdentityDiagnostics, PrepareEnvironmentError, RepositoryCloneRequest,
     ResolvedRepository, SETUP_COMMAND_OUTPUT_TRUNCATION_MARKER, SetupCommandPhase,
-    WorkspaceConfiguration, await_setup_phase, build_checkout_helper_command, environment_snapshot,
-    merge_repos_deduped, parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
+    WorkspaceConfiguration, await_checkout_helper, await_setup_phase,
+    build_checkout_helper_command, environment_snapshot, merge_repos_deduped,
+    parse_resolved_head_sha, read_checkout_report, reported_resolved_heads,
     repository_clone_requests, setup_command_failure, single_repo_name,
     validate_repository_preparation_overrides,
 };
@@ -116,6 +117,51 @@ fn duplicate_resolved_repositories_fail_before_clone() {
         })
         .collect::<Vec<_>>();
     assert!(WorkspaceConfiguration::from_resolved(repositories, Vec::new(), Vec::new()).is_err());
+}
+
+#[test]
+fn checkout_helper_timeout_covers_command_start_and_exit() {
+    for command_started in [false, true] {
+        block_on(async {
+            let (start_tx, start_rx) = oneshot::channel::<()>();
+            let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
+            let (deadline_tx, deadline_rx) = oneshot::channel::<()>();
+            let operation = async {
+                start_rx.await.unwrap();
+                Ok(exit_rx.await.unwrap())
+            };
+            let mut wait = Box::pin(await_checkout_helper(operation, deadline_rx));
+            assert!(poll!(wait.as_mut()).is_pending());
+            if command_started {
+                start_tx.send(()).unwrap();
+                assert!(poll!(wait.as_mut()).is_pending());
+            }
+            deadline_tx.send(()).unwrap();
+
+            assert!(matches!(
+                wait.await,
+                Err(PrepareEnvironmentError::CheckoutHelperTimedOut {
+                    timeout_seconds: 1800
+                })
+            ));
+            assert!(exit_tx.is_canceled());
+        });
+    }
+}
+
+#[test]
+fn checkout_helper_completion_preserves_command_result() {
+    assert_eq!(
+        block_on(await_checkout_helper(ready(Ok(17)), pending::<()>())).unwrap(),
+        17
+    );
+    assert!(matches!(
+        block_on(await_checkout_helper(
+            ready(Err::<(), _>(PrepareEnvironmentError::InvalidRuntimeState)),
+            pending::<()>()
+        )),
+        Err(PrepareEnvironmentError::InvalidRuntimeState)
+    ));
 }
 
 #[test]
@@ -268,6 +314,7 @@ fn head_probe_timeout_preserves_later_snapshot_repositories() {
         report_file: directory.path().join("report.json"),
         remove_origins_only: false,
         fail_if_target_exists: false,
+        legacy_preparation: false,
     };
     fs::write(&args.requests_file, serde_json::to_vec(&batch).unwrap()).unwrap();
 
@@ -1227,6 +1274,7 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
             Path::new("/private/a path/requests.json"),
             Path::new("/private/a path/report.json"),
             true,
+            false,
             shell,
         );
         assert!(command.contains("environment-checkout --requests-file"));
@@ -1234,6 +1282,33 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
         assert!(!command.contains("github.com") && !command.contains("sh -c"));
         assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
         assert!(command.ends_with(" --remove-origins-only"));
+    }
+}
+
+#[test]
+fn only_skill_source_checkouts_run_under_legacy_preparation() {
+    for shell in [
+        ShellType::Bash,
+        ShellType::Zsh,
+        ShellType::Fish,
+        ShellType::PowerShell,
+    ] {
+        for skill_sources in [false, true] {
+            let command = build_checkout_helper_command(
+                Path::new("/oz"),
+                Path::new("/requests.json"),
+                Path::new("/report.json"),
+                false,
+                skill_sources,
+                shell,
+            );
+            assert_eq!(
+                command.ends_with(" --legacy-preparation"),
+                skill_sources,
+                "{command}"
+            );
+            assert!(!command.contains("PREPARATION"), "{command}");
+        }
     }
 }
 

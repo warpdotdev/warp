@@ -35,9 +35,10 @@ use super::transcript_persistence::{
 };
 use super::usage_reporting::CaptureIdentity;
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, cli_agent_session_status, install_docs_url, write_temp_file,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
+    SavePoint, ThirdPartyHarness, cli_agent_session_status, install_docs_url, write_temp_file,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -143,6 +144,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
@@ -153,7 +155,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
@@ -197,7 +199,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             server_api,
             terminal_driver,
             claude_resume,
-            resolved_mcp_servers,
+            &resolved_mcp_servers.configs,
         )?))
     }
 

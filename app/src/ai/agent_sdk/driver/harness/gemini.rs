@@ -20,9 +20,10 @@ use super::harness_persistence::{HarnessPersistence, PersistenceOutcome};
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
+    HarnessCleanupDisposition, HarnessRunner, ResolvedMCPServers, ResumePayload, SavePoint,
     ThirdPartyHarness, install_docs_url, write_temp_file,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -60,6 +61,7 @@ impl ThirdPartyHarness for GeminiHarness {
         system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
@@ -70,7 +72,7 @@ impl ThirdPartyHarness for GeminiHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        _resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        _resolved_mcp_servers: &ResolvedMCPServers,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.

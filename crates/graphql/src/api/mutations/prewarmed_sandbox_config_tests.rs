@@ -61,6 +61,14 @@ fn serializes_configuration_mutation_without_workload_token_input() {
         "skills",
         "factorySkillDirs",
         "computerUseEnabled",
+        "providers",
+        "gcp",
+        "projectNumber",
+        "poolId",
+        "providerId",
+        "serviceAccountEmail",
+        "aws",
+        "roleArn",
         "environmentVariables",
         "gitCredentials",
         "host",
@@ -109,6 +117,12 @@ fn deserializes_configuration_response_with_shared_repository_types() {
     assert_eq!(repository.clone_from.as_ref().unwrap().repo, "warp-fork");
     assert!(repository.preserve_origin);
     assert_eq!(config.spec.deferred_repositories[0].repo, "warp-server");
+    let providers = config.spec.providers.as_ref().unwrap();
+    assert_eq!(providers.gcp.as_ref().unwrap().pool_id, "oz-pool");
+    assert_eq!(
+        providers.aws.as_ref().unwrap().role_arn,
+        "arn:aws:iam::123456789012:role/OzAgent"
+    );
     assert!(serde_json::from_str::<serde_json::Value>(&config.spec.mcp_servers_json).is_ok());
     assert_eq!(
         config.environment_variables[0].name,

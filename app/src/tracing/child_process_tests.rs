@@ -174,6 +174,7 @@ fn handoff_connects_checkout_roots_to_the_spawning_span_without_baggage() {
         report_file: directory.path().join("report.json"),
         remove_origins_only: true,
         fail_if_target_exists: false,
+        legacy_preparation: false,
     };
     let provider = SdkTracerProvider::builder().build();
     let subscriber = tracing_subscriber::registry()
@@ -279,6 +280,7 @@ fn authenticated_child_export_flushes_checkout_returns() {
         report_file: directory.path().join("report.json"),
         remove_origins_only: true,
         fail_if_target_exists: false,
+        legacy_preparation: false,
     };
     let mut collector = mockito::Server::new();
     let bodies = Arc::new(Mutex::new(Vec::new()));

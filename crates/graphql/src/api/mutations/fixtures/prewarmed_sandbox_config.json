@@ -23,7 +23,16 @@
         "mcpServersJson": "{\"linear\":{\"warp_id\":\"7f1d2c3b-4a59-4e6f-8b70-1c2d3e4f5a6b\"}}",
         "skills": ["warpdotdev/warp:review"],
         "factorySkillDirs": [".agents/skills"],
-        "computerUseEnabled": true
+        "computerUseEnabled": true,
+        "providers": {
+          "gcp": {
+            "projectNumber": "123456789",
+            "poolId": "oz-pool",
+            "providerId": "oz-provider",
+            "serviceAccountEmail": "agent@example.iam.gserviceaccount.com"
+          },
+          "aws": { "roleArn": "arn:aws:iam::123456789012:role/OzAgent" }
+        }
       },
       "environmentVariables": [{ "name": "WARP_FACTORY_REPO_DIR", "value": "factory" }],
       "gitCredentials": [

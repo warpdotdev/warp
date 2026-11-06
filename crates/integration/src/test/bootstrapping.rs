@@ -1,5 +1,9 @@
 //! Integration tests for bootstrapping logic.
 
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+
 use settings::Setting as _;
 use version_compare::Cmp;
 use warp::cmd_or_ctrl_shift;
@@ -59,6 +63,61 @@ pub fn test_rc_files_only_sourced_once_during_bootstrapping() -> Builder {
             "cat ~/rc_output".to_string(),
             ExpectedExitStatus::Success,
             "foo",
+        ))
+}
+
+pub fn test_cloud_agent_fallback_commands_survive_profile_path_reset() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _version) = current_shell_starter_and_version();
+            cfg!(target_os = "linux")
+                && matches!(
+                    starter.shell_type(),
+                    ShellType::Bash | ShellType::Zsh | ShellType::Fish
+                )
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            let fallback = dir.join("fallback bin");
+            let profile = dir.join("profile-bin");
+            for (bin, output) in [
+                (&fallback, "fallback-command-selected"),
+                (&profile, "profile-command-selected"),
+            ] {
+                fs::create_dir_all(bin).expect("should create command directory");
+                let tool = bin.join("warp-fallback-probe");
+                fs::write(&tool, format!("#!/bin/sh\nprintf '{output}\\n'\n"))
+                    .expect("should write fixture command");
+                #[cfg(unix)]
+                fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))
+                    .expect("fixture command should be executable");
+            }
+            utils.set_env("WARP_CLOUD_AGENT_FALLBACK_BIN", Some(&fallback));
+            utils.set_env(
+                "PATH",
+                Some(format!(
+                    "{}:{}",
+                    fallback.display(),
+                    std::env::var("PATH").unwrap()
+                )),
+            );
+            write_rc_files_for_test(
+                &dir,
+                r#"export PATH="$HOME/profile-bin:/usr/bin:/bin""#,
+                [ShellRcType::Bash, ShellRcType::Zsh],
+            );
+            write_rc_files_for_test(
+                &dir,
+                r#"set -gx PATH "$HOME/profile-bin" /usr/bin /bin"#,
+                [ShellRcType::Fish],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "warp-fallback-probe".to_string(),
+            ExpectedExitStatus::Success,
+            "fallback-command-selected",
         ))
 }
 

@@ -147,13 +147,13 @@ pub struct ExecutionRepository {
     pub expected_sha: Option<String>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 pub struct CloudProviderClientConfigs {
     pub gcp: Option<GcpCloudProviderClientConfig>,
     pub aws: Option<AwsCloudProviderClientConfig>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 #[cynic(graphql_type = "GCPCloudProviderClientConfig")]
 pub struct GcpCloudProviderClientConfig {
     pub project_number: String,
@@ -162,7 +162,7 @@ pub struct GcpCloudProviderClientConfig {
     pub service_account_email: Option<String>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Clone, Debug)]
 #[cynic(graphql_type = "AWSCloudProviderClientConfig")]
 pub struct AwsCloudProviderClientConfig {
     pub role_arn: String,
