@@ -14,6 +14,7 @@ fn validate_keystroke_test_cases<T: ModeProvider>(
         let result = KeystrokeWithDetails {
             keystroke: key,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(mock_terminal_model);
@@ -72,6 +73,7 @@ fn test_ctrl_slash_emits_us_control_code() {
         KeystrokeWithDetails {
             keystroke: &ctrl_slash,
             key_without_modifiers: Some("/"),
+            base_layout_key: None,
             chars: Some("/"),
         }
         .to_escape_sequence(&terminal_model_mock)
@@ -84,6 +86,7 @@ fn test_ctrl_slash_emits_us_control_code() {
         KeystrokeWithDetails {
             keystroke: &slash,
             key_without_modifiers: Some("/"),
+            base_layout_key: None,
             chars: Some("/"),
         }
         .to_escape_sequence(&terminal_model_mock)
@@ -275,6 +278,7 @@ fn test_cursor_movement_keystroke_without_modifier_to_escape_sequence() {
         let result = KeystrokeWithDetails {
             keystroke: key,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock);
@@ -556,6 +560,7 @@ fn test_unmatched_keystroke_does_not_yield_escape_sequence() {
         let result = KeystrokeWithDetails {
             keystroke: key,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock);
@@ -570,6 +575,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
         KeystrokeWithDetails {
             keystroke,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars,
         }
         .to_pty_bytes(&mock)
@@ -786,6 +792,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &escape,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -799,6 +806,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &shift_enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -811,6 +819,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &shift_tab,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -823,6 +832,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &shift_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -835,6 +845,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &ctrl_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -846,6 +857,7 @@ fn test_keyboard_enhancement_disambiguate_only() {
         KeystrokeWithDetails {
             keystroke: &enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -863,6 +875,7 @@ fn test_keyboard_enhancement_unshifted_keycode_for_shifted_printables() {
         KeystrokeWithDetails {
             keystroke: &Keystroke::parse("shift-@").unwrap(),
             key_without_modifiers: Some("2"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -872,6 +885,7 @@ fn test_keyboard_enhancement_unshifted_keycode_for_shifted_printables() {
         KeystrokeWithDetails {
             keystroke: &Keystroke::parse("shift-%").unwrap(),
             key_without_modifiers: Some("5"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -882,6 +896,7 @@ fn test_keyboard_enhancement_unshifted_keycode_for_shifted_printables() {
         KeystrokeWithDetails {
             keystroke: &Keystroke::parse("shift-A").unwrap(),
             key_without_modifiers: Some("a"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -892,6 +907,7 @@ fn test_keyboard_enhancement_unshifted_keycode_for_shifted_printables() {
         KeystrokeWithDetails {
             keystroke: &Keystroke::parse("shift-A").unwrap(),
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -912,6 +928,7 @@ fn test_keyboard_enhancement_mac_option_without_meta_mapping_is_not_disambiguate
         KeystrokeWithDetails {
             keystroke: &alt_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&terminal_model_mock),
@@ -930,6 +947,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &shift_a,
             key_without_modifiers: Some("a"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -942,6 +960,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &shift_at,
             key_without_modifiers: Some("2"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -954,6 +973,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &shift_pct,
             key_without_modifiers: Some("5"),
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -966,6 +986,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -978,6 +999,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &ctrl_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -990,6 +1012,7 @@ fn test_keyboard_enhancement_alternate_keys() {
         KeystrokeWithDetails {
             keystroke: &shift_enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -1008,6 +1031,7 @@ fn test_keyboard_enhancement_associated_text() {
         KeystrokeWithDetails {
             keystroke: &a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("a"),
         }
         .to_escape_sequence(&mock),
@@ -1020,6 +1044,7 @@ fn test_keyboard_enhancement_associated_text() {
         KeystrokeWithDetails {
             keystroke: &shift_a,
             key_without_modifiers: Some("a"),
+            base_layout_key: None,
             chars: Some("A"),
         }
         .to_escape_sequence(&mock),
@@ -1032,6 +1057,7 @@ fn test_keyboard_enhancement_associated_text() {
         KeystrokeWithDetails {
             keystroke: &ctrl_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("\x01"),
         }
         .to_escape_sequence(&mock),
@@ -1044,6 +1070,7 @@ fn test_keyboard_enhancement_associated_text() {
         KeystrokeWithDetails {
             keystroke: &enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("\r"),
         }
         .to_escape_sequence(&mock),
@@ -1056,10 +1083,57 @@ fn test_keyboard_enhancement_associated_text() {
         KeystrokeWithDetails {
             keystroke: &escape,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("\x1b"),
         }
         .to_escape_sequence(&mock),
         Some(b"\x1b[27u".to_vec())
+    );
+}
+
+#[test]
+fn test_keyboard_enhancement_base_layout_key() {
+    // With REPORT_ALTERNATE_KEYS (flag 4), the physical key's US-layout character is reported in
+    // the third sub-field, so applications can match chords on layouts without Latin letters.
+    let mock = mock_with_alternate_keys();
+
+    // ctrl+v on a Russian layout: key=1084 (Cyrillic "m"), base layout key=118 (v).
+    let ctrl_cyrillic = Keystroke::parse("ctrl-\u{43c}").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &ctrl_cyrillic,
+            key_without_modifiers: Some("\u{43c}"),
+            base_layout_key: Some('v'),
+            chars: None,
+        }
+        .to_escape_sequence(&mock),
+        Some(b"\x1b[1084::118;5u".to_vec())
+    );
+
+    // On a US layout the base layout key matches the key code, so it stays out of the sequence.
+    let ctrl_v = Keystroke::parse("ctrl-v").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &ctrl_v,
+            key_without_modifiers: Some("v"),
+            base_layout_key: Some('v'),
+            chars: None,
+        }
+        .to_escape_sequence(&mock),
+        Some(b"\x1b[118;5u".to_vec())
+    );
+
+    // Without flag 4 the base layout key is not reported at all.
+    let mock_without_alternate_keys = mock_with_all_keys_as_escape();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &ctrl_cyrillic,
+            key_without_modifiers: Some("\u{43c}"),
+            base_layout_key: Some('v'),
+            chars: None,
+        }
+        .to_escape_sequence(&mock_without_alternate_keys),
+        Some(b"\x1b[1084;5u".to_vec())
     );
 }
 
@@ -1074,6 +1148,7 @@ fn test_keyboard_enhancement_alternate_keys_with_associated_text() {
         KeystrokeWithDetails {
             keystroke: &shift_a,
             key_without_modifiers: Some("a"),
+            base_layout_key: None,
             chars: Some("A"),
         }
         .to_escape_sequence(&mock),
@@ -1086,6 +1161,7 @@ fn test_keyboard_enhancement_alternate_keys_with_associated_text() {
         KeystrokeWithDetails {
             keystroke: &shift_at,
             key_without_modifiers: Some("2"),
+            base_layout_key: None,
             chars: Some("@"),
         }
         .to_escape_sequence(&mock),
@@ -1098,6 +1174,7 @@ fn test_keyboard_enhancement_alternate_keys_with_associated_text() {
         KeystrokeWithDetails {
             keystroke: &z,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("z"),
         }
         .to_escape_sequence(&mock),
@@ -1118,6 +1195,7 @@ fn test_keyboard_enhancement_event_types() {
         KeystrokeWithDetails {
             keystroke: &a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -1130,6 +1208,7 @@ fn test_keyboard_enhancement_event_types() {
         KeystrokeWithDetails {
             keystroke: &ctrl_a,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -1142,6 +1221,7 @@ fn test_keyboard_enhancement_event_types() {
         KeystrokeWithDetails {
             keystroke: &enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -1154,6 +1234,7 @@ fn test_keyboard_enhancement_event_types() {
         KeystrokeWithDetails {
             keystroke: &shift_enter,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),
@@ -1239,6 +1320,7 @@ fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
         KeystrokeWithDetails {
             keystroke: &option_space,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: Some("\u{a0}"),
         }
         .to_escape_sequence(&mock),
@@ -1251,6 +1333,7 @@ fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
         KeystrokeWithDetails {
             keystroke: &option_space,
             key_without_modifiers: None,
+            base_layout_key: None,
             chars: None,
         }
         .to_escape_sequence(&mock),

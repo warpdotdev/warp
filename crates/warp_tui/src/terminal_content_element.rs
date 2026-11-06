@@ -230,6 +230,7 @@ fn forwarded_pty_input_for_event<'a>(
             let bytes = KeystrokeWithDetails {
                 keystroke,
                 key_without_modifiers: details.key_without_modifiers.as_deref(),
+                base_layout_key: details.base_layout_key,
                 chars: Some(chars.as_str()),
             }
             .to_pty_bytes(model)?;
