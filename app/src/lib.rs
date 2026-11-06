@@ -979,9 +979,7 @@ pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
 #[cfg(feature = "tui")]
 pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut AppContext)>) -> Result<()> {
     run_internal(LaunchMode::Tui {
-        entrypoint: TuiEntryPoint::CliCommand {
-            execute,
-        },
+        entrypoint: TuiEntryPoint::CliCommand { execute },
     })
 }
 
