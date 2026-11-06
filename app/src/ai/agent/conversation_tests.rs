@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
+use ai::api_keys::{
+    ApiKeyManager, CustomEndpointModel, CustomEndpointParams, CustomEndpointSchema,
+};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -771,11 +773,12 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
                     name: "Endpoint".to_string(),
                     url: "https://custom.example".to_string(),
                     api_key: "key".to_string(),
-                    models: vec![(
-                        "raw-model".to_string(),
-                        Some("Friendly alias".to_string()),
-                        Some("config-key".to_string()),
-                    )],
+                    models: vec![CustomEndpointModel {
+                        name: "raw-model".to_string(),
+                        alias: Some("Friendly alias".to_string()),
+                        config_key: "config-key".to_string(),
+                        ..Default::default()
+                    }],
                     schema: CustomEndpointSchema::default(),
                 },
                 ctx,
@@ -1031,11 +1034,12 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
                     name: "Endpoint".to_string(),
                     url: "https://custom.example".to_string(),
                     api_key: "key".to_string(),
-                    models: vec![(
-                        "raw-model".to_string(),
-                        Some("Resolved custom".to_string()),
-                        Some("config-key".to_string()),
-                    )],
+                    models: vec![CustomEndpointModel {
+                        name: "raw-model".to_string(),
+                        alias: Some("Resolved custom".to_string()),
+                        config_key: "config-key".to_string(),
+                        ..Default::default()
+                    }],
                     schema: CustomEndpointSchema::default(),
                 },
                 ctx,
