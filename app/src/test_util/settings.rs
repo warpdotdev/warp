@@ -119,7 +119,8 @@ pub fn initialize_settings_for_tests_with_mode(
     SharedObjectLimitBannerSettings::register(app);
     WarpDriveSettings::register(app);
     WindowSettings::register(app);
-    SharedSessionSettings::register(app);
+    app.update(SharedSessionSettings::register);
+    app.update(SharedSessionSettings::enforce_inactivity_ordering);
     CodeSettings::register(app);
     SemanticSelection::register(app);
 
