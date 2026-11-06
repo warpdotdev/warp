@@ -33,7 +33,7 @@ fn bridge_command_names_the_executable_and_the_launch_file_escaped_for_the_shell
     );
     assert_eq!(
         command,
-        r"& C:\Program` Files\Warp\warp.exe acp-bridge --launch-file C:\Temp\oz-acp-x\launch.json"
+        r"& C:\Program` Files\Warp\warp.exe acp-bridge --launch-file C:\Temp\oz-acp-x\launch.json | Out-Host"
     );
 }
 

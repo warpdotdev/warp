@@ -1077,10 +1077,13 @@ fn build_checkout_helper_command(
             shell_escape_single_quotes(&path.to_string_lossy(), shell_type)
         )
     };
-    let prefix = if shell_type == ShellType::PowerShell {
-        "& "
+    // The release Windows CLI is a GUI-subsystem binary, and PowerShell only waits for one when
+    // its output is consumed by the pipeline. Without the trailing `| Out-Host` the block ends as
+    // soon as the helper is spawned and the driver reads the report file before it is written.
+    let (prefix, suffix) = if shell_type == ShellType::PowerShell {
+        ("& ", " | Out-Host")
     } else {
-        ""
+        ("", "")
     };
     let operation = if remove_origins_only {
         " --remove-origins-only"
@@ -1093,7 +1096,7 @@ fn build_checkout_helper_command(
         ""
     };
     format!(
-        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}{preparation}",
+        "{prefix}{} environment-checkout --requests-file {} --report-file {}{operation}{preparation}{suffix}",
         quote(executable),
         quote(requests_file),
         quote(report_file)
