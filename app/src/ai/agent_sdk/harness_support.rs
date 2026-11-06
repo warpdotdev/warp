@@ -166,6 +166,7 @@ fn report_external_reference(
     };
 
     let artifact = Artifact::ExternalReference {
+        origin: args.origin,
         reference_type: args.reference_type,
         url: args.url,
         title: args.title,

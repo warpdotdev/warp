@@ -1095,6 +1095,7 @@ impl AmbientAgentRunner {
                     url,
                     title,
                     metadata,
+                    ..
                 } => {
                     let title_str = title.as_deref().unwrap_or("Untitled reference");
                     lines.push(format!("  {reference_type}: {title_str}"));
