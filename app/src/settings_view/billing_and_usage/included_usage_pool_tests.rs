@@ -1,18 +1,57 @@
-use chrono::Duration;
+use chrono::{Duration, TimeZone};
 use pathfinder_geometry::vector::vec2f;
+use warpui::elements::{Expanded, Flex, ParentElement, Text};
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, TypedActionView, WindowInvalidation};
 
 use super::*;
 use crate::server::ids::ServerId;
 
+fn now() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 11, 6, 0, 0, 0).unwrap()
+}
+
 fn pool(remaining_cents: f64) -> IncludedUsagePool {
     IncludedUsagePool {
         monthly_cents: 10_000,
         granted_cents: 10_000.0,
         remaining_cents,
-        expires_at: Some((Utc::now() + Duration::days(1)).into()),
+        expires_at: Some((now() + Duration::days(1)).into()),
     }
+}
+
+#[test]
+fn included_pool_card_shows_remaining_over_monthly_total() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(|ctx| {
+            let card = render_card(
+                &PoolState::Ready(pool(8_750.0)),
+                now(),
+                Appearance::as_ref(ctx),
+            );
+            let text = card.debug_text_content().unwrap_or_default();
+            assert!(text.contains("$87.50"));
+            assert!(text.contains("/ $100.00 remaining"));
+            assert!(text.contains("Resets "));
+            assert!(!text.contains("$12.50"));
+            assert!(!text.contains("used of"));
+        });
+    });
+}
+
+#[test]
+fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(|ctx| {
+            let card = render_card(&PoolState::Ready(pool(0.0)), now(), Appearance::as_ref(ctx));
+            let text = card.debug_text_content().unwrap_or_default();
+            assert!(text.contains("$0.00"));
+            assert!(text.contains("/ $100.00 remaining"));
+            assert!(!text.contains("Unavailable"));
+        });
+    });
 }
 
 fn key(id: i64) -> PoolKey {
@@ -23,39 +62,48 @@ fn key(id: i64) -> PoolKey {
 }
 
 #[test]
-fn included_pool_uses_server_amounts_without_individual_allowance_or_addons() {
-    for (remaining, balance, remaining_label) in [
-        (10_000.0, "$0.00 used of $100.00", "$100.00 remaining"),
-        (8_750.0, "$12.50 used of $100.00", "$87.50 remaining"),
-        (0.0, "$100.00 used of $100.00", "$0.00 remaining"),
-        (8_750.25, "$12.50 used of $100.00", "$87.50 remaining"),
-    ] {
-        let labels = pool_labels(&PoolState::Ready(pool(remaining)), Utc::now());
-        assert_eq!(labels.balance, balance);
-        assert_eq!(labels.remaining.as_deref(), Some(remaining_label));
-        assert!(labels.reset.unwrap().starts_with("Resets "));
-    }
+fn included_pool_keeps_remaining_separate_from_monthly_total() {
+    let PoolBalance::Available {
+        remaining_cents,
+        monthly_cents,
+        reset,
+    } = pool_balance(&PoolState::Ready(pool(8_750.25)), now())
+    else {
+        panic!("Expected an available balance")
+    };
+    assert_eq!(remaining_cents, 8_750.25);
+    assert_eq!(monthly_cents, 10_000.0);
+    assert!(reset.starts_with("Resets "));
+}
+
+#[test]
+fn included_pool_uses_configured_monthly_total_instead_of_hardcoded_allowance() {
     let mut configured = pool(300.0);
     configured.monthly_cents = 500;
     configured.granted_cents = 500.0;
-    assert_eq!(
-        pool_labels(&PoolState::Ready(configured), Utc::now()).balance,
-        "$2.00 used of $5.00",
-    );
+    let PoolBalance::Available {
+        remaining_cents,
+        monthly_cents,
+        ..
+    } = pool_balance(&PoolState::Ready(configured), now())
+    else {
+        panic!("Expected an available balance")
+    };
+    assert_eq!(remaining_cents, 300.0);
+    assert_eq!(monthly_cents, 500.0);
 }
 
 #[test]
 fn included_pool_missing_or_expired_is_not_shown_as_exhausted() {
-    let now = Utc::now();
-    let unavailable = pool_labels(&PoolState::Unavailable, now);
-    assert!(unavailable.balance.contains("unavailable"));
-    assert_eq!(unavailable.remaining, None);
+    let now = now();
+    let unavailable = PoolBalance::Unavailable;
+    assert_eq!(pool_balance(&PoolState::Unavailable, now), unavailable);
     let mut expired = pool(500.0);
     expired.expires_at = Some((now - Duration::seconds(1)).into());
-    assert_eq!(pool_labels(&PoolState::Ready(expired), now), unavailable);
+    assert_eq!(pool_balance(&PoolState::Ready(expired), now), unavailable);
     for invalid in [f64::NAN, f64::INFINITY, -1.0] {
         assert_eq!(
-            pool_labels(&PoolState::Ready(pool(invalid)), now),
+            pool_balance(&PoolState::Ready(pool(invalid)), now),
             unavailable,
         );
     }
@@ -69,8 +117,8 @@ fn included_pool_loading_and_null_results_are_distinct() {
     request.complete(generation, Ok(None));
     assert!(matches!(request.state, PoolState::Unavailable));
     assert_ne!(
-        pool_labels(&PoolState::Loading, Utc::now()).balance,
-        pool_labels(&request.state, Utc::now()).balance,
+        pool_balance(&PoolState::Loading, now()),
+        pool_balance(&request.state, now()),
     );
 }
 
@@ -117,7 +165,6 @@ fn included_pool_old_server_validation_error_is_unavailable_and_retryable() {
 
 struct CardTestView {
     state: PoolState,
-    refresh_button: MouseStateHandle,
 }
 
 impl Entity for CardTestView {
@@ -134,12 +181,28 @@ impl View for CardTestView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
-        render_card(
-            &self.state,
-            Utc::now(),
-            self.refresh_button.clone(),
-            Appearance::as_ref(ctx),
-        )
+        let appearance = Appearance::as_ref(ctx);
+        Flex::column()
+            .with_child(Text::new_inline("Balance", appearance.ui_font_family(), 16.).finish())
+            .with_child(
+                Flex::row()
+                    .with_spacing(8.)
+                    .with_child(Expanded::new(1., render_card(&self.state, now(), appearance)).finish())
+                    .with_child(
+                        Expanded::new(
+                            1.,
+                            render_balance_card(
+                                appearance,
+                                crate::settings_view::billing_and_usage_page_v2::BONUS_CREDITS_DOT_COLOR,
+                                "Team usage",
+                                "Expires Nov 02, 2027",
+                                BalanceAmount::Cents(989.),
+                                None,
+                                appearance.theme().outline().into_solid(),
+                            ),
+                        ).finish(),
+                    ).finish(),
+            ).finish()
     }
 }
 
@@ -153,15 +216,17 @@ fn included_pool_card_renders_and_lays_out_at_narrow_and_wide_widths() {
             PoolState::Ready(pool(8_750.0)),
             PoolState::Ready(pool(0.0)),
         ] {
-            let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| CardTestView {
-                state,
-                refresh_button: MouseStateHandle::default(),
-            });
+            let (window_id, view) =
+                app.add_window(WindowStyle::NotStealFocus, |_| CardTestView { state });
             app.update(|ctx| {
                 let element = view.as_ref(ctx).render(ctx);
                 let text = element.debug_text_content().unwrap_or_default();
                 assert!(text.contains("Included team usage"));
-                assert!(text.contains("Resets monthly without rollover"));
+                assert!(text.contains("Balance"));
+                assert!(text.contains("Team usage"));
+                assert!(text.contains("$9.89"));
+                assert!(!text.contains("Team add-on"));
+                assert!(!text.contains("used of"));
                 assert!(!text.contains("$0.00/$0.00"));
                 let mut presenter = Presenter::new(window_id);
                 for width in [320., 640., 1000.] {

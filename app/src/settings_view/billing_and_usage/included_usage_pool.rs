@@ -3,24 +3,18 @@ use std::sync::Arc;
 use chrono::{DateTime, Local, Utc};
 use warp_core::ui::appearance::Appearance;
 use warp_graphql::queries::get_included_usage_pools::IncludedUsagePool;
-use warpui::elements::{
-    Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
-};
+use warpui::elements::Text;
 use warpui::fonts::{Properties, Weight};
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::workspace::WorkspaceClient;
-use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
+use crate::settings_view::billing_and_usage_page_v2::{
+    BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card, render_balance_card_contents,
+};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
-
-pub(super) const INCLUDED_USAGE_DESCRIPTION: &str =
-    "Shared across your team and used before team add-on credits. Resets monthly without rollover.";
-pub(crate) const SCALE_ADDON_DESCRIPTION: &str = "Purchased team add-on credits are separate from included team usage. They are used after included usage is depleted, roll over between billing cycles, and expire one year after purchase.";
 
 pub(crate) fn is_scale_workspace(workspace: Option<&Workspace>) -> bool {
     workspace
@@ -75,7 +69,6 @@ pub struct IncludedUsagePoolView {
     client: Arc<dyn WorkspaceClient>,
     request: PoolRequest,
     selected: bool,
-    refresh_button: MouseStateHandle,
 }
 
 impl IncludedUsagePoolView {
@@ -92,7 +85,6 @@ impl IncludedUsagePoolView {
             client: ServerApiProvider::as_ref(ctx).get_workspace_client(),
             request: PoolRequest::default(),
             selected: false,
-            refresh_button: MouseStateHandle::default(),
         }
     }
 
@@ -153,35 +145,25 @@ impl View for IncludedUsagePoolView {
         } else {
             &PoolState::Idle
         };
-        render_card(
-            state,
-            Utc::now(),
-            self.refresh_button.clone(),
-            Appearance::as_ref(ctx),
-        )
+        render_card(state, Utc::now(), Appearance::as_ref(ctx))
     }
 }
 
 #[derive(Debug, PartialEq)]
-struct PoolLabels {
-    balance: String,
-    remaining: Option<String>,
-    reset: Option<String>,
+enum PoolBalance {
+    Loading,
+    Unavailable,
+    Available {
+        remaining_cents: f64,
+        monthly_cents: f64,
+        reset: String,
+    },
 }
 
-fn pool_labels(state: &PoolState, now: DateTime<Utc>) -> PoolLabels {
-    let unavailable = || PoolLabels {
-        balance: "Included usage is unavailable. Refresh to try again.".to_string(),
-        remaining: None,
-        reset: None,
-    };
+fn pool_balance(state: &PoolState, now: DateTime<Utc>) -> PoolBalance {
     match state {
-        PoolState::Idle | PoolState::Loading => PoolLabels {
-            balance: "Loading included team usage…".to_string(),
-            remaining: None,
-            reset: None,
-        },
-        PoolState::Unavailable => unavailable(),
+        PoolState::Idle | PoolState::Loading => PoolBalance::Loading,
+        PoolState::Unavailable => PoolBalance::Unavailable,
         PoolState::Ready(pool) => {
             if pool.monthly_cents <= 0
                 || !pool.granted_cents.is_finite()
@@ -190,78 +172,59 @@ fn pool_labels(state: &PoolState, now: DateTime<Utc>) -> PoolLabels {
                 || pool.remaining_cents < 0.0
                 || pool.expires_at.is_some_and(|expiry| expiry.utc() <= now)
             {
-                return unavailable();
+                return PoolBalance::Unavailable;
             }
-            let remaining = pool.remaining_cents.min(pool.granted_cents);
-            let used = (pool.granted_cents - remaining).max(0.0);
-            PoolLabels {
-                balance: format!(
-                    "${:.2} used of ${:.2}",
-                    used / 100.0,
-                    pool.granted_cents / 100.0
-                ),
-                remaining: Some(format!("${:.2} remaining", remaining / 100.0)),
-                reset: pool.expires_at.map(|expiry| {
-                    expiry
-                        .utc()
-                        .with_timezone(&Local)
-                        .format("Resets %b %d at %-I:%M %p")
-                        .to_string()
-                }),
+            let monthly_cents = f64::from(pool.monthly_cents);
+            PoolBalance::Available {
+                remaining_cents: pool.remaining_cents.min(monthly_cents),
+                monthly_cents,
+                reset: pool
+                    .expires_at
+                    .map(|expiry| {
+                        expiry
+                            .utc()
+                            .with_timezone(&Local)
+                            .format("Resets %b %d at %-I:%M %p")
+                            .to_string()
+                    })
+                    .unwrap_or_default(),
             }
         }
     }
 }
 
-fn render_card(
-    state: &PoolState,
-    now: DateTime<Utc>,
-    refresh_button: MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let labels = pool_labels(state, now);
-    let theme = appearance.theme();
-    let mut content = Flex::column().with_spacing(8.);
-    content.add_child(
-        Text::new("Included team usage", appearance.ui_font_family(), 16.)
+fn render_card(state: &PoolState, now: DateTime<Utc>, appearance: &Appearance) -> Box<dyn Element> {
+    let border_color = appearance.theme().outline().into_solid();
+    let status = match pool_balance(state, now) {
+        PoolBalance::Available {
+            remaining_cents,
+            monthly_cents,
+            reset,
+        } => {
+            return render_balance_card(
+                appearance,
+                BASE_CREDITS_DOT_COLOR,
+                "Included team usage",
+                &reset,
+                BalanceAmount::Cents(remaining_cents),
+                Some(BalanceAmount::Cents(monthly_cents)),
+                border_color,
+            );
+        }
+        PoolBalance::Loading => "Loading…",
+        PoolBalance::Unavailable => "Unavailable",
+    };
+    render_balance_card_contents(
+        appearance,
+        BASE_CREDITS_DOT_COLOR,
+        "Included team usage",
+        "",
+        Text::new_inline(status, appearance.ui_font_family(), 24.)
+            .with_color(appearance.theme().active_ui_text_color().into())
             .with_style(Properties::default().weight(Weight::Semibold))
-            .with_color(theme.active_ui_text_color().into())
             .finish(),
-    );
-    content.add_child(
-        Text::new(labels.balance, appearance.ui_font_family(), 14.)
-            .with_color(theme.active_ui_text_color().into())
-            .finish(),
-    );
-    for label in labels
-        .remaining
-        .into_iter()
-        .chain(labels.reset)
-        .chain([INCLUDED_USAGE_DESCRIPTION.to_string()])
-    {
-        content.add_child(
-            Text::new(label, appearance.ui_font_family(), 12.)
-                .with_color(theme.sub_text_color(theme.surface_1()).into())
-                .finish(),
-        );
-    }
-    content.add_child(
-        appearance
-            .ui_builder()
-            .button(ButtonVariant::Link, refresh_button)
-            .with_text_label("Refresh".to_string())
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(BillingAndUsagePageAction::RefreshWorkspaceData);
-            })
-            .finish(),
-    );
-    Container::new(content.finish())
-        .with_uniform_padding(16.)
-        .with_background_color(theme.surface_1().into_solid())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .with_margin_bottom(16.)
-        .finish()
+        border_color,
+    )
 }
 
 #[cfg(test)]

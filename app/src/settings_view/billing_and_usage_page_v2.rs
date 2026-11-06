@@ -31,9 +31,7 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::{
-    IncludedUsagePoolView, SCALE_ADDON_DESCRIPTION, is_scale_workspace,
-};
+use super::billing_and_usage::included_usage_pool::{IncludedUsagePoolView, is_scale_workspace};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -211,7 +209,7 @@ struct UsageHistoryState {
 
 /// A balance in the unit it is displayed in.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum BalanceAmount {
+pub(super) enum BalanceAmount {
     Credits(i64),
     /// US cents, shown as dollars.
     Cents(f64),
@@ -921,7 +919,8 @@ impl BillingAndUsagePageV2View {
         let unit = usage_display_unit(app);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        if !has_base_credits && !classified.has_any() {
+        let has_included_pool = is_scale_workspace(workspaces.current_workspace());
+        if !has_included_pool && !has_base_credits && !classified.has_any() {
             return None;
         }
 
@@ -930,6 +929,12 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_size(MainAxisSize::Max);
 
         let outline_color = theme.outline().into_solid();
+
+        if has_included_pool {
+            cards_row.add_child(
+                Expanded::new(1., ChildView::new(&self.included_usage_pool).finish()).finish(),
+            );
+        }
 
         if has_base_credits {
             let reset_str = ai_model
@@ -970,19 +975,13 @@ impl BillingAndUsagePageV2View {
                 continue;
             }
             let balance = bucket.balance(unit);
-            let label = if is_scale_workspace(workspaces.current_workspace()) && pool != "Personal"
-            {
-                balance.pool_label(&format!("{pool} add-on"))
-            } else {
-                balance.pool_label(pool)
-            };
             cards_row.add_child(
                 Expanded::new(
                     1.,
                     render_balance_card(
                         appearance,
                         BONUS_CREDITS_DOT_COLOR,
-                        &label,
+                        &balance.pool_label(pool),
                         &bucket.expiry_label(),
                         balance,
                         None,
@@ -1278,9 +1277,7 @@ impl BillingAndUsagePageV2View {
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
-        let description_text = if is_scale_workspace(workspace) {
-            SCALE_ADDON_DESCRIPTION.to_string()
-        } else if team_count > 1 {
+        let description_text = if team_count > 1 {
             format!("{description} {team_description}")
         } else {
             description
@@ -1399,11 +1396,6 @@ impl BillingAndUsagePageV2View {
                 (UsageDisplayUnit::Dollars, None) => {
                     "Your admin has enabled auto-reload. When your team's purchased usage runs low, Warp will automatically purchase more and add it to your team's shared pool.".to_string()
                 }
-            };
-            let description_text = if is_scale_workspace(workspace) {
-                format!("{description_text} {SCALE_ADDON_DESCRIPTION}")
-            } else {
-                description_text
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
                 description_text,
@@ -1929,9 +1921,6 @@ impl BillingAndUsagePageV2View {
 
     fn render_overview_tab(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        if is_scale_workspace(UserWorkspaces::as_ref(app).current_workspace()) {
-            content.add_child(ChildView::new(&self.included_usage_pool).finish());
-        }
         let ai_model = AIRequestUsageModel::as_ref(app);
         if let Some(ambient_trial_widget) =
             self.render_ambient_agent_trial_widget(ai_model, appearance, app)
@@ -2485,13 +2474,57 @@ fn base_allowance_balance(
     }
 }
 
-fn render_balance_card(
+pub(super) fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
     label: &str,
     date: &str,
     remaining: BalanceAmount,
     total: Option<BalanceAmount>,
+    border_color: ColorU,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = blended_colors::text_sub(theme, theme.background());
+
+    let credit_count = Text::new_inline(remaining.format(), appearance.ui_font_family(), 24.)
+        .with_color(theme.active_ui_text_color().into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish();
+
+    let remaining_label_text = match total {
+        Some(limit) => format!("/ {} remaining", limit.format()),
+        None => "remaining".to_string(),
+    };
+    let remaining_label = Text::new_inline(remaining_label_text, appearance.ui_font_family(), 14.)
+        .with_color(sub_color)
+        .finish();
+
+    let value_row = Flex::row()
+        .with_child(credit_count)
+        .with_child(
+            Container::new(remaining_label)
+                .with_margin_left(4.)
+                .with_padding_bottom(1.)
+                .finish(),
+        )
+        .with_cross_axis_alignment(CrossAxisAlignment::End);
+
+    render_balance_card_contents(
+        appearance,
+        dot_color,
+        label,
+        date,
+        value_row.finish(),
+        border_color,
+    )
+}
+
+pub(super) fn render_balance_card_contents(
+    appearance: &Appearance,
+    dot_color: ColorU,
+    label: &str,
+    date: &str,
+    value: Box<dyn Element>,
     border_color: ColorU,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -2532,33 +2565,10 @@ fn render_balance_card(
         .with_main_axis_size(MainAxisSize::Max)
         .finish();
 
-    let credit_count = Text::new_inline(remaining.format(), appearance.ui_font_family(), 24.)
-        .with_color(theme.active_ui_text_color().into())
-        .with_style(Properties::default().weight(Weight::Semibold))
-        .finish();
-
-    let remaining_label_text = match total {
-        Some(limit) => format!("/ {} remaining", limit.format()),
-        None => "remaining".to_string(),
-    };
-    let remaining_label = Text::new_inline(remaining_label_text, appearance.ui_font_family(), 14.)
-        .with_color(sub_color)
-        .finish();
-
-    let value_row = Flex::row()
-        .with_child(credit_count)
-        .with_child(
-            Container::new(remaining_label)
-                .with_margin_left(4.)
-                .with_padding_bottom(1.)
-                .finish(),
-        )
-        .with_cross_axis_alignment(CrossAxisAlignment::End);
-
     Container::new(
         Flex::column()
             .with_child(header)
-            .with_child(value_row.finish())
+            .with_child(value)
             .with_spacing(8.)
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .finish(),

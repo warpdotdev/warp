@@ -36,9 +36,7 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::{
-    IncludedUsagePoolView, SCALE_ADDON_DESCRIPTION, is_scale_workspace,
-};
+use super::billing_and_usage::included_usage_pool::{IncludedUsagePoolView, is_scale_workspace};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -1822,11 +1820,9 @@ impl BillingAndUsagePageView {
         let theme = appearance.theme();
         let unit = usage_display_unit(app);
 
-        let header_text = match (is_scale_workspace(workspace), unit) {
-            (true, UsageDisplayUnit::Credits) => "Team add-on credits",
-            (true, UsageDisplayUnit::Dollars) => "Team add-on usage",
-            (false, UsageDisplayUnit::Credits) => "Add-on credits",
-            (false, UsageDisplayUnit::Dollars) => "Add-on usage",
+        let header_text = match unit {
+            UsageDisplayUnit::Credits => "Add-on credits",
+            UsageDisplayUnit::Dollars => "Add-on usage",
         };
         let header = Text::new_inline(header_text, appearance.ui_font_family(), 16.)
             .with_color(fg.into())
@@ -1977,18 +1973,13 @@ impl BillingAndUsagePageView {
         // If we have an explanation, render it + return early, since the rest of the content
         // here (monthly spend limits, ad-hoc purchasing of credits) isn't relevant.
         if let Some(no_credits_access_explanation) = no_credits_access_explanation {
-            let mut card_content = Flex::column().with_children([
-                Container::new(card_header).with_margin_bottom(8.).finish(),
-                no_credits_access_explanation,
-            ]);
-            if is_scale_workspace(workspace) {
-                card_content.add_child(
-                    Text::new(SCALE_ADDON_DESCRIPTION, appearance.ui_font_family(), 12.)
-                        .with_color(theme.sub_text_color(bg).into())
-                        .finish(),
-                );
-            }
-            return Container::new(card_content.finish())
+            let card_content = Flex::column()
+                .with_children([
+                    Container::new(card_header).with_margin_bottom(8.).finish(),
+                    no_credits_access_explanation,
+                ])
+                .finish();
+            return Container::new(card_content)
                 .with_background_color(theme.surface_1().into_solid())
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
                 .with_margin_bottom(16.)
@@ -2008,9 +1999,7 @@ impl BillingAndUsagePageView {
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
-        let paragraph_text = if is_scale_workspace(workspace) {
-            SCALE_ADDON_DESCRIPTION.to_string()
-        } else if team_member_count > 1 {
+        let paragraph_text = if team_member_count > 1 {
             format!("{description} {team_description}")
         } else {
             description
@@ -3068,7 +3057,43 @@ impl BillingAndUsagePageView {
         let unit = usage_display_unit(app);
 
         if is_scale_workspace(workspace) {
-            usage.add_child(ChildView::new(&self.included_usage_pool).finish());
+            let balance_header = Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(
+                    Text::new_inline("Balance", appearance.ui_font_family(), HEADER_FONT_SIZE)
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
+                )
+                .with_child(
+                    icon_button(
+                        appearance,
+                        Icon::Refresh,
+                        false,
+                        self.refresh_icon_mouse_state.clone(),
+                    )
+                    .build()
+                    .on_click(|ctx, _, _| {
+                        ctx.dispatch_typed_action(BillingAndUsagePageAction::RefreshWorkspaceData);
+                    })
+                    .finish(),
+                )
+                .finish();
+            usage.add_child(
+                Container::new(
+                    Flex::column()
+                        .with_child(
+                            Container::new(balance_header)
+                                .with_margin_bottom(12.)
+                                .finish(),
+                        )
+                        .with_child(ChildView::new(&self.included_usage_pool).finish())
+                        .finish(),
+                )
+                .with_margin_bottom(24.)
+                .finish(),
+            );
         }
 
         let mut usage_header_right_side = Flex::row()
