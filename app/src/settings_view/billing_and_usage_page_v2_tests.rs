@@ -6,6 +6,24 @@ fn workspace_uid(id: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(id))
 }
 
+#[test]
+fn scale_addon_balance_preserves_fractional_cents_with_no_whole_credits() {
+    let current = workspace_uid(1);
+    let classified = ClassifiedGrants::new(
+        &[grant_in_dollars(
+            BonusGrantScope::Workspace(current),
+            0,
+            0.75,
+        )],
+        Some(current),
+    );
+    assert!(!classified.workspace.is_empty());
+    assert_eq!(
+        classified.workspace.balance(UsageDisplayUnit::Dollars),
+        BalanceAmount::Cents(0.75)
+    );
+}
+
 fn grant(scope: BonusGrantScope, grant_type: BonusGrantType, remaining: i32) -> BonusGrant {
     BonusGrant {
         created_at: Utc::now(),

@@ -36,6 +36,9 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::included_usage_pool::{
+    IncludedUsagePoolView, SCALE_ADDON_DESCRIPTION, is_scale_workspace,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -241,6 +244,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    included_usage_pool: ViewHandle<IncludedUsagePoolView>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -424,6 +428,7 @@ impl BillingAndUsagePageView {
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
+            included_usage_pool: ctx.add_view(IncludedUsagePoolView::new),
             self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
@@ -812,6 +817,8 @@ impl BillingAndUsagePageView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.purchase_addon_credits_loading = false;
+        self.included_usage_pool
+            .update(ctx, |view, ctx| view.refresh(ctx));
         std::mem::drop(
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
@@ -991,6 +998,8 @@ impl TypedActionView for BillingAndUsagePageView {
                 ctx.notify();
             }
             BillingAndUsagePageAction::RefreshWorkspaceData => {
+                self.included_usage_pool
+                    .update(ctx, |view, ctx| view.refresh(ctx));
                 std::mem::drop(
                     TeamUpdateManager::handle(ctx)
                         .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
@@ -1813,9 +1822,11 @@ impl BillingAndUsagePageView {
         let theme = appearance.theme();
         let unit = usage_display_unit(app);
 
-        let header_text = match unit {
-            UsageDisplayUnit::Credits => "Add-on credits",
-            UsageDisplayUnit::Dollars => "Add-on usage",
+        let header_text = match (is_scale_workspace(workspace), unit) {
+            (true, UsageDisplayUnit::Credits) => "Team add-on credits",
+            (true, UsageDisplayUnit::Dollars) => "Team add-on usage",
+            (false, UsageDisplayUnit::Credits) => "Add-on credits",
+            (false, UsageDisplayUnit::Dollars) => "Add-on usage",
         };
         let header = Text::new_inline(header_text, appearance.ui_font_family(), 16.)
             .with_color(fg.into())
@@ -1966,13 +1977,18 @@ impl BillingAndUsagePageView {
         // If we have an explanation, render it + return early, since the rest of the content
         // here (monthly spend limits, ad-hoc purchasing of credits) isn't relevant.
         if let Some(no_credits_access_explanation) = no_credits_access_explanation {
-            let card_content = Flex::column()
-                .with_children([
-                    Container::new(card_header).with_margin_bottom(8.).finish(),
-                    no_credits_access_explanation,
-                ])
-                .finish();
-            return Container::new(card_content)
+            let mut card_content = Flex::column().with_children([
+                Container::new(card_header).with_margin_bottom(8.).finish(),
+                no_credits_access_explanation,
+            ]);
+            if is_scale_workspace(workspace) {
+                card_content.add_child(
+                    Text::new(SCALE_ADDON_DESCRIPTION, appearance.ui_font_family(), 12.)
+                        .with_color(theme.sub_text_color(bg).into())
+                        .finish(),
+                );
+            }
+            return Container::new(card_content.finish())
                 .with_background_color(theme.surface_1().into_solid())
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
                 .with_margin_bottom(16.)
@@ -1992,7 +2008,9 @@ impl BillingAndUsagePageView {
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
-        let paragraph_text = if team_member_count > 1 {
+        let paragraph_text = if is_scale_workspace(workspace) {
+            SCALE_ADDON_DESCRIPTION.to_string()
+        } else if team_member_count > 1 {
             format!("{description} {team_description}")
         } else {
             description
@@ -3049,6 +3067,10 @@ impl BillingAndUsagePageView {
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
         let unit = usage_display_unit(app);
 
+        if is_scale_workspace(workspace) {
+            usage.add_child(ChildView::new(&self.included_usage_pool).finish());
+        }
+
         let mut usage_header_right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -3188,6 +3210,21 @@ impl BillingAndUsagePageView {
                     app,
                 ));
             }
+        }
+
+        if is_scale_workspace(workspace) {
+            if workspace_is_delinquent_due_to_payment_issue {
+                usage.add_child(
+                    Text::new(
+                        "Restricted due to billing issue. Contact your team admin to resolve it.",
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(appearance.theme().ui_error_color())
+                    .finish(),
+                );
+            }
+            return usage.finish();
         }
 
         let usage_header = Container::new(

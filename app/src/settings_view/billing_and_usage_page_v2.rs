@@ -31,6 +31,9 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::included_usage_pool::{
+    IncludedUsagePoolView, SCALE_ADDON_DESCRIPTION, is_scale_workspace,
+};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -301,7 +304,11 @@ impl ClassifiedGrants {
             if grant.expiration.is_some_and(|exp| now >= exp) {
                 continue;
             }
-            if grant.request_credits_remaining <= 0 {
+            if grant.request_credits_remaining <= 0
+                && grant
+                    .usage_cents_remaining
+                    .is_none_or(|cents| !cents.is_finite() || cents <= 0.0)
+            {
                 continue;
             }
             if grant.grant_type == BonusGrantType::AmbientOnly {
@@ -332,6 +339,7 @@ impl ClassifiedGrants {
 }
 
 pub struct BillingAndUsagePageV2View {
+    included_usage_pool: ViewHandle<IncludedUsagePoolView>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -436,6 +444,7 @@ impl BillingAndUsagePageV2View {
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
+            included_usage_pool: ctx.add_view(IncludedUsagePoolView::new),
             self_handle: ctx.handle(),
             auth_state,
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -903,7 +912,8 @@ impl BillingAndUsagePageV2View {
         let theme = appearance.theme();
         let ai_model = AIRequestUsageModel::as_ref(app);
 
-        let has_base_credits = ai_model.request_limit() > 0;
+        let has_base_credits = ai_model.request_limit() > 0
+            && !is_scale_workspace(UserWorkspaces::as_ref(app).current_workspace());
 
         let grants = ai_model.bonus_grants();
         let workspaces = UserWorkspaces::as_ref(app);
@@ -960,13 +970,19 @@ impl BillingAndUsagePageV2View {
                 continue;
             }
             let balance = bucket.balance(unit);
+            let label = if is_scale_workspace(workspaces.current_workspace()) && pool != "Personal"
+            {
+                balance.pool_label(&format!("{pool} add-on"))
+            } else {
+                balance.pool_label(pool)
+            };
             cards_row.add_child(
                 Expanded::new(
                     1.,
                     render_balance_card(
                         appearance,
                         BONUS_CREDITS_DOT_COLOR,
-                        &balance.pool_label(pool),
+                        &label,
                         &bucket.expiry_label(),
                         balance,
                         None,
@@ -1262,7 +1278,9 @@ impl BillingAndUsagePageV2View {
                 ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM,
             ),
         };
-        let description_text = if team_count > 1 {
+        let description_text = if is_scale_workspace(workspace) {
+            SCALE_ADDON_DESCRIPTION.to_string()
+        } else if team_count > 1 {
             format!("{description} {team_description}")
         } else {
             description
@@ -1381,6 +1399,11 @@ impl BillingAndUsagePageV2View {
                 (UsageDisplayUnit::Dollars, None) => {
                     "Your admin has enabled auto-reload. When your team's purchased usage runs low, Warp will automatically purchase more and add it to your team's shared pool.".to_string()
                 }
+            };
+            let description_text = if is_scale_workspace(workspace) {
+                format!("{description_text} {SCALE_ADDON_DESCRIPTION}")
+            } else {
+                description_text
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
                 description_text,
@@ -1906,6 +1929,9 @@ impl BillingAndUsagePageV2View {
 
     fn render_overview_tab(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        if is_scale_workspace(UserWorkspaces::as_ref(app).current_workspace()) {
+            content.add_child(ChildView::new(&self.included_usage_pool).finish());
+        }
         let ai_model = AIRequestUsageModel::as_ref(app);
         if let Some(ambient_trial_widget) =
             self.render_ambient_agent_trial_widget(ai_model, appearance, app)
@@ -2137,6 +2163,8 @@ impl BillingAndUsagePageV2View {
         ctx: &mut ViewContext<Self>,
     ) {
         self.addon_credits.purchase_loading = false;
+        self.included_usage_pool
+            .update(ctx, |view, ctx| view.refresh(ctx));
         std::mem::drop(
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |mgr, ctx| mgr.refresh_workspace_metadata(ctx)),
@@ -2258,6 +2286,8 @@ impl TypedActionView for BillingAndUsagePageV2View {
             BillingAndUsagePageAction::ToggleSortingMenu
             | BillingAndUsagePageAction::ChangeUsageSort { .. } => {}
             BillingAndUsagePageAction::RefreshWorkspaceData => {
+                self.included_usage_pool
+                    .update(ctx, |view, ctx| view.refresh(ctx));
                 std::mem::drop(
                     TeamUpdateManager::handle(ctx)
                         .update(ctx, |mgr, ctx| mgr.refresh_workspace_metadata(ctx)),

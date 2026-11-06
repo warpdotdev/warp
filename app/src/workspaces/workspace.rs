@@ -305,6 +305,7 @@ pub enum CustomerType {
     Lightspeed,
     Build,
     BuildMax,
+    Scale,
     Unknown,
 }
 
@@ -321,6 +322,7 @@ impl CustomerType {
             CustomerType::Lightspeed => "Lightspeed".to_string(),
             CustomerType::Build => "Build".to_string(),
             CustomerType::BuildMax => "Max".to_string(),
+            CustomerType::Scale => "Scale".to_string(),
             CustomerType::Unknown => "".to_string(),
         }
     }
@@ -693,7 +695,8 @@ impl BillingMetadata {
             | CustomerType::Business
             | CustomerType::Enterprise
             | CustomerType::Build
-            | CustomerType::BuildMax => false,
+            | CustomerType::BuildMax
+            | CustomerType::Scale => false,
             CustomerType::Free
             | CustomerType::Legacy
             | CustomerType::Prosumer
@@ -726,7 +729,8 @@ impl BillingMetadata {
             | CustomerType::Business
             | CustomerType::Lightspeed
             | CustomerType::Build
-            | CustomerType::BuildMax => true,
+            | CustomerType::BuildMax
+            | CustomerType::Scale => true,
             CustomerType::Free
             | CustomerType::Enterprise
             | CustomerType::Legacy
@@ -744,7 +748,8 @@ impl BillingMetadata {
             | CustomerType::Enterprise
             | CustomerType::Legacy
             | CustomerType::Build
-            | CustomerType::BuildMax => true,
+            | CustomerType::BuildMax
+            | CustomerType::Scale => true,
             CustomerType::Free | CustomerType::Unknown => false,
         }
     }
@@ -793,6 +798,7 @@ impl BillingMetadata {
             | CustomerType::Enterprise
             | CustomerType::Build
             | CustomerType::BuildMax
+            | CustomerType::Scale
             | CustomerType::Unknown => false,
         }
     }

@@ -24,6 +24,9 @@ use warp_graphql::mutations::update_workspace_settings::{
 use warp_graphql::queries::get_ai_overages_for_workspace::{
     GetAiOveragesForWorkspace, GetAiOveragesForWorkspaceVariables, UserResult,
 };
+use warp_graphql::queries::get_included_usage_pools::{
+    self, GetIncludedUsagePools, GetIncludedUsagePoolsVariables, IncludedUsagePool,
+};
 
 use super::ServerApi;
 use super::team::TeamClient;
@@ -52,6 +55,11 @@ pub enum PurchaseAddonCreditsOutcome {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait WorkspaceClient: 'static + Send + Sync {
+    async fn included_usage_pool(
+        &self,
+        workspace_uid: WorkspaceUid,
+    ) -> Result<Option<IncludedUsagePool>>;
+
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String>;
     async fn remove_user_from_workspace(
         &self,
@@ -87,6 +95,30 @@ pub trait WorkspaceClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl WorkspaceClient for ServerApi {
+    async fn included_usage_pool(
+        &self,
+        workspace_uid: WorkspaceUid,
+    ) -> Result<Option<IncludedUsagePool>> {
+        let operation = GetIncludedUsagePools::build(GetIncludedUsagePoolsVariables {
+            request_context: get_request_context(),
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+        match response.user {
+            get_included_usage_pools::UserResult::UserOutput(output) => Ok(output
+                .user
+                .workspaces
+                .into_iter()
+                .find(|workspace| workspace.uid.inner() == String::from(workspace_uid))
+                .and_then(|workspace| workspace.included_usage_pool)),
+            get_included_usage_pools::UserResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            get_included_usage_pools::UserResult::Unknown => {
+                Err(anyhow!("Unable to fetch included team usage"))
+            }
+        }
+    }
+
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String> {
         let variables = StripeBillingPortalVariables {
             input: StripeBillingPortalInput {
