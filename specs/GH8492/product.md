@@ -57,6 +57,18 @@ Running tmux in Warp shows tmux's raw text TUI; Warp's native tabs/splits, comma
 
 - Empty session (no extra windows); a pane emitting a flood; detach vs. server exit; tmux < 3.2 (no flow control); another client attached at a different size (gray margin); a pane running a full-screen TUI (vim/htop) on reattach; the tmux server killed out from under the client.
 
+## Demo
+
+Working end-to-end on `yashs33244/tmux-5-usable` (built against current `master`). Pick a session from the command palette, and its tmux windows/panes render as native Warp tabs/splits over `tmux -CC`:
+
+| Command palette | Attach picker |
+|---|---|
+| ![command palette](./demo/command-palette.png) | ![attach session picker](./demo/attach-session-modal.png) |
+
+| Warpified panes (native splits + blocks) | Detach / kill lifecycle |
+|---|---|
+| ![warpified panes](./demo/warpified-panes.png) | ![detach or kill dialog](./demo/detach-kill-dialog.png) |
+
 ## Success criteria (testable behavior invariants)
 
 1. With the setting enabled, **New tmux session** opens a native tab backed by a `tmux -CC` session; `tmux ls` shows it.
