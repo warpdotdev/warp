@@ -894,7 +894,7 @@ impl TryFrom<&BillingMetadata> for StripeSubscriptionPlan {
             CustomerType::Lightspeed => Ok(StripeSubscriptionPlan::Lightspeed),
             CustomerType::Build => Ok(StripeSubscriptionPlan::Build),
             CustomerType::BuildMax => Ok(StripeSubscriptionPlan::BuildMax),
-            // These plans have no supported native checkout representation.
+            // Scale's flat workspace fee must not be used as a per-seat price when inviting members.
             CustomerType::Free
             | CustomerType::Legacy
             | CustomerType::Enterprise
