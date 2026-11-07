@@ -107,6 +107,13 @@ impl AgentDriver {
         expires_at: DateTime<Utc>,
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
+        if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
+            || runtime_env.contains_key("WARP_GITHUB_CREDENTIAL_MODE")
+        {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+                "Restricted GitHub credentials require a fresh sandbox; prewarmed assignment is not supported"
+            )));
+        }
         git_credentials::clear_standby_credentials()
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         let standby_providers = spawner

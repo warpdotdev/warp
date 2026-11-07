@@ -4,6 +4,11 @@ schema {
   subscription: RootSubscription
 }
 
+enum GitHubCredentialMode {
+  LEGACY
+  RESTRICTED_INSTALLATION
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -4031,6 +4036,8 @@ type TaskAttachment {
 
 """A set of git credentials for a single hosting provider."""
 type TaskGitCredential {
+  expiresAt: Time
+  repositoryScope: String
   """
   The email address associated with the token, if available.
   Null for service-account (installation) tokens.
@@ -4052,6 +4059,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  githubCredentialContractVersion: Int
   """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
@@ -4072,6 +4080,7 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode!
   """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
 

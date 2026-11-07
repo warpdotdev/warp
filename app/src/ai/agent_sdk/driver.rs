@@ -883,6 +883,20 @@ fn split_run_options(
         error,
     })?;
     env_vars.extend(harness_env);
+    if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)? {
+        if selected_harness != Harness::Oz {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+                "Restricted GitHub mode requires the native harness"
+            )));
+        }
+        let task_id = task_id.ok_or(AgentDriverError::InvalidRuntimeState)?;
+        git_credentials::validate_restricted_child_environment(&env_vars)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        env_vars.extend(
+            git_credentials::restricted_child_environment(&task_id.to_string())
+                .map_err(AgentDriverError::ConfigBuildFailed)?,
+        );
+    }
     let preparation_file = environment_preparation::launch_environment(
         workspace.preparation_policy.as_ref(),
         task_id.map(|id| id.to_string()).as_deref(),
@@ -1930,6 +1944,11 @@ impl AgentDriver {
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
+                            if let Some(task_id) = task_id {
+                                report_if_error!(git_credentials::close_restricted_credentials(
+                                    &task_id.to_string()
+                                ));
+                            }
                             let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
                             if tx.send(Err(error)).is_err() {
                                 report_error!("Caller did not wait for agent driver to finish");
@@ -1937,6 +1956,11 @@ impl AgentDriver {
                             return;
                         }
                     };
+                if let Some(task_id) = task_id {
+                    report_if_error!(git_credentials::close_restricted_credentials(
+                        &task_id.to_string()
+                    ));
+                }
                 match cause {
                     RunEndCause::SandboxDeadline => {
                         tracing::info!(tags.cloud_agent = true, "sandbox deadline approaching");
@@ -2445,7 +2469,9 @@ impl AgentDriver {
                 bedrock_config_for_refresh,
             ) = foreground
                 .spawn(|me, ctx| {
-                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
+                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled()
+                        || git_credentials::restricted_github_mode().unwrap_or(true)
+                    {
                         me.task_id.map(|id| id.to_string())
                     } else {
                         None

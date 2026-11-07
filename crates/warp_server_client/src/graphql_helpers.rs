@@ -8,7 +8,10 @@ use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
 use warpui_core::r#async::BoxFuture;
 
 use crate::auth::AuthEvent;
-use crate::base_client::{BaseClient, TEAM_UID_HEADER};
+use crate::base_client::{
+    AmbientHeaderPolicy, BaseClient, PREWARMED_SANDBOX_ID_HEADER,
+    PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER, TEAM_UID_HEADER,
+};
 
 /// The message of the plain error a request fails with when the server rejects the client's
 /// credentials (401, 403, or a disabled account) and the client may not refresh them. Callers
@@ -47,6 +50,35 @@ where
         options
             .headers
             .insert(TEAM_UID_HEADER.to_string(), team_uid);
+        send_graphql_request_with_options(base_client, operation, options).await
+    })
+}
+
+/// Scopes one authenticated operation to a run without changing the client's ambient identity.
+pub fn send_task_scoped_graphql_request<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    task_id: String,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
+        anyhow::ensure!(!task_id.trim().is_empty(), "Task ID is required");
+        let mut options = base_client.graphql_request_options(timeout).await?;
+        anyhow::ensure!(
+            !options.headers.contains_key(PREWARMED_SANDBOX_ID_HEADER)
+                && !options
+                    .headers
+                    .contains_key(PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER),
+            "A standby request cannot be scoped to a run"
+        );
+        options.headers.extend(
+            base_client
+                .ambient_headers(AmbientHeaderPolicy::for_task(task_id))
+                .await?,
+        );
         send_graphql_request_with_options(base_client, operation, options).await
     })
 }
