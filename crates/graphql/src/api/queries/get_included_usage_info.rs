@@ -4,22 +4,22 @@ use crate::scalars::Time;
 use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
-pub struct GetIncludedUsagePoolsVariables {
+pub struct GetIncludedUsageInfoVariables {
     pub request_context: RequestContext,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(
     graphql_type = "RootQuery",
-    variables = "GetIncludedUsagePoolsVariables"
+    variables = "GetIncludedUsageInfoVariables"
 )]
-pub struct GetIncludedUsagePools {
+pub struct GetIncludedUsageInfo {
     #[arguments(requestContext: $request_context)]
     pub user: UserResult,
 }
 
 crate::client::define_operation! {
-    get_included_usage_pools(GetIncludedUsagePoolsVariables) -> GetIncludedUsagePools;
+    get_included_usage_info(GetIncludedUsageInfoVariables) -> GetIncludedUsageInfo;
 }
 
 #[derive(cynic::InlineFragments, Debug)]
@@ -43,19 +43,18 @@ pub struct User {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct Workspace {
     pub uid: cynic::Id,
-    pub included_usage_pool: Option<IncludedUsagePool>,
+    pub included_usage_info: Option<WorkspaceIncludedUsageInfo>,
 }
 
 #[derive(cynic::QueryFragment, Clone, Debug)]
-pub struct IncludedUsagePool {
-    pub monthly_credits: f64,
-    pub used_credits: f64,
-    pub monthly_cents: i32,
-    pub granted_cents: f64,
-    pub remaining_cents: f64,
-    pub expires_at: Option<Time>,
+pub struct WorkspaceIncludedUsageInfo {
+    pub included_usage_credits: f64,
+    pub usage_credits_used_since_last_refresh: f64,
+    pub included_usage_cents: f64,
+    pub usage_cents_used_since_last_refresh: f64,
+    pub next_refresh_time: Time,
 }
 
 #[cfg(test)]
-#[path = "get_included_usage_pools_tests.rs"]
+#[path = "get_included_usage_info_tests.rs"]
 mod tests;

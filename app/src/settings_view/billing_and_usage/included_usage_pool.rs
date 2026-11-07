@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Local, Utc};
 use warp_core::ui::appearance::Appearance;
-use warp_graphql::queries::get_included_usage_pools::IncludedUsagePool;
+use warp_graphql::queries::get_included_usage_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::Text;
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
@@ -34,7 +34,7 @@ enum PoolState {
     #[default]
     Idle,
     Loading,
-    Ready(IncludedUsagePool),
+    Ready(WorkspaceIncludedUsageInfo),
     Unavailable,
 }
 
@@ -57,7 +57,11 @@ impl PoolRequest {
         self.generation
     }
 
-    fn complete(&mut self, generation: u64, result: anyhow::Result<Option<IncludedUsagePool>>) {
+    fn complete(
+        &mut self,
+        generation: u64,
+        result: anyhow::Result<Option<WorkspaceIncludedUsageInfo>>,
+    ) {
         if self.generation == generation {
             self.state = result
                 .ok()
@@ -125,7 +129,7 @@ impl IncludedUsagePoolView {
         let client = self.client.clone();
         // This query is deliberately separate: older servers must not break core usage refreshes.
         ctx.spawn(
-            async move { client.included_usage_pool(key.workspace_uid).await },
+            async move { client.included_usage_info(key.workspace_uid).await },
             move |me, result, ctx| {
                 if me.request.key == Self::current_key(ctx) {
                     me.request.complete(generation, result);
@@ -179,35 +183,33 @@ fn pool_balance(state: &PoolState, now: DateTime<Utc>) -> PoolBalance {
         PoolState::Idle | PoolState::Loading => PoolBalance::Loading,
         PoolState::Unavailable => PoolBalance::Unavailable,
         PoolState::Ready(pool) => {
-            if pool.monthly_cents <= 0
-                || !pool.monthly_credits.is_finite()
-                || !pool.used_credits.is_finite()
-                || pool.monthly_credits <= 0.0
-                || pool.used_credits < 0.0
-                || !pool.granted_cents.is_finite()
-                || !pool.remaining_cents.is_finite()
-                || pool.granted_cents < 0.0
-                || pool.remaining_cents < 0.0
-                || pool.expires_at.is_some_and(|expiry| expiry.utc() <= now)
+            if !pool.included_usage_cents.is_finite()
+                || pool.included_usage_cents <= 0.0
+                || !pool.included_usage_credits.is_finite()
+                || pool.included_usage_credits <= 0.0
+                || !pool.usage_credits_used_since_last_refresh.is_finite()
+                || pool.usage_credits_used_since_last_refresh < 0.0
+                || !pool.usage_cents_used_since_last_refresh.is_finite()
+                || pool.usage_cents_used_since_last_refresh < 0.0
+                || pool.next_refresh_time.utc() <= now
             {
                 return PoolBalance::Unavailable;
             }
-            let monthly_cents = f64::from(pool.monthly_cents);
             PoolBalance::Available {
-                remaining_credits: (pool.monthly_credits - pool.used_credits).max(0.0),
-                monthly_credits: pool.monthly_credits,
-                remaining_cents: pool.remaining_cents,
-                monthly_cents,
+                remaining_credits: (pool.included_usage_credits
+                    - pool.usage_credits_used_since_last_refresh)
+                    .max(0.0),
+                monthly_credits: pool.included_usage_credits,
+                remaining_cents: (pool.included_usage_cents
+                    - pool.usage_cents_used_since_last_refresh)
+                    .max(0.0),
+                monthly_cents: pool.included_usage_cents,
                 reset: pool
-                    .expires_at
-                    .map(|expiry| {
-                        expiry
-                            .utc()
-                            .with_timezone(&Local)
-                            .format("Resets %b %d at %-I:%M %p")
-                            .to_string()
-                    })
-                    .unwrap_or_default(),
+                    .next_refresh_time
+                    .utc()
+                    .with_timezone(&Local)
+                    .format("Resets %b %d at %-I:%M %p")
+                    .to_string(),
             }
         }
     }

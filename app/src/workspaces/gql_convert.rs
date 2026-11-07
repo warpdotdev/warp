@@ -894,7 +894,8 @@ impl TryFrom<&BillingMetadata> for StripeSubscriptionPlan {
             CustomerType::Lightspeed => Ok(StripeSubscriptionPlan::Lightspeed),
             CustomerType::Build => Ok(StripeSubscriptionPlan::Build),
             CustomerType::BuildMax => Ok(StripeSubscriptionPlan::BuildMax),
-            // Scale's flat workspace fee must not be used as a per-seat price when inviting members.
+            // Legacy customer types we no longer support, plans not billed through Stripe,
+            // or plans without per-seat pricing.
             CustomerType::Free
             | CustomerType::Legacy
             | CustomerType::Enterprise

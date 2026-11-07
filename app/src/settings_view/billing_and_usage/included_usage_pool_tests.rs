@@ -31,14 +31,13 @@ fn included_pool_credit_display_preserves_server_fractions_without_currency_conv
     });
 }
 
-fn pool(remaining_cents: f64) -> IncludedUsagePool {
-    IncludedUsagePool {
-        monthly_credits: 1234.75,
-        used_credits: 250.125,
-        monthly_cents: 10_000,
-        granted_cents: 10_000.0,
-        remaining_cents,
-        expires_at: Some((now() + Duration::days(1)).into()),
+fn pool(remaining_cents: f64) -> WorkspaceIncludedUsageInfo {
+    WorkspaceIncludedUsageInfo {
+        included_usage_credits: 1234.75,
+        usage_credits_used_since_last_refresh: 250.125,
+        included_usage_cents: 10_000.0,
+        usage_cents_used_since_last_refresh: 10_000.0 - remaining_cents,
+        next_refresh_time: (now() + Duration::days(1)).into(),
     }
 }
 
@@ -69,7 +68,7 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
             let mut exhausted = pool(0.0);
-            exhausted.used_credits = 1500.0;
+            exhausted.usage_credits_used_since_last_refresh = 1500.0;
             let card = render_card(
                 &PoolState::Ready(exhausted.clone()),
                 now(),
@@ -123,8 +122,8 @@ fn included_pool_keeps_remaining_separate_from_monthly_total() {
 #[test]
 fn included_pool_uses_configured_monthly_total_instead_of_hardcoded_allowance() {
     let mut configured = pool(300.0);
-    configured.monthly_cents = 500;
-    configured.granted_cents = 500.0;
+    configured.included_usage_cents = 500.0;
+    configured.usage_cents_used_since_last_refresh = 200.0;
     let PoolBalance::Available {
         remaining_cents,
         monthly_cents,
@@ -138,26 +137,68 @@ fn included_pool_uses_configured_monthly_total_instead_of_hardcoded_allowance() 
 }
 
 #[test]
+fn included_pool_preserves_fractional_cents_in_allowance_and_usage() {
+    let mut info = pool(0.0);
+    info.included_usage_cents = 500.125;
+    info.usage_cents_used_since_last_refresh = 200.0625;
+    let PoolBalance::Available {
+        remaining_cents,
+        monthly_cents,
+        ..
+    } = pool_balance(&PoolState::Ready(info), now())
+    else {
+        panic!("Expected an available balance")
+    };
+    assert_eq!(monthly_cents, 500.125);
+    assert_eq!(remaining_cents, 300.0625);
+}
+
+#[test]
+fn included_pool_clamps_overshoot_in_each_server_unit_independently() {
+    let mut info = pool(10_000.0);
+    info.usage_credits_used_since_last_refresh = info.included_usage_credits + 0.125;
+    info.usage_cents_used_since_last_refresh = info.included_usage_cents + 0.25;
+    let PoolBalance::Available {
+        remaining_credits,
+        remaining_cents,
+        ..
+    } = pool_balance(&PoolState::Ready(info), now())
+    else {
+        panic!("Expected an exhausted balance")
+    };
+    assert_eq!(remaining_credits, 0.0);
+    assert_eq!(remaining_cents, 0.0);
+}
+
+#[test]
 fn included_pool_missing_or_expired_is_not_shown_as_exhausted() {
     let now = now();
     let unavailable = PoolBalance::Unavailable;
     assert_eq!(pool_balance(&PoolState::Unavailable, now), unavailable);
     let mut expired = pool(500.0);
-    expired.expires_at = Some((now - Duration::seconds(1)).into());
+    expired.next_refresh_time = (now - Duration::seconds(1)).into();
     assert_eq!(pool_balance(&PoolState::Ready(expired), now), unavailable);
     for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+        let mut invalid_cents = pool(500.0);
+        invalid_cents.usage_cents_used_since_last_refresh = invalid;
         assert_eq!(
-            pool_balance(&PoolState::Ready(pool(invalid)), now),
-            unavailable,
+            pool_balance(&PoolState::Ready(invalid_cents), now),
+            unavailable
+        );
+        let mut invalid_cents_allowance = pool(500.0);
+        invalid_cents_allowance.included_usage_cents = invalid;
+        assert_eq!(
+            pool_balance(&PoolState::Ready(invalid_cents_allowance), now),
+            unavailable
         );
         let mut invalid_credits = pool(500.0);
-        invalid_credits.used_credits = invalid;
+        invalid_credits.usage_credits_used_since_last_refresh = invalid;
         assert_eq!(
             pool_balance(&PoolState::Ready(invalid_credits), now),
             unavailable,
         );
         let mut invalid_allowance = pool(500.0);
-        invalid_allowance.monthly_credits = invalid;
+        invalid_allowance.included_usage_credits = invalid;
         assert_eq!(
             pool_balance(&PoolState::Ready(invalid_allowance), now),
             unavailable,
@@ -210,7 +251,7 @@ fn included_pool_old_server_validation_error_is_unavailable_and_retryable() {
     request.complete(
         generation,
         Err(anyhow::anyhow!(
-            "Cannot query field includedUsagePool on type Workspace"
+            "Cannot query field includedUsageInfo on type Workspace"
         )),
     );
     assert!(matches!(request.state, PoolState::Unavailable));

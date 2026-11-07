@@ -5207,7 +5207,7 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
-  includedUsagePool: IncludedUsagePool
+  includedUsageInfo: WorkspaceIncludedUsageInfo
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
@@ -5230,13 +5230,12 @@ type Workspace {
 """
 A plan's shared workspace allowance for the current monthly AI cycle.
 """
-type IncludedUsagePool {
-  monthlyCredits: Float!
-  usedCredits: Float!
-  monthlyCents: Int!
-  grantedCents: Float!
-  remainingCents: Float!
-  expiresAt: Time
+type WorkspaceIncludedUsageInfo {
+  includedUsageCredits: Float!
+  usageCreditsUsedSinceLastRefresh: Float!
+  includedUsageCents: Float!
+  usageCentsUsedSinceLastRefresh: Float!
+  nextRefreshTime: Time!
 }
 
 type WorkspaceMember {

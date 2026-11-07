@@ -21,17 +21,16 @@ fn context() -> RequestContext {
 
 #[test]
 fn pool_query_is_separate_from_core_usage_and_metadata_queries() {
-    let pool = GetIncludedUsagePools::build(GetIncludedUsagePoolsVariables {
+    let pool = GetIncludedUsageInfo::build(GetIncludedUsageInfoVariables {
         request_context: context(),
     });
     for field in [
-        "includedUsagePool",
-        "monthlyCredits",
-        "usedCredits",
-        "monthlyCents",
-        "grantedCents",
-        "remainingCents",
-        "expiresAt",
+        "includedUsageInfo",
+        "includedUsageCredits",
+        "usageCreditsUsedSinceLastRefresh",
+        "includedUsageCents",
+        "usageCentsUsedSinceLastRefresh",
+        "nextRefreshTime",
     ] {
         assert!(pool.query.contains(field), "{field}");
     }
@@ -41,25 +40,24 @@ fn pool_query_is_separate_from_core_usage_and_metadata_queries() {
     let metadata = GetWorkspacesMetadataForUser::build(GetWorkspacesMetadataForUserVariables {
         request_context: context(),
     });
-    assert!(!usage.query.contains("includedUsagePool"));
-    assert!(!metadata.query.contains("includedUsagePool"));
+    assert!(!usage.query.contains("includedUsageInfo"));
+    assert!(!metadata.query.contains("includedUsageInfo"));
 }
 
 #[test]
 fn pool_response_accepts_null_and_fractional_balances() {
-    let response: GetIncludedUsagePools = serde_json::from_value(serde_json::json!({
+    let response: GetIncludedUsageInfo = serde_json::from_value(serde_json::json!({
         "user": {
             "__typename": "UserOutput",
             "user": {
                 "workspaces": [
-                    {"uid": "without-pool", "includedUsagePool": null},
-                    {"uid": "with-pool", "includedUsagePool": {
-                        "monthlyCredits": 1234.75,
-                        "usedCredits": 1000.125,
-                        "monthlyCents": 10000,
-                        "grantedCents": 10000.0,
-                        "remainingCents": 1234.56,
-                        "expiresAt": null
+                    {"uid": "without-pool", "includedUsageInfo": null},
+                    {"uid": "with-pool", "includedUsageInfo": {
+                        "includedUsageCredits": 1234.75,
+                        "usageCreditsUsedSinceLastRefresh": 1000.125,
+                        "includedUsageCents": 10000.125,
+                        "usageCentsUsedSinceLastRefresh": 8765.565,
+                        "nextRefreshTime": "2026-12-06T00:00:00Z"
                     }}
                 ]
             }
@@ -69,19 +67,20 @@ fn pool_response_accepts_null_and_fractional_balances() {
     let UserResult::UserOutput(output) = response.user else {
         panic!("Expected user")
     };
-    assert!(output.user.workspaces[0].included_usage_pool.is_none());
+    assert!(output.user.workspaces[0].included_usage_info.is_none());
     let pool = output.user.workspaces[1]
-        .included_usage_pool
+        .included_usage_info
         .as_ref()
         .unwrap();
-    assert_eq!(pool.monthly_credits, 1234.75);
-    assert_eq!(pool.used_credits, 1000.125);
+    assert_eq!(pool.included_usage_credits, 1234.75);
+    assert_eq!(pool.included_usage_cents, 10000.125);
+    assert_eq!(pool.usage_credits_used_since_last_refresh, 1000.125);
     assert_eq!(
         output.user.workspaces[1]
-            .included_usage_pool
+            .included_usage_info
             .as_ref()
             .unwrap()
-            .remaining_cents,
-        1234.56,
+            .usage_cents_used_since_last_refresh,
+        8765.565,
     );
 }
