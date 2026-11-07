@@ -36,6 +36,7 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::included_usage_pool::{IncludedUsagePoolView, is_scale_workspace};
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -241,6 +242,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    included_usage_pool: ViewHandle<IncludedUsagePoolView>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -424,6 +426,7 @@ impl BillingAndUsagePageView {
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
+            included_usage_pool: ctx.add_view(IncludedUsagePoolView::new),
             self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
@@ -812,6 +815,8 @@ impl BillingAndUsagePageView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.purchase_addon_credits_loading = false;
+        self.included_usage_pool
+            .update(ctx, |view, ctx| view.refresh(ctx));
         std::mem::drop(
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
@@ -991,6 +996,8 @@ impl TypedActionView for BillingAndUsagePageView {
                 ctx.notify();
             }
             BillingAndUsagePageAction::RefreshWorkspaceData => {
+                self.included_usage_pool
+                    .update(ctx, |view, ctx| view.refresh(ctx));
                 std::mem::drop(
                     TeamUpdateManager::handle(ctx)
                         .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
@@ -3049,6 +3056,46 @@ impl BillingAndUsagePageView {
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
         let unit = usage_display_unit(app);
 
+        if is_scale_workspace(workspace) {
+            let balance_header = Flex::row()
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(
+                    Text::new_inline("Balance", appearance.ui_font_family(), HEADER_FONT_SIZE)
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(appearance.theme().active_ui_text_color().into())
+                        .finish(),
+                )
+                .with_child(
+                    icon_button(
+                        appearance,
+                        Icon::Refresh,
+                        false,
+                        self.refresh_icon_mouse_state.clone(),
+                    )
+                    .build()
+                    .on_click(|ctx, _, _| {
+                        ctx.dispatch_typed_action(BillingAndUsagePageAction::RefreshWorkspaceData);
+                    })
+                    .finish(),
+                )
+                .finish();
+            usage.add_child(
+                Container::new(
+                    Flex::column()
+                        .with_child(
+                            Container::new(balance_header)
+                                .with_margin_bottom(12.)
+                                .finish(),
+                        )
+                        .with_child(ChildView::new(&self.included_usage_pool).finish())
+                        .finish(),
+                )
+                .with_margin_bottom(24.)
+                .finish(),
+            );
+        }
+
         let mut usage_header_right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -3188,6 +3235,21 @@ impl BillingAndUsagePageView {
                     app,
                 ));
             }
+        }
+
+        if is_scale_workspace(workspace) {
+            if workspace_is_delinquent_due_to_payment_issue {
+                usage.add_child(
+                    Text::new(
+                        "Restricted due to billing issue. Contact your team admin to resolve it.",
+                        appearance.ui_font_family(),
+                        12.,
+                    )
+                    .with_color(appearance.theme().ui_error_color())
+                    .finish(),
+                );
+            }
+            return usage.finish();
         }
 
         let usage_header = Container::new(
