@@ -2407,12 +2407,23 @@ impl CodeReviewView {
         match (existing_index, updated_diff) {
             (Some(index), Some(diff)) => {
                 let diff = diff.as_ref();
+                let current_editor = diff_data.file_states[index].editor_state.as_ref();
+                let should_apply = current_editor
+                    .map(|editor| !editor.has_unsaved_changes(ctx))
+                    .unwrap_or(true);
+                #[cfg(not(target_family = "wasm"))]
+                let backing_changed = current_editor.is_some_and(|editor| {
+                    editor.editor().as_ref(ctx).file_id().is_none()
+                        != self.file_requires_unbacked_editor(&diff.file_diff)
+                });
+                #[cfg(target_family = "wasm")]
+                let backing_changed = false;
                 let status_changed = file_status_changed_deleted_state(
                     &diff_data.file_states[index].file_diff.status,
                     &diff.file_diff.status,
                 );
 
-                if status_changed {
+                if status_changed || (should_apply && backing_changed) {
                     diff_data.file_states.shift_remove_index(index);
                     self.viewported_list_state.remove(index);
                     let new_states =
@@ -2424,12 +2435,27 @@ impl CodeReviewView {
                     );
                 } else {
                     let current = &mut diff_data.file_states[index];
-                    let should_apply = current
-                        .editor_state
-                        .as_ref()
-                        .map(|es| !es.has_unsaved_changes(ctx))
-                        .unwrap_or(true);
                     if should_apply {
+                        if let Some(editor) = &current.editor_state
+                            && editor.editor().as_ref(ctx).file_id().is_none()
+                        {
+                            let comment_line_numbers = self
+                                .repo_path()
+                                .map(|repo_path| {
+                                    self.comment_line_numbers_for_file(
+                                        &repo_path.join(&file_path),
+                                        ctx,
+                                    )
+                                })
+                                .unwrap_or_default();
+                            Self::apply_diff_to_code_editor(
+                                editor.editor(),
+                                diff,
+                                false,
+                                &comment_line_numbers,
+                                ctx,
+                            );
+                        }
                         current.file_diff = diff.file_diff.clone();
                     }
                     self.viewported_list_state
@@ -2990,7 +3016,29 @@ impl CodeReviewView {
             }
         }
 
+        // Git emits type changes as deletion plus creation. A separate insertion at line zero
+        // leaves an extra block marker newline in the reconstructed buffer.
+        if let [deleted, added] = diff_deltas.as_mut_slice()
+            && deleted.insertion.is_empty()
+            && deleted.replacement_line_range.start == 1
+            && added.replacement_line_range == (0..0)
+        {
+            deleted.insertion = mem::take(&mut added.insertion);
+            diff_deltas.pop();
+        }
+
         diff_deltas
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn file_requires_unbacked_editor(&self, file: &FileDiff) -> bool {
+        matches!(file.status, GitFileStatus::Deleted)
+            || self.repo_path().is_some_and(|repo_path| {
+                repo_path
+                    .join(&file.file_path)
+                    .to_local_path()
+                    .is_some_and(|path| path.is_symlink())
+            })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -3003,10 +3051,9 @@ impl CodeReviewView {
         // Skip editor creation for binary files or files without content (e.g., pure renames)
         if file.file_diff.is_binary || file.content_at_head.is_none() {
             None
-        } else if matches!(file.file_diff.status, GitFileStatus::Deleted) {
-            // For deleted files, the file doesn't exist on disk anymore, so we can't use
-            // GlobalBufferModel. Instead, use the non-global buffer approach which directly
-            // populates the editor with content_at_head.
+        } else if self.file_requires_unbacked_editor(&file.file_diff) {
+            // A global buffer would follow symlinks and show the referent instead of Git's
+            // link target path. Deleted files also have no backing file to load.
             self.create_code_review_model(file, ctx)
         } else {
             let self_handle = ctx.handle();
@@ -3123,7 +3170,6 @@ impl CodeReviewView {
                     ctx,
                 )
                 .with_add_context_button() // Enable add context button for code review
-                .with_revert_diff_hunk_button() // Enable revert diff button for code review
                 .with_comment_button() // Enable comment button for code review
                 .with_collapsible_diffs(false) // Disable collapsible diffs
                 .disable_diff_indicator_expansion_on_hover()
@@ -3233,18 +3279,12 @@ impl CodeReviewView {
                 });
             }
             LocalCodeEditorEvent::CommentSaved { comment } => {
-                // Use `file_location()` to preserve host identity for
-                // remote editors. The comment batch is already host-scoped
-                // (keyed by the repo `LocalOrRemotePath` in
-                // `WorkingDirectoriesModel.comment_models`), but encoding
-                // the host on the comment target keeps later helpers
-                // honest.
-                let Some(file_location) = editor.as_ref(ctx).file_location().cloned() else {
-                    report_error!(
-                        "Attempted to attach code review comment to a LocalCodeEditorView without a file path"
-                    );
-                    return;
-                };
+                // Symlink and deleted-file editors have a logical path without file metadata.
+                let file_location = editor
+                    .as_ref(ctx)
+                    .file_location()
+                    .unwrap_or(file_location)
+                    .clone();
                 let base = self.get_diff_base(ctx).ok();
                 let head = self.get_current_head(ctx);
                 let comment_with_file_context = AttachedReviewComment::from_editor_review_comment(
@@ -3423,11 +3463,10 @@ impl CodeReviewView {
             let version = ContentVersion::new();
             let diff_deltas = Self::convert_hunks_to_diff_deltas(&file.file_diff.hunks);
 
-            // For deleted files, we need to populate the buffer directly since the file
-            // doesn't exist on disk and can't be loaded via GlobalBufferModel.
             let is_deleted_file = matches!(file.file_diff.status, GitFileStatus::Deleted);
 
             code_editor_view.update(ctx, |local_editor, ctx| {
+                let populate_buffer = is_deleted_file || local_editor.file_id().is_none();
                 // Preserve cursor position for non-initial setups (when refreshing diffs)
                 let saved_selections = if !is_initial_setup {
                     Some(Self::capture_cursor_position(
@@ -3440,9 +3479,7 @@ impl CodeReviewView {
 
                 let mut range = None;
 
-                // When global buffer is enabled (and file is not deleted), we only need to set the base to the content at HEAD.
-                // For deleted files or when global buffer is disabled, we need to populate the buffer directly.
-                if is_deleted_file {
+                if populate_buffer {
                     let line_count = file_content.lines().count();
                     range = Some(calculate_hidden_lines(
                         &diff_deltas,
@@ -3454,7 +3491,7 @@ impl CodeReviewView {
                     local_editor.reset_with_state(state, ctx);
                 }
                 #[cfg(not(target_family = "wasm"))]
-                if !is_deleted_file {
+                if !populate_buffer {
                     // We only want to recompute diff is the file is loaded. If not, we can rely on the file load event
                     // for diff computation.
                     let file_loaded = local_editor.file_loaded(ctx);
@@ -3465,8 +3502,7 @@ impl CodeReviewView {
                 }
 
                 local_editor.editor().update(ctx, |editor, ctx| {
-                    // When global buffer is enabled (and file is not deleted), hidden line configuration is handed off to the model itself.
-                    if is_deleted_file {
+                    if populate_buffer {
                         if let Some(range) = range {
                             editor.model.update(ctx, |model, ctx| {
                                 model.set_hidden_lines(range, ctx);
@@ -3485,7 +3521,7 @@ impl CodeReviewView {
                     }
 
                     if is_initial_setup {
-                        if FeatureFlag::CodeReviewSaveChanges.is_enabled() {
+                        if !populate_buffer && FeatureFlag::CodeReviewSaveChanges.is_enabled() {
                             editor.set_interaction_state(InteractionState::Editable, ctx);
                         } else {
                             editor.set_interaction_state(InteractionState::Selectable, ctx);
