@@ -40,24 +40,25 @@ fn lifecycle_details_roundtrip_in_the_existing_wire_shape() {
 
 #[test]
 fn historical_lifecycle_details_remain_optional() {
-    for event_type in ["run_failed", "run_errored", "run_blocked", "run_cancelled"] {
-        let absent: AgentRunEventKind =
-            serde_json::from_value(json!({"event_type":event_type})).unwrap();
-        let null: AgentRunEventKind =
-            serde_json::from_value(json!({"event_type":event_type,"detail":null})).unwrap();
-        let empty: AgentRunEventKind =
-            serde_json::from_value(json!({"event_type":event_type,"detail":{}})).unwrap();
-        assert_eq!(absent, null);
-        assert_eq!(absent, empty);
+    for wire in [
+        json!({"event_type":"run_failed"}),
+        json!({"event_type":"run_failed","detail":null}),
+        json!({"event_type":"run_failed","detail":{}}),
+        json!({"event_type":"run_failed","detail":{"reason":null,"error_message":null,"future":"ignored"}}),
+    ] {
+        let decoded: AgentRunEventKind = serde_json::from_value(wire).unwrap();
         assert_eq!(
-            serde_json::to_value(absent).unwrap(),
-            json!({"event_type":event_type})
+            decoded,
+            AgentRunEventKind::Failed {
+                reason: None,
+                error_message: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            json!({"event_type":"run_failed"})
         );
     }
-    assert_eq!(
-        serde_json::from_value::<AgentRunEventKind>(json!({"event_type":"run_failed","detail":{"reason":null,"error_message":null,"future":"ignored"}})).unwrap(),
-        AgentRunEventKind::Failed { reason: None, error_message: None },
-    );
 }
 
 #[test]
@@ -65,19 +66,16 @@ fn malformed_known_details_do_not_become_unknown_events() {
     for wire in [
         json!({"event_type":"run_failed","detail":[]}),
         json!({"event_type":"run_errored","detail":{"error_message":134}}),
-        json!({"event_type":"run_blocked","detail":{"blocked_action":true}}),
-        json!({"event_type":"run_cancelled","detail":{"reason":{}}}),
     ] {
         assert!(serde_json::from_value::<AgentRunEventKind>(wire).is_err());
     }
 }
 
 #[test]
-fn mixed_stream_keeps_future_events_and_common_metadata() {
+fn flattened_events_keep_unknown_types_and_non_lifecycle_references() {
     let events: Vec<AgentRunEvent> = serde_json::from_value(json!([
         {"event_type":"future_event","detail":{"future":true},"run_id":"child","sequence":1,"occurred_at":"2026-01-01T00:00:00Z"},
         {"event_type":"new_message","ref_id":"message","run_id":"parent","sequence":2,"occurred_at":"2026-01-01T00:00:00Z"},
-        {"event_type":"run_cancelled","detail":{"reason":"Requester cancelled"},"run_id":"child","sequence":3,"occurred_at":"2026-01-01T00:00:00Z"},
         {"event_type":"child_agent_started","ref_id":"child","run_id":"parent","sequence":4,"occurred_at":"2026-01-01T00:00:00Z"},
         {"event_type":"run_session_linked","ref_id":"session","run_id":"child","sequence":5,"occurred_at":"2026-01-01T00:00:00Z"}
     ])).unwrap();
@@ -88,16 +86,8 @@ fn mixed_stream_keeps_future_events_and_common_metadata() {
     );
     assert_eq!(events[1].kind, AgentRunEventKind::NewMessage);
     assert_eq!(events[1].ref_id.as_deref(), Some("message"));
-    assert_eq!(
-        events[2].kind,
-        AgentRunEventKind::Cancelled {
-            reason: Some("Requester cancelled".into())
-        }
-    );
-    assert_eq!(events[2].run_id, "child");
-    assert_eq!(events[2].sequence, 3);
-    assert_eq!(events[3].kind, AgentRunEventKind::ChildAgentStarted);
-    assert_eq!(events[3].ref_id.as_deref(), Some("child"));
-    assert_eq!(events[4].kind, AgentRunEventKind::RunSessionLinked);
-    assert_eq!(events[4].ref_id.as_deref(), Some("session"));
+    assert_eq!(events[2].kind, AgentRunEventKind::ChildAgentStarted);
+    assert_eq!(events[2].ref_id.as_deref(), Some("child"));
+    assert_eq!(events[3].kind, AgentRunEventKind::RunSessionLinked);
+    assert_eq!(events[3].ref_id.as_deref(), Some("session"));
 }

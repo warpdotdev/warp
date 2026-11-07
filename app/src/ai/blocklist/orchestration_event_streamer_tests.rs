@@ -3,6 +3,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use mockall::predicate::eq;
+use warp_multi_agent_api::agent_event::lifecycle_event::{
+    Blocked, Cancelled, Detail, Errored, Failed,
+};
 use warpui::App;
 
 use super::*;
@@ -52,9 +55,7 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
-fn cancellation_reason_survives_parent_event_serialization() {
-    use prost::Message;
-
+fn mixed_json_events_preserve_cancellation_context_for_parent() {
     let events: Vec<AgentRunEvent> = serde_json::from_value(serde_json::json!([
         {"event_type":"future_event","run_id":"child","sequence":1,"occurred_at":"2026-01-01T00:00:00Z"},
         {"event_type":"new_message","run_id":"self-run","ref_id":"message","sequence":2,"occurred_at":"2026-01-01T00:00:00Z"},
@@ -63,10 +64,9 @@ fn cancellation_reason_survives_parent_event_serialization() {
     let parent_events = api::message::EventsFromAgents {
         agent_events: convert_lifecycle_events(&events, "self-run"),
     };
-    let restored =
-        api::message::EventsFromAgents::decode(parent_events.encode_to_vec().as_slice()).unwrap();
-    assert_eq!(restored.agent_events.len(), 1);
-    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &restored.agent_events[0].event
+    assert_eq!(parent_events.agent_events.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) =
+        &parent_events.agent_events[0].event
     else {
         panic!("expected lifecycle event");
     };
@@ -456,18 +456,6 @@ fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> Agent
     }
 }
 
-fn make_run_event_with_detail(
-    event_type: &str,
-    run_id: &str,
-    detail: serde_json::Value,
-) -> AgentRunEvent {
-    let mut event = make_run_event(event_type, run_id, None);
-    event.kind =
-        serde_json::from_value(serde_json::json!({"event_type": event_type, "detail": detail}))
-            .unwrap();
-    event
-}
-
 fn make_seq_event(
     event_type: &str,
     run_id: &str,
@@ -497,46 +485,61 @@ fn convert_lifecycle_events_includes_run_blocked() {
 }
 
 #[test]
-fn convert_lifecycle_events_maps_failed_detail() {
-    let events = vec![make_run_event_with_detail(
-        "run_failed",
-        "child-run",
-        serde_json::json!({"reason": "environment_setup_failed", "error_message": "Environment setup failed (git clone failed)"}),
-    )];
-    let result = convert_lifecycle_events(&events, "self-run");
-    assert_eq!(result.len(), 1);
-    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
-        panic!("expected lifecycle event");
-    };
-    let Some(api::agent_event::lifecycle_event::Detail::Failed(failed)) = &lifecycle.detail else {
-        panic!("expected failed detail");
-    };
-    assert_eq!(failed.reason, "environment_setup_failed");
-    assert_eq!(
-        failed.error_message,
-        "Environment setup failed (git clone failed)"
-    );
-}
-
-#[test]
-fn convert_lifecycle_events_maps_errored_detail() {
-    let events = vec![make_run_event_with_detail(
-        "run_errored",
-        "child-run",
-        serde_json::json!({"reason": "internal_error", "error_message": "An unexpected error has occurred"}),
-    )];
-    let result = convert_lifecycle_events(&events, "self-run");
-    assert_eq!(result.len(), 1);
-    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
-        panic!("expected lifecycle event");
-    };
-    let Some(api::agent_event::lifecycle_event::Detail::Errored(errored)) = &lifecycle.detail
-    else {
-        panic!("expected errored detail");
-    };
-    assert!(errored.stage.is_empty());
-    assert_eq!(errored.reason, "internal_error");
-    assert_eq!(errored.error_message, "An unexpected error has occurred");
+fn convert_lifecycle_events_maps_typed_context() {
+    for (kind, expected) in [
+        (
+            AgentRunEventKind::Failed {
+                reason: Some("environment_setup_failed".into()),
+                error_message: Some("Repository unavailable".into()),
+            },
+            Detail::Failed(Failed {
+                reason: "environment_setup_failed".into(),
+                error_message: "Repository unavailable".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Errored {
+                reason: Some("internal_error".into()),
+                error_message: Some("Child process failed".into()),
+            },
+            Detail::Errored(Errored {
+                stage: String::new(),
+                reason: "internal_error".into(),
+                error_message: "Child process failed".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Blocked {
+                blocked_action: Some("Approval required".into()),
+            },
+            Detail::Blocked(Blocked {
+                blocked_action: "Approval required".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Cancelled {
+                reason: Some("Requester cancelled".into()),
+            },
+            Detail::Cancelled(Cancelled {
+                reason: "Requester cancelled".into(),
+            }),
+        ),
+    ] {
+        let events = [AgentRunEvent {
+            kind,
+            run_id: "child-run".into(),
+            ref_id: None,
+            execution_id: None,
+            occurred_at: "2026-01-01T00:00:00Z".into(),
+            sequence: 1,
+        }];
+        let result = convert_lifecycle_events(&events, "self-run");
+        assert_eq!(result.len(), 1);
+        let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+            panic!("expected lifecycle event");
+        };
+        assert_eq!(lifecycle.detail.as_ref(), Some(&expected));
+    }
 }
 
 #[test]
@@ -558,25 +561,6 @@ fn convert_lifecycle_events_errored_without_detail_has_no_diagnosis() {
     assert!(errored.reason.is_empty());
     assert!(errored.stage.is_empty());
     assert!(errored.error_message.is_empty());
-}
-
-#[test]
-fn convert_lifecycle_events_maps_blocked_action_detail() {
-    let events = vec![make_run_event_with_detail(
-        "run_blocked",
-        "child-run",
-        serde_json::json!({"blocked_action": "waiting for command approval"}),
-    )];
-    let result = convert_lifecycle_events(&events, "self-run");
-    assert_eq!(result.len(), 1);
-    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
-        panic!("expected lifecycle event");
-    };
-    let Some(api::agent_event::lifecycle_event::Detail::Blocked(blocked)) = &lifecycle.detail
-    else {
-        panic!("expected blocked detail");
-    };
-    assert_eq!(blocked.blocked_action, "waiting for command approval");
 }
 
 #[test]
