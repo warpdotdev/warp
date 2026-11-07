@@ -10,7 +10,7 @@ use objc2_foundation::{NSArray, NSData, NSString, ns_string};
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
 unsafe extern "C" {
-    fn getFilePathsFromPasteboard() -> id;
+    fn getFilePathsFromPasteboard(pasteboard: &NSPasteboard) -> id;
 }
 
 pub struct Clipboard(Retained<NSPasteboard>);
@@ -74,7 +74,7 @@ impl crate::Clipboard for Clipboard {
         unsafe {
             // Try getting file paths from the clipboard. If we end up with an empty
             // array of file paths, fallback to getting the string from the pasteboard.
-            let file_paths = &*getFilePathsFromPasteboard().cast::<NSArray<NSString>>();
+            let file_paths = &*getFilePathsFromPasteboard(&self.0).cast::<NSArray<NSString>>();
             let available_paths = file_paths.count();
 
             let text = self.0.stringForType(NSPasteboardTypeString);
@@ -112,8 +112,11 @@ impl crate::Clipboard for Clipboard {
                 )
             }
 
-            // Try to read image data from clipboard
-            content.images = self.read_image_data_from_pasteboard();
+            // Files copied in Finder come with a TIFF icon on the pasteboard. The paths are
+            // the real content, so only read image data when there are none.
+            if available_paths == 0 {
+                content.images = self.read_image_data_from_pasteboard();
+            }
 
             content
         }

@@ -44,8 +44,7 @@ BOOL isDarkMode() {
     return name == NSAppearanceNameDarkAqua;
 }
 
-NSArray *getFilePathsFromPasteboard() {
-    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+NSArray *getFilePathsFromPasteboard(NSPasteboard *pb) {
     NSArray *types = [pb types];
 
     if ([types containsObject:NSPasteboardTypeFileURL]) {
