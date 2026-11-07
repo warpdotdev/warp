@@ -1982,6 +1982,29 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_parse_unclosed_underline_round_trips_to_literal_text() {
+    // Regression test: an unclosed `<u>` followed by another `<u>` used to be matched as an
+    // opener/closer pair by the emphasis algorithm, silently deleting both markers and the text
+    // between/around them. `<u>` is only ever closed by an explicit `</u>` (handled by
+    // `parse_underline`), so two bare `<u>` markers should round-trip to literal text, exactly
+    // like an unclosed `*`.
+    assert_eq!(
+        parse_all("<u><u>", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u><u>")]
+    );
+
+    assert_eq!(
+        parse_all("<u>a<u>", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u>a<u>")]
+    );
+
+    assert_eq!(
+        parse_all("a <u>word<u> b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a <u>word<u> b")]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";

@@ -1842,6 +1842,14 @@ impl Delimiter {
             return false;
         }
 
+        // `<u>` is only ever closed by an explicit `</u>`, which is handled separately by
+        // `parse_underline` (it never goes through `can_open_for`). Pairing two `<u>` openers
+        // through the emphasis algorithm is always wrong and would silently delete the text
+        // between/around them; an unclosed `<u>` should round-trip to literal text instead.
+        if self.kind == DelimiterKind::UnderlineStart {
+            return false;
+        }
+
         // For strikethrough, the delimiter counts must match.
         if self.kind == DelimiterKind::Strikethrough {
             return self.count == other.count;
