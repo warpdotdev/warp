@@ -28,6 +28,12 @@ use crate::server::server_api::ai::{
 };
 use crate::util::path::resolve_executable;
 
+mod restricted;
+pub(crate) use restricted::{
+    bootstrap_restricted_credentials, close_restricted_credentials, restricted_child_environment,
+    restricted_github_mode, validate_restricted_child_environment,
+};
+
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
@@ -962,6 +968,14 @@ async fn try_refresh(
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
+    if restricted_github_mode().map_err(TaskGitCredentialsError::Request)? {
+        return restricted::refresh_restricted_credentials(
+            task_id,
+            ai_client,
+            use_factory_repositories,
+        )
+        .await;
+    }
     ensure_workload_token_available()?;
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
@@ -1011,7 +1025,12 @@ pub(crate) async fn refresh_loop(
     use_factory_repositories: bool,
 ) {
     loop {
-        warpui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
+        let interval = if restricted_github_mode().unwrap_or(true) {
+            Duration::from_secs(60)
+        } else {
+            GIT_CREDENTIALS_REFRESH_INTERVAL
+        };
+        warpui::r#async::Timer::after(interval).await;
 
         log::info!("Refreshing git credentials for task {task_id}");
 

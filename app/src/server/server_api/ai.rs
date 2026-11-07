@@ -136,6 +136,11 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyInput, TaskGitCredentialsLegacyResult,
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
+use warp_graphql::queries::task_restricted_git_credentials::{
+    RestrictedTaskGitCredentials, RestrictedTaskGitCredentialsInput,
+    RestrictedTaskGitCredentialsOutput, RestrictedTaskGitCredentialsResult,
+    RestrictedTaskGitCredentialsVariables,
+};
 #[cfg(not(target_family = "wasm"))]
 use warp_graphql::queries::task_secrets::{ManagedSecretValue, TaskSecretsInput};
 use warp_multi_agent_api::ConversationData;
@@ -1615,6 +1620,13 @@ pub trait AIClient: 'static + Send + Sync {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
     ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError>;
+
+    async fn get_restricted_task_git_credentials(
+        &self,
+        task_id: String,
+        workload_token: String,
+        use_factory_repositories: bool,
+    ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
     /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
@@ -3163,6 +3175,39 @@ impl AIClient for ServerApi {
                     .await
             }
             Err(error) => Err(error),
+        }
+    }
+
+    async fn get_restricted_task_git_credentials(
+        &self,
+        task_id: String,
+        workload_token: String,
+        use_factory_repositories: bool,
+    ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
+        let variables = RestrictedTaskGitCredentialsVariables {
+            input: RestrictedTaskGitCredentialsInput {
+                task_id: cynic::Id::new(task_id),
+                workload_token,
+                accepts_partial_refresh: Some(false),
+                use_factory_repositories: use_factory_repositories.then_some(true),
+                github_credential_contract_version: Some(1),
+            },
+            request_context: get_request_context(),
+        };
+        let operation = RestrictedTaskGitCredentials::build(variables);
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
+
+        match response.task_git_credentials {
+            RestrictedTaskGitCredentialsResult::TaskGitCredentialsOutput(output) => Ok(output),
+            RestrictedTaskGitCredentialsResult::UserFacingError(error) => {
+                Err(TaskGitCredentialsError::from_user_facing(error))
+            }
+            RestrictedTaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(
+                anyhow!("Unknown restricted taskGitCredentials response"),
+            )),
         }
     }
 
