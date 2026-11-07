@@ -1,6 +1,7 @@
 use warpui::elements::MouseStateHandle;
-use warpui::{AppContext, ViewHandle};
+use warpui::{AppContext, EntityId, ViewHandle};
 
+use super::code_review_view::SplitBaselinePane;
 use crate::code::local_code_editor::LocalCodeEditorView;
 
 pub struct CodeReviewEditorState {
@@ -10,6 +11,8 @@ pub struct CodeReviewEditorState {
     /// Whether the buffer content has been loaded from disk (for global buffer mode).
     /// This is set to true when LocalCodeEditorEvent::DelayedRenderingFlushed or FailedToLoad fires.
     is_loaded: bool,
+    /// The read-only base pane shown to the left of `editor` in the split diff layout.
+    pub(crate) baseline: Option<SplitBaselinePane>,
 }
 
 impl CodeReviewEditorState {
@@ -20,6 +23,7 @@ impl CodeReviewEditorState {
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
             is_loaded: false,
+            baseline: None,
         }
     }
 
@@ -31,6 +35,7 @@ impl CodeReviewEditorState {
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
             is_loaded: true,
+            baseline: None,
         }
     }
 
@@ -50,6 +55,32 @@ impl CodeReviewEditorState {
 
     pub fn unsaved_changes_mouse_state(&self) -> MouseStateHandle {
         self.unsaved_changes_mouse_state.clone()
+    }
+
+    /// The editors shown for this file: the base pane first when the split layout is active,
+    /// then the modified pane.
+    pub fn panes(&self) -> impl Iterator<Item = &ViewHandle<LocalCodeEditorView>> {
+        self.baseline
+            .as_ref()
+            .map(|baseline| &baseline.editor)
+            .into_iter()
+            .chain(std::iter::once(&self.editor))
+    }
+
+    /// The pane with the given editor id, if it belongs to this file.
+    pub fn pane(&self, editor_id: EntityId) -> Option<&ViewHandle<LocalCodeEditorView>> {
+        self.panes().find(|pane| pane.id() == editor_id)
+    }
+
+    /// The pane with the given editor id, or the modified pane when no id is given.
+    pub fn pane_or_modified(
+        &self,
+        editor_id: Option<EntityId>,
+    ) -> Option<&ViewHandle<LocalCodeEditorView>> {
+        match editor_id {
+            Some(editor_id) => self.pane(editor_id),
+            None => Some(&self.editor),
+        }
     }
 
     pub fn has_unsaved_changes(&self, ctx: &AppContext) -> bool {

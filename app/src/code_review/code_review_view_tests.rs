@@ -5,6 +5,7 @@ use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
 use repo_metadata::repositories::DetectedRepositories;
+use warp_core::settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
@@ -20,6 +21,7 @@ use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::diff_layout::DiffLayout;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::GlobalCodeReviewModel;
@@ -1153,5 +1155,135 @@ fn test_active_comments_not_marked_outdated() {
                 "Should have no fallbacks when content matches"
             );
         });
+    });
+}
+
+fn header_menu_labels(view: &ViewHandle<CodeReviewView>, app: &mut App) -> Vec<String> {
+    view.update(app, |view, ctx| {
+        view.header_menu_items(ctx)
+            .iter()
+            .map(|item| match item {
+                MenuItem::Separator => "---".to_string(),
+                item => item
+                    .fields()
+                    .map(|fields| fields.label().to_string())
+                    .unwrap_or_default(),
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn test_diff_layout_menu_item_hidden_when_flag_disabled() {
+    let _split = FeatureFlag::SideBySideDiffLayout.override_enabled(false);
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+        let labels = header_menu_labels(&ctx.code_review_view, &mut app);
+        assert!(labels.iter().all(|label| !label.starts_with("Switch to")));
+    });
+}
+
+#[test]
+fn test_diff_layout_menu_item_is_the_only_item_in_bare_legacy_header() {
+    let _split = FeatureFlag::SideBySideDiffLayout.override_enabled(true);
+    let _git_ops = FeatureFlag::GitOperationsInCodeReview.override_enabled(false);
+    let _comments = FeatureFlag::FileAndDiffSetComments.override_enabled(false);
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+        // The view has no loaded changes, and the item still shows.
+        assert_eq!(
+            header_menu_labels(&ctx.code_review_view, &mut app),
+            vec!["Switch to split diff".to_string()]
+        );
+    });
+}
+
+#[test]
+fn test_diff_layout_menu_item_follows_a_divider_in_new_header() {
+    let _split = FeatureFlag::SideBySideDiffLayout.override_enabled(true);
+    let _git_ops = FeatureFlag::GitOperationsInCodeReview.override_enabled(false);
+    let _comments = FeatureFlag::FileAndDiffSetComments.override_enabled(true);
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+        let labels = header_menu_labels(&ctx.code_review_view, &mut app);
+        let len = labels.len();
+        assert!(
+            len >= 3,
+            "expected other items, a divider and the switch: {labels:?}"
+        );
+        assert_eq!(labels[len - 2], "---");
+        assert_eq!(labels[len - 1], "Switch to split diff");
+    });
+}
+
+#[test]
+fn test_toggle_diff_layout_writes_setting_relabels_and_requests_maximize_once() {
+    let _split = FeatureFlag::SideBySideDiffLayout.override_enabled(true);
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+
+        let maximize_requests: std::rc::Rc<std::cell::Cell<usize>> = Default::default();
+        let requests = maximize_requests.clone();
+        app.update(|app_ctx| {
+            app_ctx.subscribe_to_view(&ctx.code_review_view, move |_, event, _| {
+                if matches!(event, CodeReviewViewEvent::EnsureMaximized) {
+                    requests.set(requests.get() + 1);
+                }
+            });
+        });
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            view.handle_action(&CodeReviewAction::ToggleDiffLayout, view_ctx);
+        });
+        app.read(|app_ctx| {
+            assert_eq!(
+                *CodeSettings::as_ref(app_ctx).diff_layout.value(),
+                DiffLayout::SideBySide
+            );
+        });
+        assert_eq!(maximize_requests.get(), 1);
+        assert_eq!(
+            header_menu_labels(&ctx.code_review_view, &mut app).last(),
+            Some(&"Switch to unified diff".to_string())
+        );
+
+        // Switching back to unified neither requests a maximize nor a minimize.
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            view.handle_action(&CodeReviewAction::ToggleDiffLayout, view_ctx);
+        });
+        app.read(|app_ctx| {
+            assert_eq!(
+                *CodeSettings::as_ref(app_ctx).diff_layout.value(),
+                DiffLayout::Inline
+            );
+        });
+        assert_eq!(maximize_requests.get(), 1);
+    });
+}
+
+#[test]
+fn test_split_stored_elsewhere_does_not_request_maximize() {
+    let _split = FeatureFlag::SideBySideDiffLayout.override_enabled(true);
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+        let maximize_requests: std::rc::Rc<std::cell::Cell<usize>> = Default::default();
+        let requests = maximize_requests.clone();
+        app.update(|app_ctx| {
+            app_ctx.subscribe_to_view(&ctx.code_review_view, move |_, event, _| {
+                if matches!(event, CodeReviewViewEvent::EnsureMaximized) {
+                    requests.set(requests.get() + 1);
+                }
+            });
+        });
+        // A stored or synced value (not this view's menu) only re-lays out the panes.
+        app.update(|app_ctx| {
+            CodeSettings::handle(app_ctx).update(app_ctx, |settings, ctx| {
+                settings
+                    .diff_layout
+                    .set_value(DiffLayout::SideBySide, ctx)
+                    .expect("set diff layout");
+            });
+        });
+        assert_eq!(maximize_requests.get(), 0);
     });
 }

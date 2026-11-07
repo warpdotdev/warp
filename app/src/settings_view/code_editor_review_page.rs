@@ -23,6 +23,9 @@ use super::{
     flags,
 };
 use crate::appearance::Appearance;
+use crate::code::diff_layout::{DiffLayout, switch_diff_layout};
+use crate::code_review::telemetry_event::DiffLayoutChangeSource;
+use crate::features::FeatureFlag;
 use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, CodeSettings};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::view_components::{Dropdown, DropdownItem};
@@ -149,6 +152,7 @@ impl View for EditorAndCodeReviewPageView {
 pub enum EditorAndCodeReviewPageAction {
     ToggleCodeReviewPanel,
     ToggleShowCodeReviewDiffStats,
+    ToggleSplitDiffLayout,
     ToggleAutoOpenCodeReviewPane,
     ToggleProjectExplorer,
     ToggleGlobalSearch,
@@ -177,6 +181,15 @@ impl TypedActionView for EditorAndCodeReviewPageView {
                             .toggle_and_save_value(ctx)
                     );
                 });
+                ctx.notify();
+            }
+            EditorAndCodeReviewPageAction::ToggleSplitDiffLayout => {
+                let current = DiffLayout::effective(*CodeSettings::as_ref(ctx).diff_layout.value());
+                switch_diff_layout(
+                    current.toggled(),
+                    DiffLayoutChangeSource::CommandPalette,
+                    ctx,
+                );
                 ctx.notify();
             }
             EditorAndCodeReviewPageAction::ToggleProjectExplorer => {
@@ -310,6 +323,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 context,
                 flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
             ),
+            ToggleSettingActionPair::new(
+                "split diff view in code review",
+                builder(SettingsAction::EditorAndCodeReview(
+                    EditorAndCodeReviewPageAction::ToggleSplitDiffLayout,
+                )),
+                context,
+                flags::SPLIT_DIFF_LAYOUT_FLAG,
+            )
+            .with_enabled(|| FeatureFlag::SideBySideDiffLayout.is_enabled()),
             ToggleSettingActionPair::new(
                 "project explorer",
                 builder(SettingsAction::EditorAndCodeReview(

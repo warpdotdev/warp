@@ -447,6 +447,9 @@ pub enum FeatureFlag {
     /// Enables find/search in code review pane
     CodeReviewFind,
 
+    /// Enables the side-by-side (split) diff layout in the code review pane.
+    SideBySideDiffLayout,
+
     /// Enables asynchronous find in terminal, running search on a background thread.
     AsyncFind,
 
@@ -1065,6 +1068,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     // End manually enabled Code features.
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
+    FeatureFlag::SideBySideDiffLayout,
     FeatureFlag::RememberFastForwardState,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
@@ -1179,6 +1183,9 @@ impl FeatureFlag {
                 Some("Enables viewing agent conversations within shared sessions.")
             }
             CodeReviewFind => Some("Enables the find bar in the code review pane."),
+            SideBySideDiffLayout => {
+                Some("Enables a side-by-side diff layout in the code review pane.")
+            }
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
             }
