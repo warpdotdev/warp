@@ -1,81 +1,23 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Local, Utc};
 use warp_core::ui::appearance::Appearance;
-use warp_graphql::queries::get_included_usage_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::Text;
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 
 use crate::ai::blocklist::view_util::usage_display_unit;
-use crate::auth::{AuthManager, AuthStateProvider};
-use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::workspace::WorkspaceClient;
+use crate::ai::{AIRequestUsageModel, WorkspaceIncludedUsageState as PoolState};
 use crate::settings::ai::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::billing_and_usage_page_v2::{
     BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card, render_balance_card_contents,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{CustomerType, Workspace};
 
 pub(crate) fn is_scale_workspace(workspace: Option<&Workspace>) -> bool {
     workspace
         .is_some_and(|workspace| workspace.billing_metadata.customer_type == CustomerType::Scale)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PoolKey {
-    workspace_uid: WorkspaceUid,
-    user_uid: String,
-}
-
-#[derive(Default)]
-enum PoolState {
-    #[default]
-    Idle,
-    Loading,
-    Ready(WorkspaceIncludedUsageInfo),
-    Unavailable,
-}
-
-#[derive(Default)]
-struct PoolRequest {
-    key: Option<PoolKey>,
-    generation: u64,
-    state: PoolState,
-}
-
-impl PoolRequest {
-    fn begin(&mut self, key: Option<PoolKey>) -> u64 {
-        self.generation += 1;
-        self.state = if key.is_some() {
-            PoolState::Loading
-        } else {
-            PoolState::Idle
-        };
-        self.key = key;
-        self.generation
-    }
-
-    fn complete(
-        &mut self,
-        generation: u64,
-        result: anyhow::Result<Option<WorkspaceIncludedUsageInfo>>,
-    ) {
-        if self.generation == generation {
-            self.state = result
-                .ok()
-                .flatten()
-                .map_or(PoolState::Unavailable, PoolState::Ready);
-        }
-    }
-}
-
-pub struct IncludedUsagePoolView {
-    client: Arc<dyn WorkspaceClient>,
-    request: PoolRequest,
-    selected: bool,
-}
+pub struct IncludedUsagePoolView;
 
 impl IncludedUsagePoolView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
@@ -84,59 +26,10 @@ impl IncludedUsagePoolView {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, _, ctx| {
-            me.refresh_if_workspace_changed(ctx);
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, _, ctx| {
-            me.refresh_if_workspace_changed(ctx);
-            ctx.notify();
-        });
-        Self {
-            client: ServerApiProvider::as_ref(ctx).get_workspace_client(),
-            request: PoolRequest::default(),
-            selected: false,
-        }
-    }
-
-    fn current_key(ctx: &AppContext) -> Option<PoolKey> {
-        let auth = AuthStateProvider::as_ref(ctx).get();
-        if !auth.is_logged_in() {
-            return None;
-        }
-        let workspace = UserWorkspaces::as_ref(ctx).current_workspace()?;
-        is_scale_workspace(Some(workspace)).then(|| PoolKey {
-            workspace_uid: workspace.uid,
-            user_uid: auth.user_id().unwrap_or_default().to_string(),
-        })
-    }
-
-    fn refresh_if_workspace_changed(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.selected && self.request.key != Self::current_key(ctx) {
-            self.refresh(ctx);
-        }
-    }
-
-    pub fn refresh(&mut self, ctx: &mut ViewContext<Self>) {
-        self.selected = true;
-        let key = Self::current_key(ctx);
-        if key == self.request.key && matches!(self.request.state, PoolState::Loading) {
-            return;
-        }
-        let generation = self.request.begin(key.clone());
-        ctx.notify();
-        let Some(key) = key else { return };
-        let client = self.client.clone();
-        // This query is deliberately separate: older servers must not break core usage refreshes.
-        ctx.spawn(
-            async move { client.included_usage_info(key.workspace_uid).await },
-            move |me, result, ctx| {
-                if me.request.key == Self::current_key(ctx) {
-                    me.request.complete(generation, result);
-                    ctx.notify();
-                }
-            },
-        );
+        Self
     }
 }
 
@@ -150,14 +43,8 @@ impl View for IncludedUsagePoolView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
-        let current_key = Self::current_key(ctx);
-        let state = if current_key.is_some() && current_key == self.request.key {
-            &self.request.state
-        } else {
-            &PoolState::Idle
-        };
         render_card(
-            state,
+            AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
             Utc::now(),
             usage_display_unit(ctx),
             Appearance::as_ref(ctx),

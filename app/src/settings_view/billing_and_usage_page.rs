@@ -815,15 +815,14 @@ impl BillingAndUsagePageView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.purchase_addon_credits_loading = false;
-        self.included_usage_pool
-            .update(ctx, |view, ctx| view.refresh(ctx));
         std::mem::drop(
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
         );
 
         AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
-            ai_request_usage_model.refresh_request_usage_async(ctx)
+            ai_request_usage_model.refresh_request_usage_async(ctx);
+            ai_request_usage_model.refresh_workspace_included_usage(ctx);
         });
 
         self.usage_history_model
@@ -996,15 +995,14 @@ impl TypedActionView for BillingAndUsagePageView {
                 ctx.notify();
             }
             BillingAndUsagePageAction::RefreshWorkspaceData => {
-                self.included_usage_pool
-                    .update(ctx, |view, ctx| view.refresh(ctx));
                 std::mem::drop(
                     TeamUpdateManager::handle(ctx)
                         .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx)),
                 );
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
-                    ai_request_usage_model.refresh_request_usage_async(ctx)
+                    ai_request_usage_model.refresh_request_usage_async(ctx);
+                    ai_request_usage_model.refresh_workspace_included_usage(ctx);
                 });
             }
             BillingAndUsagePageAction::ChangeUsageSort { key, order } => {

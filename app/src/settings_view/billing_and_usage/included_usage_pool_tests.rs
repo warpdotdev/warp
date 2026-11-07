@@ -1,11 +1,11 @@
 use chrono::{Duration, TimeZone};
 use pathfinder_geometry::vector::vec2f;
+use warp_graphql::queries::get_included_usage_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::{Expanded, Flex, ParentElement, Text};
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, TypedActionView, WindowInvalidation};
 
 use super::*;
-use crate::server::ids::ServerId;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 6, 0, 0, 0).unwrap()
@@ -91,13 +91,6 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             assert!(text.contains("/ 1234.75 remaining"));
         });
     });
-}
-
-fn key(id: i64) -> PoolKey {
-    PoolKey {
-        workspace_uid: WorkspaceUid::from(ServerId::from(id)),
-        user_uid: "user".to_string(),
-    }
 }
 
 #[test]
@@ -207,34 +200,6 @@ fn included_pool_missing_or_expired_is_not_shown_as_exhausted() {
 }
 
 #[test]
-fn included_pool_loading_and_null_results_are_distinct() {
-    let mut request = PoolRequest::default();
-    let generation = request.begin(Some(key(1)));
-    assert!(matches!(request.state, PoolState::Loading));
-    request.complete(generation, Ok(None));
-    assert!(matches!(request.state, PoolState::Unavailable));
-    assert_ne!(
-        pool_balance(&PoolState::Loading, now()),
-        pool_balance(&request.state, now()),
-    );
-}
-
-#[test]
-fn included_pool_ignores_stale_results_after_workspace_switch_and_signout() {
-    let mut request = PoolRequest::default();
-    let old = request.begin(Some(key(1)));
-    let current = request.begin(Some(key(2)));
-    request.complete(old, Ok(Some(pool(100.0))));
-    assert!(matches!(request.state, PoolState::Loading));
-    request.complete(current, Ok(Some(pool(200.0))));
-    assert!(matches!(request.state, PoolState::Ready(_)));
-    request.begin(None);
-    request.complete(current, Ok(Some(pool(200.0))));
-    assert!(matches!(request.state, PoolState::Idle));
-    assert_eq!(request.key, None);
-}
-
-#[test]
 fn scale_plan_identity_and_paid_plan_behavior() {
     assert_eq!(CustomerType::Scale.to_display_string(), "Scale");
     assert!(
@@ -242,22 +207,6 @@ fn scale_plan_identity_and_paid_plan_behavior() {
     );
     let gql: CustomerType = warp_graphql::billing::CustomerType::Scale.into();
     assert_eq!(gql, CustomerType::Scale);
-}
-
-#[test]
-fn included_pool_old_server_validation_error_is_unavailable_and_retryable() {
-    let mut request = PoolRequest::default();
-    let generation = request.begin(Some(key(1)));
-    request.complete(
-        generation,
-        Err(anyhow::anyhow!(
-            "Cannot query field includedUsageInfo on type Workspace"
-        )),
-    );
-    assert!(matches!(request.state, PoolState::Unavailable));
-    let retry = request.begin(Some(key(1)));
-    request.complete(retry, Ok(Some(pool(10_000.0))));
-    assert!(matches!(request.state, PoolState::Ready(_)));
 }
 
 struct CardTestView {

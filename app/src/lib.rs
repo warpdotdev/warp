@@ -1790,7 +1790,13 @@ pub(crate) fn initialize_app(
     // be initialized after it.
     ctx.add_singleton_model(|ctx| ServerExperiments::new_from_cache(experiments, ctx));
 
-    ctx.add_singleton_model(|ctx| AIRequestUsageModel::new(ai_client, ctx));
+    ctx.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new(
+            ai_client,
+            server_api_provider.as_ref(ctx).get_workspace_client(),
+            ctx,
+        )
+    });
 
     ctx.add_singleton_model(|ctx| {
         UserWorkspaces::new(
