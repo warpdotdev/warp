@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use instant::Instant;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity, TypedActionView};
 
@@ -53,7 +54,14 @@ fn native_generation_dispatches_once_and_recopy_reuses_the_response() {
             modal.handle_action(&TemporaryInviteAction::Copy, ctx);
             assert!(modal.pending);
         });
-        Timer::after(Duration::from_millis(100)).await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while modal.read(&app, |modal, _| modal.pending) {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for invite generation"
+            );
+            Timer::after(Duration::from_millis(10)).await;
+        }
         modal.update(&mut app, |modal, ctx| {
             assert_eq!(
                 modal.result.as_ref().unwrap().invite_uid,
