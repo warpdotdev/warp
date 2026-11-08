@@ -3399,7 +3399,22 @@ type DeleteRunnerOutput implements Response {
 
 union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
 
+input GenerateTemporaryInviteCodeInput {
+  workspaceUid: ID!
+  teamUid: ID
+}
+
+type GenerateTemporaryInviteCodeOutput implements Response {
+  inviteUid: ID!
+  inviteLink: String!
+  expiresAt: Time
+  responseContext: ResponseContext!
+}
+
+union GenerateTemporaryInviteCodeResult = GenerateTemporaryInviteCodeOutput | UserFacingError
+
 type RootMutation {
+  generateTemporaryInviteCode(input: GenerateTemporaryInviteCodeInput!, requestContext: RequestContext!): GenerateTemporaryInviteCodeResult!
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!

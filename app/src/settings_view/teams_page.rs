@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
-use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink,
@@ -42,6 +41,7 @@ use super::settings_page::{
     render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
+use super::temporary_invite_modal::{InviteTarget, TemporaryInviteModal};
 use super::transfer_ownership_confirmation_modal::{
     TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
 };
@@ -131,7 +131,6 @@ const OWNER_STATE_CHIP_ACCENT_OPACITY: u8 = 30;
 const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
-const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
 const INVITE_LINK_UNAVAILABLE_INSTRUCTIONS: &str =
     "Your team’s visibility settings prevent you from creating invite links.";
 const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
@@ -185,12 +184,40 @@ fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
     is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum InviteDomainManagement {
+    Inline,
+    WorkspacePanel,
+    AskWorkspaceAdmin,
+    AskTeamAdmin,
+}
+
+fn invite_domain_management(
+    is_workspace_admin: bool,
+    is_native_workspace: bool,
+) -> InviteDomainManagement {
+    match (is_workspace_admin, is_native_workspace) {
+        (true, true) => InviteDomainManagement::WorkspacePanel,
+        (true, false) => InviteDomainManagement::Inline,
+        (false, true) => InviteDomainManagement::AskWorkspaceAdmin,
+        (false, false) => InviteDomainManagement::AskTeamAdmin,
+    }
+}
+
+fn invite_domain_summary(domains: &[&str]) -> String {
+    if domains.is_empty() {
+        "No domain restrictions".into()
+    } else {
+        format!("Restricted to {}", domains.join(", "))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TeamsPageAction {
     LeaveTeam,
     ShowLeaveTeamConfirmationDialog,
     ShowDeleteTeamConfirmationDialog,
-    CopyLink(String),
+    ShowInviteLinkDialog,
     CreateTeam,
     ChangeInviteViewOption(TeamsInviteOption),
     DeletePendingEmailInvitation {
@@ -280,6 +307,7 @@ impl TeamsPageAction {
         matches!(
             self,
             LeaveTeam
+                | ShowInviteLinkDialog
                 | ShowLeaveTeamConfirmationDialog
                 | ShowDeleteTeamConfirmationDialog
                 | CreateTeam
@@ -337,7 +365,6 @@ impl TryFrom<&TeamsPageAction> for TelemetryEvent {
     type Error = anyhow::Error;
     fn try_from(action: &TeamsPageAction) -> Result<Self, Self::Error> {
         match action {
-            TeamsPageAction::CopyLink(_) => Ok(TelemetryEvent::TeamLinkCopied),
             TeamsPageAction::ChangeInviteViewOption(option) => {
                 Ok(TelemetryEvent::ChangedInviteViewOption(*option))
             }
@@ -373,7 +400,6 @@ struct TeamsWidgetMouseHandles {
     create_team_button: MouseStateHandle,
     approve_domains_button: MouseStateHandle,
     reset_invite_links_button: MouseStateHandle,
-    invite_by_link_toggle_state: SwitchStateHandle,
     upgrade_link: MouseStateHandle,
     stripe_billing_portal_link: MouseStateHandle,
     manage_plan_link: MouseStateHandle,
@@ -385,6 +411,7 @@ struct TeamsWidgetMouseHandles {
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
     workspace_admin_panel_link: HighlightedHyperlink,
+    team_visibility_link: MouseStateHandle,
     browse_teams_button: MouseStateHandle,
     switch_team_button: MouseStateHandle,
     discovery_back_button: MouseStateHandle,
@@ -610,6 +637,7 @@ enum DiscoveryJoinTarget {
 struct TeamInvitationPermissions {
     has_admin_permissions: bool,
     is_workspace_admin: bool,
+    is_native_workspace: bool,
 }
 
 impl DiscoverableTeamState {
@@ -662,6 +690,7 @@ pub struct TeamsPageView {
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     join_teams_modal_state: ModalViewState<Modal<JoinTeamsModal>>,
+    temporary_invite_modal_state: ModalViewState<Modal<TemporaryInviteModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
     discoverable_workspaces_states: Vec<DiscoverableWorkspaceState>,
@@ -701,7 +730,7 @@ impl TypedActionView for TeamsPageView {
         }
 
         match action {
-            TeamsPageAction::CopyLink(link) => self.copy_invite_link(link, ctx),
+            TeamsPageAction::ShowInviteLinkDialog => self.show_invite_link_dialog(ctx),
             TeamsPageAction::LeaveTeam => self.leave_team(ctx),
             TeamsPageAction::CreateTeam => self.create_team(ctx),
             TeamsPageAction::RemoveUserFromTeam {
@@ -935,6 +964,7 @@ impl TeamsPageView {
     pub fn new(ctx: &mut ViewContext<TeamsPageView>) -> Self {
         let user_workspaces = UserWorkspaces::handle(ctx);
         ctx.observe(&user_workspaces, |me, _, ctx| {
+            me.clear_invite_on_scope_change(ctx);
             me.update_team_members_state(ctx);
             me.update_approved_domains_state(ctx);
         });
@@ -1097,6 +1127,25 @@ impl TeamsPageView {
             me.handle_join_teams_modal_close_event(event, ctx);
         });
 
+        let invite_body = ctx.add_typed_action_view(TemporaryInviteModal::new);
+        let invite_modal = ctx.add_typed_action_view(|ctx| {
+            Modal::new(Some("Invite by link".into()), invite_body, ctx)
+                .with_modal_style(UiComponentStyles {
+                    width: Some(480.),
+                    ..Default::default()
+                })
+                .with_body_style(UiComponentStyles {
+                    padding: Some(Coords::uniform(24.)),
+                    ..Default::default()
+                })
+        });
+        ctx.subscribe_to_view(&invite_modal, |me, _, event, ctx| match event {
+            ModalEvent::Close => me.close_invite_link_dialog(ctx),
+        });
+        ctx.observe(&AuthManager::handle(ctx), |me, _, ctx| {
+            me.clear_invite_on_scope_change(ctx);
+        });
+
         let member_actions_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
         ctx.subscribe_to_view(&member_actions_menu, |me, _, event, ctx| {
             if let menu::Event::Close { .. } = event {
@@ -1148,6 +1197,7 @@ impl TeamsPageView {
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             join_teams_modal_state: ModalViewState::new(join_teams_modal),
+            temporary_invite_modal_state: ModalViewState::new(invite_modal),
             discoverable_teams_states: Vec::new(),
             discoverable_workspaces_states: Vec::new(),
             workspace_discovery_screen: Default::default(),
@@ -1244,11 +1294,12 @@ impl TeamsPageView {
                 self.show_error("Failed to toggle invite links", Some(err), ctx);
             }
             UserWorkspacesEvent::ResetInviteLinks => {
-                self.show_success("Reset invite links", ctx);
+                self.close_invite_link_dialog(ctx);
+                self.show_success("Revoked invite links", ctx);
                 ctx.notify();
             }
             UserWorkspacesEvent::ResetInviteLinksRejected(err) => {
-                self.show_error("Failed to reset invite links", Some(err), ctx);
+                self.show_error("Failed to revoke invite links", Some(err), ctx);
             }
             UserWorkspacesEvent::DeleteTeamInvite => {
                 self.update_team_members_state(ctx);
@@ -1503,6 +1554,7 @@ impl TeamsPageView {
         // rather than leave it queued behind for a target the user has moved on from.
         self.clear_transfer_ownership_modal(ctx);
         self.clear_join_teams_modal(ctx);
+        self.close_invite_link_dialog(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1557,7 +1609,9 @@ impl TeamsPageView {
     /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
     /// centered on it lands wherever the scroll offset happens to put it.
     pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
-        if self.join_teams_modal_state.is_open() {
+        if self.temporary_invite_modal_state.is_open() {
+            Some(self.temporary_invite_modal_state.render())
+        } else if self.join_teams_modal_state.is_open() {
             Some(self.join_teams_modal_state.render())
         } else if self.transfer_ownership_modal_state.is_open() {
             Some(self.transfer_ownership_modal_state.render())
@@ -1692,6 +1746,7 @@ impl TeamsPageView {
     }
 
     fn show_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.close_invite_link_dialog(ctx);
         self.clear_team_action_confirmation();
         self.clear_transfer_ownership_modal(ctx);
         let teams = self
@@ -1745,6 +1800,7 @@ impl TeamsPageView {
         team_uid: ServerId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.close_invite_link_dialog(ctx);
         self.clear_team_action_confirmation();
         self.clear_join_teams_modal(ctx);
         self.transfer_ownership_modal_state
@@ -1991,10 +2047,81 @@ impl TeamsPageView {
         self.update_team_members_state(ctx);
     }
 
-    fn copy_invite_link(&mut self, link: &str, ctx: &mut ViewContext<Self>) {
-        ctx.clipboard()
-            .write(ClipboardContent::plain_text(link.to_string()));
-        self.show_toast("Link copied to clipboard!", ToastFlavor::Default, ctx);
+    fn invite_target(&self, ctx: &ViewContext<Self>) -> Option<InviteTarget> {
+        let workspaces = self.user_workspaces.as_ref(ctx);
+        Some(InviteTarget {
+            workspace_uid: workspaces.current_workspace()?.uid,
+            team_uid: workspaces.team_for_view(ctx)?.uid,
+            actor_uid: AuthStateProvider::as_ref(ctx).get().user_id()?,
+        })
+    }
+
+    fn clear_invite_on_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
+        let target = self
+            .temporary_invite_modal_state
+            .view
+            .as_ref(ctx)
+            .body()
+            .as_ref(ctx)
+            .target();
+        let auth = AuthStateProvider::as_ref(ctx).get();
+        if target.is_some()
+            && (target != self.invite_target(ctx)
+                || auth.is_anonymous_or_logged_out()
+                || auth.is_service_account())
+        {
+            self.close_invite_link_dialog(ctx);
+        }
+    }
+
+    fn close_invite_link_dialog(&mut self, ctx: &mut ViewContext<Self>) {
+        self.temporary_invite_modal_state
+            .view
+            .update(ctx, |modal, ctx| {
+                modal.body().update(ctx, |body, ctx| body.clear(ctx));
+            });
+        self.temporary_invite_modal_state.close();
+        ctx.focus_self();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_invite_link_dialog(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(target) = self.invite_target(ctx) else {
+            return;
+        };
+        let workspaces = self.user_workspaces.as_ref(ctx);
+        let Some(team) = workspaces.team_for_view(ctx) else {
+            return;
+        };
+        let Some(workspace) = workspaces.current_workspace() else {
+            return;
+        };
+        if workspace.is_native_workspaces_enabled() && !team.visibility.supports_invite_link() {
+            return;
+        }
+        let destination = team.name.clone();
+        let domains = invite_domain_summary(
+            &workspace
+                .invite_link_domain_restrictions
+                .iter()
+                .map(|entry| entry.domain.as_str())
+                .collect::<Vec<_>>(),
+        );
+        self.clear_team_action_confirmation();
+        self.clear_join_teams_modal(ctx);
+        self.clear_transfer_ownership_modal(ctx);
+        self.temporary_invite_modal_state
+            .view
+            .update(ctx, |modal, ctx| {
+                modal.body().update(ctx, |body, ctx| {
+                    body.open(target, destination, domains, ctx)
+                });
+            });
+        self.temporary_invite_modal_state.open();
+        ctx.focus(&self.temporary_invite_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
     }
 
     fn remove_user_from_team(
@@ -2954,7 +3081,8 @@ impl TeamsWidget {
             team_metadata,
             TeamInvitationPermissions {
                 has_admin_permissions,
-                is_workspace_admin: use_workspace_admin_panel,
+                is_workspace_admin: workspace.is_workspace_admin(&current_user_email),
+                is_native_workspace: workspace.is_native_workspaces_enabled(),
             },
             view,
             appearance,
@@ -3472,7 +3600,6 @@ impl TeamsWidget {
         let mut invitation_section = Flex::column();
 
         let user_workspaces = UserWorkspaces::as_ref(app);
-        let is_invite_link_enabled = team_metadata.invite_link.is_some();
         let is_discoverable = user_workspaces.is_discoverable();
 
         // "team is full" or "billing issue" or some other alert thats restricting you from adding team members
@@ -3511,23 +3638,13 @@ impl TeamsWidget {
             );
         }
 
-        // Invite by link section
-        // Only show invite-by-link if user is admin (so they can see the
-        // toggle, or why it's unavailable for a Private/Hidden team) OR if
-        // invite links are actually usable (enabled on a team whose
-        // visibility supports them).
-        if permissions.has_admin_permissions
-            || (team_metadata.visibility.supports_invite_link() && is_invite_link_enabled)
-        {
-            invitation_section.add_child(self.render_invite_by_link_section(
-                team_metadata,
-                is_invite_link_enabled,
-                permissions,
-                view,
-                appearance,
-                chip_editor_style,
-            ));
-        }
+        invitation_section.add_child(self.render_invite_by_link_section(
+            team_metadata,
+            permissions,
+            view,
+            appearance,
+            chip_editor_style,
+        ));
 
         // Invite by email. Disabled whenever the warning banner is showing —
         // the banner owns the explanation + recovery CTA.
@@ -3561,146 +3678,136 @@ impl TeamsWidget {
     fn render_invite_by_link_section(
         &self,
         team: &Team,
-        is_invite_link_enabled: bool,
         permissions: TeamInvitationPermissions,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
     ) -> Box<dyn Element> {
-        let supports_invite_link = team.visibility.supports_invite_link();
-        let mut section = Flex::column();
-
-        // Header + admin-only subtext on the left, toggle on the right. The
-        // text is stacked so the toggle centers against the whole block.
-        let header = self.render_subsubsection_header("By link".to_owned(), appearance);
-        let text_column = if permissions.has_admin_permissions {
-            let instructions = if supports_invite_link {
-                self.render_sub_text(
-                    INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
-                    appearance,
-                    Some(Coords::uniform(0.).right(48.)),
-                )
-            } else {
-                let mut fragments = vec![FormattedTextFragment::plain_text(
-                    INVITE_LINK_UNAVAILABLE_INSTRUCTIONS,
-                )];
-                if permissions.is_workspace_admin {
-                    fragments.extend([
-                        FormattedTextFragment::plain_text(" Update team visibility in the "),
-                        FormattedTextFragment::hyperlink(
-                            "workspace admin panel",
-                            AdminActions::workspace_teams_admin_panel_link(),
-                        ),
-                        FormattedTextFragment::plain_text("."),
-                    ]);
+        let mut section = Flex::column().with_spacing(8.);
+        section.add_child(self.render_subsubsection_header("By link".into(), appearance));
+        let supports_link =
+            !permissions.is_native_workspace || team.visibility.supports_invite_link();
+        if supports_link {
+            section.add_child(self.render_sub_text(
+                "Create a separate invite link that expires in 3 days.".into(),
+                appearance,
+                None,
+            ));
+            section.add_child(
+                appearance
+                    .ui_builder()
+                    .button(
+                        ButtonVariant::Accent,
+                        self.mouse_state_handles.copy_link_button.clone(),
+                    )
+                    .with_centered_text_label("Copy invite link…".into())
+                    .build()
+                    .on_click(|ctx, _, _| {
+                        ctx.dispatch_typed_action(TeamsPageAction::ShowInviteLinkDialog)
+                    })
+                    .finish(),
+            );
+        } else {
+            section.add_child(self.render_sub_text(
+                INVITE_LINK_UNAVAILABLE_INSTRUCTIONS.into(),
+                appearance,
+                None,
+            ));
+            if permissions.is_workspace_admin {
+                section.add_child(
+                    appearance
+                        .ui_builder()
+                        .link(
+                            "Manage team visibility".into(),
+                            Some(AdminActions::workspace_teams_admin_panel_link()),
+                            None,
+                            self.mouse_state_handles.team_visibility_link.clone(),
+                        )
+                        .build()
+                        .finish(),
+                );
+            }
+        }
+        if permissions.has_admin_permissions {
+            let team_uid = team.uid;
+            section.add_child(
+                appearance
+                    .ui_builder()
+                    .link(
+                        "Revoke links".into(),
+                        None,
+                        Some(Box::new(move |ctx| {
+                            ctx.dispatch_typed_action(TeamsPageAction::ResetInviteLinks {
+                                team_uid,
+                            })
+                        })),
+                        self.mouse_state_handles.reset_invite_links_button.clone(),
+                    )
+                    .build()
+                    .finish(),
+            );
+        }
+        section.add_child(
+            self.render_sub_text(
+                invite_domain_summary(
+                    &team
+                        .invite_link_domain_restrictions
+                        .iter()
+                        .map(|entry| entry.domain.as_str())
+                        .collect::<Vec<_>>(),
+                ),
+                appearance,
+                None,
+            ),
+        );
+        let management = invite_domain_management(
+            permissions.is_workspace_admin,
+            permissions.is_native_workspace,
+        );
+        if management == InviteDomainManagement::Inline {
+            section.add_child(self.render_approved_domains_section(
+                team,
+                true,
+                view,
+                appearance,
+                chip_editor_style,
+            ));
+        } else {
+            let fragments = match management {
+                InviteDomainManagement::WorkspacePanel => vec![
+                    FormattedTextFragment::plain_text(
+                        "Manage your workspace’s invite link restrictions in the ",
+                    ),
+                    FormattedTextFragment::hyperlink(
+                        "admin panel",
+                        AdminActions::workspace_members_admin_panel_link(),
+                    ),
+                    FormattedTextFragment::plain_text("."),
+                ],
+                InviteDomainManagement::AskWorkspaceAdmin => {
+                    vec![FormattedTextFragment::plain_text(
+                        "Ask your workspace admin to update domain restrictions for invite links.",
+                    )]
                 }
+                InviteDomainManagement::AskTeamAdmin => vec![FormattedTextFragment::plain_text(
+                    "Ask your team admin to update domain restrictions for invite links.",
+                )],
+                InviteDomainManagement::Inline => unreachable!(),
+            };
+            section.add_child(
                 FormattedTextElement::new(
                     FormattedText::new([FormattedTextLine::Line(fragments)]),
                     appearance.ui_font_size(),
                     appearance.ui_font_family(),
                     appearance.ui_font_family(),
-                    appearance
-                        .theme()
-                        .active_ui_text_color()
-                        .with_opacity(60)
-                        .into(),
+                    appearance.theme().active_ui_text_color().into(),
                     self.mouse_state_handles.workspace_admin_panel_link.clone(),
                 )
                 .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-                .register_default_click_handlers(|url, _, ctx| {
-                    ctx.open_url(&url.url);
-                })
-                .finish()
-            };
-            Flex::column()
-                .with_child(header)
-                .with_child(Container::new(instructions).with_padding_top(8.).finish())
-                .finish()
-        } else {
-            Flex::column().with_child(header).finish()
-        };
-
-        let mut invite_by_link_header_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_child(Shrinkable::new(1., text_column).finish());
-
-        if permissions.has_admin_permissions {
-            let team_uid = team.uid;
-            let current_state = is_invite_link_enabled;
-            let invite_by_link_toggle = appearance
-                .ui_builder()
-                .switch(self.mouse_state_handles.invite_by_link_toggle_state.clone())
-                .check(supports_invite_link && is_invite_link_enabled)
-                .with_disabled(!supports_invite_link)
-                .with_disabled_styles(UiComponentStyles {
-                    background: Some(internal_colors::neutral_4(appearance.theme()).into()),
-                    foreground: Some(internal_colors::neutral_5(appearance.theme()).into()),
-                    ..Default::default()
-                })
-                .build()
-                .on_click(move |ctx, _, _| {
-                    if !supports_invite_link {
-                        return;
-                    }
-                    ctx.dispatch_typed_action(TeamsPageAction::ToggleIsInviteLinkEnabled {
-                        team_uid,
-                        current_state,
-                    })
-                });
-
-            invite_by_link_header_row.add_child(invite_by_link_toggle.finish());
+                .register_default_click_handlers(|url, _, ctx| ctx.open_url(&url.url))
+                .finish(),
+            );
         }
-
-        section.add_child(invite_by_link_header_row.finish());
-
-        // 3) Invite link + domain restrictions
-        // Only renders if invite by link is enabled and the team's visibility
-        // supports it.
-        if supports_invite_link && is_invite_link_enabled {
-            section.add_child(self.render_copy_link_row(team, appearance));
-
-            // Render invite link reset text if admin user
-            if permissions.has_admin_permissions {
-                let team_uid = team.uid;
-                section.add_child(
-                    Align::new(
-                        appearance
-                            .ui_builder()
-                            .link(
-                                "Reset links".into(),
-                                None,
-                                Some(Box::new(move |ctx| {
-                                    ctx.dispatch_typed_action(TeamsPageAction::ResetInviteLinks {
-                                        team_uid,
-                                    });
-                                })),
-                                self.mouse_state_handles.reset_invite_links_button.clone(),
-                            )
-                            .soft_wrap(false)
-                            .build()
-                            .with_margin_top(8.)
-                            .finish(),
-                    )
-                    .left()
-                    .finish(),
-                );
-            }
-
-            // Don't render restricted domains section if user is not an admin AND there are no domain restrictions
-            if permissions.has_admin_permissions || !team.invite_link_domain_restrictions.is_empty()
-            {
-                section.add_child(self.render_approved_domains_section(
-                    team,
-                    permissions.has_admin_permissions,
-                    view,
-                    appearance,
-                    chip_editor_style,
-                ));
-            }
-        }
-
         section.finish()
     }
 
@@ -4591,89 +4698,6 @@ impl TeamsWidget {
         Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_children(all_items)
-            .finish()
-    }
-
-    fn render_copy_link_row(
-        &self,
-        team_metadata: &Team,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let mut section = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-
-        let (link_text, button_enabled) = match &team_metadata.invite_link {
-            Some(invite_link) => (invite_link.clone(), true),
-            None => ("Failed to load invite link.".into(), false),
-        };
-        let theme = appearance.theme();
-
-        let mut copy_button = appearance
-            .ui_builder()
-            .copy_button(14., self.mouse_state_handles.copy_link_button.clone())
-            .build();
-
-        if !button_enabled {
-            copy_button = copy_button.disable();
-        }
-
-        // 1) Invite link (with copy button)
-        section.add_child(
-            Shrinkable::new(
-                1.,
-                Container::new(
-                    Flex::row()
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .with_main_axis_size(MainAxisSize::Max)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_children([
-                            Shrinkable::new(
-                                1.,
-                                Container::new(
-                                    Align::new(
-                                        appearance
-                                            .ui_builder()
-                                            .span(link_text.clone())
-                                            .with_style(UiComponentStyles {
-                                                font_color: Some(
-                                                    theme
-                                                        .main_text_color(theme.background())
-                                                        .into_solid(),
-                                                ),
-                                                ..Default::default()
-                                            })
-                                            .build()
-                                            .finish(),
-                                    )
-                                    .left()
-                                    .finish(),
-                                )
-                                .with_padding_bottom(10.)
-                                .with_padding_top(10.)
-                                .finish(),
-                            )
-                            .finish(),
-                            copy_button
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(TeamsPageAction::CopyLink(
-                                        link_text.clone(),
-                                    ));
-                                })
-                                .finish(),
-                        ])
-                        .finish(),
-                )
-                .with_background(theme.background())
-                .with_border(Border::all(1.).with_border_fill(theme.outline()))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                .with_padding_left(8.)
-                .with_padding_right(8.)
-                .finish(),
-            )
-            .finish(),
-        );
-
-        Container::new(section.finish())
-            .with_margin_top(TEXT_FIELD_TOP_PADDING)
             .finish()
     }
 

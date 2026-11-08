@@ -119,6 +119,7 @@ mod show_blocks_view;
 mod tab_menu;
 mod teams_page;
 mod telemetry;
+mod temporary_invite_modal;
 mod transfer_ownership_confirmation_modal;
 pub mod update_environment_form;
 mod warp_agent_page;

@@ -9,6 +9,35 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use warpui::App;
 
 use super::*;
+
+#[test]
+fn invite_domain_management_uses_workspace_admin_and_native_workspace_independently() {
+    assert_eq!(
+        invite_domain_management(true, true),
+        InviteDomainManagement::WorkspacePanel
+    );
+    assert_eq!(
+        invite_domain_management(true, false),
+        InviteDomainManagement::Inline
+    );
+    assert_eq!(
+        invite_domain_management(false, true),
+        InviteDomainManagement::AskWorkspaceAdmin
+    );
+    assert_eq!(
+        invite_domain_management(false, false),
+        InviteDomainManagement::AskTeamAdmin
+    );
+}
+
+#[test]
+fn invite_domain_summary_does_not_invent_a_restriction() {
+    assert_eq!(invite_domain_summary(&[]), "No domain restrictions");
+    assert_eq!(
+        invite_domain_summary(&["warp.dev", "example.com"]),
+        "Restricted to warp.dev, example.com"
+    );
+}
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::team::MockTeamClient;
 #[cfg(not(target_family = "wasm"))]
