@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn test_low_power_gpu_uses_vsync_presentation_mode() {
+    assert_eq!(
+        present_mode_for_power_preference(GPUPowerPreference::LowPower),
+        PresentMode::AutoVsync
+    );
+}
+
+#[test]
+fn test_high_performance_gpu_uses_no_vsync_presentation_mode() {
+    assert_eq!(
+        present_mode_for_power_preference(GPUPowerPreference::HighPerformance),
+        PresentMode::AutoNoVsync
+    );
+}
+
+#[test]
 fn test_is_unsupported_llvmpipe_adapter() {
     let supported_adapter_info = wgpu::AdapterInfo {
         name: "llvmpipe (LLVM 17.0.6, 256 bits)".to_owned(),
