@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{Duration, TimeZone, Utc};
 use warpui::App;
 
+use super::super::WorkspaceIncludedUsage;
 use super::*;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ai::MockAIClient;
@@ -15,10 +15,19 @@ fn workspace_uid(workspace: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(workspace))
 }
 
-fn allowances() -> HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo> {
+fn allowances() -> Vec<WorkspaceIncludedUsage> {
     let mut second = pool();
     second.included_usage_credits = 2000.0;
-    HashMap::from([(workspace_uid(1), pool()), (workspace_uid(2), second)])
+    vec![
+        WorkspaceIncludedUsage {
+            workspace_uid: workspace_uid(1),
+            info: pool(),
+        },
+        WorkspaceIncludedUsage {
+            workspace_uid: workspace_uid(2),
+            info: second,
+        },
+    ]
 }
 
 fn pool() -> WorkspaceIncludedUsageInfo {
@@ -87,7 +96,7 @@ fn included_usage_refreshes_with_grants_and_selects_cached_workspaces() {
                 Ok(super::super::RequestUsageInfo {
                     request_limit_info: super::super::RequestLimitInfo::default(),
                     bonus_grants: vec![],
-                    workspace_allowances: HashMap::new(),
+                    workspace_allowances: Vec::new(),
                 })
             });
         let model =

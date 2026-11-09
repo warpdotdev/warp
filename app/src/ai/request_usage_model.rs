@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
@@ -161,11 +160,17 @@ pub struct CodebaseContextUsageLimit {
     pub embedding_generation_batch_size: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct WorkspaceIncludedUsage {
+    pub workspace_uid: WorkspaceUid,
+    pub info: WorkspaceIncludedUsageInfo,
+}
+
 /// Contains all usage-related information fetched from the server.
 pub struct RequestUsageInfo {
     pub request_limit_info: RequestLimitInfo,
     pub bonus_grants: Vec<BonusGrant>,
-    pub workspace_allowances: HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>,
+    pub workspace_allowances: Vec<WorkspaceIncludedUsage>,
 }
 
 #[cfg(feature = "agent_mode_evals")]
@@ -232,7 +237,7 @@ struct ServerAvailabilityState {
 
 pub struct AIRequestUsageModel {
     ai_client: Arc<dyn AIClient>,
-    workspace_allowances: HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>,
+    workspace_allowances: Vec<WorkspaceIncludedUsage>,
 
     /// The last time at which `request_limit_info` was updated.
     last_update_time: Option<Instant>,
@@ -276,7 +281,7 @@ impl AIRequestUsageModel {
 
         Self {
             ai_client,
-            workspace_allowances: HashMap::new(),
+            workspace_allowances: Vec::new(),
             request_limit_info,
             last_update_time: None,
             bonus_grants: vec![],
@@ -290,7 +295,7 @@ impl AIRequestUsageModel {
     pub fn new_for_test(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         Self {
             ai_client,
-            workspace_allowances: HashMap::new(),
+            workspace_allowances: Vec::new(),
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],

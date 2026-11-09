@@ -26,8 +26,9 @@ impl AIRequestUsageModel {
             return WorkspaceIncludedUsageState::Idle;
         }
         self.workspace_allowances
-            .get(&workspace.uid)
-            .cloned()
+            .iter()
+            .find(|allowance| allowance.workspace_uid == workspace.uid)
+            .map(|allowance| allowance.info.clone())
             .map_or(
                 WorkspaceIncludedUsageState::Unavailable,
                 WorkspaceIncludedUsageState::Ready,

@@ -171,6 +171,8 @@ use crate::ai::llms::{
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
+#[cfg(not(feature = "agent_mode_evals"))]
+use crate::ai::request_usage_model::WorkspaceIncludedUsage;
 use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
@@ -2196,14 +2198,15 @@ impl AIClient for ServerApi {
                     .workspaces
                     .iter()
                     .filter_map(|workspace| {
-                        workspace.included_usage_info.clone().map(|info| {
-                            (
-                                WorkspaceUid::from(ServerId::from_string_lossy(
+                        workspace
+                            .included_usage_info
+                            .clone()
+                            .map(|info| WorkspaceIncludedUsage {
+                                workspace_uid: WorkspaceUid::from(ServerId::from_string_lossy(
                                     workspace.uid.inner(),
                                 )),
                                 info,
-                            )
-                        })
+                            })
                     })
                     .collect();
 
