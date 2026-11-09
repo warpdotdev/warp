@@ -21,10 +21,10 @@ use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::terminal::{CommandHandle, TerminalDriver};
 use super::{
-    AgentDriver, AgentDriverError, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
-    LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    AgentDriver, AgentDriverError, HarnessSetupStage,
+    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
 use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
@@ -172,7 +172,11 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// Validate that the harness is ready to run. Default impl checks that the
     /// CLI is installed on `PATH`; override for additional checks.
     fn validate(&self) -> Result<(), AgentDriverError> {
-        validate_cli_installed(self.cli_agent().command_prefix(), self.install_docs_url())
+        validate_cli_installed(
+            self.cli_agent().command_prefix(),
+            self.install_docs_url(),
+            None,
+        )
     }
 
     /// Shell command to verify authentication credentials are valid.
@@ -518,6 +522,7 @@ fn acp_harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverError> {
         Harness::Oz | Harness::OpenCode | Harness::Unknown => {
             Err(AgentDriverError::HarnessSetupFailed {
                 harness: harness.to_string(),
+                stage: Some(HarnessSetupStage::Manifest),
                 reason: format!("The {harness} harness cannot be driven over ACP."),
             })
         }
@@ -554,10 +559,12 @@ pub(crate) fn auth_check_command_for(harness: Harness) -> Option<String> {
 }
 
 /// Check that `cli` is installed and on PATH, returning a `HarnessSetupFailed`
-/// error with an optional install-docs link when it isn't.
+/// error with an optional install-docs link when it isn't. `stage` is the ACP setup stage the
+/// check belongs to, or `None` for a harness driven in the terminal.
 pub(crate) fn validate_cli_installed(
     cli: &str,
     install_docs_url: Option<&str>,
+    stage: Option<HarnessSetupStage>,
 ) -> Result<(), AgentDriverError> {
     if resolve_executable(cli).is_none() {
         let mut reason = format!("'{cli}' CLI not found on your machine.");
@@ -566,6 +573,7 @@ pub(crate) fn validate_cli_installed(
         }
         return Err(AgentDriverError::HarnessSetupFailed {
             harness: cli.into(),
+            stage,
             reason,
         });
     }

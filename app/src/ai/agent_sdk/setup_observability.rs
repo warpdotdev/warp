@@ -1,10 +1,14 @@
+use std::fmt::Display;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Utc};
 use enum_iterator::Sequence;
+use event_listener::Event;
 use futures::FutureExt as _;
 use tracing::Instrument as _;
+use warp_cli::agent::HarnessTransport;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -18,8 +22,40 @@ pub(crate) struct SetupClientEventReporter {
     run_id: Option<AmbientAgentTaskId>,
     /// Keeps execution scope separate from the run ID that controls event reporting.
     scope: SetupScope,
+    /// Stamped on every metric event, so harness steps can be split by how the harness is driven.
+    transport: Option<HarnessTransport>,
+    /// Shared by every clone, so a milestone that must follow `agent_started` waits for it even
+    /// when posted from another task.
+    agent_started: Arc<MilestoneGate>,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
+}
+
+/// A milestone that has or has not been posted yet.
+#[derive(Default)]
+struct MilestoneGate {
+    posted: AtomicBool,
+    changed: Event,
+}
+
+impl MilestoneGate {
+    fn mark_posted(&self) {
+        self.posted.store(true, Ordering::SeqCst);
+        self.changed.notify(usize::MAX);
+    }
+
+    async fn wait_posted(&self) {
+        loop {
+            if self.posted.load(Ordering::SeqCst) {
+                return;
+            }
+            let listener = self.changed.listen();
+            if self.posted.load(Ordering::SeqCst) {
+                return;
+            }
+            listener.await;
+        }
+    }
 }
 
 impl SetupClientEventReporter {
@@ -32,6 +68,8 @@ impl SetupClientEventReporter {
         Self {
             run_id: Some(run_id),
             scope: SetupScope::Run,
+            transport: None,
+            agent_started: Arc::default(),
             ai_client,
             background,
         }
@@ -42,8 +80,18 @@ impl SetupClientEventReporter {
         Self {
             run_id: None,
             scope: SetupScope::Run,
+            transport: None,
+            agent_started: Arc::default(),
             ai_client,
             background,
+        }
+    }
+
+    /// A reporter for the same run whose metric events carry `transport`.
+    pub(crate) fn with_transport(&self, transport: HarnessTransport) -> Self {
+        Self {
+            transport: Some(transport),
+            ..self.clone()
         }
     }
 
@@ -65,10 +113,22 @@ impl SetupClientEventReporter {
     }
 
     /// Records a setup step's duration and error state without changing its result.
-    pub(crate) async fn record_result<T, E: std::error::Error>(
+    pub(crate) async fn record_result<T, E: Display>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        self.record_result_with_outcome(step, future, |_| None)
+            .await
+    }
+
+    /// Like [`Self::record_result`], with a bounded outcome label derived from a successful
+    /// value. A failed step reports no outcome; its error flag says what happened.
+    pub(crate) async fn record_result_with_outcome<T, E: Display>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = Result<T, E>>,
+        outcome: impl FnOnce(&T) -> Option<&'static str>,
     ) -> Result<T, E> {
         let (step_name, span) = self.start_step(step);
 
@@ -83,11 +143,13 @@ impl SetupClientEventReporter {
             .await;
         let finish_timestamp = Utc::now();
 
-        self.post_setup_metric_event_best_effort(
+        let outcome = result.as_ref().ok().and_then(outcome);
+        self.post_metric_event_best_effort(
             step_name,
             start_timestamp,
             finish_timestamp,
             result.is_err(),
+            outcome,
         );
         result
     }
@@ -115,11 +177,12 @@ impl SetupClientEventReporter {
         let value = future.instrument(span).await;
         let finish_timestamp = Utc::now();
 
-        self.post_setup_metric_event_best_effort(
+        self.post_metric_event_best_effort(
             step_name,
             start_timestamp,
             finish_timestamp,
             is_error(&value),
+            None,
         );
         value
     }
@@ -139,14 +202,34 @@ impl SetupClientEventReporter {
                 let start_timestamp = Utc::now();
                 future.instrument(span).await;
                 let finish_timestamp = Utc::now();
-                reporter.post_setup_metric_event_best_effort(
+                reporter.post_metric_event_best_effort(
                     step_name,
                     start_timestamp,
                     finish_timestamp,
                     false,
+                    None,
                 );
             })
             .detach();
+    }
+
+    /// Reports how an ACP action that began at `started` turned out, in the background.
+    pub(crate) fn post_action_event(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        let event_name = event.as_event_name();
+        tracing::info!(event_name, outcome, is_error, tags.cloud_agent = true);
+        self.post_metric_event_best_effort(
+            event_name,
+            started,
+            Utc::now(),
+            is_error,
+            Some(outcome),
+        );
     }
 
     /// Reports a run milestone without making delivery failures fatal.
@@ -158,6 +241,32 @@ impl SetupClientEventReporter {
         let event_name = event.as_event_name();
         let request = AgentRunClientEventRequest::timeline_event(event_name, timestamp);
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
+        if event == OzRunTimelineEvent::AgentStarted {
+            self.agent_started.mark_posted();
+        }
+    }
+
+    /// Like [`Self::post_timeline_event`], posted in the background so it never delays the run.
+    /// The event's timestamp is taken now; a milestone the server only accepts after
+    /// `agent_started` is held back until that has been posted.
+    pub(crate) fn post_timeline_event_detached(&self, event: OzRunTimelineEvent) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+        let event_name = event.as_event_name();
+        let request = AgentRunClientEventRequest::timeline_event(event_name, Utc::now());
+        let agent_started = event
+            .follows_agent_started()
+            .then(|| self.agent_started.clone());
+        let ai_client = self.ai_client.clone();
+        self.background
+            .spawn(async move {
+                if let Some(agent_started) = agent_started {
+                    agent_started.wait_posted().await;
+                }
+                Self::post_client_event(run_id, ai_client, event_name, request).await;
+            })
+            .detach();
     }
 
     /// Like [`Self::post_timeline_event`], with an event-specific JSON payload, posted in the
@@ -179,18 +288,20 @@ impl SetupClientEventReporter {
         self.background.spawn(post).detach();
     }
 
-    fn post_setup_metric_event_best_effort(
+    fn post_metric_event_best_effort(
         &self,
         event_name: &'static str,
         start_timestamp: DateTime<Utc>,
         finish_timestamp: DateTime<Utc>,
         is_error: bool,
+        outcome: Option<&'static str>,
     ) {
         let Some(run_id) = self.run_id else {
             return;
         };
 
         let ai_client = self.ai_client.clone();
+        let transport = self.transport.map(transport_label);
         self.background
             .spawn(async move {
                 let request = AgentRunClientEventRequest::setup_metric_event(
@@ -198,6 +309,8 @@ impl SetupClientEventReporter {
                     start_timestamp,
                     finish_timestamp,
                     is_error,
+                    outcome.map(str::to_owned),
+                    transport.map(str::to_owned),
                 );
                 Self::post_client_event(run_id, ai_client, event_name, request).await;
             })
@@ -221,10 +334,21 @@ impl SetupClientEventReporter {
     }
 }
 
+/// The `transport` label the server records on metric events.
+fn transport_label(transport: HarnessTransport) -> &'static str {
+    match transport {
+        HarnessTransport::Acp => "acp",
+        HarnessTransport::Pty => "pty",
+    }
+}
+
 /// Names run milestones that have a timestamp rather than a setup duration.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
+    /// The agent's first output reached the conversation; with `AgentStarted`, the run's time
+    /// to first token.
+    AgentFirstOutput,
     WorkerContainerReady,
     SkillSourcesResolved,
 }
@@ -233,8 +357,41 @@ impl OzRunTimelineEvent {
     fn as_event_name(self) -> &'static str {
         match self {
             Self::AgentStarted => "agent_started",
+            Self::AgentFirstOutput => "agent_first_output",
             Self::WorkerContainerReady => "worker_container_ready",
             Self::SkillSourcesResolved => "skill_sources_resolved",
+        }
+    }
+
+    /// Whether the server accepts the milestone only once `agent_started` has been recorded.
+    fn follows_agent_started(self) -> bool {
+        match self {
+            Self::AgentFirstOutput => true,
+            Self::AgentStarted | Self::WorkerContainerReady | Self::SkillSourcesResolved => false,
+        }
+    }
+}
+
+/// Names ACP actions whose latency and outcome are reported as client events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AcpActionEvent {
+    /// A follow-up steered into the running turn.
+    Steer,
+    /// A `session/cancel` of the running turn.
+    Cancel,
+    /// A prompt turn, from its prompt to its response.
+    Turn,
+    /// Held follow-ups that could not be sent; counted through the error flag.
+    FollowupsDropped,
+}
+
+impl AcpActionEvent {
+    fn as_event_name(self) -> &'static str {
+        match self {
+            Self::Steer => "acp_steer",
+            Self::Cancel => "acp_cancel",
+            Self::Turn => "acp_turn",
+            Self::FollowupsDropped => "acp_followups_dropped",
         }
     }
 }
@@ -290,6 +447,15 @@ pub(crate) enum SetupStep {
     ThirdPartyHarnessPreparationNotificationPluginUpdate,
     ThirdPartyHarnessPreparationPlatformPluginInstall,
     ThirdPartyHarnessPreparationPlatformPluginUpdate,
+    /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] and
+    /// [`SetupStep::ThirdPartyHarnessStart`] that time each stage of bringing up a harness
+    /// over ACP.
+    AcpAuthPreflight,
+    AcpBridgeAccept,
+    AcpInitialize,
+    AcpSessionOpen,
+    AcpModelConfig,
+    AcpBeginTurn,
 }
 
 macro_rules! span_and_name {
@@ -340,7 +506,13 @@ impl SetupStep {
             | Self::ThirdPartyHarnessPreparationNotificationPluginInstall
             | Self::ThirdPartyHarnessPreparationNotificationPluginUpdate
             | Self::ThirdPartyHarnessPreparationPlatformPluginInstall
-            | Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => SetupScope::Run,
+            | Self::ThirdPartyHarnessPreparationPlatformPluginUpdate
+            | Self::AcpAuthPreflight
+            | Self::AcpBridgeAccept
+            | Self::AcpInitialize
+            | Self::AcpSessionOpen
+            | Self::AcpModelConfig
+            | Self::AcpBeginTurn => SetupScope::Run,
         }
     }
 
@@ -446,6 +618,12 @@ impl SetupStep {
             Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => {
                 span_and_name!("setup_third_party_harness_preparation_platform_plugin_update")
             }
+            Self::AcpAuthPreflight => span_and_name!("setup_acp_auth_preflight"),
+            Self::AcpBridgeAccept => span_and_name!("setup_acp_bridge_accept"),
+            Self::AcpInitialize => span_and_name!("setup_acp_initialize"),
+            Self::AcpSessionOpen => span_and_name!("setup_acp_session_open"),
+            Self::AcpModelConfig => span_and_name!("setup_acp_model_config"),
+            Self::AcpBeginTurn => span_and_name!("setup_acp_begin_turn"),
         }
     }
 }

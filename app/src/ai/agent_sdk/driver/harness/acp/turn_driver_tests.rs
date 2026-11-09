@@ -542,11 +542,78 @@ impl TurnHost for RecordingHost {
     }
 }
 
+/// One report the turn driver made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TelemetryEvent {
+    Action {
+        event: AcpActionEvent,
+        outcome: &'static str,
+        is_error: bool,
+    },
+    FirstOutput,
+}
+
+/// Records what the turn driver reports, in order.
+#[derive(Default)]
+struct RecordingTelemetry {
+    events: Mutex<Vec<TelemetryEvent>>,
+}
+
+impl RecordingTelemetry {
+    fn events(&self) -> Vec<TelemetryEvent> {
+        self.events.lock().clone()
+    }
+
+    /// The `(outcome, is_error)` of every report of `event`, in order.
+    fn actions(&self, wanted: AcpActionEvent) -> Vec<(&'static str, bool)> {
+        self.events()
+            .into_iter()
+            .filter_map(|recorded| match recorded {
+                TelemetryEvent::Action {
+                    event,
+                    outcome,
+                    is_error,
+                } if event == wanted => Some((outcome, is_error)),
+                TelemetryEvent::Action { .. } | TelemetryEvent::FirstOutput => None,
+            })
+            .collect()
+    }
+
+    fn first_output_count(&self) -> usize {
+        self.events()
+            .iter()
+            .filter(|event| **event == TelemetryEvent::FirstOutput)
+            .count()
+    }
+}
+
+impl TurnTelemetry for RecordingTelemetry {
+    fn action(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        assert!(started <= Utc::now(), "{event:?} started in the future");
+        self.events.lock().push(TelemetryEvent::Action {
+            event,
+            outcome,
+            is_error,
+        });
+    }
+
+    fn first_output(&self) {
+        self.events.lock().push(TelemetryEvent::FirstOutput);
+    }
+}
+
 struct Fixture {
     agent: FakeAgent,
     follow_ups: async_channel::Sender<ExternalHarnessPrompt>,
     cancels: async_channel::Sender<ExternalHarnessCancel>,
     host: Arc<RecordingHost>,
+    telemetry: Arc<RecordingTelemetry>,
     state: Arc<TurnState>,
     connection: Arc<AcpConnection>,
     flush_gate: FlushGate,
@@ -576,6 +643,19 @@ impl Fixture {
         let Fixture { host, state, .. } = self;
         (host, state)
     }
+
+    /// Like [`Self::unbind`], keeping the telemetry sink for assertions.
+    fn unbind_with_telemetry(
+        self,
+    ) -> (Arc<RecordingHost>, Arc<TurnState>, Arc<RecordingTelemetry>) {
+        let Fixture {
+            host,
+            state,
+            telemetry,
+            ..
+        } = self;
+        (host, state, telemetry)
+    }
 }
 
 fn rejecting_handler() -> AgentRequestHandler {
@@ -604,6 +684,7 @@ fn start(
     let connection = Arc::new(connection);
     let state = Arc::new(TurnState::default());
     let host = Arc::new(RecordingHost::new(state.clone()));
+    let telemetry = Arc::new(RecordingTelemetry::default());
     let (follow_up_tx, follow_up_rx) = async_channel::unbounded();
     let (cancel_tx, cancel_rx) = async_channel::unbounded();
     let (save_tx, _save_rx) = async_channel::unbounded();
@@ -615,6 +696,8 @@ fn start(
         follow_ups: Some(follow_up_rx),
         cancels: Some(cancel_rx),
         host: host.clone(),
+        telemetry: telemetry.clone(),
+        first_output_pending: true,
         state: state.clone(),
         turn,
         session_id: SESSION.to_owned(),
@@ -647,6 +730,7 @@ fn start(
         follow_ups: follow_up_tx,
         cancels: cancel_tx,
         host,
+        telemetry,
         state,
         connection,
         flush_gate,
@@ -718,9 +802,9 @@ fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
             .host
             .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     let streams = host.streams();
     assert_eq!(
@@ -728,6 +812,20 @@ fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
         1,
         "the turn keeps running: {:?}",
         host.events()
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("injected", false)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("stopped_end_turn", false)]
+    );
+    assert!(telemetry.actions(AcpActionEvent::Cancel).is_empty());
+    assert_eq!(
+        telemetry.first_output_count(),
+        1,
+        "two chunks reached the conversation but the first output is reported once"
     );
     assert_eq!(
         host.texts_on(&streams[0]),
@@ -1031,14 +1129,34 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
             .host
             .wait_for(|events| matches!(events.last(), Some(HostEvent::Finished { .. })))
             .await;
-        (participant, fixture.unbind())
+        (participant, fixture.unbind_with_telemetry())
     };
-    let ((participant, (host, state)), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((participant, (host, state, telemetry)), ()) =
+        block_on(join(script, driver.run(&mut mapper)));
 
     let streams = host.streams();
     assert_eq!(streams.len(), 2, "{:?}", host.events());
     let (first, second) = (&streams[0], &streams[1]);
     assert_eq!(host.texts_on(first), vec!["working", " late"]);
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("cancel_fallback", false)],
+        "without steering support the follow-up falls back to a cancel"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("acked", false)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("cancelled", false), ("stopped_end_turn", false)]
+    );
+    assert!(
+        telemetry
+            .actions(AcpActionEvent::FollowupsDropped)
+            .is_empty()
+    );
+    assert_eq!(telemetry.first_output_count(), 1);
     assert_eq!(
         host.texts_on(second),
         vec!["steer"],
@@ -1133,6 +1251,7 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
             "next",
             "no interruption note between turns"
         );
+        fixture.agent.send_chunk("later output").await;
         fixture.agent.respond(&second, "end_turn").await;
         fixture
             .host
@@ -1144,15 +1263,29 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
                     == 2
             })
             .await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, _, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     assert_eq!(
         host.events().last(),
         Some(&HostEvent::Stopped),
         "the host learns the driver stopped so cancellations fall back to the native path"
     );
+    assert_eq!(
+        host.texts_on(&host.streams()[1]),
+        vec!["next", "later output"]
+    );
+    assert_eq!(
+        telemetry.first_output_count(),
+        0,
+        "only the initial turn's output counts as the run's first output"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("stopped_end_turn", false), ("stopped_end_turn", false)]
+    );
+    assert!(telemetry.actions(AcpActionEvent::Steer).is_empty());
     assert!(
         !host.events().iter().any(|event| matches!(
             event,
@@ -1405,15 +1538,15 @@ fn more_than_two_ready_batches_are_submitted_fifo_without_empty_prompts_or_dupli
         for (index, text) in expected.iter().enumerate() {
             let author = if index < 5 {
                 let participant_id = ParticipantId::new();
-                driver.queued.push_back(QueuedFollowUp {
-                    prompt: ExternalHarnessPrompt {
+                driver.queued.push_back(QueuedFollowUp::new(
+                    ExternalHarnessPrompt {
                         text: text.clone(),
                         attachments: Vec::new(),
                         participant_id: participant_id.clone(),
                         base: None,
                     },
-                    row: None,
-                });
+                    None,
+                ));
                 participant_id
             } else {
                 fixture.send_follow_up(text).await
@@ -1606,11 +1739,16 @@ fn a_cancel_lost_before_registration_is_retried_and_old_timers_cannot_cancel_the
         fixture.agent.read_barrier().await;
         fixture.agent.respond(&second, "end_turn").await;
         fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
     assert_eq!(host.streams().len(), 2, "{:?}", host.events());
     assert_eq!(host.texts_on(&host.streams()[1]), vec!["B"]);
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("retried", false)],
+        "a cancel answered only after a re-send is one retried cancel"
+    );
     assert!(!state.is_settling());
 }
 
@@ -1623,10 +1761,19 @@ fn an_ignored_explicit_stop_uses_the_bounded_terminal_path() {
         fixture.agent.expect_cancel().await;
         timers.take(STEER_CANCEL_DEADLINE).await.send(()).unwrap();
         fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
     assert!(host.events().contains(&HostEvent::InterruptedTerminal));
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("timed_out", true)]
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("error", true)]
+    );
+    assert_eq!(telemetry.first_output_count(), 0);
     assert!(host.events().iter().any(|event| matches!(
         event,
         HostEvent::Finished {
@@ -1663,11 +1810,29 @@ fn explicit_stop_upgrades_soft_cancellation_before_and_after_grace_expiry() {
             assert!(retry_three.send(()).is_err());
             timers.take(STEER_CANCEL_DEADLINE).await.send(()).unwrap();
             fixture.host.wait_for_finished(1).await;
-            fixture.unbind()
+            fixture.unbind_with_telemetry()
         };
-        let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+        let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
         assert!(
             host.events().contains(&HostEvent::InterruptedTerminal),
+            "{expire_soft_grace}"
+        );
+        // The soft grace expiring reports the follow-up's cancel as timed out; the interrupt
+        // then starts a cancel of its own, which times out too. Without the expiry the
+        // interrupt takes over the pending cancel, so there is a single timeout to report.
+        let expected_cancels = if expire_soft_grace {
+            vec![("timed_out", true), ("timed_out", true)]
+        } else {
+            vec![("timed_out", true)]
+        };
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::Cancel),
+            expected_cancels,
+            "{expire_soft_grace}"
+        );
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::FollowupsDropped),
+            vec![("cancel_timed_out", true)],
             "{expire_soft_grace}"
         );
         assert!(
@@ -2354,12 +2519,21 @@ fn an_agent_that_rejects_the_steering_request_is_not_steered_again() {
             .host
             .wait_for(|events| ended_count(events) == 3)
             .await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, _, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
 
     assert_eq!(host.streams().len(), 3, "{:?}", host.events());
     assert!(host.queued_rows.lock().is_empty());
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Steer),
+        vec![("rejected", true), ("cancel_fallback", false)],
+        "the rejection is reported once; later follow-ups report the fallback"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Cancel),
+        vec![("acked", false), ("acked", false)]
+    );
 }
 
 #[test]
@@ -2369,15 +2543,15 @@ fn follow_ups_a_prompt_could_not_carry_are_steered_into_its_turn() {
         .map(|index| format!("follow-up-{index}"))
         .collect::<Vec<_>>();
     for text in &expected {
-        driver.queued.push_back(QueuedFollowUp {
-            prompt: ExternalHarnessPrompt {
+        driver.queued.push_back(QueuedFollowUp::new(
+            ExternalHarnessPrompt {
                 text: text.clone(),
                 attachments: Vec::new(),
                 participant_id: ParticipantId::new(),
                 base: None,
             },
-            row: None,
-        });
+            None,
+        ));
     }
     let overflow = expected[MAX_BATCHED_FOLLOW_UPS].clone();
     let script = async {

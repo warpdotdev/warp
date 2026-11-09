@@ -23,11 +23,12 @@ pub(crate) enum ThirdPartyHarnessTelemetryEvent {
     /// retry (e.g. dismissing Claude's background-task confirmation), or a
     /// final force-kill of the harness's process group. Fires on every
     /// attempt, not just escalations, so the ratio of clean exits to
-    /// escalations is measurable.
+    /// escalations is measurable, and once more when the whole ladder ran
+    /// out and the run's bounded exit timeout was swallowed.
     ExitEscalation {
         /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
         harness: String,
-        /// `"exit"`, `"exit_followup"`, or `"force_kill"`.
+        /// `"exit"`, `"exit_followup"`, `"force_kill"`, or `"timed_out"`.
         method: &'static str,
     },
 

@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use event_listener::Event;
 use futures::future::FusedFuture;
 use futures::stream::{FuturesOrdered, FuturesUnordered};
@@ -39,6 +40,9 @@ use super::protocol::{
     self, CancelParams, ContentBlock, PromptParams, PromptResponse, SessionUpdate,
     SessionUpdateParams, SteeringIdleBehavior, SteeringMeta, SteeringOptions, SteeringOutcome,
     SteeringParams, SteeringResponse, StopReason,
+};
+use crate::ai::agent_sdk::setup_observability::{
+    AcpActionEvent, OzRunTimelineEvent, SetupClientEventReporter,
 };
 use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::blocklist::{
@@ -111,6 +115,37 @@ pub(super) trait TurnHost: Send + Sync {
     async fn turn_driver_stopped(&self);
 }
 
+/// Where the turn driver reports what it did, so the state machine can be driven against a
+/// recording sink in tests.
+pub(super) trait TurnTelemetry: Send + Sync {
+    /// Reports how an ACP action that began at `started` turned out.
+    fn action(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    );
+    /// Reports the agent's first output of the run.
+    fn first_output(&self);
+}
+
+impl TurnTelemetry for SetupClientEventReporter {
+    fn action(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        self.post_action_event(event, outcome, started, is_error);
+    }
+
+    fn first_output(&self) {
+        self.post_timeline_event_detached(OzRunTimelineEvent::AgentFirstOutput);
+    }
+}
+
 /// Turn activity shared with the harness runner, which reads it off the turn driver's task.
 #[derive(Default)]
 pub(super) struct TurnState {
@@ -162,6 +197,53 @@ pub(super) enum TurnOutcome {
     Cancelled,
 }
 
+impl TurnOutcome {
+    /// A bounded label for metrics.
+    fn metric_label(self) -> &'static str {
+        match self {
+            Self::Stopped(StopReason::EndTurn) => "stopped_end_turn",
+            Self::Stopped(StopReason::MaxTokens) => "stopped_max_tokens",
+            Self::Stopped(StopReason::MaxTurnRequests) => "stopped_max_turn_requests",
+            Self::Stopped(StopReason::Refusal) => "stopped_refusal",
+            Self::Stopped(StopReason::Cancelled) => "stopped_cancelled",
+            Self::Stopped(StopReason::Unknown) => "stopped_unknown",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Why held follow-ups will not be sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropReason {
+    HarnessExited,
+    TurnOpenFailed,
+    AgentDisconnected,
+    CancelTimedOut,
+}
+
+impl DropReason {
+    /// A bounded label for metrics.
+    fn metric_label(self) -> &'static str {
+        match self {
+            Self::HarnessExited => "harness_exited",
+            Self::TurnOpenFailed => "turn_open_failed",
+            Self::AgentDisconnected => "agent_disconnected",
+            Self::CancelTimedOut => "cancel_timed_out",
+        }
+    }
+}
+
+impl std::fmt::Display for DropReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::HarnessExited => "the harness exited before the follow-up could be sent",
+            Self::TurnOpenFailed => "the follow-up turn could not be opened",
+            Self::AgentDisconnected => "the agent disconnected before the follow-up could be sent",
+            Self::CancelTimedOut => "the agent did not answer session/cancel in time",
+        })
+    }
+}
+
 /// What cut a turn short. The distinction is the conversation's status afterwards, which is
 /// what the run state and its integrations mirror: a follow-up continues the conversation at
 /// once, so the turn boundary is internal and the status stays `InProgress`, as when a native
@@ -176,6 +258,18 @@ pub(super) enum TurnCancellation {
 pub(super) struct QueuedFollowUp {
     prompt: ExternalHarnessPrompt,
     row: Option<QueuedQueryId>,
+    /// When the follow-up reached the turn driver, from which its delivery latency counts.
+    received: DateTime<Utc>,
+}
+
+impl QueuedFollowUp {
+    fn new(prompt: ExternalHarnessPrompt, row: Option<QueuedQueryId>) -> Self {
+        Self {
+            prompt,
+            row,
+            received: Utc::now(),
+        }
+    }
 }
 
 /// What the agent's answer to a steer means for the prompt.
@@ -191,12 +285,36 @@ enum SteerVerdict {
     DetachedTurn,
 }
 
+impl SteerVerdict {
+    /// A bounded label for metrics.
+    fn metric_label(&self) -> &'static str {
+        match self {
+            Self::Injected => "injected",
+            Self::PromptRequired => "prompt_required",
+            Self::Rejected => "rejected",
+            Self::DetachedTurn => "detached_turn",
+        }
+    }
+
+    /// Whether the agent mishandled the steer, as opposed to declining it in order.
+    fn is_error(&self) -> bool {
+        match self {
+            Self::Injected | Self::PromptRequired => false,
+            Self::Rejected | Self::DetachedTurn => true,
+        }
+    }
+}
+
 /// The cancellation of the turn in flight, if one has started: what asked for it, when the
 /// agent must have answered by, and the re-sends of `session/cancel` still to come.
 struct CancelState {
     by: Option<TurnCancellation>,
     deadline: Deadline,
     retries: FuturesOrdered<Deadline>,
+    /// When the first `session/cancel` went out; cleared once its outcome has been reported.
+    started: Option<DateTime<Utc>>,
+    /// How many times `session/cancel` has been sent for this turn.
+    sends: u32,
 }
 
 impl CancelState {
@@ -205,7 +323,16 @@ impl CancelState {
             by: None,
             deadline: no_deadline(),
             retries: FuturesOrdered::new(),
+            started: None,
+            sends: 0,
         }
+    }
+
+    /// The outcome of a cancel the agent answered, or `None` if none was pending.
+    fn take_acknowledged(&mut self) -> Option<(&'static str, DateTime<Utc>)> {
+        let started = self.started.take()?;
+        let outcome = if self.sends > 1 { "retried" } else { "acked" };
+        Some((outcome, started))
     }
 }
 
@@ -282,6 +409,10 @@ pub(super) struct TurnDriver {
     /// Interrupts of the current turn. `None` once the controller has unbound the conversation.
     pub cancels: Option<async_channel::Receiver<ExternalHarnessCancel>>,
     pub host: Arc<dyn TurnHost>,
+    pub telemetry: Arc<dyn TurnTelemetry>,
+    /// Whether the initial turn has yet to put anything into the conversation. Cleared when it
+    /// does, or when the initial turn ends, so the first output is reported at most once.
+    pub first_output_pending: bool,
     pub state: Arc<TurnState>,
     /// The currently open request stream.
     pub turn: ExternalHarnessTurn,
@@ -323,6 +454,7 @@ impl TurnDriver {
     /// the agent's own.
     pub(super) async fn run(mut self, mapper: &mut AcpTurnMapper) {
         let mut turn_result = self.run_turn(mapper, PromptInput::Initial).await;
+        self.first_output_pending = false;
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -342,7 +474,7 @@ impl TurnDriver {
             match wake {
                 Wake::FollowUp(Ok(prompt)) => {
                     log::info!("Running ACP follow-up turn");
-                    self.queued.push_back(QueuedFollowUp { prompt, row: None });
+                    self.queued.push_back(QueuedFollowUp::new(prompt, None));
                     turn_result = self.run_follow_ups(mapper, false).await;
                 }
                 // The controller unbound the conversation; nothing more can be routed here.
@@ -364,8 +496,7 @@ impl TurnDriver {
                 }
             }
         }
-        self.fail_queued("the harness exited before the follow-up could be sent")
-            .await;
+        self.fail_queued(DropReason::HarnessExited).await;
         self.host.turn_driver_stopped().await;
         self.connection.close().await;
         match turn_result {
@@ -391,8 +522,7 @@ impl TurnDriver {
         let next = match self.host.begin_turn(initiator).await {
             Ok(next) => next,
             Err(error) => {
-                self.fail_queued("the follow-up turn could not be opened")
-                    .await;
+                self.fail_queued(DropReason::TurnOpenFailed).await;
                 return Err(error);
             }
         };
@@ -408,7 +538,7 @@ impl TurnDriver {
         if let Some(receiver) = &self.follow_ups {
             for _ in 0..receiver.len() {
                 match receiver.try_recv() {
-                    Ok(prompt) => self.queued.push_back(QueuedFollowUp { prompt, row: None }),
+                    Ok(prompt) => self.queued.push_back(QueuedFollowUp::new(prompt, None)),
                     Err(_) => break,
                 }
             }
@@ -445,7 +575,7 @@ impl TurnDriver {
             PromptInput::FollowUps { interrupted } => (Vec::new(), interrupted),
         };
         let mut prepared = 0;
-        while let Some(QueuedFollowUp { prompt, row }) = self.next_batch_follow_up(prepared) {
+        while let Some(QueuedFollowUp { prompt, row, .. }) = self.next_batch_follow_up(prepared) {
             prepared += 1;
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
@@ -474,6 +604,7 @@ impl TurnDriver {
         mapper: &mut AcpTurnMapper,
         input: PromptInput,
     ) -> Result<TurnOutcome> {
+        let started = Utc::now();
         self.state.set_in_turn(true);
         let cancels = self.cancels.clone();
         let prepared = {
@@ -495,6 +626,12 @@ impl TurnDriver {
             Ok(None) => Ok(TurnOutcome::Cancelled),
             Err(error) => Err(error),
         };
+        let (outcome, is_error) = match &turn_result {
+            Ok(outcome) => (outcome.metric_label(), false),
+            Err(_) => ("error", true),
+        };
+        self.telemetry
+            .action(AcpActionEvent::Turn, outcome, started, is_error);
         // A turn that failed mid-prompt can leave steers unanswered; they are held like the rest.
         self.hold_steers();
         let finish_events = mapper.finish_events();
@@ -537,8 +674,7 @@ impl TurnDriver {
         // Follow-ups held through a failed turn go out as the next turn while the agent is still
         // connected; once it has gone they cannot be delivered.
         if turn_result.is_err() && self.notifications.is_closed() {
-            self.fail_queued("the agent disconnected before the follow-up could be sent")
-                .await;
+            self.fail_queued(DropReason::AgentDisconnected).await;
         }
         turn_result
     }
@@ -645,6 +781,10 @@ impl TurnDriver {
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
+                    if let Some((outcome, started)) = cancel.take_acknowledged() {
+                        self.telemetry
+                            .action(AcpActionEvent::Cancel, outcome, started, false);
+                    }
                     if self.steering.is_some() {
                         self.settle_steer_after_turn(mapper, steer_fut, arrival)
                             .await?;
@@ -657,7 +797,7 @@ impl TurnDriver {
                     if cancel.by.is_none() && self.steering_supported && self.queued.is_empty() =>
                 {
                     let row = self.host.show_queued_prompt(&prompt).await;
-                    let follow_up = QueuedFollowUp { prompt, row };
+                    let follow_up = QueuedFollowUp::new(prompt, row);
                     if self.steering.is_some() {
                         self.awaiting_steer.push_back(follow_up);
                     } else {
@@ -666,8 +806,14 @@ impl TurnDriver {
                     }
                 }
                 Wake::FollowUp(Ok(prompt)) => {
-                    self.hold_follow_up(prompt).await;
+                    let received = self.hold_follow_up(prompt).await;
                     if cancel.by.is_none() {
+                        self.telemetry.action(
+                            AcpActionEvent::Steer,
+                            "cancel_fallback",
+                            received,
+                            false,
+                        );
                         self.begin_follow_up_cancel(&mut cancel).await?;
                     }
                 }
@@ -683,7 +829,9 @@ impl TurnDriver {
                     let Some(steer) = self.steering.take() else {
                         continue;
                     };
-                    match self.classify_steer(result) {
+                    let verdict = self.classify_steer(result);
+                    self.report_steer(&verdict, steer.received);
+                    match verdict {
                         SteerVerdict::Injected => {
                             self.steer_taken(mapper, steer).await?;
                             // Nothing joins a turn that is being cancelled: what is still
@@ -709,24 +857,34 @@ impl TurnDriver {
                                 self.begin_follow_up_cancel(&mut cancel).await?;
                             } else {
                                 // The detached turn began after the cancel already sent.
-                                self.start_cancel().await?;
+                                self.start_cancel(&mut cancel).await?;
                             }
                         }
                     }
                 }
                 Wake::LateSteer((_, result)) => self.note_late_steer(result),
                 Wake::Deadline => match cancel.by {
-                    Some(TurnCancellation::Interrupt) => return self.cancel_timed_out().await,
+                    Some(TurnCancellation::Interrupt) => {
+                        return self.cancel_timed_out(cancel.started.take()).await;
+                    }
                     Some(TurnCancellation::FollowUp) => {
                         log::info!(
                             "ACP follow-up cancellation grace expired; waiting for the turn to finish"
                         );
+                        if let Some(started) = cancel.started.take() {
+                            self.telemetry.action(
+                                AcpActionEvent::Cancel,
+                                "timed_out",
+                                started,
+                                true,
+                            );
+                        }
                         cancel.deadline = no_deadline();
                         cancel.retries = FuturesOrdered::new();
                     }
                     None => unreachable!(),
                 },
-                Wake::Retry => self.start_cancel().await?,
+                Wake::Retry => self.start_cancel(&mut cancel).await?,
             }
         }
         let (_, response) = prompt_fut.await;
@@ -739,7 +897,7 @@ impl TurnDriver {
         cancel.by = Some(TurnCancellation::FollowUp);
         cancel.deadline = (self.timer_factory)(self.cancel_deadline);
         cancel.retries = self.follow_up_cancel_retries();
-        self.start_cancel().await
+        self.start_cancel(cancel).await
     }
 
     /// Cancels the turn for an interrupt, which takes over from a follow-up cancellation: past
@@ -748,13 +906,25 @@ impl TurnDriver {
         cancel.by = Some(TurnCancellation::Interrupt);
         cancel.deadline = (self.timer_factory)(self.cancel_deadline);
         cancel.retries = FuturesOrdered::new();
-        self.start_cancel().await
+        self.start_cancel(cancel).await
     }
 
-    /// Shows a follow-up as queued until the active prompt settles.
-    async fn hold_follow_up(&mut self, prompt: ExternalHarnessPrompt) {
+    /// Shows a follow-up as queued until the active prompt settles. Returns when it arrived.
+    async fn hold_follow_up(&mut self, prompt: ExternalHarnessPrompt) -> DateTime<Utc> {
         let row = self.host.show_queued_prompt(&prompt).await;
-        self.queued.push_back(QueuedFollowUp { prompt, row });
+        let follow_up = QueuedFollowUp::new(prompt, row);
+        let received = follow_up.received;
+        self.queued.push_back(follow_up);
+        received
+    }
+
+    fn report_steer(&self, verdict: &SteerVerdict, received: DateTime<Utc>) {
+        self.telemetry.action(
+            AcpActionEvent::Steer,
+            verdict.metric_label(),
+            received,
+            verdict.is_error(),
+        );
     }
 
     /// Moves every follow-up still waiting to be steered to the held prompts, which go out in a
@@ -939,11 +1109,15 @@ impl TurnDriver {
                      sending the prompt as a turn",
                     self.steer_settle_deadline
                 );
+                self.telemetry
+                    .action(AcpActionEvent::Steer, "timed_out", steer.received, true);
                 self.late_steers.lock().push(steer_fut);
             }
             Some((arrival, result)) => {
                 let in_turn = arrival < response_arrival;
-                match self.classify_steer(result) {
+                let verdict = self.classify_steer(result);
+                self.report_steer(&verdict, steer.received);
+                match verdict {
                     SteerVerdict::Injected if in_turn => {
                         self.steer_taken(mapper, steer).await?;
                         self.hold_steers();
@@ -955,7 +1129,7 @@ impl TurnDriver {
                     ),
                     SteerVerdict::PromptRequired | SteerVerdict::Rejected => {}
                     SteerVerdict::DetachedTurn => {
-                        if let Err(error) = self.start_cancel().await {
+                        if let Err(error) = self.send_cancel().await {
                             log::warn!("Failed to cancel the agent's detached ACP turn: {error:#}");
                         }
                     }
@@ -982,10 +1156,18 @@ impl TurnDriver {
         }
     }
 
+    /// Asks the agent to end the turn in flight, counting the send on `cancel` so the answer
+    /// can be reported against it.
+    async fn start_cancel(&self, cancel: &mut CancelState) -> Result<()> {
+        cancel.started.get_or_insert_with(Utc::now);
+        cancel.sends += 1;
+        self.send_cancel().await
+    }
+
     /// Asks the agent to end the current turn. Permission requests it is waiting on are answered
     /// `cancelled` at once, as the protocol requires, so it is not left deciding for work that
     /// will not proceed.
-    async fn start_cancel(&self) -> Result<()> {
+    async fn send_cancel(&self) -> Result<()> {
         self.state.set_settling(true);
         log::info!("Cancelling the current ACP turn");
         self.connection
@@ -1031,19 +1213,27 @@ impl TurnDriver {
 
     /// The agent did not answer `session/cancel` in time: its block is interrupted (the
     /// driver's exit ladder force-kills it if that is not enough) and the turn is failed.
-    async fn cancel_timed_out(&mut self) -> Result<TurnOutcome> {
+    /// `cancel_started` is when the first `session/cancel` went out.
+    async fn cancel_timed_out(
+        &mut self,
+        cancel_started: Option<DateTime<Utc>>,
+    ) -> Result<TurnOutcome> {
         let reason = format!(
             "the agent did not answer session/cancel within {:?}",
             self.cancel_deadline
         );
         log::warn!("{reason}; interrupting its terminal");
+        if let Some(started) = cancel_started {
+            self.telemetry
+                .action(AcpActionEvent::Cancel, "timed_out", started, true);
+        }
         self.host.interrupt_terminal().await;
-        self.fail_queued(&reason).await;
+        self.fail_queued(DropReason::CancelTimedOut).await;
         Err(anyhow!(reason))
     }
 
     /// Drops every held follow-up; `reason` is why they will not be sent.
-    async fn fail_queued(&mut self, reason: &str) {
+    async fn fail_queued(&mut self, reason: DropReason) {
         self.state.set_settling(false);
         self.hold_steers();
         if !self.queued.is_empty() {
@@ -1052,7 +1242,13 @@ impl TurnDriver {
                 self.queued.len()
             );
         }
-        while let Some(QueuedFollowUp { row, .. }) = self.queued.pop_front() {
+        while let Some(QueuedFollowUp { row, received, .. }) = self.queued.pop_front() {
+            self.telemetry.action(
+                AcpActionEvent::FollowupsDropped,
+                reason.metric_label(),
+                received,
+                true,
+            );
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
             }
@@ -1082,6 +1278,14 @@ impl TurnDriver {
             return Ok(());
         }
         let events = mapper.map_update(params.update);
+        if self.first_output_pending
+            && events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::Actions(actions) if !actions.is_empty()))
+        {
+            self.first_output_pending = false;
+            self.telemetry.first_output();
+        }
         self.apply_events(mapper, events).await
     }
 
