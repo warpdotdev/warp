@@ -1,6 +1,6 @@
 use chrono::{Duration, TimeZone};
 use pathfinder_geometry::vector::vec2f;
-use warp_graphql::queries::get_included_usage_info::WorkspaceIncludedUsageInfo;
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::{Expanded, Flex, ParentElement, Text};
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, TypedActionView, WindowInvalidation};
@@ -259,7 +259,7 @@ fn included_pool_card_renders_and_lays_out_at_narrow_and_wide_widths() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         for state in [
-            PoolState::Loading,
+            PoolState::Idle,
             PoolState::Unavailable,
             PoolState::Ready(pool(8_750.0)),
             PoolState::Ready(pool(0.0)),

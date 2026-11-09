@@ -2168,7 +2168,6 @@ impl BillingAndUsagePageV2View {
         );
         AIRequestUsageModel::handle(ctx).update(ctx, |m, ctx| {
             m.refresh_request_usage_async(ctx);
-            m.refresh_workspace_included_usage(ctx);
         });
         self.usage_history
             .model
@@ -2292,7 +2291,6 @@ impl TypedActionView for BillingAndUsagePageV2View {
                 );
                 AIRequestUsageModel::handle(ctx).update(ctx, |m, ctx| {
                     m.refresh_request_usage_async(ctx);
-                    m.refresh_workspace_included_usage(ctx);
                 });
             }
             BillingAndUsagePageAction::SelectTab(tab) => {

@@ -822,7 +822,6 @@ impl BillingAndUsagePageView {
 
         AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
             ai_request_usage_model.refresh_request_usage_async(ctx);
-            ai_request_usage_model.refresh_workspace_included_usage(ctx);
         });
 
         self.usage_history_model
@@ -1002,7 +1001,6 @@ impl TypedActionView for BillingAndUsagePageView {
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |ai_request_usage_model, ctx| {
                     ai_request_usage_model.refresh_request_usage_async(ctx);
-                    ai_request_usage_model.refresh_workspace_included_usage(ctx);
                 });
             }
             BillingAndUsagePageAction::ChangeUsageSort { key, order } => {

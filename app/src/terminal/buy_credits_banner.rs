@@ -107,7 +107,6 @@ impl BuyCreditsBanner {
                     ctx.notify();
                 }
                 AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
-                | AIRequestUsageModelEvent::WorkspaceIncludedUsageUpdated
                 | AIRequestUsageModelEvent::RequestBonusRefunded { .. } => {}
             },
         );

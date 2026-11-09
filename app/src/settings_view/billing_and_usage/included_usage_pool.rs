@@ -71,7 +71,7 @@ enum PoolBalance {
 
 fn pool_balance(state: &PoolState, now: DateTime<Utc>) -> PoolBalance {
     match state {
-        PoolState::Idle | PoolState::Loading => PoolBalance::Loading,
+        PoolState::Idle => PoolBalance::Loading,
         PoolState::Unavailable => PoolBalance::Unavailable,
         PoolState::Ready(pool) => {
             if !pool.included_usage_cents.is_finite()

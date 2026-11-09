@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -19,14 +21,12 @@ use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason,
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::workspace::WorkspaceClient;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::WorkspaceUid;
 
 #[path = "workspace_included_usage.rs"]
 mod workspace_included_usage;
-use workspace_included_usage::WorkspaceIncludedUsageRequest;
 pub(crate) use workspace_included_usage::WorkspaceIncludedUsageState;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
@@ -165,6 +165,7 @@ pub struct CodebaseContextUsageLimit {
 pub struct RequestUsageInfo {
     pub request_limit_info: RequestLimitInfo,
     pub bonus_grants: Vec<BonusGrant>,
+    pub workspace_allowances: HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>,
 }
 
 #[cfg(feature = "agent_mode_evals")]
@@ -231,8 +232,7 @@ struct ServerAvailabilityState {
 
 pub struct AIRequestUsageModel {
     ai_client: Arc<dyn AIClient>,
-    workspace_client: Arc<dyn WorkspaceClient>,
-    workspace_included_usage: Option<WorkspaceIncludedUsageRequest>,
+    workspace_allowances: HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>,
 
     /// The last time at which `request_limit_info` was updated.
     last_update_time: Option<Instant>,
@@ -256,7 +256,6 @@ impl Entity for AIRequestUsageModel {
 
 pub enum AIRequestUsageModelEvent {
     RequestUsageUpdated,
-    WorkspaceIncludedUsageUpdated,
     /// The server-authoritative credit availability decision was updated.
     CreditAvailabilityUpdated,
     AmbientCreditsBannerDismissed,
@@ -268,11 +267,7 @@ pub enum AIRequestUsageModelEvent {
 }
 
 impl AIRequestUsageModel {
-    pub fn new(
-        ai_client: Arc<dyn AIClient>,
-        workspace_client: Arc<dyn WorkspaceClient>,
-        ctx: &mut ModelContext<Self>,
-    ) -> Self {
+    pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         // Check if the user has cached request limit info from before.
         // This is only used to show the latest known value before we finish refreshing from the server below.
         let cached_request_limit_info = get_cached_request_limit_info(ctx);
@@ -281,8 +276,7 @@ impl AIRequestUsageModel {
 
         Self {
             ai_client,
-            workspace_client,
-            workspace_included_usage: None,
+            workspace_allowances: HashMap::new(),
             request_limit_info,
             last_update_time: None,
             bonus_grants: vec![],
@@ -294,12 +288,9 @@ impl AIRequestUsageModel {
 
     #[cfg(test)]
     pub fn new_for_test(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
-        use crate::server::server_api::workspace::MockWorkspaceClient;
-
         Self {
             ai_client,
-            workspace_client: Arc::new(MockWorkspaceClient::new()),
-            workspace_included_usage: None,
+            workspace_allowances: HashMap::new(),
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
@@ -337,6 +328,7 @@ impl AIRequestUsageModel {
                     Ok(usage_info) => {
                         let request_limit = usage_info.request_limit_info.limit;
                         model.bonus_grants = usage_info.bonus_grants;
+                        model.workspace_allowances = usage_info.workspace_allowances;
                         model.update_request_limit_info(usage_info.request_limit_info, ctx);
                         Some(request_limit)
                     }
