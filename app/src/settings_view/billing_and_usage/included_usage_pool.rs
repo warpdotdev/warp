@@ -10,6 +10,7 @@ use crate::settings::ai::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::billing_and_usage_page_v2::{
     BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card, render_balance_card_contents,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{CustomerType, Workspace};
 
 pub(crate) fn is_scale_workspace(workspace: Option<&Workspace>) -> bool {
@@ -29,6 +30,9 @@ impl IncludedUsagePoolView {
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
         Self
     }
 }
@@ -44,7 +48,7 @@ impl View for IncludedUsagePoolView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
         render_card(
-            AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
+            &AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
             Utc::now(),
             usage_display_unit(ctx),
             Appearance::as_ref(ctx),

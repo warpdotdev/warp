@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
@@ -55,10 +57,9 @@ pub enum PurchaseAddonCreditsOutcome {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait WorkspaceClient: 'static + Send + Sync {
-    async fn included_usage_info(
+    async fn included_usage_by_workspace(
         &self,
-        workspace_uid: WorkspaceUid,
-    ) -> Result<Option<WorkspaceIncludedUsageInfo>>;
+    ) -> Result<HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>>;
 
     async fn generate_stripe_billing_portal_link(&self, team_uid: ServerId) -> Result<String>;
     async fn remove_user_from_workspace(
@@ -95,10 +96,9 @@ pub trait WorkspaceClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl WorkspaceClient for ServerApi {
-    async fn included_usage_info(
+    async fn included_usage_by_workspace(
         &self,
-        workspace_uid: WorkspaceUid,
-    ) -> Result<Option<WorkspaceIncludedUsageInfo>> {
+    ) -> Result<HashMap<WorkspaceUid, WorkspaceIncludedUsageInfo>> {
         let operation = GetIncludedUsageInfo::build(GetIncludedUsageInfoVariables {
             request_context: get_request_context(),
         });
@@ -108,8 +108,12 @@ impl WorkspaceClient for ServerApi {
                 .user
                 .workspaces
                 .into_iter()
-                .find(|workspace| workspace.uid.inner() == String::from(workspace_uid))
-                .and_then(|workspace| workspace.included_usage_info)),
+                .filter_map(|workspace| {
+                    workspace
+                        .included_usage_info
+                        .map(|info| (WorkspaceUid::from(workspace.uid.inner().to_string()), info))
+                })
+                .collect()),
             get_included_usage_info::UserResult::UserFacingError(error) => {
                 Err(anyhow!(get_user_facing_error_message(error)))
             }
