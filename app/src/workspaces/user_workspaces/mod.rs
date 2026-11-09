@@ -99,6 +99,10 @@ pub enum UserWorkspacesEvent {
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
     PurchaseAddonCreditsSuccess,
+    CustomUsageRequestCompleted {
+        request_id: uuid::Uuid,
+        result: Result<Option<String>>,
+    },
     /// The purchase requires the user to complete checkout in the browser
     /// (no saved payment method). Credits arrive via webhook + polling after
     /// checkout completes.
@@ -125,6 +129,7 @@ pub enum UserWorkspacesEvent {
 /// and all other things related to operating on workspace and team data.
 /// TODO: move other server_api calls to update_manager to correctly update sqlite.
 pub struct UserWorkspaces {
+    addon_request_pending: bool,
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
@@ -190,6 +195,7 @@ impl UserWorkspaces {
         // requires us to register that singleton along with _its_ dependencies
         // for all tests that use [`UserWorkspaces`] (a lot of them do).
         Self {
+            addon_request_pending: false,
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
@@ -241,6 +247,7 @@ impl UserWorkspaces {
         });
 
         let mut me = Self {
+            addon_request_pending: false,
             current_workspace_uid: current_workspace_uid.into(),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
@@ -1489,14 +1496,114 @@ impl UserWorkspaces {
         credits: i32,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.addon_request_pending {
+            ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsRejected(
+                anyhow::anyhow!("Another billing request is pending"),
+            ));
+            return;
+        }
+        self.addon_request_pending = true;
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
                 workspace_client
-                    .purchase_addon_credits(team_uid, credits)
+                    .purchase_addon_credits(team_uid, credits, None)
                     .await
             },
             Self::on_purchase_addon_credits,
+        );
+    }
+
+    pub fn purchase_addon_usage(
+        &mut self,
+        team_uid: Option<ServerId>,
+        usage_cents: i32,
+        request_id: uuid::Uuid,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.addon_request_pending {
+            ctx.emit(UserWorkspacesEvent::CustomUsageRequestCompleted {
+                request_id,
+                result: Err(anyhow::anyhow!("Another billing request is pending")),
+            });
+            return;
+        }
+        self.addon_request_pending = true;
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                workspace_client
+                    .purchase_addon_credits(team_uid, 0, Some(usage_cents))
+                    .await
+            },
+            move |me, result, ctx| {
+                me.addon_request_pending = false;
+                let result = result.map(|outcome| match outcome {
+                    PurchaseAddonCreditsOutcome::Completed(metadata) => {
+                        me.on_workspaces_updated(
+                            Ok(WorkspacesMetadataWithPricing {
+                                metadata: *metadata,
+                                pricing_info: None,
+                            }),
+                            ctx,
+                        );
+                        None
+                    }
+                    PurchaseAddonCreditsOutcome::CheckoutRequired { checkout_url } => {
+                        Some(checkout_url)
+                    }
+                });
+                ctx.emit(UserWorkspacesEvent::CustomUsageRequestCompleted { request_id, result });
+                ctx.notify();
+            },
+        );
+    }
+
+    pub fn update_addon_usage_settings(
+        &mut self,
+        team_uid: ServerId,
+        auto_reload_enabled: Option<bool>,
+        usage_cents: Option<i32>,
+        max_monthly_spend_cents: Option<i32>,
+        request_id: uuid::Uuid,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.addon_request_pending {
+            ctx.emit(UserWorkspacesEvent::CustomUsageRequestCompleted {
+                request_id,
+                result: Err(anyhow::anyhow!("Another billing request is pending")),
+            });
+            return;
+        }
+        self.addon_request_pending = true;
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                workspace_client
+                    .update_addon_credits_settings(
+                        team_uid,
+                        auto_reload_enabled,
+                        max_monthly_spend_cents,
+                        None,
+                        usage_cents,
+                    )
+                    .await
+            },
+            move |me, result, ctx| {
+                me.addon_request_pending = false;
+                let result = result.map(|metadata| {
+                    me.on_workspaces_updated(
+                        Ok(WorkspacesMetadataWithPricing {
+                            metadata,
+                            pricing_info: None,
+                        }),
+                        ctx,
+                    );
+                    None
+                });
+                ctx.emit(UserWorkspacesEvent::CustomUsageRequestCompleted { request_id, result });
+                ctx.notify();
+            },
         );
     }
 
@@ -1505,6 +1612,7 @@ impl UserWorkspaces {
         result: Result<PurchaseAddonCreditsOutcome>,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.addon_request_pending = false;
         match result {
             Ok(PurchaseAddonCreditsOutcome::Completed(result)) => {
                 let wrapped = WorkspacesMetadataWithPricing {
@@ -1544,6 +1652,13 @@ impl UserWorkspaces {
         selected_auto_reload_credit_denomination: Option<i32>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.addon_request_pending {
+            ctx.emit(UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(
+                anyhow::anyhow!("Another billing request is pending"),
+            ));
+            return;
+        }
+        self.addon_request_pending = true;
         let workspace_client = self.workspace_client.clone();
         let _ = ctx.spawn(
             async move {
@@ -1553,10 +1668,14 @@ impl UserWorkspaces {
                         auto_reload_enabled,
                         max_monthly_spend_cents,
                         selected_auto_reload_credit_denomination,
+                        None,
                     )
                     .await
             },
-            Self::on_update_workspace_metadata,
+            |me, result, ctx| {
+                me.addon_request_pending = false;
+                me.on_update_workspace_metadata(result, ctx);
+            },
         );
     }
 

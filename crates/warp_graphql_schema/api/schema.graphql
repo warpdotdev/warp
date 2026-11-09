@@ -4,6 +4,12 @@ schema {
   subscription: RootSubscription
 }
 
+type CustomUsageAmounts {
+  minimumCents: Int!
+  maximumCents: Int!
+  stepCents: Int!
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -563,6 +569,7 @@ type BillingCycleUsageSummary {
 
 type BillingMetadata {
   aiOverages: AiOverages
+  customUsageAmounts: CustomUsageAmounts
   customerType: CustomerType!
   delinquencyStatus: DelinquencyStatus!
   serviceAgreements: [ServiceAgreement!]!
@@ -3012,12 +3019,15 @@ type PurchaseAddonCreditsCheckoutOutput implements Response {
 }
 
 input PurchaseAddonCreditsInput {
-  credits: Int!
+  credits: Int
+  usageCents: Int
   teamUid: ID
 }
 
 """The purchase was charged synchronously and credits were granted."""
 type PurchaseAddonCreditsOutput implements Response {
+  usageCents: Int
+  priceUsdCents: Int
   responseContext: ResponseContext!
   success: Boolean!
 }

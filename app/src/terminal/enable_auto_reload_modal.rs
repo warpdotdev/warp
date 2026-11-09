@@ -23,6 +23,9 @@ use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
 use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::billing_and_usage::custom_usage_controls::{
+    CustomUsageControls, CustomUsageEvent, CustomUsagePurpose,
+};
 use crate::settings_view::create_discount_badge;
 use crate::ui_components::blended_colors;
 use crate::view_components::{Dropdown, DropdownAction, ToastFlavor};
@@ -38,6 +41,7 @@ struct MouseStates {
 
 /// The body content of the enable auto-reload modal
 pub struct EnableAutoReloadModalBody {
+    custom_usage: ViewHandle<CustomUsageControls>,
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
     addon_credits_options: Vec<AddonCreditsOption>,
@@ -144,7 +148,19 @@ impl EnableAutoReloadModalBody {
             dropdown
         });
 
+        let custom_usage = ctx.add_typed_action_view(|ctx| {
+            CustomUsageControls::new(CustomUsagePurpose::EnableReload, ctx)
+        });
+        ctx.subscribe_to_view(&custom_usage, |me, _, event, ctx| {
+            match event {
+                CustomUsageEvent::Selected => me.selected_denomination_index = usize::MAX,
+                CustomUsageEvent::PresetRestored => me.selected_denomination_index = 0,
+                CustomUsageEvent::Saved => ctx.emit(EnableAutoReloadModalBodyEvent::Close),
+            }
+            ctx.notify();
+        });
         let mut me = Self {
+            custom_usage,
             mouse_states: Default::default(),
             denomination_dropdown,
             addon_credits_options: Default::default(),
@@ -152,6 +168,9 @@ impl EnableAutoReloadModalBody {
             update_workspace_settings_loading: false,
         };
         me.update_addon_credits_options(ctx);
+        if me.custom_usage.as_ref(ctx).is_selected() {
+            me.selected_denomination_index = usize::MAX;
+        }
         me
     }
 
@@ -266,6 +285,7 @@ impl EnableAutoReloadModalBody {
             .with_main_axis_size(MainAxisSize::Min)
             .with_child(explanation_text)
             .with_child(denomination_dropdown)
+            .with_child(ChildView::new(&self.custom_usage).finish())
             .finish()
     }
 
@@ -321,17 +341,20 @@ impl EnableAutoReloadModalBody {
                 ctx.dispatch_typed_action(Action::Enable);
             });
 
-        if self.update_workspace_settings_loading {
+        if self.update_workspace_settings_loading || self.selected_denomination_index == usize::MAX
+        {
             enable_button = enable_button.disable();
         }
 
-        Flex::row()
+        let mut buttons = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(8.)
-            .with_child(cancel_button)
-            .with_child(enable_button.finish())
-            .finish()
+            .with_child(cancel_button);
+        if self.selected_denomination_index != usize::MAX {
+            buttons.add_child(enable_button.finish());
+        }
+        buttons.finish()
     }
 }
 
@@ -392,6 +415,8 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             Action::SelectDenomination(index) => {
+                self.custom_usage
+                    .update(ctx, |view, ctx| view.select_preset(ctx));
                 self.selected_denomination_index = *index;
                 ctx.notify();
             }
@@ -400,6 +425,11 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
                 ctx.emit(EnableAutoReloadModalBodyEvent::Close);
             }
             Action::Enable => {
+                if self.update_workspace_settings_loading
+                    || self.selected_denomination_index >= self.addon_credits_options.len()
+                {
+                    return;
+                }
                 let workspaces = UserWorkspaces::as_ref(ctx);
                 let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
