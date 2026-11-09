@@ -315,22 +315,3 @@ fn acp_action_events_are_posted_in_the_background() {
     assert_eq!(request["payload"]["transport"], "acp");
     assert!(request["payload"]["latency_ms"].as_i64().unwrap() >= 0);
 }
-
-#[test]
-fn first_output_is_posted_only_after_agent_started_even_from_another_clone() {
-    let (reporter, rx) = recording_run_reporter(2);
-    reporter
-        .with_transport(HarnessTransport::Acp)
-        .post_timeline_event_detached(OzRunTimelineEvent::AgentFirstOutput);
-    assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "the first output must wait for agent_started"
-    );
-
-    block_on(reporter.post_timeline_event(OzRunTimelineEvent::AgentStarted));
-    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(request["event_name"], "agent_started");
-    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(request["event_name"], "agent_first_output");
-    assert!(request.get("payload").is_none(), "{request}");
-}

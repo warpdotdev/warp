@@ -41,9 +41,7 @@ use super::protocol::{
     SessionUpdateParams, SteeringIdleBehavior, SteeringMeta, SteeringOptions, SteeringOutcome,
     SteeringParams, SteeringResponse, StopReason,
 };
-use crate::ai::agent_sdk::setup_observability::{
-    AcpActionEvent, OzRunTimelineEvent, SetupClientEventReporter,
-};
+use crate::ai::agent_sdk::setup_observability::{AcpActionEvent, SetupClientEventReporter};
 use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::blocklist::{
     ExternalHarnessCancel, ExternalHarnessPrompt, ExternalHarnessTurn, QueuedQueryId,
@@ -126,8 +124,6 @@ pub(super) trait TurnTelemetry: Send + Sync {
         started: DateTime<Utc>,
         is_error: bool,
     );
-    /// Reports the agent's first output of the run.
-    fn first_output(&self);
 }
 
 impl TurnTelemetry for SetupClientEventReporter {
@@ -139,10 +135,6 @@ impl TurnTelemetry for SetupClientEventReporter {
         is_error: bool,
     ) {
         self.post_action_event(event, outcome, started, is_error);
-    }
-
-    fn first_output(&self) {
-        self.post_timeline_event_detached(OzRunTimelineEvent::AgentFirstOutput);
     }
 }
 
@@ -410,9 +402,6 @@ pub(super) struct TurnDriver {
     pub cancels: Option<async_channel::Receiver<ExternalHarnessCancel>>,
     pub host: Arc<dyn TurnHost>,
     pub telemetry: Arc<dyn TurnTelemetry>,
-    /// Whether the initial turn has yet to put anything into the conversation. Cleared when it
-    /// does, or when the initial turn ends, so the first output is reported at most once.
-    pub first_output_pending: bool,
     pub state: Arc<TurnState>,
     /// The currently open request stream.
     pub turn: ExternalHarnessTurn,
@@ -454,7 +443,6 @@ impl TurnDriver {
     /// the agent's own.
     pub(super) async fn run(mut self, mapper: &mut AcpTurnMapper) {
         let mut turn_result = self.run_turn(mapper, PromptInput::Initial).await;
-        self.first_output_pending = false;
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -1278,14 +1266,6 @@ impl TurnDriver {
             return Ok(());
         }
         let events = mapper.map_update(params.update);
-        if self.first_output_pending
-            && events
-                .iter()
-                .any(|event| matches!(event, TurnEvent::Actions(actions) if !actions.is_empty()))
-        {
-            self.first_output_pending = false;
-            self.telemetry.first_output();
-        }
         self.apply_events(mapper, events).await
     }
 

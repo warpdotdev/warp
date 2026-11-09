@@ -542,48 +542,29 @@ impl TurnHost for RecordingHost {
     }
 }
 
-/// One report the turn driver made.
+/// One action report the turn driver made.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TelemetryEvent {
-    Action {
-        event: AcpActionEvent,
-        outcome: &'static str,
-        is_error: bool,
-    },
-    FirstOutput,
+struct ReportedAction {
+    event: AcpActionEvent,
+    outcome: &'static str,
+    is_error: bool,
 }
 
 /// Records what the turn driver reports, in order.
 #[derive(Default)]
 struct RecordingTelemetry {
-    events: Mutex<Vec<TelemetryEvent>>,
+    actions: Mutex<Vec<ReportedAction>>,
 }
 
 impl RecordingTelemetry {
-    fn events(&self) -> Vec<TelemetryEvent> {
-        self.events.lock().clone()
-    }
-
     /// The `(outcome, is_error)` of every report of `event`, in order.
     fn actions(&self, wanted: AcpActionEvent) -> Vec<(&'static str, bool)> {
-        self.events()
-            .into_iter()
-            .filter_map(|recorded| match recorded {
-                TelemetryEvent::Action {
-                    event,
-                    outcome,
-                    is_error,
-                } if event == wanted => Some((outcome, is_error)),
-                TelemetryEvent::Action { .. } | TelemetryEvent::FirstOutput => None,
-            })
-            .collect()
-    }
-
-    fn first_output_count(&self) -> usize {
-        self.events()
+        self.actions
+            .lock()
             .iter()
-            .filter(|event| **event == TelemetryEvent::FirstOutput)
-            .count()
+            .filter(|action| action.event == wanted)
+            .map(|action| (action.outcome, action.is_error))
+            .collect()
     }
 }
 
@@ -596,15 +577,11 @@ impl TurnTelemetry for RecordingTelemetry {
         is_error: bool,
     ) {
         assert!(started <= Utc::now(), "{event:?} started in the future");
-        self.events.lock().push(TelemetryEvent::Action {
+        self.actions.lock().push(ReportedAction {
             event,
             outcome,
             is_error,
         });
-    }
-
-    fn first_output(&self) {
-        self.events.lock().push(TelemetryEvent::FirstOutput);
     }
 }
 
@@ -697,7 +674,6 @@ fn start(
         cancels: Some(cancel_rx),
         host: host.clone(),
         telemetry: telemetry.clone(),
-        first_output_pending: true,
         state: state.clone(),
         turn,
         session_id: SESSION.to_owned(),
@@ -822,11 +798,6 @@ fn a_follow_up_mid_turn_is_steered_into_the_turn_when_the_agent_supports_it() {
         vec![("stopped_end_turn", false)]
     );
     assert!(telemetry.actions(AcpActionEvent::Cancel).is_empty());
-    assert_eq!(
-        telemetry.first_output_count(),
-        1,
-        "two chunks reached the conversation but the first output is reported once"
-    );
     assert_eq!(
         host.texts_on(&streams[0]),
         vec!["working", "steer", "changing course"],
@@ -1156,7 +1127,6 @@ fn a_follow_up_mid_turn_cancels_the_turn_then_prompts_with_an_interruption_note(
             .actions(AcpActionEvent::FollowupsDropped)
             .is_empty()
     );
-    assert_eq!(telemetry.first_output_count(), 1);
     assert_eq!(
         host.texts_on(second),
         vec!["steer"],
@@ -1275,11 +1245,6 @@ fn a_follow_up_between_turns_is_sent_without_a_cancel() {
     assert_eq!(
         host.texts_on(&host.streams()[1]),
         vec!["next", "later output"]
-    );
-    assert_eq!(
-        telemetry.first_output_count(),
-        0,
-        "only the initial turn's output counts as the run's first output"
     );
     assert_eq!(
         telemetry.actions(AcpActionEvent::Turn),
@@ -1773,7 +1738,6 @@ fn an_ignored_explicit_stop_uses_the_bounded_terminal_path() {
         telemetry.actions(AcpActionEvent::Turn),
         vec![("error", true)]
     );
-    assert_eq!(telemetry.first_output_count(), 0);
     assert!(host.events().iter().any(|event| matches!(
         event,
         HostEvent::Finished {

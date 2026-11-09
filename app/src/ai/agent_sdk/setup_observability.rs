@@ -1,11 +1,9 @@
 use std::fmt::Display;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Utc};
 use enum_iterator::Sequence;
-use event_listener::Event;
 use futures::FutureExt as _;
 use tracing::Instrument as _;
 use warp_cli::agent::HarnessTransport;
@@ -24,38 +22,8 @@ pub(crate) struct SetupClientEventReporter {
     scope: SetupScope,
     /// Stamped on every metric event, so harness steps can be split by how the harness is driven.
     transport: Option<HarnessTransport>,
-    /// Shared by every clone, so a milestone that must follow `agent_started` waits for it even
-    /// when posted from another task.
-    agent_started: Arc<MilestoneGate>,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
-}
-
-/// A milestone that has or has not been posted yet.
-#[derive(Default)]
-struct MilestoneGate {
-    posted: AtomicBool,
-    changed: Event,
-}
-
-impl MilestoneGate {
-    fn mark_posted(&self) {
-        self.posted.store(true, Ordering::SeqCst);
-        self.changed.notify(usize::MAX);
-    }
-
-    async fn wait_posted(&self) {
-        loop {
-            if self.posted.load(Ordering::SeqCst) {
-                return;
-            }
-            let listener = self.changed.listen();
-            if self.posted.load(Ordering::SeqCst) {
-                return;
-            }
-            listener.await;
-        }
-    }
 }
 
 impl SetupClientEventReporter {
@@ -69,7 +37,6 @@ impl SetupClientEventReporter {
             run_id: Some(run_id),
             scope: SetupScope::Run,
             transport: None,
-            agent_started: Arc::default(),
             ai_client,
             background,
         }
@@ -81,7 +48,6 @@ impl SetupClientEventReporter {
             run_id: None,
             scope: SetupScope::Run,
             transport: None,
-            agent_started: Arc::default(),
             ai_client,
             background,
         }
@@ -241,32 +207,6 @@ impl SetupClientEventReporter {
         let event_name = event.as_event_name();
         let request = AgentRunClientEventRequest::timeline_event(event_name, timestamp);
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
-        if event == OzRunTimelineEvent::AgentStarted {
-            self.agent_started.mark_posted();
-        }
-    }
-
-    /// Like [`Self::post_timeline_event`], posted in the background so it never delays the run.
-    /// The event's timestamp is taken now; a milestone the server only accepts after
-    /// `agent_started` is held back until that has been posted.
-    pub(crate) fn post_timeline_event_detached(&self, event: OzRunTimelineEvent) {
-        let Some(run_id) = self.run_id else {
-            return;
-        };
-        let event_name = event.as_event_name();
-        let request = AgentRunClientEventRequest::timeline_event(event_name, Utc::now());
-        let agent_started = event
-            .follows_agent_started()
-            .then(|| self.agent_started.clone());
-        let ai_client = self.ai_client.clone();
-        self.background
-            .spawn(async move {
-                if let Some(agent_started) = agent_started {
-                    agent_started.wait_posted().await;
-                }
-                Self::post_client_event(run_id, ai_client, event_name, request).await;
-            })
-            .detach();
     }
 
     /// Like [`Self::post_timeline_event`], with an event-specific JSON payload, posted in the
@@ -343,12 +283,9 @@ fn transport_label(transport: HarnessTransport) -> &'static str {
 }
 
 /// Names run milestones that have a timestamp rather than a setup duration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
-    /// The agent's first output reached the conversation; with `AgentStarted`, the run's time
-    /// to first token.
-    AgentFirstOutput,
     WorkerContainerReady,
     SkillSourcesResolved,
 }
@@ -357,17 +294,8 @@ impl OzRunTimelineEvent {
     fn as_event_name(self) -> &'static str {
         match self {
             Self::AgentStarted => "agent_started",
-            Self::AgentFirstOutput => "agent_first_output",
             Self::WorkerContainerReady => "worker_container_ready",
             Self::SkillSourcesResolved => "skill_sources_resolved",
-        }
-    }
-
-    /// Whether the server accepts the milestone only once `agent_started` has been recorded.
-    fn follows_agent_started(self) -> bool {
-        match self {
-            Self::AgentFirstOutput => true,
-            Self::AgentStarted | Self::WorkerContainerReady | Self::SkillSourcesResolved => false,
         }
     }
 }

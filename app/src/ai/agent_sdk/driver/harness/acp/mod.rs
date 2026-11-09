@@ -1120,7 +1120,6 @@ impl HarnessRunner for AcpHarnessRunner {
             cancels: Some(cancel_rx),
             host,
             telemetry: Arc::new(setup_events.clone()),
-            first_output_pending: true,
             state: self.turn_state.clone(),
             turn,
             session_id,
