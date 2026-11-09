@@ -1242,19 +1242,29 @@ impl LLMPreferences {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
         let available = self.get_computer_use_available(scope.team_uid(), app);
-        let selected_model = terminal_view_id
-            .and_then(|id| self.computer_use_llm_for_terminal_view.get(&id))
-            .map(Option::as_ref)
-            .unwrap_or_else(|| profile.data().computer_use_model.as_ref());
-        selected_model
-            .and_then(|id| available.info_for_id(id))
+        if let Some(selection) =
+            terminal_view_id.and_then(|id| self.computer_use_llm_for_terminal_view.get(&id))
+        {
+            match selection {
+                Some(id) => {
+                    if let Some(info) = self.usable_model_info_for_id(available, id, app) {
+                        return info;
+                    }
+                }
+                None => return self.get_default_computer_use_model(scope, app),
+            }
+        }
+        profile
+            .data()
+            .computer_use_model
+            .as_ref()
+            .and_then(|id| self.usable_model_info_for_id(available, id, app))
             .unwrap_or_else(|| self.get_default_computer_use_model(scope, app))
     }
 
     /// Returns the effective default computer use model as a fallback: the
     /// server default when usable, else the first usable choice, else the
-    /// (possibly disabled) server default. No custom-endpoint fallback here:
-    /// custom models aren't offered for computer use.
+    /// (possibly disabled) server default. Custom endpoints are only used when explicitly selected.
     pub fn get_default_computer_use_model<'a>(
         &'a self,
         scope: &(impl TeamScope + ?Sized),
