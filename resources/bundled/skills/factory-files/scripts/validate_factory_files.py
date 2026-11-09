@@ -53,7 +53,7 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 # Mirrors the caps the endpoint enforces, so an oversized tree is reported here
 # rather than collecting a 400.
-MAX_REMOTE_FILES = 256
+MAX_REMOTE_FILES = 2048
 MAX_REMOTE_FILE_BYTES = 256 * 1024
 MAX_REMOTE_CONTENT_BYTES = 2 * 1024 * 1024
 
@@ -113,8 +113,17 @@ def classify(relative: str) -> tuple[str, str]:
     if relative == "factory.yaml":
         return "factory", ""
     segments = relative.split("/")
+    if len(segments) == 2 and segments[0] == "skills" and _is_yaml(segments[1]):
+        return "skill_reference", ""
     if len(segments) >= 2 and segments[0] == "skills":
         return "skill", ""
+    if (
+        len(segments) == 4
+        and segments[0] == "agents"
+        and segments[2] == "skills"
+        and _is_yaml(segments[3])
+    ):
+        return "skill_reference", segments[1]
     if len(segments) >= 4 and segments[0] == "agents" and segments[2] == "skills":
         return "skill", ""
     if len(segments) == 3 and segments[0] == "agents" and segments[2] == "agent.md":
@@ -166,6 +175,20 @@ def _valid_name(name: str) -> bool:
     return name not in ("", ".", "..") and "/" not in name
 
 
+def _is_yaml(name: str) -> bool:
+    return name.endswith((".yaml", ".yml"))
+
+
+def _direct_files(directory: Path) -> list[Path]:
+    """Files directly inside directory, including symlinks so they can be refused."""
+    with os.scandir(directory) as entries:
+        return [
+            Path(entry.path)
+            for entry in entries
+            if entry.is_symlink() or entry.is_file(follow_symlinks=False)
+        ]
+
+
 def _valid_benchmark_task_slug(slug: str) -> bool:
     if not slug or slug in (".", "..") or slug[0].isspace() or slug[-1].isspace():
         return False
@@ -184,6 +207,9 @@ def _valid_benchmark_task_slug(slug: str) -> bool:
 
 def _resource_files(root: Path) -> list[Path]:
     files = [root / "factory.yaml"]
+    # Of a skills directory, only the reference files directly inside it are Factory format.
+    if (root / "skills").is_dir():
+        files.extend(_direct_files(root / "skills"))
     for directory_name in (
         "agents",
         "automations",
@@ -200,6 +226,8 @@ def _resource_files(root: Path) -> list[Path]:
             parts = relative_directory.parts
             if directory_name == "agents" and len(parts) == 2:
                 child_directories[:] = [name for name in child_directories if name != "skills"]
+                if (Path(directory) / "skills").is_dir():
+                    files.extend(_direct_files(Path(directory) / "skills"))
             files.extend(Path(directory) / filename for filename in filenames)
     return sorted(files)
 

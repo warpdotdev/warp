@@ -1517,6 +1517,22 @@ esac
         export PATH="$PATH:$WARP_PATH_APPEND"
         unset WARP_PATH_APPEND
     fi
+    # Direct non-root cloud containers use a private command directory when system installation fails.
+    # Restore the entrypoint-provided directory's precedence after profiles reset PATH.
+    if [[ "${WARP_CLOUD_AGENT_FALLBACK_BIN:-}" == /* && "$WARP_CLOUD_AGENT_FALLBACK_BIN" != *:* \
+        && -d "$WARP_CLOUD_AGENT_FALLBACK_BIN" && "$(command -p uname -s)" == Linux ]]; then
+        _warp_runtime_remaining="$PATH:"
+        _warp_runtime_path="$WARP_CLOUD_AGENT_FALLBACK_BIN"
+        while [[ -n "$_warp_runtime_remaining" ]]; do
+            _warp_runtime_entry="${_warp_runtime_remaining%%:*}"
+            _warp_runtime_remaining="${_warp_runtime_remaining#*:}"
+            if [[ "$_warp_runtime_entry" != "$WARP_CLOUD_AGENT_FALLBACK_BIN" ]]; then
+                _warp_runtime_path="$_warp_runtime_path:$_warp_runtime_entry"
+            fi
+        done
+        export PATH="$_warp_runtime_path"
+        unset _warp_runtime_remaining _warp_runtime_path _warp_runtime_entry
+    fi
 
     # Read through shell options to determine if the user has enabled vi mode.
     vi_mode_enabled=0

@@ -22,7 +22,6 @@ use session_sharing_protocol::sharer::{
     ReconnectPayload, ReconnectToken, ReconnectionFailedReason, SessionEndedReason,
     SessionSourceType, SessionTerminatedReason, UpstreamMessage,
 };
-use warp_server_client::iap::IapManager;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::executor::Foreground;
 use warpui::r#async::{FutureExt as _, Timer};
@@ -206,6 +205,80 @@ fn start_scripted_reconnect(
 }
 
 #[test]
+fn test_idle_reconnects_do_not_exhaust_progress_budget() {
+    App::test((), |mut app| async move {
+        for event_count in [0usize, 1] {
+            let (network, _) = create_network(&mut app, true);
+            network.update(&mut app, |network, _| {
+                for _ in 0..event_count {
+                    network.send_ordered_terminal_event_message(
+                        OrderedTerminalEventType::PtyBytesRead {
+                            bytes: "acknowledged".into(),
+                        },
+                    );
+                }
+            });
+            let confirmed_event_no = event_count.checked_sub(1);
+            for _ in 0..10 {
+                confirm_reconnect(&network, &mut app, confirmed_event_no);
+                network.read(&app, |network, _| {
+                    assert!(network.is_connected());
+                    assert_eq!(network.no_progress_reconnects, 0);
+                    assert!(!network.has_unconfirmed_terminal_events());
+                    assert_eq!(network.unacked_terminal_events.len(), event_count);
+                });
+            }
+        }
+    });
+}
+
+#[test]
+fn test_idle_reconnect_budget_is_not_applied_to_new_pending_events() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        for _ in 0..10 {
+            confirm_reconnect(&network, &mut app, None);
+        }
+        network.update(&mut app, |network, _| {
+            network.send_ordered_terminal_event_message(OrderedTerminalEventType::PtyBytesRead {
+                bytes: "new event".into(),
+            });
+        });
+        confirm_reconnect(&network, &mut app, None);
+        network.read(&app, |network, _| {
+            assert!(network.is_connected());
+            assert_eq!(network.no_progress_reconnects, 1);
+            assert!(network.has_unconfirmed_terminal_events());
+        });
+    });
+}
+
+#[test]
+fn test_caught_up_session_clears_stale_budget_before_reconnecting() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app, true);
+        let (limit_tx, limit_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&network, move |_, event, _| {
+                if let NetworkEvent::ReconnectLimitReached { reason } = event {
+                    limit_tx.try_send(*reason).unwrap();
+                }
+            });
+        });
+        network.update(&mut app, |network, ctx| {
+            network.no_progress_reconnects = 5;
+            network.reconnect_websocket(ctx);
+        });
+        network.read(&app, |network, _| {
+            assert!(network.is_connected());
+            assert!(!network.ws_proxy_tx.is_closed());
+            assert_eq!(network.no_progress_reconnects, 0);
+        });
+        assert!(limit_rx.is_empty());
+    });
+}
+
+#[test]
 fn test_reconnect_retries_eof_before_ack() {
     App::test((), |mut app| async move {
         let (network, attempts) = start_scripted_reconnect(
@@ -344,6 +417,11 @@ fn test_reconnect_send_timeout_is_retryable() {
 fn test_disconnect_after_fifth_reconnect_without_progress_finishes_session() {
     App::test((), |mut app| async move {
         let (network, _) = create_network(&mut app, true);
+        network.update(&mut app, |network, _| {
+            network.send_ordered_terminal_event_message(OrderedTerminalEventType::PtyBytesRead {
+                bytes: "stalled".into(),
+            });
+        });
         let (limit_tx, limit_rx) = async_channel::bounded(1);
         app.update(|ctx| {
             ctx.subscribe_to_model(&network, move |_, event, _| {
@@ -385,6 +463,15 @@ fn test_disconnect_after_fifth_reconnect_without_progress_finishes_session() {
 fn test_confirmed_ordered_event_progress_resets_reconnect_limit() {
     App::test((), |mut app| async move {
         let (network, _) = create_network(&mut app, true);
+        network.update(&mut app, |network, _| {
+            for _ in 0..3 {
+                network.send_ordered_terminal_event_message(
+                    OrderedTerminalEventType::PtyBytesRead {
+                        bytes: "pending".into(),
+                    },
+                );
+            }
+        });
 
         for _ in 0..4 {
             confirm_reconnect(&network, &mut app, None);
@@ -1662,16 +1749,6 @@ fn test_messages_are_buffered_before_session_initialized() {
 fn test_messages_are_buffered_while_reconnecting() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        // Disabled (`None`) IapManager so the reconnect path, which reads the
-        // singleton, doesn't panic; inert no-op in tests.
-        app.add_singleton_model(|ctx| {
-            IapManager::new(
-                None,
-                Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
-                None,
-                ctx,
-            )
-        });
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
         app.add_singleton_model(AuthManager::new_for_test);

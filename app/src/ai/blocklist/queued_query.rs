@@ -401,11 +401,7 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::DispatchStateChanged { conversation_id });
     }
 
-    /// Clears the native setup barrier once the initial prompt has actually been sent. Does
-    /// *not* dispatch any prompt that arrived in the meantime -- the caller
-    /// (`BlocklistAIController::dispatch_queued_warp_agent_prompt`) does that immediately
-    /// afterward, once it's safe to do so (see that method's doc comment for why the two can't
-    /// be combined into one step here).
+    /// Releases startup follow-ups for steering or idle delivery after the initial submission.
     pub(crate) fn finish_native_setup(
         &mut self,
         conversation_id: AIConversationId,

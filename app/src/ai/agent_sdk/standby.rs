@@ -499,8 +499,6 @@ async fn prepare(
             )
         })
         .map_err(AgentDriverError::ConfigBuildFailed)?;
-    execution_config::validate_prewarmed_harness(harness)
-        .map_err(AgentDriverError::ConfigBuildFailed)?;
     // Deferred checkouts belong to the claiming task, so the standby workspace declares none and
     // only validates them.
     let mut workspace = WorkspaceConfiguration::from_resolved(
@@ -589,6 +587,7 @@ async fn prepare(
 
     let (_, discovery_dirs) =
         resolve_configured_skills(foreground, skills, true, &working_dir, setup_events).await?;
+    workspace.definition_skill_dirs = Some(skill_dirs.clone());
     merge_skill_dirs(&mut skill_dirs, discovery_dirs);
     workspace.factory_skill_dirs = Some(skill_dirs);
     let cloud_providers = if FeatureFlag::OzIdentityFederation.is_enabled() {

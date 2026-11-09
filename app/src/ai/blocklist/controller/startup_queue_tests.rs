@@ -18,6 +18,7 @@ use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
     CancellationReason, RequestCommandOutputResult,
 };
+use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -873,6 +874,27 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
         .collect()
 }
 
+fn settle_native_request(
+    controller: &mut BlocklistAIController,
+    id: AIConversationId,
+    ctx: &mut ModelContext<BlocklistAIController>,
+) {
+    for stream in controller
+        .in_flight_response_streams
+        .stream_ids_for_conversation(id, ctx)
+    {
+        controller
+            .in_flight_response_streams
+            .cleanup_stream(&stream);
+    }
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+        history
+            .conversation_mut(&id)
+            .unwrap()
+            .set_status_for_test(ConversationStatus::Success);
+    });
+}
+
 fn file_prompt(participant: ParticipantId, base: Option<BaseUserQuery>) -> QueuedQuery {
     QueuedQuery::new_shared_session_prompt(
         "file followup".into(),
@@ -1077,7 +1099,7 @@ fn missing_download_configuration_settles_eagerly_without_waiting_for_dispatch()
 }
 
 #[test]
-fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_time() {
+fn startup_injections_preserve_the_initial_stream_until_a_request_boundary() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -1117,12 +1139,21 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
             terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
         });
 
-        // Mirrors what `AgentDriver::execute_run` does: send the initial prompt, then dispatch
-        // the head of the backlog.
-        controller.update(&mut app, |controller, ctx| {
+        let initial_streams = controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+            assert_eq!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
+            streams
         });
+        assert_eq!(initial_streams.len(), 1);
 
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
             assert_eq!(
@@ -1131,28 +1162,52 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
                     .iter()
                     .map(QueuedQuery::text)
                     .collect::<Vec<_>>(),
-                vec!["prompt3"],
-                "only the head row (prompt2) should have been dispatched; prompt3 waits for the \
-                 next natural boundary or the conversation going idle again"
+                vec!["prompt2", "prompt3"]
             );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(user_queries_in_order(history, id), vec!["prompt1"]);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            for stream in initial_streams {
+                controller
+                    .in_flight_response_streams
+                    .cleanup_stream(&stream);
+            }
+            controller.send_follow_up_for_conversation(id, ctx);
         });
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec!["prompt1".to_owned(), "prompt2".to_owned()],
-                "prompt1 and prompt2 should both have been sent, each as its own exchange"
+                vec!["prompt1", "prompt2"]
             );
         });
-        controller.read(&app, |controller, ctx| {
-            let streams = controller
-                .in_flight_response_streams
-                .stream_ids_for_conversation(id, ctx);
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
             assert_eq!(
-                streams.len(),
-                1,
-                "prompt2's turn should be active; prompt1's was interrupted the same way a \
-                 rapid live follow-up interrupts a prior turn"
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["prompt3"]
             );
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            settle_native_request(controller, id, ctx);
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.drain_queued_prompts(id, FinishReason::Complete, ctx);
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["prompt1", "prompt2", "prompt3"]
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
         });
     });
 }
@@ -1222,6 +1277,7 @@ fn agent_message_wake_origin_becomes_an_agent_wake_input_not_a_query() {
 
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1322,6 +1378,7 @@ fn wake_text_without_the_wake_origin_stays_a_user_query() {
 
             controller.update(&mut app, |controller, ctx| {
                 controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+                settle_native_request(controller, id, ctx);
                 controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
             });
 
@@ -1659,10 +1716,17 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
         });
 
         controller.update(&mut app, |controller, ctx| {
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.finish_native_setup(id, ctx);
-            });
+            controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            let streams = controller
+                .in_flight_response_streams
+                .stream_ids_for_conversation(id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, Some(second_row_id), ctx);
+            assert_ne!(
+                controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx),
+                streams
+            );
         });
 
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
@@ -1680,7 +1744,7 @@ fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_th
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec!["prompt3".to_owned()],
+                vec!["prompt1", "prompt3"],
                 "the explicitly targeted row should have been sent"
             );
         });
@@ -1722,6 +1786,7 @@ fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds(
 
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1863,6 +1928,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
         });
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
+            settle_native_request(controller, id, ctx);
             controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
@@ -1964,6 +2030,17 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                     },
                     ctx,
                 );
+                let streams = controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(id, ctx);
+                assert_eq!(streams.len(), 1);
+                controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+                assert_eq!(
+                    controller
+                        .in_flight_response_streams
+                        .stream_ids_for_conversation(id, ctx),
+                    streams
+                );
                 assert_eq!(
                     BlocklistAIHistoryModel::as_ref(ctx)
                         .conversation(&id)
@@ -1971,10 +2048,6 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
                         .exchange_count(),
                     1
                 );
-                // The initial send finishes the setup barrier immediately (it does not wait for
-                // this turn to complete); the queued follow-up is left untouched until something
-                // explicitly drains it (`AgentDriver::execute_run` does so right after this send
-                // in production).
                 assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
                 assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
             });

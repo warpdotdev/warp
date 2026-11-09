@@ -1,0 +1,6 @@
+issuer: https://token.actions.githubusercontent.com
+subject_pattern: repo:warpdotdev/channel-versions:.*
+claim_pattern:
+  job_workflow_ref: warpdotdev/channel-versions/\.github/workflows/(update_channels|create_version_bump_pr)\.yml@.+
+permissions:
+  contents: read

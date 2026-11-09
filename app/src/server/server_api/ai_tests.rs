@@ -6,16 +6,19 @@ use serde_json::{Value, json};
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat};
 use warp_graphql::queries::execution_config::CodeForge;
-use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
+use warp_server_client::base_client::{
+    AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER,
+};
 
 use super::super::ServerApi;
 use super::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
-    ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
-    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskGitCredentialsError, TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskId,
+    AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
+    ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
+    ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskGitCredentialsError,
+    TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
     agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
     build_run_followup_url, is_unknown_git_credential_schema_error,
 };
@@ -27,6 +30,57 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server.mock("GET", format!("/api/v1/agent/runs/{task_id}/previews").as_str())
+            .match_header(CLOUD_AGENT_ID_HEADER, task_id.to_string().as_str())
+            .match_header(AMBIENT_WORKLOAD_TOKEN_HEADER, "test-workload-token")
+            .with_status(200)
+            .with_body(r#"{"execution_id":42,"previews":[{"expires_at":"2026-10-22T18:00:00Z","port":3000}]}"#)
+            .expect(1)
+            .create()
+    };
+    let api = execution_bootstrap_server_api();
+    let response = block_on(api.list_run_previews(&task_id)).unwrap();
+    assert_eq!(response.execution_id, Some(42));
+    assert_eq!(response.previews.len(), 1);
+    request.assert();
+}
+
+#[test]
+fn list_run_previews_no_execution_and_older_server() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440001".parse().unwrap();
+    for (status, body) in [
+        (200, r#"{"previews":[]}"#),
+        (404, r#"{"error":"not found"}"#),
+    ] {
+        let request = {
+            let mut server = warp_core::channel::ChannelState::mock_server();
+            server
+                .mock(
+                    "GET",
+                    format!("/api/v1/agent/runs/{task_id}/previews").as_str(),
+                )
+                .with_status(status)
+                .with_body(body)
+                .expect(1)
+                .create()
+        };
+        let result = block_on(execution_bootstrap_server_api().list_run_previews(&task_id));
+        if status == 200 {
+            let response = result.unwrap();
+            assert_eq!(response.execution_id, None);
+            assert!(response.previews.is_empty());
+        } else {
+            assert!(result.is_err());
+        }
+        request.assert();
+    }
 }
 
 fn execution_bootstrap_response() -> Value {

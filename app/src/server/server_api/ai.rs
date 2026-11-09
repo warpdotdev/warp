@@ -488,6 +488,8 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    /// An event-specific JSON payload for a timeline event.
+    Timeline(serde_json::Value),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1003,6 +1005,15 @@ struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ListRunPreviewsResponse {
+    pub execution_id: Option<i64>,
+    pub previews: Vec<RunPreview>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RunPreview {}
+
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1268,6 +1279,10 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse>;
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,
@@ -2015,6 +2030,16 @@ fn convert_upload_field(
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
+    async fn list_run_previews(
+        &self,
+        task_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<ListRunPreviewsResponse> {
+        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/previews"))
+            .await?
+            .json::<ListRunPreviewsResponse>()
+            .await
+            .map_err(Into::into)
+    }
     async fn generate_commands_from_natural_language(
         &self,
         prompt: String,

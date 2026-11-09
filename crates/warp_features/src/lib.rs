@@ -892,6 +892,10 @@ pub enum FeatureFlag {
     /// are protected from reordering.
     PinnedTabs,
 
+    /// Gates the "Merge into tab" tab context-menu action, which moves every pane of one
+    /// tab into another tab as splits.
+    MergeTabIntoTab,
+
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
@@ -1004,9 +1008,9 @@ pub enum FeatureFlag {
     GitMirrorCache,
     AgentPromptSteering,
 
-    /// Gates the "Merge into tab" tab context-menu action, which moves every pane of one
-    /// tab into another tab as splits.
-    MergeTabIntoTab,
+    /// Resolves skill reference files in a Factory definition's skill folders during cloud runs,
+    /// loading the selected skills from other repositories.
+    FactorySkillReferences,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1087,6 +1091,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::FactorySkillReferences,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

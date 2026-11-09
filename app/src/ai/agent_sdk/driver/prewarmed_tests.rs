@@ -274,7 +274,16 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
             (ctx.spawner(), paths)
         });
         let mut unsupported = config();
-        unsupported.harness = warp_graphql::ai::AgentHarness::Gemini;
+        unsupported.deferred_repositories = Some(vec![ExecutionRepository {
+            forge: CodeForge::GitHub,
+            owner: "benchmarks".into(),
+            name: "frozen-api".into(),
+            ref_: None,
+            clone_from: None,
+            preserve_origin: false,
+            expected_sha: None,
+        }]);
+        let _unsupported = FeatureFlag::FactoryDeferredRepositories.override_enabled(false);
         let error = AgentDriver::prepare_prewarmed_assignment(
             &spawner,
             unsupported,
@@ -295,7 +304,7 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
 /// The server commits runs with cloud providers to pre-warmed sandboxes, so validation must
 /// accept them.
 #[test]
-fn prewarmed_accepts_server_assignments_and_rejects_unsupported_runs() {
+fn prewarmed_accepts_server_assignments() {
     let mut configuration = server_assignment();
     assert!(configuration.providers.is_some());
     validate_assignment(&configuration).unwrap();
@@ -310,7 +319,7 @@ fn prewarmed_accepts_server_assignments_and_rejects_unsupported_runs() {
     configuration.harness = warp_graphql::ai::AgentHarness::Codex;
     validate_assignment(&configuration).unwrap();
     configuration.harness = warp_graphql::ai::AgentHarness::Gemini;
-    assert!(validate_assignment(&configuration).is_err());
+    validate_assignment(&configuration).unwrap();
 }
 
 #[test]

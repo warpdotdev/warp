@@ -334,7 +334,11 @@ impl AcpTurnMapper {
 
     /// Actions that open the conversation: create the root task and echo the user's prompt,
     /// mirroring what the MAA server streams first.
-    pub(super) fn initial_actions(&self, prompt: &str) -> Vec<ClientAction> {
+    pub(super) fn initial_actions(
+        &self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> Vec<ClientAction> {
         vec![
             action(client_action::Action::CreateTask(CreateTask {
                 task: Some(Task {
@@ -342,7 +346,7 @@ impl AcpTurnMapper {
                     ..Default::default()
                 }),
             })),
-            self.user_query_action(prompt, None),
+            self.user_query_action(prompt, base),
         ]
     }
 
@@ -369,6 +373,17 @@ impl AcpTurnMapper {
             source_message,
             ..Default::default()
         }))])
+    }
+
+    /// Echoes a user prompt that joined the turn in flight. The agent's next chunk is a reply
+    /// to it, so the message open before it must not be extended past it.
+    pub(super) fn steered_user_query_action(
+        &mut self,
+        prompt: &str,
+        base: Option<&BaseUserQuery>,
+    ) -> ClientAction {
+        self.open_message = None;
+        self.user_query_action(prompt, base)
     }
 
     pub(super) fn map_update(&mut self, update: SessionUpdate) -> Vec<TurnEvent> {

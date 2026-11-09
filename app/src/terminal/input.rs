@@ -7711,6 +7711,16 @@ impl Input {
             return;
         }
 
+        // The final bootstrap precmd replaces the active block after the Bootstrapped hook.
+        if !self
+            .model
+            .lock()
+            .block_list()
+            .is_bootstrapping_precmd_done()
+        {
+            return;
+        }
+
         let command = self.get_command(ctx);
         if self.can_execute_command(ctx).is_no() {
             return;

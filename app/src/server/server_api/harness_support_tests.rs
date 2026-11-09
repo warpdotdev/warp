@@ -237,3 +237,31 @@ fn report_shutdown_abnormal_serializes_with_error() {
         })
     );
 }
+
+#[test]
+fn report_transport_input_maps_the_transport_and_optional_reason() {
+    use warp_cli::agent::HarnessTransport;
+    use warp_graphql::mutations::report_harness_transport::{
+        HarnessTransport as GraphQLHarnessTransport, HarnessTransportFallbackReason,
+    };
+
+    use super::report_harness_transport_input;
+
+    let acp = report_harness_transport_input(HarnessTransport::Acp, None).unwrap();
+    assert_eq!(acp.transport, GraphQLHarnessTransport::Acp);
+    assert_eq!(acp.fallback_reason, None);
+
+    for (reason, expected) in [
+        ("no_sidecar", HarnessTransportFallbackReason::NoSidecar),
+        (
+            "sidecar_without_adapter",
+            HarnessTransportFallbackReason::SidecarWithoutAdapter,
+        ),
+    ] {
+        let fallback = report_harness_transport_input(HarnessTransport::Pty, Some(reason)).unwrap();
+        assert_eq!(fallback.transport, GraphQLHarnessTransport::Pty);
+        assert_eq!(fallback.fallback_reason, Some(expected), "{reason}");
+    }
+
+    assert!(report_harness_transport_input(HarnessTransport::Pty, Some("bogus")).is_err());
+}

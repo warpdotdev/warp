@@ -134,6 +134,14 @@ impl HarnessSupportClient for FailingUploadTargetsClient {
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
@@ -247,6 +255,14 @@ impl HarnessSupportClient for RecordingClient {
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }
+    async fn report_transport(
+        &self,
+        _transport: warp_cli::agent::HarnessTransport,
+        _fallback_reason: Option<&'static str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by the coordinator")
     }

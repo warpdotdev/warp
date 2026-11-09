@@ -13,7 +13,6 @@ use crate::terminal::view::load_ai_conversation::{
 };
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
-    execution_config::validate_prewarmed_harness(execution_config::harness(&config.harness)?)?;
     anyhow::ensure!(
         FeatureFlag::FactoryDeferredRepositories.is_enabled()
             || config
@@ -258,8 +257,46 @@ impl AgentDriver {
             &mut task,
         )
         .await?;
+        // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
+        // instead, before the resume path and the run configuration read the transport.
+        let transport_fallback = super::harness::apply_transport_fallback(
+            &mut task.harness,
+            &mut options.harness_transport,
+        )?;
+        if let Some(reason) = transport_fallback {
+            let harness_name = task.harness.harness().to_string();
+            log::info!(
+                "No ACP adapter for the {harness_name} harness in this sandbox ({reason}); driving it over a PTY"
+            );
+            let _ = spawner
+                .spawn(move |_, ctx| {
+                    use warp_core::telemetry::TelemetryEvent as _;
+                    let event =
+                        super::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
+                            harness: harness_name,
+                            reason: reason.as_str(),
+                        };
+                    crate::send_telemetry_from_app_ctx!(event, ctx);
+                })
+                .await;
+        }
+        options.harness_transport_fallback = transport_fallback;
         if let HarnessKind::ThirdParty(harness) = &task.harness {
             harness.validate()?;
+        }
+        // A harness whose transport is fixed (Pi) sends no report: the server rejects it.
+        if task.harness.reports_transport() {
+            let transport = options.harness_transport;
+            spawner
+                .spawn(move |_, ctx| {
+                    crate::ai::agent_sdk::transport_report::report_transport_in_background(
+                        &ctx.background_executor(),
+                        ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                        transport,
+                        transport_fallback.map(super::harness::TransportFallbackReason::as_str),
+                    );
+                })
+                .await?;
         }
         if let Some(conversation_id) = conversation_id {
             options.resume = setup_events

@@ -8,6 +8,35 @@ use super::UploadKey;
 use crate::ManagedSecretValue;
 
 #[test]
+fn llm_provider_ciphertext_is_bound_to_its_envelope_type() {
+    super::init();
+    let public_key = read_keyset_json(TEST_PUBLIC_KEY);
+    let private_key = read_keyset_json(TEST_PRIVATE_KEY);
+    let upload_key = UploadKey {
+        encrypt: tink_hybrid::new_encrypt(&public_key).unwrap(),
+        public_key,
+    };
+    let secret = ManagedSecretValue::llm_provider_api_key("google", "private-key", None);
+    let encrypted = upload_key
+        .encrypt_secret("user123", "GOOGLE_KEY", &secret)
+        .unwrap();
+    let ciphertext = base64::prelude::BASE64_STANDARD.decode(encrypted).unwrap();
+    let decrypt = tink_hybrid::new_decrypt(&private_key).unwrap();
+
+    assert_eq!(
+        decrypt
+            .decrypt(&ciphertext, b"1:user123:GOOGLE_KEY:llm_provider_api_key")
+            .unwrap(),
+        br#"{"provider_id":"google","api_key":"private-key"}"#
+    );
+    assert!(
+        decrypt
+            .decrypt(&ciphertext, b"1:user123:GOOGLE_KEY:openai_api_key")
+            .is_err()
+    );
+}
+
+#[test]
 fn test_import_public_keyset() {
     super::init();
 

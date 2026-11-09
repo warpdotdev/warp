@@ -10,6 +10,11 @@ use warpui_core::r#async::BoxFuture;
 use crate::auth::AuthEvent;
 use crate::base_client::{BaseClient, TEAM_UID_HEADER};
 
+/// The message of the plain error a request fails with when the server rejects the client's
+/// credentials (401, 403, or a disabled account) and the client may not refresh them. Callers
+/// that classify failures match on it, since no [`GraphQLError`] is left in the chain.
+pub const AUTH_REJECTED_MESSAGE: &str = "server rejected authentication credentials";
+
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
 /// This function is deliberately generic so concrete endpoint operation
@@ -79,7 +84,7 @@ where
                 | GraphQLError::ResponseError(_) => false,
             };
             if !base_client.is_auth_refresh_allowed() && is_auth_rejection {
-                anyhow::bail!("server rejected authentication credentials");
+                anyhow::bail!(AUTH_REJECTED_MESSAGE);
             }
             anyhow::bail!(err);
         }
@@ -101,7 +106,7 @@ where
                 report_error!("GraphQL request failed due to unauthenticated user");
                 let _ = base_client.send_auth_event(AuthEvent::UserAccountDisabled);
             } else {
-                anyhow::bail!("server rejected authentication credentials");
+                anyhow::bail!(AUTH_REJECTED_MESSAGE);
             }
         }
     }

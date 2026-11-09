@@ -650,6 +650,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
     AgentDriverOptions {
         working_dir: std::env::current_dir().unwrap(),
         task_id: None,
+        execution_id: None,
         use_factory_repositories: false,
         experimental: None,
         parent_run_id: None,
@@ -664,6 +665,7 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         computer_use_config: None,
         selected_harness: Harness::Oz,
         harness_transport: HarnessTransport::Pty,
+        harness_transport_fallback: None,
         third_party_harness_model_config: None,
         team_scope: None,
         bedrock_oidc_credentials: None,

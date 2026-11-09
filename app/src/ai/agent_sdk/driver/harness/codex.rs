@@ -40,6 +40,7 @@ use super::{
     HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
     install_docs_url, write_temp_file,
 };
+use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -131,6 +132,7 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _prompt_attribution: Option<&BaseUserQuery>,
         workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
@@ -810,6 +812,14 @@ fn resolve_openai_base_url_from_secret(
 
     secrets.values().find_map(|secret| match secret {
         ManagedSecretValue::OpenaiApiKey { base_url, .. } => base_url
+            .as_ref()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        ManagedSecretValue::LlmProviderApiKey {
+            provider_id,
+            base_url,
+            ..
+        } if provider_id == "openai" => base_url
             .as_ref()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty()),

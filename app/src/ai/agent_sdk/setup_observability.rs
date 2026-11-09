@@ -8,7 +8,9 @@ use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
+use crate::server::server_api::ai::{
+    AIClient, AgentRunClientEventPayload, AgentRunClientEventRequest,
+};
 
 /// Records setup spans and optional run events, with an agent-only scope for standby.
 #[derive(Clone)]
@@ -96,6 +98,17 @@ impl SetupClientEventReporter {
         step: SetupStep,
         future: impl Future<Output = T>,
     ) -> T {
+        self.record_value_with_error_flag(step, future, |_| false)
+            .await
+    }
+
+    /// Like [`Self::record_value`], with the metric's error flag derived from the value.
+    pub(crate) async fn record_value_with_error_flag<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T>,
+        is_error: impl FnOnce(&T) -> bool,
+    ) -> T {
         let (step_name, span) = self.start_step(step);
 
         let start_timestamp = Utc::now();
@@ -106,7 +119,7 @@ impl SetupClientEventReporter {
             step_name,
             start_timestamp,
             finish_timestamp,
-            false,
+            is_error(&value),
         );
         value
     }
@@ -145,6 +158,25 @@ impl SetupClientEventReporter {
         let event_name = event.as_event_name();
         let request = AgentRunClientEventRequest::timeline_event(event_name, timestamp);
         Self::post_client_event(run_id, self.ai_client.clone(), event_name, request).await;
+    }
+
+    /// Like [`Self::post_timeline_event`], with an event-specific JSON payload, posted in the
+    /// background so it never delays the run.
+    pub(crate) fn post_timeline_event_with_payload(
+        &self,
+        event: OzRunTimelineEvent,
+        payload: serde_json::Value,
+    ) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+        let event_name = event.as_event_name();
+        let request = AgentRunClientEventRequest {
+            payload: Some(AgentRunClientEventPayload::Timeline(payload)),
+            ..AgentRunClientEventRequest::timeline_event(event_name, Utc::now())
+        };
+        let post = Self::post_client_event(run_id, self.ai_client.clone(), event_name, request);
+        self.background.spawn(post).detach();
     }
 
     fn post_setup_metric_event_best_effort(
@@ -194,6 +226,7 @@ impl SetupClientEventReporter {
 pub(crate) enum OzRunTimelineEvent {
     AgentStarted,
     WorkerContainerReady,
+    SkillSourcesResolved,
 }
 
 impl OzRunTimelineEvent {
@@ -201,6 +234,7 @@ impl OzRunTimelineEvent {
         match self {
             Self::AgentStarted => "agent_started",
             Self::WorkerContainerReady => "worker_container_ready",
+            Self::SkillSourcesResolved => "skill_sources_resolved",
         }
     }
 }
@@ -243,6 +277,7 @@ pub(crate) enum SetupStep {
     EnvironmentSkillLoading,
     GlobalSkillLoading,
     SkillsDirsLoading,
+    SkillReferenceResolution,
     ConversationResumeLoading,
     ThirdPartyHarnessPreparation,
     /// Launching the harness through command startup and ACP runner initialization, including
@@ -296,7 +331,9 @@ impl SetupStep {
             // Session ACLs name the requester, who is unknown before a claim.
             | Self::SharedSessionEstablishment
             | Self::ConversationResumeLoading
-            // Pre-warming is Oz-only, so these are unreachable from a standby.
+            // Skill references are checked out with the claimed task's credentials.
+            | Self::SkillReferenceResolution
+            // Third-party harness setup needs the assigned run, so standby defers these steps.
             | Self::ThirdPartyHarnessPreparation
             | Self::ThirdPartyHarnessStart
             | Self::ThirdPartyHarnessExternalConversation
@@ -381,6 +418,9 @@ impl SetupStep {
             }
             Self::SkillsDirsLoading => {
                 span_and_name!("setup_skills_dirs_loading")
+            }
+            Self::SkillReferenceResolution => {
+                span_and_name!("setup_skill_reference_resolution")
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")

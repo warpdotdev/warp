@@ -1065,6 +1065,11 @@ type CreateGenericStringObjectOutput implements Response {
 union CreateGenericStringObjectResult = CreateGenericStringObjectOutput | UserFacingError
 
 input CreateManagedSecretInput {
+  """
+  Optional override of the provider's default API URL. Only valid for
+  LLM_PROVIDER_API_KEY secrets.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String!
   name: String!
@@ -1957,6 +1962,8 @@ type HarnessInfo {
   displayName: String!
   enabled: Boolean!
   harness: AgentHarness!
+  piVersion: String
+  piProviders: [PiProviderInfo!]
 }
 
 input HarnessInput {
@@ -1993,6 +2000,29 @@ input HarnessSettingsEntryInput {
 input HarnessSettingsInput {
   harnessConfigs: [HarnessSettingsEntryInput!]
   optOutOfNewHarnesses: Boolean
+}
+
+"""
+The transport the agent process drives a run's third-party harness over.
+"""
+enum HarnessTransport {
+  """The harness is driven over the Agent Client Protocol."""
+  ACP
+
+  """The harness is driven through a terminal."""
+  PTY
+}
+
+"""
+Why the harness is driven over a PTY although the run was dispatched over ACP, when no ACP
+adapter was found on PATH either.
+"""
+enum HarnessTransportFallbackReason {
+  """No coding CLI sidecar was mounted."""
+  NO_SIDECAR
+
+  """A sidecar was mounted but carries no ACP adapter."""
+  SIDECAR_WITHOUT_ADAPTER
 }
 
 enum HostEnablementSetting {
@@ -2373,6 +2403,12 @@ type LlmSpec {
   speed: Float!
 }
 
+"""How an LLM provider API key's endpoint is reached."""
+enum LlmEndpointKind {
+  """The provider's own API, at its default URL or a baseUrl override of it."""
+  NATIVE
+}
+
 type LlmUsageMetadata {
   creditMultiplier: Float
   requestMultiplier: Int! @deprecated(reason: "Use creditMultiplier instead")
@@ -2401,7 +2437,19 @@ type MCPTemplateVariable {
   key: String!
 }
 
+type PiProviderInfo {
+  id: String!
+  name: String!
+  apiKeySupported: Boolean!
+  unsupportedReason: String
+}
+
 type ManagedSecret {
+  """
+  For LLM_PROVIDER_API_KEY secrets, an optional override of the provider's default API
+  URL (for example, a proxy or regional endpoint). Not secret.
+  """
+  baseUrl: String
   createdAt: Time!
 
   """
@@ -2409,11 +2457,19 @@ type ManagedSecret {
   """
   description: String
 
+  """For LLM_PROVIDER_API_KEY secrets, how the key's endpoint is reached."""
+  endpointKind: LlmEndpointKind
+
   """The name of this secret. Secret names are unique for a given owner."""
   name: String!
 
   """The user or team who owns this secret."""
   owner: Space!
+
+  """
+  For LLM_PROVIDER_API_KEY secrets, the model provider the key authenticates against.
+  """
+  providerId: String
 
   """The kind of secret value."""
   type: ManagedSecretType!
@@ -2489,6 +2545,17 @@ type ManagedSecretOpenAiApiKeyValue {
   baseUrl: String
 }
 
+"""
+A managed secret value representing an API key for a model provider. The encrypted
+value carries only providerId and apiKey; baseUrl is read from the secret's metadata
+when the value is delivered to a run.
+"""
+type ManagedSecretLlmProviderApiKeyValue {
+  providerId: String!
+  apiKey: String!
+  baseUrl: String
+}
+
 """A raw, unencrypted managed secret value."""
 type ManagedSecretRawValue {
   value: String!
@@ -2508,10 +2575,11 @@ enum ManagedSecretType {
   DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
+  LLM_PROVIDER_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretLlmProviderApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""
@@ -3066,6 +3134,20 @@ type RepoResult {
   status: UserRepoAuthStatus!
 }
 
+input ReportHarnessTransportInput {
+  """Why the harness fell back to a PTY. Omitted when no fallback happened."""
+  fallbackReason: HarnessTransportFallbackReason
+
+  """The transport the harness is driven over."""
+  transport: HarnessTransport!
+}
+
+type ReportHarnessTransportOutput implements Response {
+  responseContext: ResponseContext!
+}
+
+union ReportHarnessTransportResult = ReportHarnessTransportOutput | UserFacingError
+
 input RequestContext {
   clientContext: ClientContext!
   osContext: OSContext!
@@ -3385,6 +3467,18 @@ type RootMutation {
   removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
   removeUserFromWorkspace(input: RemoveUserFromWorkspaceInput!, requestContext: RequestContext!): RemoveUserFromWorkspaceResult!
   renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
+
+  """
+  Reports the transport the agent process drives the run's third-party harness over.
+  The agent sends it at harness start, after deciding whether it can honour the ACP
+  transport the run was dispatched with or must fall back to a terminal, so the platform
+  delivers follow-ups the way the harness can receive them. It retries transient failures;
+  a report that matches the recorded transport is a no-op.
+  
+  This may only be called from within a cloud agent execution environment, with the
+  current execution's credentials.
+  """
+  reportHarnessTransport(input: ReportHarnessTransportInput!, requestContext: RequestContext!): ReportHarnessTransportResult!
   resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
   sendReferralInviteEmails(input: SendReferralInviteEmailsInput!, requestContext: RequestContext!): SendReferralInviteEmailsResult!
@@ -4526,6 +4620,11 @@ type UpdateGenericStringObjectOutput implements Response {
 union UpdateGenericStringObjectResult = UpdateGenericStringObjectOutput | UserFacingError
 
 input UpdateManagedSecretInput {
+  """
+  New base URL for an LLM_PROVIDER_API_KEY secret. If omitted, the base URL is not
+  changed. If set to null, the provider's default API URL is used.
+  """
+  baseUrl: String
   description: String
   encryptedValue: String
   name: String!

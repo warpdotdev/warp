@@ -3622,9 +3622,9 @@ impl FeaturesPageView {
                 .unwrap_or_default();
 
         // Determine the current tab behavior based on the user's keybindings.
-        *self.tab_behavior = if self.completions_keystroke.to_uppercase() == TAB_KEYSTROKE_STR {
+        *self.tab_behavior = if *self.completions_keystroke == TAB_KEYSTROKE_STR {
             TabBehavior::Completions
-        } else if self.autosuggestions_keystroke.to_uppercase() == TAB_KEYSTROKE_STR {
+        } else if *self.autosuggestions_keystroke == TAB_KEYSTROKE_STR {
             TabBehavior::Autosuggestions
         } else {
             TabBehavior::UserDefined

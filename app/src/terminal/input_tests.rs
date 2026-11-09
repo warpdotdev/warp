@@ -91,7 +91,9 @@ use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::local_tty::shell::ShellStarter;
-use crate::terminal::model::ansi::{Handler, PromptMetadata};
+use crate::terminal::model::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PromptMetadata,
+};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::blocks::{BlockListPoint, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
@@ -163,6 +165,47 @@ fn subscribe_to_execute_command_events(
         });
     });
     events
+}
+
+#[test]
+fn pending_command_waits_for_final_bootstrap_precmd() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let events = subscribe_to_execute_command_events(&mut app, &terminal);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.execute_command_or_set_pending("echo ready", ctx);
+        });
+        assert!(input.read(&app, |input, _| input.has_pending_command()));
+        assert!(events.borrow().is_empty());
+
+        terminal.update(&mut app, |terminal, ctx| {
+            {
+                let mut model = terminal.model.lock();
+                let session_id = model.block_list().active_block().session_id().unwrap();
+                let completion_metadata = CompletionMetadata::default();
+                model.command_finished(CommandFinishedValue {
+                    completion_metadata: completion_metadata.clone(),
+                    session_id: Some(session_id.as_u64()),
+                });
+                model.precmd_with_completion_metadata(PrecmdValue {
+                    completion_metadata,
+                    prompt_metadata: PromptMetadata {
+                        session_id: Some(session_id.as_u64()),
+                        ..Default::default()
+                    },
+                });
+            }
+            terminal.model_event_dispatcher().update(ctx, |_, ctx| {
+                ctx.emit(ModelEvent::BootstrapPrecmdDone);
+            });
+        });
+
+        assert!(!input.read(&app, |input, _| input.has_pending_command()));
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "echo ready");
+    });
 }
 
 #[test]

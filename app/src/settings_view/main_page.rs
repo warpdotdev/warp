@@ -43,6 +43,8 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
 use crate::server::ids::ServerId;
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::IapRoutingSettings;
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
@@ -129,6 +131,8 @@ pub enum MainPageAction {
     OpenUrl(String),
     #[cfg(not(target_family = "wasm"))]
     RefreshIapCredentials,
+    #[cfg(not(target_family = "wasm"))]
+    ToggleIapRouting,
 }
 
 impl MainPageAction {
@@ -244,6 +248,15 @@ impl TypedActionView for MainSettingsPageView {
                 IapManager::handle(ctx).update(ctx, |manager, ctx| manager.start_refresh(ctx));
                 ctx.notify();
             }
+            #[cfg(not(target_family = "wasm"))]
+            MainPageAction::ToggleIapRouting => {
+                if IapManager::as_ref(ctx).is_enabled() {
+                    IapRoutingSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        report_if_error!(settings.routing_enabled.toggle_and_save_value(ctx));
+                    });
+                    ctx.notify();
+                }
+            }
         }
     }
 }
@@ -289,6 +302,10 @@ impl MainSettingsPageView {
         #[cfg(not(target_family = "wasm"))]
         if IapManager::as_ref(ctx).is_enabled() {
             widgets.push(Box::new(IapCredentialsWidget::default()));
+            widgets.push(Box::new(IapRoutingWidget::default()));
+            ctx.subscribe_to_model(&IapRoutingSettings::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
                 if matches!(e, IapManagerEvent::StateChanged) {
@@ -1191,6 +1208,48 @@ impl SettingsWidget for IapCredentialsWidget {
                 .finish(),
         )
         .with_margin_top(VERTICAL_MARGIN)
+        .finish()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct IapRoutingWidget {
+    switch_state: SwitchStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for IapRoutingWidget {
+    type View = MainSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "iap staging routing opt in identity proxy"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        Container::new(render_body_item::<MainPageAction>(
+            "Use IAP for staging requests".to_string(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*IapRoutingSettings::as_ref(app).routing_enabled)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(MainPageAction::ToggleIapRouting);
+                })
+                .finish(),
+            None,
+        ))
+        .with_margin_top(8.)
         .finish()
     }
 }

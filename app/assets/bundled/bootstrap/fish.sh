@@ -44,6 +44,20 @@ if test -n "$WARP_PATH_APPEND"
     set -gx --path PATH "$PATH:$WARP_PATH_APPEND"
     set -e WARP_PATH_APPEND
 end
+# Direct non-root cloud containers use a private command directory when system installation fails.
+# Restore the entrypoint-provided directory's precedence after profiles reset PATH.
+if string match -q '/*' -- "$WARP_CLOUD_AGENT_FALLBACK_BIN"
+    and not string match -q '*:*' -- "$WARP_CLOUD_AGENT_FALLBACK_BIN"
+    and test -d "$WARP_CLOUD_AGENT_FALLBACK_BIN"
+    and test (command uname -s) = Linux
+    set -l runtime_path "$WARP_CLOUD_AGENT_FALLBACK_BIN"
+    for runtime_entry in $PATH
+        if test "$runtime_entry" != "$WARP_CLOUD_AGENT_FALLBACK_BIN"
+            set -a runtime_path "$runtime_entry"
+        end
+    end
+    set -gx PATH $runtime_path
+end
 
 function warp_send_json_message
     # Sends a message to the controlling terminal as a DSC control sequence.
