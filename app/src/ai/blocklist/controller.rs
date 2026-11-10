@@ -45,7 +45,9 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestRow};
+use super::queued_query::{
+    QueuedQueryEvent, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestRow,
+};
 use super::{BlocklistAIInputModel, ResponseStreamId, hooks};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
