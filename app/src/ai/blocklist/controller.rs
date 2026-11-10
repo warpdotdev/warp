@@ -1161,17 +1161,15 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.turn_in_flight(conversation_id, ctx) {
-            return;
-        }
         let is_this_surfaces_conversation = self.native_prompt_conversation_id
             == Some(conversation_id)
             || BlocklistAIHistoryModel::as_ref(ctx)
                 .active_conversation_id(self.terminal_surface_id)
                 == Some(conversation_id);
-        if is_this_surfaces_conversation {
+        if is_this_surfaces_conversation && !self.turn_in_flight(conversation_id, ctx) {
             self.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
         }
+        hooks::turn::end_follow_up_wait(conversation_id, ctx);
         if self.turn_in_flight(conversation_id, ctx) {
             return;
         }
@@ -3579,7 +3577,10 @@ impl BlocklistAIController {
                             || matches!(
                                 conversation.status(),
                                 ConversationStatus::Success | ConversationStatus::WaitingForEvents
-                            ))
+                            )
+                            // The status is held in progress so the conversation never looks
+                            // finished between a stop hook and the follow-up it asked for.
+                            || hooks::turn::is_awaiting_follow_up(conversation_id, ctx))
                 })
     }
 

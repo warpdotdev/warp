@@ -85,6 +85,10 @@ pub(crate) struct TurnStops {
     /// Conversations whose stop hooks finished while a prompt's own hooks were still running.
     /// That prompt owns the status if it goes out; if it does not, the turn is still unfinished.
     deferred: HashSet<AIConversationId>,
+    /// Conversations whose stop hooks asked for a follow-up and whose turn the controller has not
+    /// finished yet. Their status still says in progress, but nothing of the turn is left to
+    /// interrupt.
+    awaiting_follow_up: HashSet<AIConversationId>,
 }
 
 impl TurnStops {
@@ -92,6 +96,7 @@ impl TurnStops {
         self.cancel(conversation_id);
         self.chains.remove(&conversation_id);
         self.deferred.remove(&conversation_id);
+        self.awaiting_follow_up.remove(&conversation_id);
     }
 
     /// Drops the held turn and tells its hooks to stop.
@@ -234,7 +239,8 @@ pub(crate) enum TurnStopResolution {
     /// Mark the turn successful.
     Finalize,
     /// A follow-up prompt was queued for the conversation. Send the queue's head if the
-    /// conversation is idle, and mark the turn successful if nothing is left running.
+    /// conversation is idle, call [`end_follow_up_wait`], and mark the turn successful if
+    /// nothing is left running.
     FollowUpQueued,
 }
 
@@ -292,10 +298,34 @@ pub(crate) fn resolve_turn_stop(
         return TurnStopResolution::Dropped;
     }
     if queued {
+        runtime.update(ctx, |runtime, _| {
+            runtime.turn_stops.awaiting_follow_up.insert(conversation_id);
+        });
         TurnStopResolution::FollowUpQueued
     } else {
         TurnStopResolution::Finalize
     }
+}
+
+/// Whether `conversation_id`'s turn is over in all but status: its stop hooks asked for a
+/// follow-up, and the queue's head has yet to be sent and the turn marked successful.
+pub(crate) fn is_awaiting_follow_up(conversation_id: AIConversationId, ctx: &AppContext) -> bool {
+    HookRuntime::is_installed(ctx)
+        && HookRuntime::as_ref(ctx)
+            .turn_stops
+            .awaiting_follow_up
+            .contains(&conversation_id)
+}
+
+/// Ends the wait [`resolve_turn_stop`] began when it queued a follow-up, whether or not the
+/// queue's head could be sent.
+pub(crate) fn end_follow_up_wait(conversation_id: AIConversationId, ctx: &mut AppContext) {
+    if !HookRuntime::is_installed(ctx) {
+        return;
+    }
+    HookRuntime::handle(ctx).update(ctx, |runtime, _| {
+        runtime.turn_stops.awaiting_follow_up.remove(&conversation_id);
+    });
 }
 
 /// Logs when a stop hook's follow-up is still at the head of `conversation_id`'s queue after
