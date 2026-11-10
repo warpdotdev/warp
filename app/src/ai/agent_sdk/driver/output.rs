@@ -76,10 +76,10 @@ pub mod text {
                             "Command was not allowed to run due to presence on denylist"
                         )
                     }
-                    RequestCommandOutputResult::HookDenied { reason, .. } => {
-                        writeln!(w, "Command was denied by an agent hook: {reason}")
-                    }
                 },
+                AIAgentActionResultType::DeniedByHook { reason } => {
+                    writeln!(w, "Denied by an agent hook: {reason}")
+                }
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
                         writeln!(w, "Command is still running...")
@@ -891,19 +891,15 @@ pub mod json {
                             "Command was not allowed to run due to presence on denylist",
                         ),
                     }),
-                    RequestCommandOutputResult::HookDenied { reason, .. } => {
-                        Some(JsonMessage::ToolError {
-                            error: Cow::Owned(format!(
-                                "Command was denied by an agent hook: {reason}"
-                            )),
-                        })
-                    }
                     RequestCommandOutputResult::TerminalBusy { .. } => {
                         Some(JsonMessage::ToolError {
                             error: Cow::Owned(result.to_string()),
                         })
                     }
                 },
+                AIAgentActionResultType::DeniedByHook { .. } => Some(JsonMessage::ToolError {
+                    error: Cow::Owned(result.to_string()),
+                }),
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
                         Some(JsonMessage::ToolResult(JsonToolResult::RunCommand(

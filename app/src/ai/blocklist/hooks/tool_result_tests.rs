@@ -112,9 +112,7 @@ fn a_hook_denial_is_observed_once_as_a_failure() {
         });
         assert!(matches!(
             result.as_deref().map(|result| &result.result),
-            Some(AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::HookDenied { .. }
-            ))
+            Some(AIAgentActionResultType::DeniedByHook { .. })
         ));
         assert_eq!(
             observed(&app),

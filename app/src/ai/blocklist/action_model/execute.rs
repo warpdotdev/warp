@@ -663,7 +663,9 @@ impl BlocklistAIActionExecutor {
                 &PermissionFloors::default(),
             )
         {
-            let result = pre_tool::denied_result(&action.action, &reason.text);
+            let result = AIAgentActionResultType::DeniedByHook {
+                reason: reason.text.clone(),
+            };
             HookRuntime::as_ref(ctx).messenger().notify(HookNotice {
                 conversation_id,
                 action_id: Some(action.id.clone()),

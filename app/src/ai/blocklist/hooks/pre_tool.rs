@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::{DispatchOutcome, HookBoundary, HookExecutionHost, MergedEffects};
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -11,9 +10,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use super::HookRuntime;
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-};
+use crate::ai::agent::{AIAgentAction, AIAgentActionId};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// What a cached verdict is keyed by. Action ids are only unique within a conversation, and the
@@ -84,50 +81,6 @@ pub(crate) enum PreToolLookup {
 pub(crate) struct Resumption {
     pub conversation_id: AIConversationId,
     pub is_user_initiated: bool,
-}
-
-/// The result an action finishes with when a hook denies it. Only shell commands have a result
-/// that carries the hook's reason; every other family finishes with its cancelled result and the
-/// reason reaches the user through a notice.
-pub(crate) fn denied_result(action: &AIAgentActionType, reason: &str) -> AIAgentActionResultType {
-    match action {
-        AIAgentActionType::RequestCommandOutput { command, .. } => {
-            AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
-                command: command.clone(),
-                reason: reason.to_owned(),
-            })
-        }
-        AIAgentActionType::WriteToLongRunningShellCommand { .. }
-        | AIAgentActionType::ReadFiles(_)
-        | AIAgentActionType::UploadArtifact(_)
-        | AIAgentActionType::SearchCodebase(_)
-        | AIAgentActionType::RequestFileEdits { .. }
-        | AIAgentActionType::Grep { .. }
-        | AIAgentActionType::FileGlob { .. }
-        | AIAgentActionType::FileGlobV2 { .. }
-        | AIAgentActionType::ReadMCPResource { .. }
-        | AIAgentActionType::CallMCPTool { .. }
-        | AIAgentActionType::SuggestNewConversation { .. }
-        | AIAgentActionType::SuggestPrompt(_)
-        | AIAgentActionType::InitProject
-        | AIAgentActionType::OpenCodeReview
-        | AIAgentActionType::ReadDocuments(_)
-        | AIAgentActionType::EditDocuments(_)
-        | AIAgentActionType::CreateDocuments(_)
-        | AIAgentActionType::ReadShellCommandOutput { .. }
-        | AIAgentActionType::UseComputer(_)
-        | AIAgentActionType::InsertCodeReviewComments { .. }
-        | AIAgentActionType::RequestComputerUse(_)
-        | AIAgentActionType::StartRecording { .. }
-        | AIAgentActionType::StopRecording { .. }
-        | AIAgentActionType::ReadSkill(_)
-        | AIAgentActionType::FetchConversation { .. }
-        | AIAgentActionType::SendMessageToAgent { .. }
-        | AIAgentActionType::TransferShellCommandControlToUser { .. }
-        | AIAgentActionType::AskUserQuestion { .. }
-        | AIAgentActionType::RunAgents(_)
-        | AIAgentActionType::WaitForEvents { .. } => action.cancelled_result(),
-    }
 }
 
 /// Sets the cancel flag if the dispatch future is dropped before it finishes, so a runner that
