@@ -112,7 +112,9 @@ pub enum AIAgentActionResultType {
 
     /// An agent hook denied the action before it ran. Unlike the other variants this is not tied
     /// to one tool: any action can finish with it. `reason` is shown to the model.
-    DeniedByHook { reason: String },
+    DeniedByHook {
+        reason: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ReadFilesFailedFile {
