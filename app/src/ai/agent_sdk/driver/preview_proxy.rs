@@ -87,7 +87,7 @@ struct Client {
 fn classify(error: anyhow::Error) -> Error {
     if error
         .downcast_ref::<HttpStatusError>()
-        .is_some_and(|error| matches!(error.status, 401 | 403 | 404 | 410))
+        .is_some_and(|error| matches!(error.status, 401 | 403 | 404 | 409 | 410))
     {
         Error::Fenced
     } else {

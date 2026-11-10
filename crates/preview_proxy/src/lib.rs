@@ -17,7 +17,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +25,8 @@ use tokio_util::sync::CancellationToken;
 pub mod protocol;
 
 pub const TOKEN_HEADER: &str = "x-warp-preview-proxy-token";
+pub const ACTION_HEADER: &str = "x-warp-preview-proxy-action";
+pub const RELOCATE_PATH: &str = "/__warp_preview_proxy/relocate";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CONNECTIONS: usize = 256;
@@ -34,12 +36,18 @@ type Body = BoxBody<Bytes, hyper::Error>;
 struct Routing {
     token: String,
     listener_port: u16,
+    relocate: Option<mpsc::Sender<u16>>,
 }
 
 impl Routing {
+    fn authenticated(&self, headers: &HeaderMap) -> bool {
+        headers
+            .get(TOKEN_HEADER)
+            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(self.token.as_bytes())))
+    }
+
     fn resolve(&self, headers: &HeaderMap) -> Option<u16> {
-        let token = headers.get(TOKEN_HEADER)?;
-        if !bool::from(token.as_bytes().ct_eq(self.token.as_bytes())) {
+        if !self.authenticated(headers) {
             return None;
         }
         let port = headers
@@ -70,6 +78,14 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(token: String, deadline: Option<Instant>) -> Result<Self> {
+        Self::bind_managed(token, deadline, None).await
+    }
+
+    pub async fn bind_managed(
+        token: String,
+        deadline: Option<Instant>,
+        relocate: Option<mpsc::Sender<u16>>,
+    ) -> Result<Self> {
         if token.len() < 32 || token.len() > 128 || HeaderValue::from_str(&token).is_err() {
             bail!("invalid preview proxy token");
         }
@@ -80,6 +96,7 @@ impl Proxy {
         let routing = Arc::new(Routing {
             token,
             listener_port: port,
+            relocate,
         });
         let cancel = CancellationToken::new();
         let task = tokio::spawn(serve(
@@ -161,6 +178,22 @@ async fn forward(
     cancel: CancellationToken,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Result<Response<Body>, Infallible> {
+    if let Some(action) = request.headers().get(ACTION_HEADER) {
+        if !routing.authenticated(request.headers())
+            || action != "relocate"
+            || request.method() != Method::POST
+            || request.uri() != RELOCATE_PATH
+        {
+            return Ok(empty(StatusCode::FORBIDDEN));
+        }
+        let Some(relocate) = &routing.relocate else {
+            return Ok(empty(StatusCode::FORBIDDEN));
+        };
+        return Ok(empty(match relocate.try_send(routing.listener_port) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => StatusCode::ACCEPTED,
+            Err(mpsc::error::TrySendError::Closed(_)) => StatusCode::SERVICE_UNAVAILABLE,
+        }));
+    }
     let Some(app_port) = routing.resolve(request.headers()) else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
