@@ -31,7 +31,7 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::{IncludedUsagePoolView, is_scale_workspace};
+use super::billing_and_usage::included_usage_pool::IncludedUsagePoolView;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -921,8 +921,7 @@ impl BillingAndUsagePageV2View {
         let theme = appearance.theme();
         let ai_model = AIRequestUsageModel::as_ref(app);
 
-        let has_base_credits = ai_model.request_limit() > 0
-            && !is_scale_workspace(UserWorkspaces::as_ref(app).current_workspace());
+        let has_base_credits = ai_model.request_limit() > 0;
 
         let grants = ai_model.bonus_grants();
         let workspaces = UserWorkspaces::as_ref(app);
