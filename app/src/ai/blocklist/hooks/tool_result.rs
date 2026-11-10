@@ -22,7 +22,6 @@ use warp_core::command::ExitCode;
 use warp_terminal::model::BlockId;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
-use super::denied_result::DENIED_BY_HOOK_PREFIX;
 use super::envelope::{EnvelopeSite, envelope_for_tool_failure, envelope_for_tool_result};
 use super::{HookRuntime, executes_tool_calls_locally};
 use crate::ai::agent::conversation::AIConversationId;
@@ -240,7 +239,6 @@ fn shell_progress(result: &AIAgentActionResultType) -> ShellProgress {
             | RequestCommandOutputResult::ShellRecovered { .. }
             | RequestCommandOutputResult::CancelledBeforeExecution
             | RequestCommandOutputResult::Denylisted { .. }
-            | RequestCommandOutputResult::HookDenied { .. }
             | RequestCommandOutputResult::TerminalBusy { .. },
         )
         | AIAgentActionResultType::ReadShellCommandOutput(
@@ -284,14 +282,15 @@ fn shell_progress(result: &AIAgentActionResultType) -> ShellProgress {
         | AIAgentActionResultType::SendMessageToAgent(_)
         | AIAgentActionResultType::AskUserQuestion(_)
         | AIAgentActionResultType::RunAgents(_)
-        | AIAgentActionResultType::WaitForEvents(_) => ShellProgress::None,
+        | AIAgentActionResultType::WaitForEvents(_)
+        | AIAgentActionResultType::DeniedByHook { .. } => ShellProgress::None,
     }
 }
 
 /// Whether the tool ran and this is what it returned. A failing exit code, an error the tool
 /// reported, or a shell that ended under the command are all answers from a tool that ran. A
 /// cancelled result, a result Warp produced because the tool was not allowed to start, and a
-/// reason an agent hook wrote are not.
+/// denial by an agent hook are not.
 pub(crate) fn ran_and_returned(result: &AIAgentActionResultType) -> bool {
     if result.is_cancelled() && !result.is_cancelled_during_requested_command_execution() {
         return false;
@@ -303,10 +302,10 @@ pub(crate) fn ran_and_returned(result: &AIAgentActionResultType) -> bool {
             | RequestCommandOutputResult::ShellRecovered { .. } => true,
             RequestCommandOutputResult::CancelledBeforeExecution
             | RequestCommandOutputResult::Denylisted { .. }
-            | RequestCommandOutputResult::HookDenied { .. }
             | RequestCommandOutputResult::TerminalBusy { .. } => false,
         },
-        AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { .. }) => false,
+        AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { .. })
+        | AIAgentActionResultType::DeniedByHook { .. } => false,
         AIAgentActionResultType::RunAgents(
             RunAgentsResult::Launched { .. }
             | RunAgentsResult::Failure { .. }
@@ -340,15 +339,8 @@ pub(crate) fn ran_and_returned(result: &AIAgentActionResultType) -> bool {
         | AIAgentActionResultType::FetchConversation(_)
         | AIAgentActionResultType::SendMessageToAgent(_)
         | AIAgentActionResultType::AskUserQuestion(_)
-        | AIAgentActionResultType::WaitForEvents(_) => !is_hook_denial(result),
+        | AIAgentActionResultType::WaitForEvents(_) => true,
     }
-}
-
-/// Whether a failed result is the one an agent hook's denial finishes the action with. The
-/// families without a result made for this carry the reason in their error text, behind a fixed
-/// prefix. Only a failed result is rendered to look for it; a success can be large.
-fn is_hook_denial(result: &AIAgentActionResultType) -> bool {
-    result.is_failed() && result.to_string().contains(DENIED_BY_HOOK_PREFIX)
 }
 
 #[cfg(test)]
