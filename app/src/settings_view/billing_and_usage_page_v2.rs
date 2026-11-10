@@ -211,7 +211,7 @@ struct UsageHistoryState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum BalanceAmount {
     Credits(i64),
-    FractionalCredits(f64),
+    RoundedCredits(f64),
     /// US cents, shown as dollars.
     Cents(f64),
 }
@@ -220,11 +220,12 @@ impl BalanceAmount {
     fn format(self) -> String {
         match self {
             BalanceAmount::Credits(credits) => credits.separate_with_commas(),
-            BalanceAmount::FractionalCredits(credits) => {
-                if credits > 0.0 && credits < 0.01 {
-                    "<0.01".to_string()
+            BalanceAmount::RoundedCredits(credits) => {
+                let rounded = credits.round() as i64;
+                if credits > 0.0 && rounded == 0 {
+                    "<1".to_string()
                 } else {
-                    format!("{credits:.2}")
+                    rounded.separate_with_commas()
                 }
             }
             BalanceAmount::Cents(cents) => format_dollars(cents as f32),
@@ -234,7 +235,7 @@ impl BalanceAmount {
     /// Names the pool a balance card shows, e.g. `Team credits` or `Team usage`.
     fn pool_label(self, pool: &str) -> String {
         match self {
-            BalanceAmount::Credits(_) | BalanceAmount::FractionalCredits(_) => {
+            BalanceAmount::Credits(_) | BalanceAmount::RoundedCredits(_) => {
                 format!("{pool} credits")
             }
             BalanceAmount::Cents(_) => format!("{pool} usage"),

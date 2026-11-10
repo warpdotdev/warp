@@ -12,7 +12,7 @@ fn now() -> DateTime<Utc> {
 }
 
 #[test]
-fn included_pool_credit_display_preserves_server_fractions_without_currency_conversion() {
+fn included_pool_credit_display_rounds_exact_remainder_without_currency_conversion() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
@@ -24,9 +24,31 @@ fn included_pool_credit_display_preserves_server_fractions_without_currency_conv
             );
             let text = card.debug_text_content().unwrap_or_default();
             assert!(text.contains("Included team credits"));
-            assert!(text.contains("984.62"));
-            assert!(text.contains("/ 1234.75 remaining"));
+            assert!(text.contains("985"));
+            assert!(text.contains("/ 1,235 remaining"));
             assert!(!text.contains('$'));
+        });
+    });
+}
+
+#[test]
+fn included_pool_rounds_after_subtraction_and_preserves_positive_remainders() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(|ctx| {
+            let mut info = pool(8750.0);
+            info.included_usage_credits = 1.49;
+            for (used, expected) in [(1.01, "<1 / 1 remaining"), (1.49, "0 / 1 remaining")] {
+                info.usage_credits_used_since_last_refresh = used;
+                let card = render_card(
+                    Some(&info),
+                    now(),
+                    UsageDisplayUnit::Credits,
+                    Appearance::as_ref(ctx),
+                );
+                let text = card.debug_text_content().unwrap_or_default();
+                assert!(text.contains(expected), "{text}");
+            }
         });
     });
 }
@@ -87,8 +109,8 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             );
             let text = card.debug_text_content().unwrap_or_default();
             assert!(text.contains("Included team credits"));
-            assert!(text.contains("0.00"));
-            assert!(text.contains("/ 1234.75 remaining"));
+            assert!(text.contains("0 / 1,235 remaining"));
+            assert!(text.contains("/ 1,235 remaining"));
         });
     });
 }

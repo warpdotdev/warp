@@ -136,7 +136,17 @@ fn bucket_balance_is_dollars_only_when_shown_in_dollars_with_every_grant_priced(
 #[test]
 fn balance_amount_formats_in_its_unit() {
     assert_eq!(BalanceAmount::Credits(1_500).format(), "1,500");
-    assert_eq!(BalanceAmount::FractionalCredits(0.001).format(), "<0.01");
+    for (credits, expected) in [
+        (0.0, "0"),
+        (0.001, "<1"),
+        (0.49, "<1"),
+        (0.5, "1"),
+        (0.6, "1"),
+        (984.625, "985"),
+        (1234.75, "1,235"),
+    ] {
+        assert_eq!(BalanceAmount::RoundedCredits(credits).format(), expected);
+    }
     assert_eq!(
         BalanceAmount::Credits(1_500).pool_label("Team"),
         "Team credits"

@@ -126,8 +126,8 @@ fn render_card(
         } => {
             let (remaining, monthly) = match unit {
                 UsageDisplayUnit::Credits => (
-                    BalanceAmount::FractionalCredits(remaining_credits),
-                    BalanceAmount::FractionalCredits(monthly_credits),
+                    BalanceAmount::RoundedCredits(remaining_credits),
+                    BalanceAmount::Credits(monthly_credits.round() as i64),
                 ),
                 UsageDisplayUnit::Dollars => (
                     BalanceAmount::Cents(remaining_cents),
