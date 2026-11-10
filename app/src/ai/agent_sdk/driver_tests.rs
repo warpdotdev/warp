@@ -103,7 +103,6 @@ fn setup_timeout_does_not_retain_a_potentially_running_command() {
     });
 }
 
-
 #[test]
 fn driver_keeps_uninterpreted_factory_experiments() {
     App::test((), |mut app| async move {
@@ -1437,7 +1436,7 @@ fn split_loading_env_loads_all_global_loads_subset() {
 #[test]
 fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
     App::test((), |mut app| async move {
-        let _legacy = FeatureFlag::CwdScopedCloudSkills.override_enabled(false);
+        let legacy_override = FeatureFlag::CwdScopedCloudSkills.override_enabled(false);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1545,10 +1544,14 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
             "'deploy' should appear exactly once; got: {skill_names:?}"
         );
 
+        drop(legacy_override);
         let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
         let scoped_names = SkillManager::handle(&app).read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(None, ctx)
-                .into_iter().map(|skill| skill.name).collect::<Vec<_>>()
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|skill| skill.name)
+                .collect::<Vec<_>>()
         });
         assert_eq!(scoped_names, ["deploy"]);
     });
@@ -1598,17 +1601,29 @@ fn factory_reference_folders_remain_home_skills_across_cwd_changes() {
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
         super::agent_setup::load_skills_dirs(&foreground).await;
-        for cwd in [&working_dir, &working_dir.join("repo"), &working_dir.join("repo/nested")] {
+        for cwd in [
+            &working_dir,
+            &working_dir.join("repo"),
+            &working_dir.join("repo/nested"),
+        ] {
             let skills = SkillManager::handle(&app).read(&app, |manager, ctx| {
                 assert!(manager.skill_paths_by_name("not-selected").is_empty());
                 manager.get_skills_for_working_directory(
-                    Some(&LocalOrRemotePath::Local(cwd.clone())), ctx)
+                    Some(&LocalOrRemotePath::Local(cwd.clone())),
+                    ctx,
+                )
             });
-            let reference = skills.iter().find(|skill| skill.name == "reference").unwrap();
+            let reference = skills
+                .iter()
+                .find(|skill| skill.name == "reference")
+                .unwrap();
             assert_eq!(reference.scope, SkillScope::Home);
-            assert_eq!(reference.reference, SkillReference::Path(
-                LocalOrRemotePath::Local(
-                    generated.join("reference/SKILL.md"))));
+            assert_eq!(
+                reference.reference,
+                SkillReference::Path(LocalOrRemotePath::Local(
+                    generated.join("reference/SKILL.md")
+                ))
+            );
         }
     });
 }
