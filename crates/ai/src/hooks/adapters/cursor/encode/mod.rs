@@ -197,8 +197,8 @@ fn failure_type(result: &AIAgentActionResultType) -> &'static str {
         result,
         AIAgentActionResultType::RequestCommandOutput(
             RequestCommandOutputResult::Denylisted { .. }
-                | RequestCommandOutputResult::HookDenied { .. }
         ) | AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { .. })
+            | AIAgentActionResultType::DeniedByHook { .. }
     );
     if permission_denied {
         "permission_denied"

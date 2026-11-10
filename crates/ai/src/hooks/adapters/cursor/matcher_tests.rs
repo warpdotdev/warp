@@ -243,10 +243,9 @@ fn shell_events_match_the_command_text_and_only_shell_commands() {
     );
     let denied = tool_failure(
         shell_action("rm -rf /"),
-        AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
-            command: "rm -rf /".to_owned(),
+        AIAgentActionResultType::DeniedByHook {
             reason: "no".to_owned(),
-        }),
+        },
         None,
     );
     assert!(

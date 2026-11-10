@@ -94,9 +94,6 @@ pub(super) fn result_view(result: &AIAgentActionResultType) -> Value {
             RequestCommandOutputResult::Denylisted { command } => {
                 json!({ "kind": "denylisted", "command": command })
             }
-            RequestCommandOutputResult::HookDenied { command, reason } => {
-                json!({ "kind": "hook_denied", "command": command, "reason": reason })
-            }
             RequestCommandOutputResult::TerminalBusy { command, block_id } => json!({
                 "kind": "terminal_busy",
                 "command": command,
@@ -538,6 +535,9 @@ pub(super) fn result_view(result: &AIAgentActionResultType) -> Value {
             WaitForEventsResult::Completed => json!({ "kind": "completed" }),
             WaitForEventsResult::Cancelled => json!({ "kind": "cancelled" }),
         },
+        AIAgentActionResultType::DeniedByHook { reason } => {
+            json!({ "kind": "denied_by_hook", "reason": reason })
+        }
     }
 }
 
