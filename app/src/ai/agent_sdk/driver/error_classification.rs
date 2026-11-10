@@ -363,6 +363,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 },
             )
         }
+        AgentDriverError::HarnessConversationSaveFailed { detail, .. } => {
+            let mut platform_error =
+                PlatformErrorInfo::new(PlatformErrorCode::InternalError, false);
+            platform_error.detail = Some(detail.clone());
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate {
+                    message: error.to_string(),
+                    error_code: Some(PlatformErrorCode::InternalError),
+                    platform_error: Some(Box::new(platform_error)),
+                },
+            )
+        }
         AgentDriverError::HarnessSetupFailed { harness, reason } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

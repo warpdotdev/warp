@@ -115,6 +115,7 @@ mod error_classification;
 mod failure_output;
 pub(crate) mod git_credentials;
 pub(crate) mod harness;
+mod harness_outcome;
 mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
@@ -1305,6 +1306,8 @@ pub enum AgentDriverError {
         exit_code: i32,
         output: Option<String>,
     },
+    #[error("Harness '{harness}' conversation could not be saved. Follow-ups may be unavailable.")]
+    HarnessConversationSaveFailed { harness: String, detail: String },
     #[error("Harness '{harness}' setup failed: {reason}")]
     HarnessSetupFailed { harness: String, reason: String },
     #[error("Harness '{harness}' config setup failed")]
@@ -3526,14 +3529,12 @@ impl AgentDriver {
         };
         // Final save after the command finishes.
         log::debug!("Triggering final save of harness conversation data");
-        let final_save_succeeded = match runner.finalize_saves(foreground).await {
-            Ok(()) => true,
-            Err(_) => {
-                log::warn!("Harness final conversation save failed");
-                false
-            }
-        };
-        let cleanup_disposition = if final_save_succeeded
+        let final_save_result = runner.finalize_saves(foreground).await.map_err(|error| {
+            let error = harness_outcome::final_save_error(&harness_name, error);
+            log::warn!("Harness final conversation save failed: {error:?}");
+            error
+        });
+        let cleanup_disposition = if final_save_result.is_ok()
             && detected_runtime_failure.is_none()
             && matches!(command_result.as_ref(), Ok(exit_code) if exit_code.was_successful())
         {
@@ -3549,27 +3550,13 @@ impl AgentDriver {
             report_error!(err);
         }
 
-        // A runtime failure detected mid-run takes precedence over the
-        // harness's own exit code: surface the actionable detail rather
-        // than a generic "exit code N".
-        if let Some(error) = detected_runtime_failure {
-            return Err(AgentDriverError::HarnessRuntimeFailureDetected {
-                harness: harness_name,
-                pattern: error.pattern,
-                excerpt: error.excerpt,
-            });
-        }
-
-        let exit_code = command_result?;
-        log::debug!("Agent harness exited with status {exit_code}");
-        if exit_code.was_successful() {
-            Ok(())
-        } else {
-            Err(AgentDriverError::HarnessCommandFailed {
-                exit_code: exit_code.value(),
-                output: failure_output,
-            })
-        }
+        harness_outcome::finish_harness_run(
+            harness_name,
+            command_result,
+            failure_output,
+            detected_runtime_failure,
+            final_save_result,
+        )
     }
 
     async fn fetch_harness_failure_output(
@@ -3726,8 +3713,9 @@ impl AgentDriver {
             return;
         };
         Self::force_kill_harness(foreground).await;
-        if runner.finalize_saves(foreground).await.is_err() {
-            log::warn!("Harness final save after interruption failed");
+        if let Err(error) = runner.finalize_saves(foreground).await {
+            let error = harness_outcome::final_save_error(runner.harness_name(), error);
+            log::warn!("Harness final save after interruption failed: {error:?}");
         }
     }
 
