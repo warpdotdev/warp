@@ -17,6 +17,8 @@ fn with_home(
     }
     let home = tempfile::tempdir()?;
     let mut command = Command::new(std::env::current_exe()?);
+    #[cfg(windows)]
+    command.creation_flags(0);
     command
         .args([
             "--exact",
@@ -323,7 +325,14 @@ fn child_environment_removes_github_authentication() -> Result<()> {
             assert_eq!(env.get(OsStr::new("GITHUB_TOKEN")), Some(&OsString::new()));
             assert_eq!(
                 env.get(OsStr::new("GH_CONFIG_DIR")),
-                Some(&home.join(".warp/github-git/task/gh").into_os_string())
+                Some(
+                    &home
+                        .join(".warp")
+                        .join("github-git")
+                        .join("task")
+                        .join("gh")
+                        .into_os_string()
+                )
             );
             Ok(())
         },
