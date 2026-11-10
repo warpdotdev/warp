@@ -53,7 +53,8 @@ use super::{HookRuntime, RunIdentity, RunSurface};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, CancellationReason,
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, CancellationReason,
 };
 use crate::ai::agent_sdk::driver::hooks::{HookRunOptions, write_diagnostic, write_notice};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
@@ -413,16 +414,30 @@ async fn wait_until_blocked(
     .await;
 }
 
-fn hook_denied_reason(result: &AIAgentActionResultType) -> Option<&str> {
-    if let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
-        reason,
-        ..
-    }) = result
-    {
+fn denied_by_hook_reason(result: &AIAgentActionResultType) -> Option<&str> {
+    if let AIAgentActionResultType::DeniedByHook { reason } = result {
         Some(reason)
     } else {
         None
     }
+}
+
+/// What `result` sends the server as the result of `action`.
+fn wire_result(
+    action: &AIAgentAction,
+    result: AIAgentActionResultType,
+) -> Option<api::request::input::tool_call_result::Result> {
+    let wire = api::request::input::user_inputs::user_input::Input::try_from(AIAgentActionResult {
+        id: action.id.clone(),
+        task_id: action.task_id.clone(),
+        result,
+    })
+    .expect("the result reaches the wire");
+    let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) = wire else {
+        panic!("a tool call result on the wire");
+    };
+    assert_eq!(wire.tool_call_id, action.id.to_string());
+    wire.result
 }
 
 fn line_count(path: &Path) -> usize {
@@ -597,7 +612,7 @@ fi"#,
         let deploy = shell_action("deploy", "deploy production");
         queue(&mut app, &model, conversation, vec![deploy.clone()]);
         let result = finished_result(&mut app, &model, &deploy).await;
-        let reason = hook_denied_reason(&result).expect("the ask became a denial");
+        let reason = denied_by_hook_reason(&result).expect("the ask became a denial");
         assert!(reason.starts_with(APPROVAL_UNAVAILABLE_PREFIX), "{reason}");
         assert!(
             reason.contains("Deploys need a person to approve them."),
@@ -615,7 +630,7 @@ fi"#,
         });
         fs::write(policy.join("release-go"), "").expect("release the hook");
         let result = finished_result(&mut app, &model, &release).await;
-        assert_eq!(hook_denied_reason(&result), Some("Releases are frozen."));
+        assert_eq!(denied_by_hook_reason(&result), Some("Releases are frozen."));
 
         // From here the profile asks before running commands (the posture was read when the run
         // pinned, so the project hooks stay active). A headless run refuses what Warp would ask
@@ -642,7 +657,7 @@ fi"#,
         let push = shell_action("push", "git push --force origin main");
         queue(&mut app, &model, auto_approving, vec![push.clone()]);
         let result = finished_result(&mut app, &model, &push).await;
-        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_PUSH_REASON));
+        assert_eq!(denied_by_hook_reason(&result), Some(SAMPLE_PUSH_REASON));
     });
 }
 
@@ -678,7 +693,7 @@ printf '{"permission":"deny","agent_message":"The nested project allows no shell
             vec![delete.clone(), enter.clone(), list.clone()],
         );
         let result = finished_result(&mut app, &model, &delete).await;
-        assert_eq!(hook_denied_reason(&result), Some(SAMPLE_RM_REASON));
+        assert_eq!(denied_by_hook_reason(&result), Some(SAMPLE_RM_REASON));
 
         // The outer project allows `cd`, and Warp runs it on its own. The mock terminal never
         // reports it finished, so the test moves the session the way the shell's prompt would and
@@ -689,7 +704,7 @@ printf '{"permission":"deny","agent_message":"The nested project allows no shell
 
         let result = finished_result(&mut app, &model, &list).await;
         assert_eq!(
-            hook_denied_reason(&result),
+            denied_by_hook_reason(&result),
             Some("The nested project allows no shell commands."),
             "the third command was judged by the nested project's file"
         );
@@ -950,7 +965,7 @@ fn stale_registry_revision() {
 
         let result = finished_result(&mut app, &model, &action).await;
         assert_eq!(
-            hook_denied_reason(&result),
+            denied_by_hook_reason(&result),
             Some("denied on run 2"),
             "the first verdict was dropped and the hook ran again"
         );
@@ -1008,7 +1023,7 @@ fn a_pinned_hook_file_touch_keeps_the_verdict_in_flight() {
 
         let result = finished_result(&mut app, &model, &action).await;
         assert_eq!(
-            hook_denied_reason(&result),
+            denied_by_hook_reason(&result),
             Some("denied on run 1"),
             "the verdict in flight stands"
         );
@@ -1302,10 +1317,10 @@ fn protected_hook_paths() {
     }
 }
 
-/// §11 "deny reason reaches the wire": the project's shell denial carries the script's own text
-/// into `permission_denied.hook_denied.reason`. A tool with no text slot in its wire result
-/// (`InitProject`) denied by a `preToolUse` hook finishes with its cancelled result and reports
-/// the reason through a `Denied` notice.
+/// §11 "deny reason reaches the wire": a hook's denial carries the script's own text into the
+/// request's `denied_by_hook.reason` whatever the tool: the project's shell denial, and a
+/// `preToolUse` denial of `InitProject`, whose own result has no text at all. The reason also
+/// reaches the user through a `Denied` notice.
 #[test]
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {
@@ -1330,22 +1345,10 @@ printf '{"permission":"deny","agent_message":"Project setup is handled by the pl
         let rm = shell_action("rm", "rm -rf build");
         queue(&mut app, &model, harness.conversation_id, vec![rm.clone()]);
         let result = finished_result(&mut app, &model, &rm).await;
-        let AIAgentActionResultType::RequestCommandOutput(shell_result) = result else {
-            panic!("a shell result: {result:?}");
-        };
-        let wire = api::request::input::tool_call_result::Result::try_from(shell_result)
-            .expect("a hook denial reaches the wire");
-        let api::request::input::tool_call_result::Result::RunShellCommand(shell) = wire else {
-            panic!("a shell result on the wire");
-        };
-        let Some(api::run_shell_command_result::Result::PermissionDenied(denied)) = shell.result
-        else {
-            panic!("a permission denial on the wire");
-        };
         assert_eq!(
-            denied.reason,
-            Some(api::permission_denied::Reason::HookDenied(
-                api::permission_denied::HookDenied {
+            wire_result(&rm, result),
+            Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                api::DeniedByHook {
                     reason: SAMPLE_RM_REASON.to_owned(),
                 }
             ))
@@ -1355,7 +1358,18 @@ printf '{"permission":"deny","agent_message":"Project setup is handled by the pl
         let init = init_project_action("init");
         queue(&mut app, &model, conversation, vec![init.clone()]);
         let result = finished_result(&mut app, &model, &init).await;
-        assert_eq!(result, init.action.cancelled_result());
+        assert!(
+            result.should_trigger_request_upon_completion(),
+            "the model is told, so the turn goes on"
+        );
+        assert_eq!(
+            wire_result(&init, result),
+            Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                api::DeniedByHook {
+                    reason: "Project setup is handled by the platform team.".to_owned(),
+                }
+            ))
+        );
         let notices = harness.hooks.messenger.notices();
         assert!(
             notices.iter().any(|notice| {
