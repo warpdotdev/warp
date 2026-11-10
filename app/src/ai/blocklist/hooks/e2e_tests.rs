@@ -905,6 +905,25 @@ printf '{"permission":"deny","agent_message":"Project setup is handled by the pl
                 reason: "Project setup is handled by the platform team.".to_owned(),
             }
         );
+        let wire = api::request::input::user_inputs::user_input::Input::try_from(
+            AIAgentActionResult {
+                id: init.id.clone(),
+                task_id: init.task_id.clone(),
+                result,
+            },
+        )
+        .expect("a hook denial reaches the wire");
+        let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) = wire else {
+            panic!("a tool call result on the wire");
+        };
+        assert_eq!(
+            wire.result,
+            Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                api::DeniedByHook {
+                    reason: "Project setup is handled by the platform team.".to_owned(),
+                }
+            ))
+        );
         let notices = harness.hooks.messenger.notices();
         assert!(
             notices.iter().any(|notice| {
