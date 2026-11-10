@@ -20,8 +20,7 @@ use itertools::Itertools;
 use mockall::automock;
 #[cfg(not(target_family = "wasm"))]
 use preview_proxy::protocol::{
-    Acknowledgement as PreviewProxyAcknowledgement, Session as PreviewProxySession,
-    Snapshot as PreviewProxySnapshot, StartRequest as PreviewProxyStartRequest,
+    Session as PreviewProxySession, StartRequest as PreviewProxyStartRequest,
 };
 use prost::Message;
 use warp_core::channel::ChannelState;
@@ -1290,20 +1289,6 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: &AmbientAgentTaskId,
         request: &PreviewProxyStartRequest,
     ) -> anyhow::Result<PreviewProxySession>;
-    #[cfg(not(target_family = "wasm"))]
-    async fn poll_preview_proxy(
-        &self,
-        task_id: &AmbientAgentTaskId,
-        session: &str,
-        revision: i64,
-    ) -> anyhow::Result<PreviewProxySnapshot>;
-    #[cfg(not(target_family = "wasm"))]
-    async fn acknowledge_preview_proxy(
-        &self,
-        task_id: &AmbientAgentTaskId,
-        session: &str,
-        ack: &PreviewProxyAcknowledgement,
-    ) -> anyhow::Result<()>;
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2070,35 +2055,6 @@ impl AIClient for ServerApi {
         .json()
         .await
         .map_err(Into::into)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    async fn poll_preview_proxy(
-        &self,
-        task_id: &AmbientAgentTaskId,
-        session: &str,
-        revision: i64,
-    ) -> anyhow::Result<PreviewProxySnapshot> {
-        let session = urlencoding::encode(session);
-        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/preview-proxy/sessions/{session}/routes?after_revision={revision}"))
-            .await?.json().await.map_err(Into::into)
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    async fn acknowledge_preview_proxy(
-        &self,
-        task_id: &AmbientAgentTaskId,
-        session: &str,
-        ack: &PreviewProxyAcknowledgement,
-    ) -> anyhow::Result<()> {
-        let session = urlencoding::encode(session);
-        self.post_public_api_response_for_task(
-            task_id,
-            &format!("agent/runs/{task_id}/preview-proxy/sessions/{session}/ack"),
-            ack,
-        )
-        .await?;
-        Ok(())
     }
 
     async fn list_run_previews(

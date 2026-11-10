@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -18,9 +18,9 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::{Instant, sleep_until, timeout};
+use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 pub mod protocol;
@@ -32,140 +32,121 @@ const MAX_CONNECTIONS: usize = 256;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Route {
-    pub id: String,
-    pub generation: i64,
-    pub app_port: u16,
-    pub token: String,
+struct Routing {
+    token: String,
+    listener_port: u16,
+    routes: Mutex<HashMap<String, (u16, Instant)>>,
 }
 
-struct Listener {
-    route: Route,
+impl Routing {
+    fn resolve(&self, headers: &HeaderMap) -> Option<u16> {
+        let token = headers.get(TOKEN_HEADER)?;
+        if !bool::from(token.as_bytes().ct_eq(self.token.as_bytes())) {
+            return None;
+        }
+        let id = headers.get("x-warp-preview-id")?.to_str().ok()?;
+        if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+            return None;
+        }
+        let port = headers
+            .get("x-warp-preview-app-port")?
+            .to_str()
+            .ok()?
+            .parse::<u16>()
+            .ok()?;
+        if port < 1024 || (9277..=9282).contains(&port) || port == self.listener_port {
+            return None;
+        }
+        let now = Instant::now();
+        let mut routes = self.routes.lock().ok()?;
+        routes.retain(|_, (_, seen)| now.duration_since(*seen) < Duration::from_secs(600));
+        if let Some((cached_port, seen)) = routes.get_mut(id) {
+            if *cached_port != port {
+                return None;
+            }
+            *seen = now;
+            return Some(*cached_port);
+        }
+        if routes.len() >= 256 {
+            let oldest = routes
+                .iter()
+                .min_by_key(|(_, (_, seen))| *seen)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                routes.remove(&oldest);
+            }
+        }
+        routes.insert(id.to_owned(), (port, now));
+        Some(port)
+    }
+}
+
+pub struct Proxy {
     port: u16,
-    deadline: watch::Sender<Instant>,
     cancel: CancellationToken,
     task: JoinHandle<()>,
 }
 
-impl Drop for Listener {
+impl Drop for Proxy {
     fn drop(&mut self) {
         self.cancel.cancel();
         self.task.abort();
     }
 }
 
-pub struct Proxy {
-    listeners: HashMap<String, Listener>,
-    capacity: Arc<Semaphore>,
-}
-
-impl Default for Proxy {
-    fn default() -> Self {
-        Self {
-            listeners: HashMap::new(),
-            capacity: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-        }
-    }
-}
-
 impl Proxy {
-    pub async fn register(&mut self, route: Route, deadline: Instant) -> Result<u16> {
-        if deadline <= Instant::now() {
-            bail!("preview route lease expired");
-        }
-        if route.id.is_empty()
-            || route.generation <= 0
-            || route.app_port < 1024
-            || (9277..=9282).contains(&route.app_port)
-            || route.token.len() < 32
-            || route.token.len() > 128
-            || HeaderValue::from_str(&route.token).is_err()
-        {
-            bail!("invalid preview route");
-        }
-        if self
-            .listeners
-            .values()
-            .any(|listener| listener.port == route.app_port)
-        {
-            bail!("preview destination is a proxy listener");
-        }
-        if let Some(listener) = self.listeners.get(&route.id) {
-            if listener.route != route {
-                bail!("preview route generation changed without removal");
-            }
-            if listener.task.is_finished() || listener.cancel.is_cancelled() {
-                bail!("preview route listener expired");
-            }
-            listener.deadline.send_replace(deadline);
-            return Ok(listener.port);
+    pub async fn bind(token: String, deadline: Option<Instant>) -> Result<Self> {
+        if token.len() < 32 || token.len() > 128 || HeaderValue::from_str(&token).is_err() {
+            bail!("invalid preview proxy token");
         }
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .context("Failed to bind preview listener")?;
         let port = listener.local_addr()?.port();
-        if port == route.app_port
-            || self
-                .listeners
-                .values()
-                .any(|listener| listener.route.app_port == port)
-        {
-            bail!("preview listener conflicts with its destination");
-        }
-        let (deadline_tx, deadline_rx) = watch::channel(deadline);
+        let routing = Arc::new(Routing {
+            token,
+            listener_port: port,
+            routes: Mutex::new(HashMap::new()),
+        });
         let cancel = CancellationToken::new();
         let task = tokio::spawn(serve(
             listener,
-            route.clone(),
-            deadline_rx,
+            routing,
+            deadline,
             cancel.clone(),
-            self.capacity.clone(),
+            Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         ));
-        self.listeners.insert(
-            route.id.clone(),
-            Listener {
-                route,
-                port,
-                deadline: deadline_tx,
-                cancel,
-                task,
-            },
-        );
-        Ok(port)
+        Ok(Self { port, cancel, task })
     }
 
-    pub fn retain(&mut self, ids: &[String]) {
-        self.listeners.retain(|id, _| ids.contains(id));
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     pub async fn shutdown(&mut self) {
-        for (_, mut listener) in self.listeners.drain() {
-            listener.cancel.cancel();
-            let _ = (&mut listener.task).await;
-        }
+        self.cancel.cancel();
+        let _ = (&mut self.task).await;
     }
 }
 
 async fn serve(
     listener: TcpListener,
-    route: Route,
-    mut deadline: watch::Receiver<Instant>,
+    routing: Arc<Routing>,
+    deadline: Option<Instant>,
     cancel: CancellationToken,
     capacity: Arc<Semaphore>,
 ) {
     let mut connections = JoinSet::new();
     loop {
-        let expires_at = *deadline.borrow();
         tokio::select! {
             biased;
             _ = cancel.cancelled() => break,
-            _ = sleep_until(expires_at) => break,
-            changed = deadline.changed() => {
-                if changed.is_err() {
-                    break;
+            _ = async {
+                match deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
                 }
-            }
+            } => break,
             accepted = listener.accept() => {
                 let Ok((mut stream, _)) = accepted else { break };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
@@ -174,12 +155,12 @@ async fn serve(
                     )).await;
                     continue;
                 };
-                let route = route.clone();
+                let routing = routing.clone();
                 let cancel = cancel.clone();
                 connections.spawn(async move {
                     let permit = Arc::new(permit);
                     let service = service_fn(|request| {
-                        forward(request, route.clone(), cancel.clone(), permit.clone())
+                        forward(request, routing.clone(), cancel.clone(), permit.clone())
                     });
                     let mut builder = server::Builder::new();
                     builder.timer(TokioTimer::new())
@@ -203,14 +184,13 @@ async fn serve(
 
 async fn forward(
     mut request: Request<Incoming>,
-    route: Route,
+    routing: Arc<Routing>,
     cancel: CancellationToken,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Result<Response<Body>, Infallible> {
-    let token = request.headers().get(TOKEN_HEADER);
-    if !token.is_some_and(|value| bool::from(value.as_bytes().ct_eq(route.token.as_bytes()))) {
+    let Some(app_port) = routing.resolve(request.headers()) else {
         return Ok(empty(StatusCode::FORBIDDEN));
-    }
+    };
     if request.method() == Method::CONNECT
         || request.uri().scheme().is_some()
         || request.uri().authority().is_some()
@@ -225,7 +205,7 @@ async fn forward(
         return Ok(empty(StatusCode::BAD_REQUEST));
     }
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
-    if !prepare_headers(request.headers_mut(), route.app_port) {
+    if !prepare_headers(request.headers_mut(), app_port) {
         return Ok(empty(StatusCode::BAD_REQUEST));
     }
     if let Some(value) = upgrade {
@@ -238,13 +218,13 @@ async fn forward(
         .uri()
         .path_and_query()
         .map_or("/", |path| path.as_str());
-    let Ok(uri) = format!("http://localhost:{}{path}", route.app_port).parse::<Uri>() else {
+    let Ok(uri) = format!("http://localhost:{app_port}{path}").parse::<Uri>() else {
         return Ok(empty(StatusCode::BAD_REQUEST));
     };
     *request.uri_mut() = uri;
 
     let result = async {
-        let stream = connect(route.app_port).await?;
+        let stream = connect(app_port).await?;
         let (mut sender, connection) = client::handshake(TokioIo::new(stream)).await?;
         let connection_cancel = cancel.clone();
         tokio::spawn(async move {

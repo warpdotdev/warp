@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use ::preview_proxy::protocol::{
-    self, Acknowledgement, ControlPlane, Error, Session, Snapshot, StartRequest,
-};
+use ::preview_proxy::protocol::{self, ControlPlane, Error, Session, StartRequest};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use warp_server_client::HttpStatusError;
@@ -43,6 +41,11 @@ impl Manager {
                     let manager = protocol::run(
                         control,
                         uuid::Uuid::new_v4().to_string(),
+                        format!(
+                            "{}{}",
+                            uuid::Uuid::new_v4().simple(),
+                            uuid::Uuid::new_v4().simple()
+                        ),
                         deadline,
                         task_cancel.clone(),
                     );
@@ -96,20 +99,6 @@ impl ControlPlane for Client {
     async fn start(&self, request: &StartRequest) -> Result<Session, Error> {
         self.client
             .start_preview_proxy(&self.task_id, request)
-            .await
-            .map_err(classify)
-    }
-
-    async fn poll(&self, session: &str, revision: i64) -> Result<Snapshot, Error> {
-        self.client
-            .poll_preview_proxy(&self.task_id, session, revision)
-            .await
-            .map_err(classify)
-    }
-
-    async fn acknowledge(&self, session: &str, ack: &Acknowledgement) -> Result<(), Error> {
-        self.client
-            .acknowledge_preview_proxy(&self.task_id, session, ack)
             .await
             .map_err(classify)
     }
