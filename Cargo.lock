@@ -8880,6 +8880,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "non_structural_derive"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b314d87ab425583e6aa06ab4766a0858d8c6b66ee82a5132bb0027f7ceb797"
+dependencies = [
+ "non_structural_derive_macro",
+]
+
+[[package]]
+name = "non_structural_derive_macro"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce21b181c774b29e508df75ef537f6f4a9e5bf866edae6ae9dcc63cc9e6c058"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "synstructure",
+]
+
+[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15389,6 +15410,7 @@ dependencies = [
  "mockito",
  "natural_language_detection",
  "nix 0.26.4",
+ "non_structural_derive",
  "notify-debouncer-full",
  "num-traits",
  "num_cpus",
