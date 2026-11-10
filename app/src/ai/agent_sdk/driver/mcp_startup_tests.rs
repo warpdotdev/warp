@@ -445,6 +445,10 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         rendered.warp_ids,
         HashMap::from([("GitHub MCP".to_string(), uuid.to_string())])
     );
+    assert_eq!(
+        rendered.installation_ids.keys().collect::<Vec<_>>(),
+        vec!["GitHub MCP"]
+    );
 }
 
 #[test]

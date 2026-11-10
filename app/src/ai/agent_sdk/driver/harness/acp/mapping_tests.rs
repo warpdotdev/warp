@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use serde_json::json;
+use uuid::Uuid;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message as MessageKind;
 use warp_multi_agent_api::message::tool_call::Tool;
@@ -8,9 +7,11 @@ use warp_multi_agent_api::message::tool_call_result::Result as ToolResult;
 use warp_multi_agent_api::message::update_todos::Operation;
 use warp_multi_agent_api::{
     self as api, ExternalMessage, ExternalUser, McpIntegration, McpServerIdentity, QueryAuthor,
-    UserQueryOrigin, apply_file_diffs_result, query_author, read_files_result, user_query_origin,
+    UserQueryOrigin, apply_file_diffs_result, call_mcp_tool_result, query_author,
+    read_files_result, user_query_origin,
 };
 
+use super::super::mcp_projection::{KnownMcpServer, KnownMcpServers};
 use super::super::protocol::SessionUpdate;
 use super::{AcpTurnMapper, TurnEvent};
 use crate::ai::agent::BaseUserQuery;
@@ -20,7 +21,47 @@ fn update(value: serde_json::Value) -> SessionUpdate {
 }
 
 fn mapper() -> AcpTurnMapper {
-    AcpTurnMapper::new("task-1".to_owned(), "req-1".to_owned(), HashMap::new())
+    mapper_with_servers(Vec::new())
+}
+
+fn mapper_with_servers(servers: Vec<KnownMcpServer>) -> AcpTurnMapper {
+    AcpTurnMapper::new(
+        "task-1".to_owned(),
+        "req-1".to_owned(),
+        KnownMcpServers::new(servers),
+    )
+}
+
+const SLACK_INSTALLATION_ID: Uuid = Uuid::from_u128(0x5a1c);
+
+/// The Slack integration configured under the name `slack`.
+fn slack_server() -> KnownMcpServer {
+    KnownMcpServer {
+        name: "slack".to_owned(),
+        installation_id: SLACK_INSTALLATION_ID,
+        warp_id: Some("slack".to_owned()),
+    }
+}
+
+fn slack_identity() -> McpServerIdentity {
+    McpServerIdentity {
+        display_name: "slack".to_owned(),
+        integration: McpIntegration::Slack as i32,
+        ..Default::default()
+    }
+}
+
+fn mcp_result_text(result: &ToolResult) -> &str {
+    let ToolResult::CallMcpTool(mcp) = result else {
+        panic!("expected CallMcpTool result, got {result:?}");
+    };
+    let Some(call_mcp_tool_result::Result::Success(success)) = &mcp.result else {
+        panic!("expected a successful MCP result, got {mcp:?}");
+    };
+    match &success.results[0].result {
+        Some(call_mcp_tool_result::success::result::Result::Text(text)) => &text.text,
+        other => panic!("expected text, got {other:?}"),
+    }
 }
 
 fn added_messages(action: &warp_multi_agent_api::ClientAction) -> &[warp_multi_agent_api::Message] {
@@ -426,18 +467,13 @@ fn updated_message(event: &TurnEvent) -> (&warp_multi_agent_api::Message, &[Stri
     }
 }
 
+/// The shape claude-code-acp reports an MCP call in: `other` kind, `mcp__<server>__<tool>` as
+/// the name and title, and the tool's own arguments as the input, which may arrive only on a
+/// later update.
 #[test]
 fn mcp_tool_calls_name_their_tool_and_server_and_take_input_that_arrives_late() {
-    let slack = McpServerIdentity {
-        display_name: "slack".to_owned(),
-        integration: McpIntegration::Slack as i32,
-        ..Default::default()
-    };
-    let mut mapper = AcpTurnMapper::new(
-        "task-1".to_owned(),
-        "req-1".to_owned(),
-        HashMap::from([("slack".to_owned(), slack.clone())]),
-    );
+    let slack = slack_identity();
+    let mut mapper = mapper_with_servers(vec![slack_server()]);
     let announced = mapper.map_update(update(json!({
         "sessionUpdate": "tool_call",
         "toolCallId": "slack-1",
@@ -454,6 +490,7 @@ fn mcp_tool_calls_name_their_tool_and_server_and_take_input_that_arrives_late() 
         panic!("expected CallMcpTool, got {tool:?}");
     };
     assert_eq!(mcp.name, "send_message_to_thread");
+    assert_eq!(mcp.server_id, SLACK_INSTALLATION_ID.to_string());
     assert_eq!(mcp.server_identity, Some(slack.clone()));
 
     let input = mapper.map_update(update(json!({
@@ -531,14 +568,18 @@ fn mcp_tool_names_match_servers_by_their_normalized_names() {
         display_name: "warp factory__beta".to_owned(),
         ..Default::default()
     };
-    let mut mapper = AcpTurnMapper::new(
-        "task-1".to_owned(),
-        "req-1".to_owned(),
-        HashMap::from([
-            ("warp factory".to_owned(), factory.clone()),
-            ("warp factory__beta".to_owned(), nested.clone()),
-        ]),
-    );
+    let mut mapper = mapper_with_servers(vec![
+        KnownMcpServer {
+            name: "warp factory".to_owned(),
+            installation_id: Uuid::from_u128(1),
+            warp_id: None,
+        },
+        KnownMcpServer {
+            name: "warp factory__beta".to_owned(),
+            installation_id: Uuid::from_u128(2),
+            warp_id: None,
+        },
+    ]);
     let mut announce = |id: &str, title: &str| {
         let events = mapper.map_update(update(json!({
             "sessionUpdate": "tool_call",
@@ -565,6 +606,189 @@ fn mcp_tool_names_match_servers_by_their_normalized_names() {
         announce("c", "mcp__github__create_issue"),
         ("tool: mcp__github__create_issue".to_owned(), None)
     );
+}
+
+/// The shape codex-acp reports an MCP call in: `execute` kind, `mcp.<server>.<tool>` title, the
+/// invocation as the input, and `{result, error}` as the output.
+#[test]
+fn codex_mcp_calls_become_identified_mcp_calls_instead_of_shell_commands() {
+    let mut mapper = mapper_with_servers(vec![slack_server()]);
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-1",
+        "title": "mcp.slack.send_message_to_thread",
+        "kind": "execute",
+        "status": "in_progress",
+        "rawInput": {
+            "server": "slack",
+            "tool": "send_message_to_thread",
+            "arguments": { "channel_id": "C1", "thread_ts": "1.2", "message": "On it" }
+        }
+    })));
+    let (action_id, tool) = announced_tool(&call[0]);
+    let Tool::CallMcpTool(mcp) = tool else {
+        panic!("expected CallMcpTool, got {tool:?}");
+    };
+    assert_eq!(mcp.name, "send_message_to_thread");
+    assert_eq!(mcp.server_id, SLACK_INSTALLATION_ID.to_string());
+    assert_eq!(mcp.server_identity, Some(slack_identity()));
+    let args = mcp.args.expect("args");
+    assert_eq!(
+        args.fields["message"].kind,
+        Some(prost_types::value::Kind::StringValue("On it".to_owned()))
+    );
+    assert!(!args.fields.contains_key("arguments"));
+
+    let done = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call-1",
+        "status": "completed",
+        "rawOutput": {
+            "result": { "content": [{ "type": "text", "text": "{\"ok\":true}" }], "_meta": null },
+            "error": null
+        }
+    })));
+    let (result_id, result) = reported_result(&done[1]);
+    assert_eq!(result_id, action_id);
+    assert_eq!(mcp_result_text(&result), "{\"ok\":true}");
+}
+
+#[test]
+fn mcp_errors_in_the_result_envelope_become_mcp_errors() {
+    let mut mapper = mapper_with_servers(vec![slack_server()]);
+    let call = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-1",
+        "title": "mcp.slack.send_message_to_thread",
+        "kind": "execute",
+        "status": "failed",
+        "rawInput": { "server": "slack", "tool": "send_message_to_thread", "arguments": {} },
+        "rawOutput": { "result": null, "error": { "message": "channel_not_found" } }
+    })));
+    let ToolResult::CallMcpTool(mcp) = reported_result(&call[2]).1 else {
+        panic!("expected CallMcpTool result");
+    };
+    match mcp.result {
+        Some(call_mcp_tool_result::Result::Error(error)) => {
+            assert_eq!(error.message, "channel_not_found");
+        }
+        other => panic!("expected an MCP error, got {other:?}"),
+    }
+}
+
+/// claude-code-acp also names the tool in `name` and `_meta.claudeCode.toolName`; either
+/// identifies the call when the title does not.
+#[test]
+fn claude_mcp_calls_are_recognized_from_name_or_meta() {
+    for fixture in [
+        json!({ "name": "mcp__slack__read_thread", "title": "Read thread" }),
+        json!({ "title": "Read thread", "_meta": { "claudeCode": { "toolName": "mcp__slack__read_thread" } } }),
+    ] {
+        let mut mapper = mapper_with_servers(vec![slack_server()]);
+        let mut call = json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "toolu_1",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": { "channel_id": "C1", "thread_ts": "1.2" }
+        });
+        call.as_object_mut()
+            .unwrap()
+            .extend(fixture.as_object().unwrap().clone());
+        let events = mapper.map_update(update(call));
+        let Tool::CallMcpTool(mcp) = announced_tool(&events[0]).1 else {
+            panic!("expected CallMcpTool for {fixture}");
+        };
+        assert_eq!(mcp.name, "read_thread", "{fixture}");
+        assert_eq!(mcp.server_identity, Some(slack_identity()), "{fixture}");
+    }
+}
+
+/// The shapes pi-mcp-adapter exposes MCP tools in: a direct `<server>_<tool>` tool, a
+/// per-server `mcp__<server>` proxy, and the single `mcp` proxy, the latter two taking
+/// `{tool, args}`.
+#[test]
+fn pi_direct_and_proxy_mcp_calls_resolve_to_the_same_call() {
+    for (name, input) in [
+        (
+            "slack_send_message_to_thread",
+            json!({ "channel_id": "C1", "message": "hi" }),
+        ),
+        (
+            "mcp__slack",
+            json!({ "tool": "send_message_to_thread", "args": { "channel_id": "C1", "message": "hi" } }),
+        ),
+        (
+            "mcp",
+            json!({ "tool": "slack_send_message_to_thread", "args": { "channel_id": "C1", "message": "hi" } }),
+        ),
+    ] {
+        let mut mapper = mapper_with_servers(vec![slack_server()]);
+        let call = mapper.map_update(update(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "pi-1",
+            "title": name,
+            "kind": "other",
+            "status": "pending",
+            "rawInput": input
+        })));
+        let Tool::CallMcpTool(mcp) = announced_tool(&call[0]).1 else {
+            panic!("expected CallMcpTool for {name}");
+        };
+        assert_eq!(mcp.name, "send_message_to_thread", "{name}");
+        assert_eq!(mcp.server_id, SLACK_INSTALLATION_ID.to_string(), "{name}");
+        let args = mcp.args.expect("args");
+        assert!(args.fields.contains_key("message"), "{name}: {args:?}");
+        assert!(!args.fields.contains_key("args"), "{name}: {args:?}");
+    }
+}
+
+#[test]
+fn mcp_shaped_calls_for_servers_the_run_did_not_configure_stay_generic_or_shell() {
+    let mut mapper = mapper_with_servers(vec![slack_server()]);
+    let other_server = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-1",
+        "title": "mcp.github.create_issue",
+        "kind": "execute",
+        "status": "pending",
+        "rawInput": { "server": "github", "tool": "create_issue", "arguments": {} }
+    })));
+    assert!(matches!(
+        announced_tool(&other_server[0]).1,
+        Tool::RunShellCommand(_)
+    ));
+
+    // A command that merely starts with a configured server's name is still a command.
+    let command = mapper.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-2",
+        "title": "slack_cli --version",
+        "kind": "execute",
+        "status": "pending",
+        "rawInput": { "command": "slack_cli --version" }
+    })));
+    match announced_tool(&command[0]).1 {
+        Tool::RunShellCommand(shell) => assert_eq!(shell.command, "slack_cli --version"),
+        other => panic!("expected RunShellCommand, got {other:?}"),
+    }
+
+    let mut without_servers = self::mapper();
+    let unconfigured = without_servers.map_update(update(json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call-3",
+        "title": "mcp__slack__send_message_to_thread",
+        "kind": "other",
+        "status": "pending",
+        "rawInput": { "message": "hi" }
+    })));
+    match announced_tool(&unconfigured[0]).1 {
+        Tool::CallMcpTool(mcp) => {
+            assert_eq!(mcp.name, "tool: mcp__slack__send_message_to_thread");
+            assert!(mcp.server_identity.is_none());
+        }
+        other => panic!("expected a generic CallMcpTool, got {other:?}"),
+    }
 }
 
 #[test]

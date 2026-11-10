@@ -423,6 +423,8 @@ pub(super) enum SessionUpdate {
 #[serde(rename_all = "camelCase", default)]
 pub(super) struct ToolCallFields {
     pub tool_call_id: String,
+    /// The agent's own name for the tool, when it reports one apart from the title.
+    pub name: Option<String>,
     pub title: Option<String>,
     pub kind: Option<ToolKind>,
     pub status: Option<ToolCallStatus>,
@@ -430,6 +432,9 @@ pub(super) struct ToolCallFields {
     pub locations: Option<Vec<ToolCallLocation>>,
     pub raw_input: Option<Value>,
     pub raw_output: Option<Value>,
+    /// Adapter-specific extension data.
+    #[serde(rename = "_meta")]
+    pub meta: Option<Value>,
 }
 
 /// A file the tool call touches, as reported by the agent for "follow along" UIs.

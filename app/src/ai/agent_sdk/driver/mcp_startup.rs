@@ -712,6 +712,9 @@ impl AgentDriver {
                     // A later server of the same name replaces the earlier one's identity too.
                     None => result.warp_ids.remove(name),
                 };
+                result
+                    .installation_ids
+                    .insert(name.clone(), installation.uuid());
             }
             result.configs.extend(servers);
         }
