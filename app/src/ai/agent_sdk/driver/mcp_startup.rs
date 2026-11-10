@@ -27,12 +27,12 @@ use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 use warpui::r#async::{FutureExt as _, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
-use super::harness::ResolvedMCPServers;
+use super::harness::{HarnessMcpSettings, ResolvedMCPServers};
 use super::{AgentDriver, AgentDriverError, git_credentials};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::{BlocklistAIPermissions, video_recording_enabled};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_json, resolve_json};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
@@ -1499,6 +1499,10 @@ const COMPUTER_USE_MCP_ENV_VARS: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
 ];
 
+/// How long a harness waits for a computer use tool call. Stopping a recording uploads it, which
+/// can take minutes.
+const COMPUTER_USE_MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 impl AgentDriver {
     /// Adds the built-in computer use MCP server to a third-party harness's MCP servers when
     /// computer use is enabled for this run, unless a configured server already uses its name.
@@ -1557,7 +1561,13 @@ impl AgentDriver {
             }
         };
         let env = computer_use_mcp_env(&self.resolved_env_vars, |name| std::env::var_os(name));
-        computer_use_mcp_server(harness, cli_path, env)
+        computer_use_mcp_server(
+            harness,
+            cli_path,
+            self.task_id.map(|task_id| task_id.to_string()),
+            video_recording_enabled(),
+            env,
+        )
     }
 }
 
@@ -1573,15 +1583,26 @@ fn attach_computer_use_mcp(servers: &mut ResolvedMCPServers, server: JSONMCPServ
         Entry::Vacant(entry) => {
             log::info!("Attaching the built-in computer use MCP server to this agent run");
             entry.insert(server);
+            servers.harness_settings.insert(
+                builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+                HarnessMcpSettings {
+                    // The Warp CLI that uploads recordings authenticates with this variable.
+                    forwarded_env_vars: vec!["WARP_API_KEY".to_owned()],
+                    tool_timeout: Some(COMPUTER_USE_MCP_TOOL_TIMEOUT),
+                },
+            );
         }
     }
 }
 
 /// Builds the stdio MCP server entry that serves computer use to `harness` from the CLI at
-/// `cli_path`, or `None` when `harness` doesn't take MCP servers.
+/// `cli_path`, or `None` when `harness` doesn't take MCP servers. Screen recordings are attached to
+/// `run_id` when there is one, and saved locally otherwise.
 fn computer_use_mcp_server(
     harness: Harness,
     cli_path: String,
+    run_id: Option<String>,
+    recording_enabled: bool,
     env: HashMap<String, String>,
 ) -> Option<JSONMCPServer> {
     let model_family = match harness {
@@ -1589,12 +1610,18 @@ fn computer_use_mcp_server(
         Harness::Codex => "openai",
         Harness::Oz | Harness::OpenCode | Harness::Pi | Harness::Unknown => return None,
     };
+    let mut args: Vec<String> = ["computer-use-mcp", "--model-family", model_family]
+        .map(str::to_owned)
+        .to_vec();
+    if !recording_enabled {
+        args.push("--no-recording".to_owned());
+    } else if let Some(run_id) = run_id {
+        args.extend(["--run-id".to_owned(), run_id]);
+    }
     Some(JSONMCPServer {
         transport_type: JSONTransportType::CLIServer {
             command: cli_path,
-            args: ["computer-use-mcp", "--model-family", model_family]
-                .map(str::to_owned)
-                .to_vec(),
+            args,
             env,
             working_directory: None,
         },

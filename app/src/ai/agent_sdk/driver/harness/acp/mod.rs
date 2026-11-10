@@ -214,7 +214,7 @@ impl AcpHarness {
                     system_prompt,
                     resolved_env_vars,
                     resolved_secrets,
-                    &HashMap::new(),
+                    &ResolvedMCPServers::default(),
                     None,
                 )?;
                 publish_skills_for_codex(

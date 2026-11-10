@@ -2342,7 +2342,7 @@ fn stdio_server(server: &JSONMCPServer) -> (&str, &[String], &HashMap<String, St
 }
 
 fn computer_use_server(harness: Harness) -> Option<JSONMCPServer> {
-    computer_use_mcp_server(harness, "/opt/oz".to_owned(), HashMap::new())
+    computer_use_mcp_server(harness, "/opt/oz".to_owned(), None, true, HashMap::new())
 }
 
 #[test]
@@ -2365,6 +2365,44 @@ fn computer_use_mcp_server_matches_the_harness_model_family() {
     ] {
         assert!(computer_use_server(harness).is_none(), "{harness}");
     }
+}
+
+#[test]
+fn computer_use_mcp_server_attaches_recordings_to_the_run() {
+    let args_for = |run_id: Option<&str>, recording_enabled| {
+        let server = computer_use_mcp_server(
+            Harness::Claude,
+            "/opt/oz".to_owned(),
+            run_id.map(str::to_owned),
+            recording_enabled,
+            HashMap::new(),
+        )
+        .unwrap();
+        stdio_server(&server).1.to_vec()
+    };
+    assert_eq!(
+        args_for(Some("run-1"), true),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--run-id",
+            "run-1"
+        ]
+    );
+    assert_eq!(
+        args_for(Some("run-1"), false),
+        [
+            "computer-use-mcp",
+            "--model-family",
+            "anthropic",
+            "--no-recording"
+        ]
+    );
+    assert_eq!(
+        args_for(None, true),
+        ["computer-use-mcp", "--model-family", "anthropic"]
+    );
 }
 
 #[test]
@@ -2400,9 +2438,14 @@ fn configured_servers_take_precedence_over_the_computer_use_mcp() {
         .insert(COMPUTER_USE_MCP_SERVER_NAME.to_owned(), configured.clone());
     attach_computer_use_mcp(&mut servers, computer_use_server(Harness::Claude).unwrap());
     assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], configured);
+    assert!(servers.harness_settings.is_empty());
 
     let mut servers = ResolvedMCPServers::default();
     let computer_use = computer_use_server(Harness::Claude).unwrap();
     attach_computer_use_mcp(&mut servers, computer_use.clone());
     assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], computer_use);
+    assert_eq!(
+        servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME].forwarded_env_vars,
+        ["WARP_API_KEY"]
+    );
 }
