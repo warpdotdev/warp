@@ -8,6 +8,7 @@ use warp_cli::agent::{Harness, HarnessTransport};
 use warp_managed_secrets::ManagedSecretValue;
 
 use super::super::harness_env_vars;
+use super::super::mcp_credential_broker::McpCredentialHelper;
 use super::{
     PI_CODING_AGENT_DIR_ENV, pi_mcp_config, prepare_pi_environment_config, prepare_pi_settings,
     prepare_pi_system_prompt, publish_skills_for_pi,
@@ -75,7 +76,16 @@ fn worker_env_overrides_legacy_credentials_without_their_endpoint() {
         ),
     ]);
 
-    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        &secrets,
+        None,
+    )
+    .unwrap();
 
     let auth: Value =
         serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
@@ -110,6 +120,7 @@ fn provider_credentials_are_private_literal_values_with_endpoint_overrides() {
         dir.path(),
         None,
         &env,
+        &HashMap::new(),
         &HashMap::new(),
         &secrets,
         Some(&model),
@@ -172,6 +183,7 @@ fn default_model_keeps_pi_model_selection_implicit() {
         &env,
         &HashMap::new(),
         &HashMap::new(),
+        &HashMap::new(),
         Some(&model),
     )
     .unwrap();
@@ -198,7 +210,16 @@ fn generic_provider_binding_wins_over_legacy_auth_for_the_same_provider() {
         ),
     ]);
 
-    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        &secrets,
+        None,
+    )
+    .unwrap();
 
     let auth: Value =
         serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
@@ -238,7 +259,16 @@ fn legacy_auth_uses_only_the_resolved_key_and_its_endpoint() {
         ),
     ]);
 
-    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        &secrets,
+        None,
+    )
+    .unwrap();
 
     let auth: Value =
         serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
@@ -272,9 +302,16 @@ fn conflicting_provider_credentials_fail_without_exposing_keys() {
         ),
     ]);
 
-    let error =
-        prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None)
-            .unwrap_err();
+    let error = prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        &secrets,
+        None,
+    )
+    .unwrap_err();
 
     assert_eq!(
         error.to_string(),
@@ -298,7 +335,16 @@ fn identical_provider_credentials_coalesce() {
         ),
     ]);
 
-    prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None).unwrap();
+    prepare_pi_environment_config(
+        dir.path(),
+        None,
+        &env,
+        &HashMap::new(),
+        &HashMap::new(),
+        &secrets,
+        None,
+    )
+    .unwrap();
 
     let auth: Value =
         serde_json::from_slice(&fs::read(dir.path().join("auth.json")).unwrap()).unwrap();
@@ -315,9 +361,16 @@ fn invalid_provider_credentials_never_write_auth() {
             ManagedSecretValue::llm_provider_api_key(provider, key, None),
         )]);
 
-        let error =
-            prepare_pi_environment_config(dir.path(), None, &env, &HashMap::new(), &secrets, None)
-                .unwrap_err();
+        let error = prepare_pi_environment_config(
+            dir.path(),
+            None,
+            &env,
+            &HashMap::new(),
+            &HashMap::new(),
+            &secrets,
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(error.to_string(), "Invalid LLM provider API key credential");
         assert!(!dir.path().join("auth.json").exists());
@@ -439,10 +492,38 @@ fn mcp_adapter_configuration_preserves_stdio_and_remote_fields() {
     }))
     .unwrap();
     assert_eq!(
-        pi_mcp_config(&servers),
+        pi_mcp_config(&servers, &HashMap::new()),
         json!({"mcpServers": {
             "stdio": {"command": "node", "args": ["server.mjs"], "env": {"NAME": "literal"}},
             "remote": {"url": "https://example.test/mcp", "headers": {"X-Test": "literal"}}
+        }})
+    );
+}
+
+#[test]
+fn mcp_adapter_configuration_runs_the_credential_helper_for_its_header() {
+    let servers: HashMap<String, JSONMCPServer> = serde_json::from_value(json!({
+        "remote": {
+            "url": "https://example.test/mcp",
+            "headers": {"Authorization": "Bearer proxy-token", "X-Test": "literal"}
+        }
+    }))
+    .unwrap();
+    let credential_helpers = HashMap::from([(
+        "remote".to_owned(),
+        McpCredentialHelper::for_test(
+            "authorization",
+            "/usr/local/bin/oz mcp-credential --server remote",
+        ),
+    )]);
+
+    assert_eq!(
+        pi_mcp_config(&servers, &credential_helpers),
+        json!({"mcpServers": {
+            "remote": {"url": "https://example.test/mcp", "headers": {
+                "Authorization": "!/usr/local/bin/oz mcp-credential --server remote --format value",
+                "X-Test": "literal"
+            }}
         }})
     );
 }

@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 
 use clap::builder::PossibleValue;
 use clap::error::ErrorKind;
-use clap::{Arg, Command, Subcommand};
+use clap::{Arg, Command, Subcommand, ValueEnum};
 use warp_core::features::FeatureFlag;
 
 /// MCP-related subcommands.
@@ -18,6 +18,16 @@ impl MCPCommand {
             MCPCommand::List => "mcp list",
         }
     }
+}
+
+/// How the `mcp-credential` worker prints a credential.
+#[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Default)]
+pub enum McpCredentialFormat {
+    /// A JSON object mapping the header's name to its value.
+    #[default]
+    Headers,
+    /// The header's value alone.
+    Value,
 }
 
 /// Represents an MCP server specification from CLI input.

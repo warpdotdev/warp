@@ -44,6 +44,7 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
 };
+use crate::ai::agent_sdk::driver::harness::mcp_credential_broker::{self, McpCredentialBroker};
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
@@ -1130,6 +1131,9 @@ pub struct AgentDriver {
     /// The replaceable credentials of the managed MCP servers started for the run, until the
     /// run takes them to keep them valid.
     managed_mcp_refresh: Option<managed_mcp_refresh::ManagedMcpRefresh>,
+    /// Serves the credentials of the managed MCP servers resolved for a third-party harness,
+    /// until the run takes it to answer the harness's requests.
+    mcp_credential_broker: Option<McpCredentialBroker>,
 }
 
 #[derive(Clone)]
@@ -1589,6 +1593,7 @@ impl AgentDriver {
             harness_transport_fallback: None,
             sandbox_deadline: sandbox_deadline(),
             managed_mcp_refresh: None,
+            mcp_credential_broker: None,
         }
     }
 
@@ -2617,7 +2622,7 @@ impl AgentDriver {
                     ai_client_for_refresh,
                     use_factory_repositories,
                     bedrock_config_for_refresh,
-                    future::pending(),
+                    mcp_credential_broker::serve_run_credentials(&foreground),
                     &foreground,
                 )
                 .await
@@ -3329,9 +3334,14 @@ impl AgentDriver {
 
         // Resolve MCP specs into harness-native JSON format.
         let mcp_specs = mcp_specs.to_vec();
-        let resolved_mcp_servers =
+        let mut resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
+        let mcp_credential_broker = McpCredentialBroker::bind_for(&mut resolved_mcp_servers);
+        foreground
+            .spawn(move |me, _| me.mcp_credential_broker = mcp_credential_broker)
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         if !resolved_mcp_servers.configs.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",

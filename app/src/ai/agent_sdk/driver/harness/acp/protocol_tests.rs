@@ -144,6 +144,7 @@ fn resume_request_names_the_session_cwd_and_servers() {
         session_id: "prior-session".to_owned(),
         cwd: "/workspace".to_owned(),
         mcp_servers: Vec::new(),
+        meta: None,
     })
     .unwrap();
 
@@ -213,4 +214,33 @@ fn steering_outcomes_parse_with_a_fallback_for_unknown_ones() {
         params["_meta"]["steering"]["idleBehavior"],
         "promptRequired"
     );
+}
+
+#[test]
+fn session_requests_carry_adapter_options_only_when_there_are_some() {
+    let without = serde_json::to_value(NewSessionParams {
+        cwd: "/workspace".to_owned(),
+        mcp_servers: Vec::new(),
+        meta: None,
+    })
+    .unwrap();
+    assert_eq!(without, json!({ "cwd": "/workspace", "mcpServers": [] }));
+
+    let options = json!({ "claudeCode": { "options": { "mcpServers": {} } } });
+    let new = serde_json::to_value(NewSessionParams {
+        cwd: "/workspace".to_owned(),
+        mcp_servers: Vec::new(),
+        meta: Some(options.clone()),
+    })
+    .unwrap();
+    assert_eq!(new["_meta"], options);
+
+    let resume = serde_json::to_value(ResumeSessionParams {
+        session_id: "prior-session".to_owned(),
+        cwd: "/workspace".to_owned(),
+        mcp_servers: Vec::new(),
+        meta: Some(options.clone()),
+    })
+    .unwrap();
+    assert_eq!(resume["_meta"], options);
 }

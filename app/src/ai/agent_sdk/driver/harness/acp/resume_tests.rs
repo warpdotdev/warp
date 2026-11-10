@@ -367,6 +367,7 @@ fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
             SessionPlan::Resume("prior-session".to_owned()),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -395,6 +396,7 @@ fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
             SessionPlan::Resume("prior-session".to_owned()),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -424,6 +426,7 @@ fn a_resume_the_agent_does_not_answer_fails_the_handshake() {
             SessionPlan::Resume("prior-session".to_owned()),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -459,6 +462,7 @@ fn without_a_session_to_resume_a_new_one_is_opened() {
                 plan,
                 "/workspace".to_owned(),
                 Vec::new(),
+                None,
                 &clock,
             );
             let agent = async {
@@ -471,4 +475,32 @@ fn without_a_session_to_resume_a_new_one_is_opened() {
             assert_eq!(origin, expected_origin);
         });
     }
+}
+
+/// A refused resume opens a new session, which needs the adapter options just as much.
+#[test]
+fn adapter_options_accompany_both_the_resume_and_the_session_that_replaces_it() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    let clock = PhaseClock::start("opening");
+    let options = json!({ "claudeCode": { "options": { "mcpServers": {} } } });
+    block_on(async {
+        let open = open_session(
+            &connection,
+            SessionPlan::Resume("prior-session".to_owned()),
+            "/workspace".to_owned(),
+            Vec::new(),
+            Some(options.clone()),
+            &clock,
+        );
+        let agent = async {
+            let request = answer_next(&mut agent, None).await;
+            assert_eq!(request["method"], "session/resume");
+            assert_eq!(request["params"]["_meta"], options);
+            let request = answer_next(&mut agent, Some(json!({"sessionId": "fresh"}))).await;
+            assert_eq!(request["method"], "session/new");
+            assert_eq!(request["params"]["_meta"], options);
+        };
+        let (opened, ()) = join!(open, agent);
+        opened.unwrap();
+    });
 }

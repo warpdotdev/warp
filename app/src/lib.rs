@@ -925,6 +925,20 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             crate::ai::agent_sdk::driver::harness::acp::run_bridge(launch_file)
         }
         #[cfg(not(target_family = "wasm"))]
+        warp_cli::WorkerCommand::McpCredential {
+            endpoint_file,
+            server,
+            format,
+        } => {
+            // Stdout is the credential the harness reads, so there is no logging and no
+            // initialize_app.
+            crate::ai::agent_sdk::driver::harness::mcp_credential_broker::run_helper(
+                endpoint_file,
+                server,
+                *format,
+            )
+        }
+        #[cfg(not(target_family = "wasm"))]
         warp_cli::WorkerCommand::RipgrepSearch {
             parent,
             ignore_case,
