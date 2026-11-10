@@ -15,12 +15,12 @@ pub(super) async fn headers(stream: &mut TcpStream) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
-pub(super) async fn request(port: u16, id: usize, app_port: u16, extra: &str) -> TcpStream {
+pub(super) async fn request(port: u16, app_port: u16, extra: &str) -> TcpStream {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
         .unwrap();
     stream.write_all(format!(
-        "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\n{TOKEN_HEADER}: {TOKEN}\r\nX-Warp-Preview-ID: 00000000-0000-0000-0000-{id:012x}\r\nX-Warp-Preview-App-Port: {app_port}\r\nX-Warp-Preview-Public-Host: preview.example\r\nX-Warp-Preview-Public-Proto: https\r\nX-Warp-Preview-Public-Port: 443\r\n{extra}\r\n"
+        "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\n{TOKEN_HEADER}: {TOKEN}\r\nX-Warp-Preview-Port: {app_port}\r\nX-Warp-Preview-Public-Host: preview.example\r\nX-Warp-Preview-Public-Proto: https\r\nX-Warp-Preview-Public-Port: 443\r\n{extra}\r\n"
     ).as_bytes()).await.unwrap();
     stream
 }
@@ -65,7 +65,7 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
 
     let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
     let port = proxy.port();
-    let mut stream = request(port, 1, app_port,
+    let mut stream = request(port, app_port,
         "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nOrigin: https://preview.example\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Preview-Authorization: secret\r\nX-Forwarded-Host: forged\r\n").await;
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
@@ -111,7 +111,7 @@ async fn rejects_unauthenticated_and_arbitrary_destination_requests() {
         stream
             .write_all(
                 format!(
-                    "{target} HTTP/1.1\r\nHost: ingress.invalid\r\n{TOKEN_HEADER}: {token}\r\nX-Warp-Preview-ID: 00000000-0000-0000-0000-000000000001\r\nX-Warp-Preview-App-Port: 12345\r\n\r\n"
+                    "{target} HTTP/1.1\r\nHost: ingress.invalid\r\n{TOKEN_HEADER}: {token}\r\nX-Warp-Preview-Port: 12345\r\n\r\n"
                 )
                 .as_bytes(),
             )
@@ -127,27 +127,25 @@ async fn rejects_unauthenticated_and_arbitrary_destination_requests() {
 }
 
 #[tokio::test]
-async fn routes_eight_apps_through_one_listener_and_rejects_retargeting() {
+async fn routes_eight_apps_through_one_listener_using_each_requests_port() {
     let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
     let port = proxy.port();
     let mut apps = Vec::new();
     let mut requests = JoinSet::new();
-    for id in 0..8 {
+    for _ in 0..8 {
         let (app_port, task) = app().await;
         apps.push(task);
         requests.spawn(async move {
-            let mut stream = request(port, id, app_port, "Connection: close\r\n").await;
+            let mut stream = request(port, app_port, "Connection: close\r\n").await;
             assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
-            let mut retargeted = request(port, id, port, "Connection: close\r\n").await;
-            assert!(headers(&mut retargeted).await.starts_with("HTTP/1.1 403"));
+            let mut body = String::new();
+            stream.read_to_string(&mut body).await.unwrap();
+            assert!(body.contains(&format!("localhost:{app_port}")), "{body}");
         });
     }
     while let Some(result) = requests.join_next().await {
         result.unwrap();
     }
-    let (different_port, different_task) = app().await;
-    let mut retargeted = request(port, 0, different_port, "Connection: close\r\n").await;
-    assert!(headers(&mut retargeted).await.starts_with("HTTP/1.1 403"));
     proxy.shutdown().await;
     assert!(
         TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -157,7 +155,31 @@ async fn routes_eight_apps_through_one_listener_and_rejects_retargeting() {
     for task in apps {
         task.abort();
     }
-    different_task.abort();
+}
+
+#[tokio::test]
+async fn rejects_missing_invalid_and_control_ports() {
+    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let port = proxy.port();
+    for destination in ["", "not-a-port", "65536", "1023", "9277", &port.to_string()] {
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let port_header = if destination.is_empty() {
+            String::new()
+        } else {
+            format!("X-Warp-Preview-Port: {destination}\r\n")
+        };
+        stream
+            .write_all(format!("GET / HTTP/1.1\r\nHost: ingress.invalid\r\n{TOKEN_HEADER}: {TOKEN}\r\n{port_header}\r\n").as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            headers(&mut stream).await.starts_with("HTTP/1.1 403"),
+            "{destination}"
+        );
+    }
+    proxy.shutdown().await;
 }
 
 #[tokio::test]
@@ -179,7 +201,7 @@ async fn streams_first_chunk_before_completion_and_closes_at_sandbox_deadline() 
     .await
     .unwrap();
     let port = proxy.port();
-    let mut stream = request(port, 1, app_port, "").await;
+    let mut stream = request(port, app_port, "").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
     let mut chunk = [0; 11];
     timeout(Duration::from_secs(2), stream.read_exact(&mut chunk))
@@ -227,7 +249,6 @@ async fn copies_upgraded_frames_and_closes_on_driver_shutdown() {
     let port = proxy.port();
     let mut stream = request(
         port,
-        1,
         app_port,
         "Connection: upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: vite-hmr\r\n",
     )
@@ -267,7 +288,7 @@ async fn connects_to_ipv6_only_apps() {
     });
     let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
     let port = proxy.port();
-    let mut stream = request(port, 1, app_port, "").await;
+    let mut stream = request(port, app_port, "").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
     proxy.shutdown().await;
     task.await.unwrap();

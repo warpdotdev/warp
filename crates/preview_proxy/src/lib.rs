@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -35,7 +34,6 @@ type Body = BoxBody<Bytes, hyper::Error>;
 struct Routing {
     token: String,
     listener_port: u16,
-    routes: Mutex<HashMap<String, (u16, Instant)>>,
 }
 
 impl Routing {
@@ -44,12 +42,8 @@ impl Routing {
         if !bool::from(token.as_bytes().ct_eq(self.token.as_bytes())) {
             return None;
         }
-        let id = headers.get("x-warp-preview-id")?.to_str().ok()?;
-        if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
-            return None;
-        }
         let port = headers
-            .get("x-warp-preview-app-port")?
+            .get("x-warp-preview-port")?
             .to_str()
             .ok()?
             .parse::<u16>()
@@ -57,26 +51,6 @@ impl Routing {
         if port < 1024 || (9277..=9282).contains(&port) || port == self.listener_port {
             return None;
         }
-        let now = Instant::now();
-        let mut routes = self.routes.lock().ok()?;
-        routes.retain(|_, (_, seen)| now.duration_since(*seen) < Duration::from_secs(600));
-        if let Some((cached_port, seen)) = routes.get_mut(id) {
-            if *cached_port != port {
-                return None;
-            }
-            *seen = now;
-            return Some(*cached_port);
-        }
-        if routes.len() >= 256 {
-            let oldest = routes
-                .iter()
-                .min_by_key(|(_, (_, seen))| *seen)
-                .map(|(id, _)| id.clone());
-            if let Some(oldest) = oldest {
-                routes.remove(&oldest);
-            }
-        }
-        routes.insert(id.to_owned(), (port, now));
         Some(port)
     }
 }
@@ -106,7 +80,6 @@ impl Proxy {
         let routing = Arc::new(Routing {
             token,
             listener_port: port,
-            routes: Mutex::new(HashMap::new()),
         });
         let cancel = CancellationToken::new();
         let task = tokio::spawn(serve(

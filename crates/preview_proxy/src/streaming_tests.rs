@@ -22,7 +22,7 @@ async fn downstream_disconnect_closes_upstream_stream() {
     });
     let mut proxy = Proxy::bind(tests::TOKEN.into(), None).await.unwrap();
     let port = proxy.port();
-    let mut downstream = tests::request(port, 1, app_port, "").await;
+    let mut downstream = tests::request(port, app_port, "").await;
     assert!(
         tests::headers(&mut downstream)
             .await
@@ -53,8 +53,7 @@ async fn preserves_response_trailers_and_repeated_headers() {
         .uri("/")
         .header(HOST, "ingress.invalid")
         .header(TOKEN_HEADER, tests::TOKEN)
-        .header("x-warp-preview-id", "00000000-0000-0000-0000-000000000001")
-        .header("x-warp-preview-app-port", app_port.to_string())
+        .header("x-warp-preview-port", app_port.to_string())
         .header("x-warp-preview-public-host", "preview.example")
         .header("x-warp-preview-public-proto", "https")
         .header("x-warp-preview-public-port", "443")
@@ -88,7 +87,7 @@ async fn forwards_early_response_without_waiting_for_upload_completion() {
     });
     let mut proxy = Proxy::bind(tests::TOKEN.into(), None).await.unwrap();
     let port = proxy.port();
-    let mut stream = tests::request(port, 1, app_port, "Content-Length: 10485760\r\n").await;
+    let mut stream = tests::request(port, app_port, "Content-Length: 10485760\r\n").await;
     assert!(
         tests::headers(&mut stream)
             .await
