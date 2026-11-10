@@ -108,7 +108,9 @@ impl AgentDriver {
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
         if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
-            || runtime_env.contains_key("WARP_GITHUB_CREDENTIAL_MODE")
+            || runtime_env
+                .get("WARP_GITHUB_CREDENTIAL_MODE")
+                .is_some_and(|mode| mode == "restricted_installation")
         {
             return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
                 "Restricted GitHub credentials require a fresh sandbox; prewarmed assignment is not supported"
