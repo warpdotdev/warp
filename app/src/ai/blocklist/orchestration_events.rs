@@ -17,28 +17,11 @@ use crate::ai::agent::{
 const MAX_RETRY_ATTEMPTS: i32 = 3;
 const MAX_PENDING_LIFECYCLE_EVENTS_PER_TARGET: usize = 200;
 
-/// Stage associated with a lifecycle error detail.
-/// This keeps persisted/runtime metadata consistent across API payloads and DB rows.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum LifecycleEventDetailStage {
-    Runtime,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(super) struct LifecycleEventDetailPayload {
-    pub(crate) stage: Option<LifecycleEventDetailStage>,
     pub(crate) reason: Option<String>,
     pub(crate) error_message: Option<String>,
     pub(crate) blocked_action: Option<String>,
-}
-
-impl LifecycleEventDetailStage {
-    /// Canonical lowercase representation used in persistence/API payloads.
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Runtime => "runtime",
-        }
-    }
 }
 
 /// Type-specific queued data.
@@ -633,7 +616,11 @@ fn lifecycle_event_detail_from_type(
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
         LifecycleEventType::Cancelled => {
-            Some(api::agent_event::lifecycle_event::Detail::Cancelled(()))
+            Some(api::agent_event::lifecycle_event::Detail::Cancelled(
+                api::agent_event::lifecycle_event::Cancelled {
+                    reason: detail_payload.reason.clone().unwrap_or_default(),
+                },
+            ))
         }
         LifecycleEventType::Blocked => Some(api::agent_event::lifecycle_event::Detail::Blocked(
             api::agent_event::lifecycle_event::Blocked {
@@ -642,10 +629,7 @@ fn lifecycle_event_detail_from_type(
         )),
         LifecycleEventType::Errored => Some(api::agent_event::lifecycle_event::Detail::Errored(
             api::agent_event::lifecycle_event::Errored {
-                stage: detail_payload
-                    .stage
-                    .map(|stage| stage.as_str().to_string())
-                    .unwrap_or_default(),
+                stage: String::new(),
                 reason: detail_payload.reason.clone().unwrap_or_default(),
                 error_message: detail_payload.error_message.clone().unwrap_or_default(),
             },

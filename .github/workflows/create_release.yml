@@ -2980,8 +2980,7 @@ jobs:
             After writing the output files, print the full contents of changelog-draft.md to stdout so it appears in the workflow log.
 
             You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
-          warp_api_key: ${{ secrets.CHANGELOG_AGENT_WARP_STAGING_API_KEY }}
-          oz_channel: dev
+          warp_api_key: ${{ secrets.CHANGELOG_AGENT_WARP_API_KEY }}
           share: team
       - name: Upload raw Markdown changelog artifact (stable only)
         if: inputs.channel == 'stable'

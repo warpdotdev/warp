@@ -690,6 +690,12 @@ impl AgentDriver {
         let mut result = ResolvedMCPServers::default();
 
         for installation in installations.iter_mut() {
+            if installation.warp_id() == Some("github") {
+                log::warn!(
+                    "Skipping managed GitHub MCP: third-party harnesses do not provide native tool-call context"
+                );
+                continue;
+            }
             let unresolved_secret_names = installation.apply_secrets(secrets);
             if !unresolved_secret_names.is_empty() {
                 return Err(AgentDriverError::MCPUnresolvedSecrets {

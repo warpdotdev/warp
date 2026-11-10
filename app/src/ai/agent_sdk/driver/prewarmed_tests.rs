@@ -287,7 +287,7 @@ fn installation_failures_are_reported_against_the_run_with_its_credential() {
         let error = AgentDriver::prepare_prewarmed_assignment(
             &spawner,
             unsupported,
-            HashMap::new(),
+            HashMap::from([("WARP_GITHUB_CREDENTIAL_MODE".into(), "future_mode".into())]),
             "assigned-run-key".into(),
             Utc::now() + TimeDelta::hours(1),
         )

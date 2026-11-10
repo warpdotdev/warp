@@ -12,8 +12,8 @@ use warp_server_client::base_client::{
 
 use super::super::ServerApi;
 use super::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskId,
-    AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentRunEventKind, AgentSource,
+    AmbientAgentTaskId, AmbientAgentTaskState, Artifact, ArtifactDownloadResponse, ArtifactType,
     CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
     ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
     ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
@@ -1630,11 +1630,11 @@ fn test_deserialize_agent_run_events_with_optional_fields() {
     let events: Vec<AgentRunEvent> = serde_json::from_str(json).unwrap();
 
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0].event_type, "run_started");
+    assert_eq!(events[0].kind, AgentRunEventKind::LegacyStarted);
     assert_eq!(events[0].execution_id.as_deref(), Some("exec-1"));
     assert_eq!(events[0].ref_id, None);
     assert_eq!(events[0].sequence, 7);
-    assert_eq!(events[1].event_type, "new_message");
+    assert_eq!(events[1].kind, AgentRunEventKind::NewMessage);
     assert_eq!(events[1].ref_id.as_deref(), Some("message-9"));
     assert_eq!(events[1].execution_id, None);
     assert_eq!(events[1].sequence, 8);

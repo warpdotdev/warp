@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use http::StatusCode;
 use mockall::predicate::eq;
+use warp_multi_agent_api::agent_event::lifecycle_event::{
+    Blocked, Cancelled, Detail, Errored, Failed,
+};
 use warpui::App;
 
 use super::*;
@@ -329,6 +332,30 @@ fn restored_local_child_exhausted_transcript_fetch_retries() {
             );
         });
     });
+}
+
+#[test]
+fn mixed_json_events_preserve_cancellation_context_for_parent() {
+    let events: Vec<AgentRunEvent> = serde_json::from_value(serde_json::json!([
+        {"event_type":"future_event","run_id":"child","sequence":1,"occurred_at":"2026-01-01T00:00:00Z"},
+        {"event_type":"new_message","run_id":"self-run","ref_id":"message","sequence":2,"occurred_at":"2026-01-01T00:00:00Z"},
+        {"event_type":"run_cancelled","run_id":"child","detail":{"reason":"Requester cancelled"},"sequence":3,"occurred_at":"2026-01-01T00:00:00Z"}
+    ])).unwrap();
+    let parent_events = api::message::EventsFromAgents {
+        agent_events: convert_lifecycle_events(&events, "self-run"),
+    };
+    assert_eq!(parent_events.agent_events.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) =
+        &parent_events.agent_events[0].event
+    else {
+        panic!("expected lifecycle event");
+    };
+    assert_eq!(lifecycle.sender_agent_id, "child");
+    let Some(api::agent_event::lifecycle_event::Detail::Cancelled(cancelled)) = &lifecycle.detail
+    else {
+        panic!("expected cancellation");
+    };
+    assert_eq!(cancelled.reason, "Requester cancelled");
 }
 
 #[test]
@@ -700,7 +727,7 @@ fn threshold_exceeded_at_and_above_limit() {
 
 fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> AgentRunEvent {
     AgentRunEvent {
-        event_type: event_type.to_string(),
+        kind: serde_json::from_value(serde_json::json!({"event_type": event_type})).unwrap(),
         run_id: run_id.to_string(),
         ref_id: ref_id.map(|s| s.to_string()),
         execution_id: None,
@@ -735,6 +762,85 @@ fn convert_lifecycle_events_includes_run_blocked() {
         panic!("expected blocked detail");
     };
     assert!(blocked.blocked_action.is_empty());
+}
+
+#[test]
+fn convert_lifecycle_events_maps_typed_context() {
+    for (kind, expected) in [
+        (
+            AgentRunEventKind::Failed {
+                reason: Some("environment_setup_failed".into()),
+                error_message: Some("Repository unavailable".into()),
+            },
+            Detail::Failed(Failed {
+                reason: "environment_setup_failed".into(),
+                error_message: "Repository unavailable".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Errored {
+                reason: Some("internal_error".into()),
+                error_message: Some("Child process failed".into()),
+            },
+            Detail::Errored(Errored {
+                stage: String::new(),
+                reason: "internal_error".into(),
+                error_message: "Child process failed".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Blocked {
+                blocked_action: Some("Approval required".into()),
+            },
+            Detail::Blocked(Blocked {
+                blocked_action: "Approval required".into(),
+            }),
+        ),
+        (
+            AgentRunEventKind::Cancelled {
+                reason: Some("Requester cancelled".into()),
+            },
+            Detail::Cancelled(Cancelled {
+                reason: "Requester cancelled".into(),
+            }),
+        ),
+    ] {
+        let events = [AgentRunEvent {
+            kind,
+            run_id: "child-run".into(),
+            ref_id: None,
+            execution_id: None,
+            occurred_at: "2026-01-01T00:00:00Z".into(),
+            sequence: 1,
+        }];
+        let result = convert_lifecycle_events(&events, "self-run");
+        assert_eq!(result.len(), 1);
+        let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+            panic!("expected lifecycle event");
+        };
+        assert_eq!(lifecycle.detail.as_ref(), Some(&expected));
+    }
+}
+
+#[test]
+fn convert_lifecycle_events_errored_without_detail_has_no_diagnosis() {
+    let events = vec![make_run_event(
+        "run_errored",
+        "child-run",
+        Some("legacy-ref"),
+    )];
+    let result = convert_lifecycle_events(&events, "self-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    let Some(api::agent_event::lifecycle_event::Detail::Errored(errored)) = &lifecycle.detail
+    else {
+        panic!("expected errored detail");
+    };
+    assert!(errored.reason.is_empty());
+    assert!(errored.stage.is_empty());
+    assert!(errored.error_message.is_empty());
 }
 
 #[test]
@@ -1219,7 +1325,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
     let mut consumer = DormantClaudeWakeConsumer::new("target-run".to_string());
 
     let ignored_event = AgentRunEvent {
-        event_type: "new_message".to_string(),
+        kind: AgentRunEventKind::NewMessage,
         run_id: "other-run".to_string(),
         ref_id: Some("message-1".to_string()),
         execution_id: None,
@@ -1233,7 +1339,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
     assert_eq!(consumer.wake_message, None);
 
     let ignored_same_run_lifecycle = AgentRunEvent {
-        event_type: "run_restarted".to_string(),
+        kind: AgentRunEventKind::LegacyRestarted,
         run_id: "target-run".to_string(),
         ref_id: None,
         execution_id: None,
@@ -1251,7 +1357,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
     consumer.persist_cursor(7).await.unwrap();
 
     let target_event = AgentRunEvent {
-        event_type: "new_message".to_string(),
+        kind: AgentRunEventKind::NewMessage,
         run_id: "target-run".to_string(),
         ref_id: Some("message-2".to_string()),
         execution_id: None,
@@ -1466,7 +1572,7 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
         // (which we did not register in this test App).
         let events = vec![
             AgentRunEvent {
-                event_type: "unrecognized_event_type".to_string(),
+                kind: AgentRunEventKind::Unknown,
                 run_id: "some-other-run".to_string(),
                 ref_id: None,
                 execution_id: None,
@@ -1474,7 +1580,7 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
                 sequence: 17,
             },
             AgentRunEvent {
-                event_type: "unrecognized_event_type".to_string(),
+                kind: AgentRunEventKind::Unknown,
                 run_id: "some-other-run".to_string(),
                 ref_id: None,
                 execution_id: None,
@@ -1554,7 +1660,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                 0,
                 vec![
                     AgentRunEvent {
-                        event_type: "new_message".to_string(),
+                        kind: AgentRunEventKind::NewMessage,
                         run_id: killed_run_id.clone(),
                         ref_id: Some("message-from-killed-child".to_string()),
                         execution_id: None,
@@ -1562,7 +1668,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         sequence: 17,
                     },
                     AgentRunEvent {
-                        event_type: "run_cancelled".to_string(),
+                        kind: AgentRunEventKind::Cancelled { reason: None },
                         run_id: killed_run_id.clone(),
                         ref_id: None,
                         execution_id: None,
@@ -1570,7 +1676,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         sequence: 18,
                     },
                     AgentRunEvent {
-                        event_type: "new_message".to_string(),
+                        kind: AgentRunEventKind::NewMessage,
                         run_id: killed_run_id.clone(),
                         ref_id: None,
                         execution_id: None,
@@ -3220,7 +3326,7 @@ fn wait_registration_fetch_error_does_not_register() {
 
 #[test]
 fn classify_child_agent_started_on_self_is_child_started() {
-    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", Some("child-run"));
+    let event = make_run_event("child_agent_started", "parent-run", Some("child-run"));
     assert_eq!(
         classify_family_event(&event, "parent-run"),
         FamilyEvent::ChildStarted {
@@ -3232,7 +3338,7 @@ fn classify_child_agent_started_on_self_is_child_started() {
 #[test]
 fn classify_child_agent_started_without_ref_id_is_opaque() {
     // A discovery event with no child run id carries nothing actionable.
-    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", None);
+    let event = make_run_event("child_agent_started", "parent-run", None);
     assert_eq!(
         classify_family_event(&event, "parent-run"),
         FamilyEvent::Opaque
@@ -3241,7 +3347,7 @@ fn classify_child_agent_started_without_ref_id_is_opaque() {
 
 #[test]
 fn classify_run_session_linked_on_child_is_session_linked() {
-    let event = make_run_event(EVENT_RUN_SESSION_LINKED, "child-run", Some("session-uuid"));
+    let event = make_run_event("run_session_linked", "child-run", Some("session-uuid"));
     assert_eq!(
         classify_family_event(&event, "parent-run"),
         FamilyEvent::ChildSessionLinked {
@@ -3334,12 +3440,7 @@ fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
         });
 
         let events = vec![
-            make_seq_event(
-                EVENT_CHILD_AGENT_STARTED,
-                &parent_run_id,
-                Some(&child_a),
-                10,
-            ),
+            make_seq_event("child_agent_started", &parent_run_id, Some(&child_a), 10),
             make_seq_event("run_in_progress", &child_a, None, 11),
             make_seq_event("new_message", &parent_run_id, Some("msg-1"), 12),
             make_seq_event("some_unknown_event", &child_b, None, 13),
@@ -3458,7 +3559,7 @@ fn drain_family_events_primary_does_not_queue_delivery_for_an_external_harness_o
         // Non-terminal child lifecycle events only: a terminal one would also evict the child's
         // cached task through `AgentConversationsModel`, which this fixture does not register.
         let events = vec![
-            make_seq_event(EVENT_CHILD_AGENT_STARTED, &parent_run_id, Some(&child), 20),
+            make_seq_event("child_agent_started", &parent_run_id, Some(&child), 20),
             make_seq_event("run_in_progress", &child, None, 21),
             make_seq_event("new_message", &parent_run_id, Some("msg-1"), 22),
             make_seq_event("run_blocked", &child, None, 23),
