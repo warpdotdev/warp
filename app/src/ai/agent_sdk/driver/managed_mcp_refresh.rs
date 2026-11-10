@@ -15,7 +15,6 @@ use futures::future::{self, BoxFuture};
 use futures::{FutureExt as _, StreamExt as _};
 use mcp::refreshable_headers::{RefreshableHeaders, RejectionHandler};
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
@@ -86,9 +85,6 @@ pub(super) fn leases_for_installations(
     installations: &[TemplatableMCPServerInstallation],
     warp_id: &str,
 ) -> Vec<ManagedMcpLease> {
-    if !FeatureFlag::ManagedMcpCredentialRefresh.is_enabled() {
-        return Vec::new();
-    }
     let Some((header_name, credential)) = credential_from_client_config(config) else {
         return Vec::new();
     };
@@ -154,6 +150,16 @@ pub(crate) enum MintError {
     /// The server declined to issue a credential, or issued one that cannot replace the
     /// current one.
     Rejected(anyhow::Error),
+}
+
+impl fmt::Display for MintError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transient(error) | Self::Unauthenticated(error) | Self::Rejected(error) => {
+                write!(f, "{error:#}")
+            }
+        }
+    }
 }
 
 impl MintError {

@@ -317,6 +317,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WellKnownMcpIds,
         #[cfg(feature = "managed_mcp_credential_refresh")]
         FeatureFlag::ManagedMcpCredentialRefresh,
+        #[cfg(feature = "managed_mcp_harness_credential_helper")]
+        FeatureFlag::ManagedMcpHarnessCredentialHelper,
         #[cfg(feature = "factory_mcp")]
         FeatureFlag::FactoryMcp,
         #[cfg(feature = "preview_urls_mcp")]

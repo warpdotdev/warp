@@ -7,10 +7,10 @@ use futures::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use instant::Instant;
 use warp_util::path::ShellFamily;
 
+use super::super::super::local_socket::{MAX_TOKEN_LINE, TOKEN_BYTES, read_line};
 use super::{
-    BridgeEndpoint, BridgeListener, BridgeReader, BridgeStream, BridgeWriter, MAX_TOKEN_LINE,
-    TOKEN_BYTES, bridge_command, connect_with_token, read_launch, read_line, render_bridge_command,
-    select_agent_program,
+    BridgeEndpoint, BridgeListener, BridgeReader, BridgeStream, BridgeWriter, bridge_command,
+    connect_with_token, read_launch, render_bridge_command, select_agent_program,
 };
 
 #[test]
@@ -325,7 +325,7 @@ fn bridge_fails_clearly_when_its_token_is_rejected() {
         panic!("the bridge should not have been accepted");
     };
     assert!(
-        error.to_string().contains("rejected the bridge token"),
+        error.to_string().contains("rejected the token"),
         "{error:#}"
     );
     // The driver keeps waiting for the real bridge, which never came.

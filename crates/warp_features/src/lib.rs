@@ -1018,6 +1018,10 @@ pub enum FeatureFlag {
     /// Refreshes the short-lived proxy credentials of managed MCP servers during an agent run,
     /// before they expire and on first use after they have expired.
     ManagedMcpCredentialRefresh,
+
+    /// Gives third-party harnesses a helper command that asks the agent driver for the current
+    /// credential of a managed MCP server, in place of a credential written into their config.
+    ManagedMcpHarnessCredentialHelper,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1098,6 +1102,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::ManagedMcpCredentialRefresh,
+    FeatureFlag::ManagedMcpHarnessCredentialHelper,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

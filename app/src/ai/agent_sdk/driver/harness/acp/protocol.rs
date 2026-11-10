@@ -126,6 +126,9 @@ pub(super) struct AgentInfo {
 pub(super) struct NewSessionParams {
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
+    /// Adapter-specific options for the session.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 /// Reopens a session the agent persisted, in place of `session/new`.
@@ -135,6 +138,9 @@ pub(super) struct ResumeSessionParams {
     pub session_id: String,
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
+    /// Adapter-specific options for the session.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 /// Reopens a session the agent persisted, in place of `session/new`, with the agent replaying
@@ -145,6 +151,9 @@ pub(super) struct LoadSessionParams {
     pub session_id: String,
     pub cwd: String,
     pub mcp_servers: Vec<McpServer>,
+    /// Adapter-specific options for the session.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -165,6 +174,14 @@ pub(super) enum McpServer {
         url: String,
         headers: Vec<HttpHeader>,
     },
+}
+
+impl McpServer {
+    pub(super) fn name(&self) -> &str {
+        match self {
+            Self::Stdio { name, .. } | Self::Remote { name, .. } => name,
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]

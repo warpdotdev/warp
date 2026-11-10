@@ -449,6 +449,7 @@ fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
             reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -477,6 +478,7 @@ fn a_resumed_session_keeps_the_notifications_around_its_answer() {
             reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -510,6 +512,7 @@ fn a_loaded_session_discards_its_replayed_history_and_keeps_what_follows() {
             reopen(ReopenMethod::Load),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -552,6 +555,7 @@ fn a_refused_load_discards_its_partial_replay_and_falls_back_to_a_new_session() 
             reopen(ReopenMethod::Load),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -602,6 +606,7 @@ fn a_load_the_agent_does_not_answer_fails_the_handshake() {
             reopen(ReopenMethod::Load),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -631,6 +636,7 @@ fn a_load_answer_that_cannot_be_read_fails_the_handshake() {
             reopen(ReopenMethod::Load),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -721,6 +727,7 @@ fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
             reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -755,6 +762,7 @@ fn a_resume_the_agent_does_not_answer_fails_the_handshake() {
             reopen(ReopenMethod::Resume),
             "/workspace".to_owned(),
             Vec::new(),
+            None,
             &clock,
         );
         let agent = async {
@@ -790,6 +798,7 @@ fn without_a_session_to_resume_a_new_one_is_opened() {
                 plan,
                 "/workspace".to_owned(),
                 Vec::new(),
+                None,
                 &clock,
             );
             let agent = async {
@@ -800,6 +809,38 @@ fn without_a_session_to_resume_a_new_one_is_opened() {
             let (session, origin) = opened.unwrap();
             assert_eq!(session.session_id, "fresh");
             assert_eq!(origin, expected_origin);
+        });
+    }
+}
+
+#[test]
+fn adapter_options_accompany_reopening_and_the_session_that_replaces_it() {
+    for (method, request_method) in [
+        (ReopenMethod::Resume, "session/resume"),
+        (ReopenMethod::Load, "session/load"),
+    ] {
+        let (connection, _notifications, mut agent) = connect(rejecting_handler());
+        let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
+        let options = json!({ "claudeCode": { "options": { "mcpServers": {} } } });
+        block_on(async {
+            let open = open_session(
+                &connection,
+                reopen(method),
+                "/workspace".to_owned(),
+                Vec::new(),
+                Some(options.clone()),
+                &clock,
+            );
+            let agent = async {
+                let request = answer_next(&mut agent, None).await;
+                assert_eq!(request["method"], request_method);
+                assert_eq!(request["params"]["_meta"], options);
+                let request = answer_next(&mut agent, Some(json!({"sessionId": "fresh"}))).await;
+                assert_eq!(request["method"], "session/new");
+                assert_eq!(request["params"]["_meta"], options);
+            };
+            let (opened, ()) = join!(open, agent);
+            opened.unwrap();
         });
     }
 }
