@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,6 +14,7 @@ use futures::{FutureExt as _, StreamExt as _};
 use http::StatusCode;
 use instant::Instant;
 use uuid::Uuid;
+use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
@@ -29,10 +31,11 @@ use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
-    attach_builtin_mcp_servers, start_task_and_profile_mcp_servers,
+    attach_builtin_mcp_servers, attach_computer_use_mcp, computer_use_mcp_env,
+    computer_use_mcp_server, start_task_and_profile_mcp_servers,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
-use crate::ai::agent_sdk::driver::harness::HarnessKind;
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, ResolvedMCPServers};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::driver::{AgentRunPrompt, Task};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -40,7 +43,8 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{
-    FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME,
+    COMPUTER_USE_MCP_SERVER_NAME, FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME,
+    PREVIEW_URLS_MCP_SERVER_NAME,
 };
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
@@ -2326,4 +2330,79 @@ fn timed_out_wait_does_not_tear_down_a_later_waits_subscription() {
             )
             .expect("wait B's oneshot sender should not have been dropped");
     });
+}
+
+fn stdio_server(server: &JSONMCPServer) -> (&str, &[String], &HashMap<String, String>) {
+    match &server.transport_type {
+        JSONTransportType::CLIServer {
+            command, args, env, ..
+        } => (command, args, env),
+        JSONTransportType::SSEServer { .. } => panic!("expected a stdio server"),
+    }
+}
+
+fn computer_use_server(harness: Harness) -> Option<JSONMCPServer> {
+    computer_use_mcp_server(harness, "/opt/oz".to_owned(), HashMap::new())
+}
+
+#[test]
+fn computer_use_mcp_server_matches_the_harness_model_family() {
+    for (harness, model_family) in [
+        (Harness::Claude, "anthropic"),
+        (Harness::Gemini, "anthropic"),
+        (Harness::Codex, "openai"),
+    ] {
+        let server = computer_use_server(harness).expect("harness takes MCP servers");
+        let (command, args, _) = stdio_server(&server);
+        assert_eq!(command, "/opt/oz");
+        assert_eq!(args, ["computer-use-mcp", "--model-family", model_family]);
+    }
+    for harness in [
+        Harness::Oz,
+        Harness::OpenCode,
+        Harness::Pi,
+        Harness::Unknown,
+    ] {
+        assert!(computer_use_server(harness).is_none(), "{harness}");
+    }
+}
+
+#[test]
+fn computer_use_mcp_env_prefers_the_run_environment_and_skips_other_variables() {
+    let resolved = HashMap::from([
+        (OsString::from("DISPLAY"), OsString::from(":99")),
+        (OsString::from("API_TOKEN"), OsString::from("secret")),
+    ]);
+    let env = computer_use_mcp_env(&resolved, |name| {
+        matches!(name, "DISPLAY" | "XAUTHORITY" | "API_TOKEN")
+            .then(|| OsString::from(format!("process-{name}")))
+    });
+    assert_eq!(
+        env,
+        HashMap::from([
+            ("DISPLAY".to_owned(), ":99".to_owned()),
+            ("XAUTHORITY".to_owned(), "process-XAUTHORITY".to_owned()),
+        ])
+    );
+}
+
+#[test]
+fn configured_servers_take_precedence_over_the_computer_use_mcp() {
+    let configured = JSONMCPServer {
+        transport_type: JSONTransportType::SSEServer {
+            url: "https://example.com/mcp".to_owned(),
+            headers: HashMap::new(),
+        },
+    };
+    let mut servers = ResolvedMCPServers::default();
+    servers
+        .configs
+        .insert(COMPUTER_USE_MCP_SERVER_NAME.to_owned(), configured.clone());
+    attach_computer_use_mcp(&mut servers, computer_use_server(Harness::Claude).unwrap());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], configured);
+
+    let mut servers = ResolvedMCPServers::default();
+    let computer_use = computer_use_server(Harness::Claude).unwrap();
+    attach_computer_use_mcp(&mut servers, computer_use.clone());
+    assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], computer_use);
 }
