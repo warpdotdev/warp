@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use command::blocking::Command;
 use warp_graphql::queries::task_restricted_git_credentials::{
@@ -51,9 +51,8 @@ static MANAGED_STORE: Mutex<Option<ManagedStore>> = Mutex::new(None);
 
 pub(crate) fn restricted_github_mode() -> Result<bool> {
     match std::env::var("WARP_GITHUB_CREDENTIAL_MODE") {
-        Err(std::env::VarError::NotPresent) => Ok(false),
-        Ok(value) if value == "restricted_installation" => Ok(true),
-        _ => bail!("Unknown GitHub credential mode; refusing legacy fallback"),
+        Ok(value) => Ok(value == "restricted_installation"),
+        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => Ok(false),
     }
 }
 

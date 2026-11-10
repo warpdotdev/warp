@@ -71,6 +71,38 @@ fn response() -> RestrictedTaskGitCredentialsOutput {
 }
 
 #[test]
+fn unknown_mode_uses_legacy_credentials() -> Result<()> {
+    with_home(
+        "unknown_mode_uses_legacy_credentials",
+        &[("WARP_GITHUB_CREDENTIAL_MODE", "future_mode")],
+        |_| {
+            assert!(!restricted_github_mode()?);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn restricted_mode_uses_restricted_credentials() -> Result<()> {
+    with_home(
+        "restricted_mode_uses_restricted_credentials",
+        &[("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")],
+        |_| {
+            assert!(restricted_github_mode()?);
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn absent_mode_uses_legacy_credentials() -> Result<()> {
+    with_home("absent_mode_uses_legacy_credentials", &[], |_| {
+        assert!(!restricted_github_mode()?);
+        Ok(())
+    })
+}
+
+#[test]
 fn legacy_response_is_not_accepted_in_restricted_mode() {
     let mut response = response();
     response.github_credential_mode = GitHubCredentialMode::Legacy;
