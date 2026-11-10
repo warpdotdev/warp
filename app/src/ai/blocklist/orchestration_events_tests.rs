@@ -33,9 +33,9 @@ fn lifecycle_pending_event(
                 error_message: String::new(),
             },
         )),
-        api::LifecycleEventType::Cancelled => {
-            Some(api::agent_event::lifecycle_event::Detail::Cancelled(()))
-        }
+        api::LifecycleEventType::Cancelled => Some(
+            api::agent_event::lifecycle_event::Detail::Cancelled(Default::default()),
+        ),
         api::LifecycleEventType::Blocked => {
             Some(api::agent_event::lifecycle_event::Detail::Blocked(
                 api::agent_event::lifecycle_event::Blocked {
