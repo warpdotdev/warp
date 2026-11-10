@@ -742,8 +742,7 @@ mod hooks {
                     vec![
                         "verdict:<id>:false".to_owned(),
                         "executing:<id>".to_owned(),
-                        "finished:<id>:hook_denied(rm -rf build;rm is not allowed in this repo)"
-                            .to_owned(),
+                        "finished:<id>:denied_by_hook(rm is not allowed in this repo)".to_owned(),
                     ]
                 );
                 assert_eq!(
