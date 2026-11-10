@@ -892,6 +892,10 @@ pub enum FeatureFlag {
     /// are protected from reordering.
     PinnedTabs,
 
+    /// Gates the "Merge into tab" tab context-menu action, which moves every pane of one
+    /// tab into another tab as splits.
+    MergeTabIntoTab,
+
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,

@@ -18,6 +18,7 @@ pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
 mod startup_directory;
 mod tab_grouping;
+mod tab_merge;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 pub(crate) mod tests;
@@ -8128,6 +8129,7 @@ impl Workspace {
                 is_only_member_of_group,
                 can_move_left,
                 can_move_right,
+                &self.merge_into_tab_destinations(tab_index, ctx),
                 ctx,
             )
         };
@@ -8214,6 +8216,7 @@ impl Workspace {
             is_only_member_of_group,
             can_move_left,
             can_move_right,
+            &self.merge_into_tab_destinations(tab_index, ctx),
             Some(pane_name_target),
             ctx,
         );
@@ -24295,6 +24298,10 @@ impl TypedActionView for Workspace {
                 tab_index,
                 group_id,
             } => self.move_tab_to_group(*tab_index, *group_id, ctx),
+            MergeTabIntoTab {
+                source_tab_index,
+                destination_tab_index,
+            } => self.merge_tab_into_tab(*source_tab_index, *destination_tab_index, ctx),
             RemoveTabFromGroup(tab_index) => self.remove_tab_from_group(*tab_index, ctx),
             ShiftSelectTabRange { locator } => self.shift_select_tab_range(*locator, ctx),
             ToggleTabMultiSelection { locator } => self.toggle_tab_multi_selection(*locator, ctx),

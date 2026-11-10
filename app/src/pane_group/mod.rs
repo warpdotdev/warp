@@ -4405,6 +4405,66 @@ impl PaneGroup {
         pane_content
     }
 
+    /// Whether every pane in this group is a visible terminal pane, which is the only layout
+    /// [`Self::take_panes_for_merge`] can move without losing or stranding content. Hidden
+    /// panes (pending close, move, job, or child agent) live off the visible tree and cannot be
+    /// re-attached as splits, and non-terminal panes need their own attach/detach handling.
+    /// Groups that track child agent panes (or are a split-off child agent tab) are excluded
+    /// because that bookkeeping is keyed to this group and would dangle in the destination.
+    pub fn can_merge_into_another_tab(&self) -> bool {
+        let visible_pane_ids = self.panes.visible_pane_ids();
+        self.child_agent_panes.is_empty()
+            && self.transitively_shared_child_panes.is_empty()
+            && self.child_agent_origin.is_none()
+            && !visible_pane_ids.is_empty()
+            && visible_pane_ids.len() == self.pane_contents.len()
+            && visible_pane_ids.iter().all(PaneId::is_terminal_pane)
+    }
+
+    /// Detaches every pane from this group without ending its session, in visible tree order.
+    /// Returns an empty list and leaves the group untouched unless
+    /// [`Self::can_merge_into_another_tab`] holds, so a group is never partially drained.
+    ///
+    /// Removing the last pane emits [`Event::Exited`], which closes the now-empty tab.
+    pub fn take_panes_for_merge(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<Box<dyn AnyPaneContent>> {
+        if !self.can_merge_into_another_tab() {
+            return Vec::new();
+        }
+        self.panes
+            .visible_pane_ids()
+            .iter()
+            .filter_map(|pane_id| self.remove_pane_for_move(pane_id, ctx))
+            .collect()
+    }
+
+    /// Appends panes taken from another group as splits to the right of the existing layout,
+    /// preserving their order, and focuses the first appended pane.
+    pub fn add_merged_panes(
+        &mut self,
+        panes: Vec<Box<dyn AnyPaneContent>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let first_pane_id = panes.first().map(|pane| pane.as_pane().id());
+        for pane in panes {
+            let pane_id = pane.as_pane().id();
+            if self
+                .add_pane(Direction::Right, None, pane, false, ctx)
+                .is_none()
+            {
+                report_error!(
+                    "Failed to attach merged pane",
+                    extra: { "pane_id" => ?pane_id }
+                );
+            }
+        }
+        if let Some(pane_id) = first_pane_id {
+            self.focus_pane_by_id(pane_id, ctx);
+        }
+    }
+
     pub fn notebook_pane_by_pane_id(&self, pane_id: Option<PaneId>) -> Option<&NotebookPane> {
         self.downcast_pane_by_id(pane_id?)
     }
