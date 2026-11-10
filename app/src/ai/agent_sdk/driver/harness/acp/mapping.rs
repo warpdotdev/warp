@@ -27,6 +27,7 @@ use warp_multi_agent_api::{
     call_mcp_tool_result, client_action, read_files_result, run_shell_command_result,
 };
 
+use super::mcp_projection::{self, KnownMcpServers};
 use super::protocol::{
     PlanEntry, SessionUpdate, ToolCallContent, ToolCallFields, ToolCallStatus, ToolKind,
 };
@@ -53,6 +54,15 @@ struct OpenMessage {
 /// the call and its result always agree; see [`ToolProjection::for_call`].
 #[derive(Clone, Debug, PartialEq)]
 enum ToolProjection {
+    /// A call to one of the MCP servers the agent was given, presented as the native agent's
+    /// own MCP calls are: the installation id as `server_id` and the server's identity stamped
+    /// on.
+    Mcp {
+        server_id: String,
+        name: String,
+        args: prost_types::Struct,
+        identity: McpServerIdentity,
+    },
     Shell {
         command: String,
     },
@@ -73,19 +83,24 @@ enum ToolProjection {
     Generic {
         name: String,
         args: prost_types::Struct,
-        /// Set when the call is a tool of one of the MCP servers the agent was given.
-        server_identity: Option<McpServerIdentity>,
     },
 }
 
 impl ToolProjection {
-    fn for_call(
-        kind: Option<ToolKind>,
-        title: &str,
-        raw_input: Option<&Value>,
-        content: Option<&[ToolCallContent]>,
-        mcp_servers: &HashMap<String, McpServerIdentity>,
-    ) -> Self {
+    fn for_call(call: &ToolCallFields, title: &str, mcp_servers: &KnownMcpServers) -> Self {
+        let kind = call.kind;
+        let raw_input = call.raw_input.as_ref();
+        let content = call.content.as_deref();
+        // Decided before the shell projection: an adapter may report an MCP call as `execute`
+        // with the invocation's name as its title, which would otherwise read as a command.
+        if let Some(mcp) = mcp_servers.recognize(call) {
+            return Self::Mcp {
+                server_id: mcp.server.installation_id.to_string(),
+                name: mcp.tool,
+                args: generic_args(mcp.args.as_ref()),
+                identity: mcp.server.identity(),
+            };
+        }
         if let Some(command) = command_from_raw_input(raw_input, kind, title) {
             return Self::Shell { command };
         }
@@ -106,23 +121,25 @@ impl ToolProjection {
                 line_range: line_range_from_raw_input(raw_input),
             };
         }
-        let args = generic_args(raw_input);
-        match split_mcp_tool_name(title, mcp_servers) {
-            Some((tool, identity)) => Self::Generic {
-                name: tool.to_owned(),
-                args,
-                server_identity: Some(identity.clone()),
-            },
-            None => Self::Generic {
-                name: mcp_tool_name(kind, title),
-                args,
-                server_identity: None,
-            },
+        Self::Generic {
+            name: mcp_tool_name(kind, title),
+            args: generic_args(raw_input),
         }
     }
 
     fn tool(&self, title: &str) -> Tool {
         match self {
+            Self::Mcp {
+                server_id,
+                name,
+                args,
+                identity,
+            } => Tool::CallMcpTool(CallMcpTool {
+                name: name.clone(),
+                args: Some(args.clone()),
+                server_id: server_id.clone(),
+                server_identity: Some(identity.clone()),
+            }),
             Self::Shell { command } => Tool::RunShellCommand(RunShellCommand {
                 command: command.clone(),
                 ..Default::default()
@@ -156,21 +173,30 @@ impl ToolProjection {
                     line_ranges: line_range.iter().copied().collect(),
                 }],
             }),
-            Self::Generic {
-                name,
-                args,
-                server_identity,
-            } => Tool::CallMcpTool(CallMcpTool {
+            Self::Generic { name, args } => Tool::CallMcpTool(CallMcpTool {
                 name: name.clone(),
                 args: Some(args.clone()),
-                server_identity: server_identity.clone(),
                 ..Default::default()
             }),
         }
     }
 
-    fn result(&self, action_id: &str, output: String, failed: bool) -> ToolResult {
+    fn result(
+        &self,
+        action_id: &str,
+        output: String,
+        raw_output: Option<&Value>,
+        failed: bool,
+    ) -> ToolResult {
         match self {
+            // The MCP result itself, when the adapter passed it through, is more faithful than
+            // the content rendered from it.
+            Self::Mcp { .. } => match mcp_projection::outcome(raw_output) {
+                Some(Err(message)) => mcp_error(message),
+                Some(Ok(text)) => mcp_success(text),
+                None if failed => mcp_error(output),
+                None => mcp_success(output),
+            },
             Self::Shell { command } => {
                 let exit_code = i32::from(failed);
                 #[allow(deprecated)]
@@ -241,24 +267,32 @@ impl ToolProjection {
                     result: Some(result),
                 })
             }
-            Self::Generic { .. } if failed => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Error(
-                    call_mcp_tool_result::Error { message: output },
-                )),
-            }),
-            Self::Generic { .. } => ToolResult::CallMcpTool(CallMcpToolResult {
-                result: Some(call_mcp_tool_result::Result::Success(
-                    call_mcp_tool_result::Success {
-                        results: vec![call_mcp_tool_result::success::Result {
-                            result: Some(call_mcp_tool_result::success::result::Result::Text(
-                                call_mcp_tool_result::success::result::Text { text: output },
-                            )),
-                        }],
-                    },
-                )),
-            }),
+            Self::Generic { .. } if failed => mcp_error(output),
+            Self::Generic { .. } => mcp_success(output),
         }
     }
+}
+
+fn mcp_error(message: String) -> ToolResult {
+    ToolResult::CallMcpTool(CallMcpToolResult {
+        result: Some(call_mcp_tool_result::Result::Error(
+            call_mcp_tool_result::Error { message },
+        )),
+    })
+}
+
+fn mcp_success(text: String) -> ToolResult {
+    ToolResult::CallMcpTool(CallMcpToolResult {
+        result: Some(call_mcp_tool_result::Result::Success(
+            call_mcp_tool_result::Success {
+                results: vec![call_mcp_tool_result::success::Result {
+                    result: Some(call_mcp_tool_result::success::result::Result::Text(
+                        call_mcp_tool_result::success::result::Text { text },
+                    )),
+                }],
+            },
+        )),
+    })
 }
 
 struct ToolCallState {
@@ -272,6 +306,8 @@ struct ToolCallState {
     title: String,
     projection: ToolProjection,
     output: String,
+    /// The latest `rawOutput` the agent attached to the call.
+    raw_output: Option<Value>,
     has_result: bool,
 }
 
@@ -303,16 +339,12 @@ pub(super) struct AcpTurnMapper {
     /// Whether a tool call was announced in the current request stream, so the next result
     /// must be preceded by a segment boundary.
     tool_call_announced_in_segment: bool,
-    /// Identities of the MCP servers the agent was given, keyed by server name.
-    mcp_servers: HashMap<String, McpServerIdentity>,
+    /// The MCP servers the agent was given.
+    mcp_servers: KnownMcpServers,
 }
 
 impl AcpTurnMapper {
-    pub(super) fn new(
-        task_id: String,
-        request_id: String,
-        mcp_servers: HashMap<String, McpServerIdentity>,
-    ) -> Self {
+    pub(super) fn new(task_id: String, request_id: String, mcp_servers: KnownMcpServers) -> Self {
         Self {
             task_id,
             request_id,
@@ -526,13 +558,7 @@ impl AcpTurnMapper {
         }
         self.open_message = None;
         let title = call.title.clone().unwrap_or_else(|| "Tool call".to_owned());
-        let projection = ToolProjection::for_call(
-            call.kind,
-            &title,
-            call.raw_input.as_ref(),
-            call.content.as_deref(),
-            &self.mcp_servers,
-        );
+        let projection = ToolProjection::for_call(&call, &title, &self.mcp_servers);
         let action_id = Uuid::new_v4().to_string();
         let message = self.new_message(MessageKind::ToolCall(ToolCall {
             tool_call_id: action_id.clone(),
@@ -545,6 +571,7 @@ impl AcpTurnMapper {
             title,
             projection,
             output: tool_output_text(call.content.as_deref(), call.raw_output.as_ref()),
+            raw_output: call.raw_output.clone(),
             has_result: false,
         };
         self.tool_calls.insert(call.tool_call_id.clone(), state);
@@ -582,6 +609,24 @@ impl AcpTurnMapper {
         // later is written back onto the announced call.
         let mut input_changed = false;
         match &mut state.projection {
+            // The server and tool were fixed when the call was announced; only the arguments
+            // follow a later input. An update may carry the input alone, so the announced title
+            // stands in for the label that named the call.
+            ToolProjection::Mcp { args, .. } => {
+                if call.raw_input.is_some() {
+                    let mut refined = call.clone();
+                    if refined.name.is_none() && refined.title.is_none() {
+                        refined.title = Some(state.title.clone());
+                    }
+                    if let Some(mcp) = self.mcp_servers.recognize(&refined) {
+                        let updated = generic_args(mcp.args.as_ref());
+                        if *args != updated {
+                            *args = updated;
+                            input_changed = true;
+                        }
+                    }
+                }
+            }
             ToolProjection::Shell { command } => {
                 if call.raw_input.is_some()
                     && let Some(updated) =
@@ -618,6 +663,9 @@ impl AcpTurnMapper {
         let output = tool_output_text(call.content.as_deref(), call.raw_output.as_ref());
         if !output.is_empty() {
             state.output = output;
+        }
+        if call.raw_output.is_some() {
+            state.raw_output = call.raw_output.clone();
         }
         let mut events = Vec::new();
         if input_changed {
@@ -729,7 +777,9 @@ impl AcpTurnMapper {
         } else {
             state.output.clone()
         };
-        let result = state.projection.result(&action_id, output, failed);
+        let result = state
+            .projection
+            .result(&action_id, output, state.raw_output.as_ref(), failed);
         Some(
             self.new_message(MessageKind::ToolCallResult(ToolCallResult {
                 tool_call_id: action_id,
@@ -918,33 +968,6 @@ fn generic_args(raw_input: Option<&Value>) -> prost_types::Struct {
         Some(prost_types::value::Kind::StructValue(fields)) => fields,
         _ => prost_types::Struct::default(),
     }
-}
-
-/// Splits a Claude Code MCP tool name, `mcp__<server>__<tool>`, into the tool's own name and the
-/// identity of the server it belongs to. Claude Code writes the server name with every character
-/// outside `[A-Za-z0-9_-]` replaced by `_`; when several server names match, the longest wins.
-fn split_mcp_tool_name<'a>(
-    title: &'a str,
-    mcp_servers: &'a HashMap<String, McpServerIdentity>,
-) -> Option<(&'a str, &'a McpServerIdentity)> {
-    let qualified = title.strip_prefix("mcp__")?;
-    mcp_servers
-        .iter()
-        .filter_map(|(name, identity)| {
-            let server: String = name
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            let tool = qualified.strip_prefix(&server)?.strip_prefix("__")?;
-            (!tool.is_empty()).then_some((tool, identity))
-        })
-        .min_by_key(|(tool, _)| tool.len())
 }
 
 fn mcp_tool_name(kind: Option<ToolKind>, title: &str) -> String {
