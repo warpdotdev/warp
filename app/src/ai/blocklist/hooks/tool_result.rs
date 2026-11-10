@@ -290,7 +290,7 @@ fn shell_progress(result: &AIAgentActionResultType) -> ShellProgress {
 /// Whether the tool ran and this is what it returned. A failing exit code, an error the tool
 /// reported, or a shell that ended under the command are all answers from a tool that ran. A
 /// cancelled result, a result Warp produced because the tool was not allowed to start, and a
-/// reason an agent hook wrote are not.
+/// denial by an agent hook are not.
 pub(crate) fn ran_and_returned(result: &AIAgentActionResultType) -> bool {
     if result.is_cancelled() && !result.is_cancelled_during_requested_command_execution() {
         return false;
@@ -304,13 +304,13 @@ pub(crate) fn ran_and_returned(result: &AIAgentActionResultType) -> bool {
             | RequestCommandOutputResult::Denylisted { .. }
             | RequestCommandOutputResult::TerminalBusy { .. } => false,
         },
-        AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { .. }) => false,
+        AIAgentActionResultType::RunAgents(RunAgentsResult::Denied { .. })
+        | AIAgentActionResultType::DeniedByHook { .. } => false,
         AIAgentActionResultType::RunAgents(
             RunAgentsResult::Launched { .. }
             | RunAgentsResult::Failure { .. }
             | RunAgentsResult::Cancelled,
         ) => true,
-        AIAgentActionResultType::DeniedByHook { .. } => false,
         AIAgentActionResultType::ReadShellCommandOutput(_)
         | AIAgentActionResultType::WriteToLongRunningShellCommand(_)
         | AIAgentActionResultType::TransferShellCommandControlToUser(_)

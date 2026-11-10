@@ -406,6 +406,13 @@ fn a_tool_that_ran_is_a_result_whatever_it_returned_and_one_that_did_not_is_a_fa
             ),
             (
                 shell.clone(),
+                AIAgentActionResultType::DeniedByHook {
+                    reason: "no".to_owned(),
+                },
+                HookBoundary::ToolFailure,
+            ),
+            (
+                shell.clone(),
                 AIAgentActionResultType::RequestCommandOutput(
                     RequestCommandOutputResult::Denylisted {
                         command: "make".to_owned(),
