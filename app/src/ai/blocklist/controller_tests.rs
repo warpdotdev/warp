@@ -1312,7 +1312,7 @@ mod hooks {
             controller.update(&mut app, |controller, ctx| {
                 // The person's row steers into the running turn as before.
                 let steered =
-                    controller.steer_head_prompt_for_request(conversation_id, &task_id, ctx);
+                    controller.steer_head_prompt_for_request(conversation_id, &task_id, true, ctx);
                 assert!(matches!(
                     steered,
                     Some(AIAgentInput::UserQuery { query, .. }) if query == "a person's"

@@ -1246,7 +1246,8 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             | QueuedQueryOrigin::QueueSlashCommand
             | QueuedQueryOrigin::AutoQueueToggle
             | QueuedQueryOrigin::CompactAndSlashCommand
-            | QueuedQueryOrigin::ForkAndCompactSlashCommand => None,
+            | QueuedQueryOrigin::ForkAndCompactSlashCommand
+            | QueuedQueryOrigin::HookFollowUp => None,
         };
         let prompt_text_or_editor = if let Some(suffix) = suffix.filter(|_| !is_in_edit_mode) {
             let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
