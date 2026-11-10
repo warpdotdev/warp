@@ -1,6 +1,6 @@
 # Cwd-scoped cloud skill listings
 
-Status: proposed; implementation requires human approval.
+Status: implementation authorized; validation in progress.
 Tracking: [QUALITY-2387](https://linear.app/warpdotdev/issue/QUALITY-2387).
 Source: [request and decisions](https://warpdev.slack.com/archives/C0BDQDW8V5E/p1794263012687819).
 
@@ -116,6 +116,7 @@ Benchmarks are deferred for draft PR delivery.
 
 ## Approval
 
-This spec records the latest attachment's Factory-reference additions and the requester's
-resolved choices. Approval of this spec and the companion server spec is required before
-implementation. Neither this document nor opening its draft PR constitutes that approval.
+After receiving both spec PRs, the requester asked: "could you make the corresponding
+code change of warp and warp server in the same PR". This authorizes implementation of
+the presented companion specs on their existing branches. The earlier non-GUI-only and
+deferred-benchmark choices remain in force.

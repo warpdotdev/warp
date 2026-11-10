@@ -165,6 +165,77 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
 }
 
 #[test]
+fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let temp = TempDir::new().unwrap();
+        let workspace = LocalOrRemotePath::Local(dunce::canonicalize(temp.path()).unwrap());
+        let repo = workspace.join("repo");
+        let nested = repo.join("nested");
+        let pinned = workspace.join("global/.agents/skills/selected/SKILL.md");
+        let nested_path = nested.join(".agents/skills/nested/SKILL.md");
+        let remote_host = HostId::new("remote-host".into());
+        let remote = make_remote_skill(&remote_host, "remote-pinned");
+        handle.update(&mut app, |manager, _| {
+            manager.set_cloud_environment(true);
+            manager.set_cloud_working_dir(repo.clone());
+            for (name, path) in [
+                ("root", repo.join(".agents/skills/root/SKILL.md")),
+                ("nested", nested_path.clone()),
+                ("selected", pinned.clone()),
+                ("unselected", workspace.join("global/.agents/skills/unselected/SKILL.md")),
+            ] {
+                manager.handle_skills_added(vec![ParsedSkill {
+                    name: name.into(),
+                    description: name.into(),
+                    content: name.into(),
+                    path,
+                    line_range: None,
+                    provider: SkillProvider::Agents,
+                    scope: SkillScope::Project,
+                }]);
+            }
+            manager.pin_skill_paths([pinned.clone(), remote.path.clone()]);
+            manager.handle_skills_added(vec![remote]);
+        });
+
+        for (cwd, expected) in [
+            (None, vec!["root", "selected"]),
+            (Some(&workspace), vec!["selected"]),
+            (Some(&nested), vec!["nested", "root", "selected"]),
+        ] {
+            let mut names = handle.read(&app, |manager, ctx| {
+                manager.get_skills_for_working_directory(cwd, ctx)
+                    .into_iter().map(|skill| skill.name).collect::<Vec<_>>()
+            });
+            names.sort();
+            assert_eq!(names, expected);
+        }
+        handle.read(&app, |manager, ctx| {
+            assert!(manager.active_skill_by_reference(
+                &SkillReference::Path(nested_path), ctx).is_some());
+            let remote_skills = manager.get_skills_for_working_directory_with_origin(
+                None, &SkillPathOrigin::Remote { host_id: remote_host }, ctx);
+            assert_eq!(remote_skills.len(), 1);
+            assert_eq!(remote_skills[0].name, "remote-pinned");
+            assert!(manager.get_skills_for_working_directory_with_origin(
+                None, &SkillPathOrigin::Unavailable, ctx).is_empty());
+        });
+        handle.update(&mut app, |manager, _| manager.handle_path_deleted(&pinned));
+        assert!(handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(Some(&workspace), ctx).is_empty()
+        }));
+    });
+}
+
+#[test]
 fn remote_home_provider_variants_are_available_for_provider_selection() {
     let host_id = HostId::new("remote-host".to_string());
     let agents_skill = make_remote_home_skill(&host_id, "deploy", "shared content");

@@ -339,6 +339,18 @@ pub(crate) async fn load_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repos: Vec<SourceRepo>,
 ) {
+    if let Err(err) = foreground
+        .spawn(|me, ctx| {
+            SkillManager::handle(ctx).update(ctx, |manager, _| {
+                manager.set_cloud_working_dir(LocalOrRemotePath::Local(
+                    me.harness_working_dir.clone(),
+                ));
+            });
+        })
+        .await
+    {
+        log::warn!("Failed to set skill working directory: {err}");
+    }
     if repos.is_empty() {
         log::info!("No environment repositories for skill loading");
         return;
@@ -516,6 +528,7 @@ pub(crate) async fn load_global_skills(
         .spawn(move |_, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
                 manager.set_cloud_environment(true);
+                manager.pin_skill_paths(skills.iter().map(|skill| skill.path.clone()));
                 manager.handle_skills_added(skills);
             });
         })
