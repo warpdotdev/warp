@@ -712,7 +712,7 @@ mod hooks {
     }
 
     #[test]
-    fn a_hook_ask_for_a_hidden_child_ends_in_hook_denied_with_approval_unavailable() {
+    fn a_hook_ask_for_a_hidden_child_is_denied_by_hook_with_approval_unavailable() {
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
@@ -732,7 +732,7 @@ mod hooks {
             let finished = events
                 .borrow()
                 .iter()
-                .find(|l| l.starts_with(&format!("finished:{}:hook_denied(", shell.id)))
+                .find(|l| l.starts_with(&format!("finished:{}:denied_by_hook(", shell.id)))
                 .cloned()
                 .expect("the command finishes denied");
             assert!(finished.contains(APPROVAL_UNAVAILABLE_PREFIX), "{finished}");
@@ -811,7 +811,7 @@ mod hooks {
             let denials = events
                 .borrow()
                 .iter()
-                .filter(|l| l.contains("hook_denied("))
+                .filter(|l| l.contains("denied_by_hook("))
                 .cloned()
                 .collect::<Vec<_>>();
             assert_eq!(denials.len(), 2);

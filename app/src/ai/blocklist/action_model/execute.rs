@@ -30,7 +30,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
+use ai::agent::action_result::{
+    InsertReviewCommentsResult, RequestCommandOutputResult, RunAgentsResult,
+};
 use ai::hooks::{PermissionDecision, PermissionFloors, WarpPermissionResult};
 pub use ask_user_question::AskUserQuestionExecutor;
 use call_mcp_tool::CallMCPToolExecutor;
@@ -95,7 +97,6 @@ use crate::ai::agent::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
-use crate::ai::blocklist::hooks::denied_result::denied_result_for;
 use crate::ai::blocklist::hooks::pre_tool::{self, PendingDispatch, PreToolLookup};
 use crate::ai::blocklist::hooks::tool_result;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
@@ -668,13 +669,18 @@ impl BlocklistAIActionExecutor {
             );
             match decision {
                 PermissionDecision::Deny { reason, .. } => {
-                    let result = denied_result_for(&action.action, &reason.text);
+                    // Run-agents telemetry counts a hook denial as a declined launch.
                     send_run_agents_completed_telemetry(
                         conversation_id,
                         &action.action,
-                        &result,
+                        &AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+                            reason: reason.text.clone(),
+                        }),
                         ctx,
                     );
+                    let result = AIAgentActionResultType::DeniedByHook {
+                        reason: reason.text,
+                    };
                     self.finish_sync(action, result, conversation_id, ctx);
                     return TryExecuteResult::ExecutedSync;
                 }
