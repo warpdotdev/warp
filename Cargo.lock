@@ -10511,6 +10511,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "preview_proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "subtle",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "primal-check"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14262,6 +14278,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
@@ -15415,6 +15432,7 @@ dependencies = [
  "pin-project",
  "plist",
  "pprof",
+ "preview_proxy",
  "prost",
  "prost-build",
  "prost-types",

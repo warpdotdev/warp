@@ -118,6 +118,7 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
+mod preview_proxy;
 mod preview_retention;
 mod prewarmed;
 mod skill_references;
@@ -1007,6 +1008,7 @@ pub struct AgentDriver {
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
     execution_id: Option<String>,
+    preview_proxy: Option<preview_proxy::Manager>,
     use_factory_repositories: bool,
     #[allow(
         dead_code,
@@ -1526,6 +1528,7 @@ impl AgentDriver {
             output_format: OutputFormat::default(),
             task_id: None,
             execution_id: None,
+            preview_proxy: None,
             use_factory_repositories: false,
             experimental: None,
             team_scope: None,
@@ -1608,6 +1611,20 @@ impl AgentDriver {
         self.secrets = Arc::new(secrets);
         self.task_id = task_id;
         self.execution_id = execution_id;
+        self.preview_proxy = None;
+        if preview_retention::is_namespace_sandbox(warp_isolation_platform::detect())
+            && std::env::var("WARP_PREVIEW_PROXY_PROTOCOL").as_deref() == Ok("1")
+            && let Some(task_id) = task_id
+        {
+            match preview_proxy::Manager::start(
+                task_id,
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+                self.sandbox_deadline,
+            ) {
+                Ok(manager) => self.preview_proxy = Some(manager),
+                Err(_) => log::error!("Preview proxy runtime failed to start"),
+            }
+        }
         self.use_factory_repositories = use_factory_repositories;
         self.factory_repository_contract = use_factory_repositories;
         self.experimental = experimental;

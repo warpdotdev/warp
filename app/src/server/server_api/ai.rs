@@ -18,6 +18,11 @@ use cynic::{MutationBuilder, QueryBuilder};
 use itertools::Itertools;
 #[cfg(test)]
 use mockall::automock;
+#[cfg(not(target_family = "wasm"))]
+use preview_proxy::protocol::{
+    Acknowledgement as PreviewProxyAcknowledgement, Session as PreviewProxySession,
+    Snapshot as PreviewProxySnapshot, StartRequest as PreviewProxyStartRequest,
+};
 use prost::Message;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -1279,6 +1284,26 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
+    #[cfg(not(target_family = "wasm"))]
+    async fn start_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        request: &PreviewProxyStartRequest,
+    ) -> anyhow::Result<PreviewProxySession>;
+    #[cfg(not(target_family = "wasm"))]
+    async fn poll_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        session: &str,
+        revision: i64,
+    ) -> anyhow::Result<PreviewProxySnapshot>;
+    #[cfg(not(target_family = "wasm"))]
+    async fn acknowledge_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        session: &str,
+        ack: &PreviewProxyAcknowledgement,
+    ) -> anyhow::Result<()>;
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2030,6 +2055,52 @@ fn convert_upload_field(
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
+    #[cfg(not(target_family = "wasm"))]
+    async fn start_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        request: &PreviewProxyStartRequest,
+    ) -> anyhow::Result<PreviewProxySession> {
+        self.post_public_api_response_for_task(
+            task_id,
+            &format!("agent/runs/{task_id}/preview-proxy/sessions"),
+            request,
+        )
+        .await?
+        .json()
+        .await
+        .map_err(Into::into)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn poll_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        session: &str,
+        revision: i64,
+    ) -> anyhow::Result<PreviewProxySnapshot> {
+        let session = urlencoding::encode(session);
+        self.get_public_api_response_for_task(task_id, &format!("agent/runs/{task_id}/preview-proxy/sessions/{session}/routes?after_revision={revision}"))
+            .await?.json().await.map_err(Into::into)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn acknowledge_preview_proxy(
+        &self,
+        task_id: &AmbientAgentTaskId,
+        session: &str,
+        ack: &PreviewProxyAcknowledgement,
+    ) -> anyhow::Result<()> {
+        let session = urlencoding::encode(session);
+        self.post_public_api_response_for_task(
+            task_id,
+            &format!("agent/runs/{task_id}/preview-proxy/sessions/{session}/ack"),
+            ack,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
