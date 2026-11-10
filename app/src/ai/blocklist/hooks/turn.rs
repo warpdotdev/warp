@@ -299,7 +299,10 @@ pub(crate) fn resolve_turn_stop(
     }
     if queued {
         runtime.update(ctx, |runtime, _| {
-            runtime.turn_stops.awaiting_follow_up.insert(conversation_id);
+            runtime
+                .turn_stops
+                .awaiting_follow_up
+                .insert(conversation_id);
         });
         TurnStopResolution::FollowUpQueued
     } else {
@@ -324,7 +327,10 @@ pub(crate) fn end_follow_up_wait(conversation_id: AIConversationId, ctx: &mut Ap
         return;
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-        runtime.turn_stops.awaiting_follow_up.remove(&conversation_id);
+        runtime
+            .turn_stops
+            .awaiting_follow_up
+            .remove(&conversation_id);
     });
 }
 
