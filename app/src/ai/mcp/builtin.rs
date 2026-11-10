@@ -41,6 +41,9 @@ pub const FACTORY_MCP_SERVER_NAME: &str = "warp-factory";
 /// The server name under which the preview URLs MCP's tools are grouped.
 pub const PREVIEW_URLS_MCP_SERVER_NAME: &str = "warp-preview-urls";
 
+/// The server name under which the computer use MCP's tools are given to third-party harnesses.
+pub const COMPUTER_USE_MCP_SERVER_NAME: &str = "warp-computer-use";
+
 /// Code-owned definition of a streamable-HTTP MCP server hosted by warp-server.
 struct BuiltinMcpServer {
     name: &'static str,
