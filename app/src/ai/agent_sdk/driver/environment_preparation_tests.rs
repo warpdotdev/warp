@@ -10,6 +10,8 @@ use crate::ai::agent_sdk::driver::environment_checkout_protocol::{CheckoutBatch,
 fn request(owner: &str, repo: &str) -> CheckoutRequest {
     CheckoutRequest {
         source: RepositoryIdentity {
+            git_host: None,
+            github_instance_uid: None,
             code_forge: RepositoryForge::GitHub,
             repo_owner: owner.into(),
             repo_name: repo.into(),

@@ -108,6 +108,7 @@ fn execution_bootstrap_response() -> Value {
                         "repositories": [],
                         "deferredRepositories": [{
                             "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                            "gitHost": null, "githubInstanceUid": null,
                             "ref": null, "cloneFrom": null, "preserveOrigin": true,
                             "expectedSha": "0123456789abcdef0123456789abcdef01234567"
                         }],
@@ -215,8 +216,9 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
             let config = &mut response["data"]["task"]["task"]["executionConfig"];
             config["repositories"] = json!([{
                 "forge": "GITLAB", "owner": "platform/backend", "name": "api",
+                "gitHost": null, "githubInstanceUid": null,
                 "ref": {"type": "COMMIT_SHA", "value": "0123456789abcdef0123456789abcdef01234567"},
-                "cloneFrom": {"codeForge": "GITHUB", "owner": "acme", "repo": "api"},
+                "cloneFrom": {"codeForge": "GITHUB", "owner": "acme", "repo": "api", "gitHost": null, "githubInstanceUid": null},
                 "preserveOrigin": true
             }]);
             config
@@ -319,7 +321,16 @@ fn execution_bootstrap_rejects_configuration_errors() {
     request.assert();
 }
 
-fn mock_git_credentials(input: Value, response: Value, operation: &str) -> Mock {
+fn mock_git_credentials(mut input: Value, mut response: Value, operation: &str) -> Mock {
+    if operation == "TaskGitCredentials" {
+        input["supportsGithubInstances"] = json!(true);
+        if let Some(output) = response
+            .pointer_mut("/data/taskGitCredentials")
+            .and_then(Value::as_object_mut)
+        {
+            output.insert("removedHosts".into(), json!([]));
+        }
+    }
     let mut server = warp_core::channel::ChannelState::mock_server();
     server
         .mock("POST", "/graphql/v2")

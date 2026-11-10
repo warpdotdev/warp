@@ -326,6 +326,8 @@ fn prewarmed_accepts_server_assignments() {
 fn prewarmed_rejects_deferred_repositories_without_client_support() {
     let mut configuration = config();
     configuration.deferred_repositories = Some(vec![ExecutionRepository {
+        git_host: None,
+        github_instance_uid: None,
         forge: CodeForge::GitHub,
         owner: "benchmarks".into(),
         name: "frozen-api".into(),
