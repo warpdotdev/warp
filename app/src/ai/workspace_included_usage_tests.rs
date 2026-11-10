@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{Duration, TimeZone, Utc};
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warpui::App;
 
 use super::super::WorkspaceIncludedUsage;
@@ -9,7 +10,7 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::workspaces::workspace::{Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
 
 fn workspace_uid(workspace: i64) -> WorkspaceUid {
     WorkspaceUid::from(ServerId::from(workspace))
@@ -59,7 +60,11 @@ fn included_usage_refreshes_with_grants_and_selects_cached_workspaces() {
                         None,
                         None,
                     );
-                    workspace.billing_metadata.customer_type = CustomerType::Scale;
+                    workspace.billing_metadata.customer_type = if id == 2 {
+                        CustomerType::Business
+                    } else {
+                        CustomerType::Scale
+                    };
                     workspace
                 })
                 .collect();
@@ -114,10 +119,10 @@ fn included_usage_refreshes_with_grants_and_selects_cached_workspaces() {
             });
             model.read(&app, |model, ctx| {
                 match (model.workspace_included_usage(ctx), expected) {
-                    (WorkspaceIncludedUsageState::Ready(info), Some(expected)) => {
+                    (Some(info), Some(expected)) => {
                         assert_eq!(info.included_usage_credits, expected);
                     }
-                    (WorkspaceIncludedUsageState::Unavailable, None) => {}
+                    (None, None) => {}
                     _ => panic!("Workspace selection should read the cached allowance"),
                 }
             });

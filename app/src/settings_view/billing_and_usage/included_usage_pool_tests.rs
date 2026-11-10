@@ -17,7 +17,7 @@ fn included_pool_credit_display_preserves_server_fractions_without_currency_conv
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
             let card = render_card(
-                &PoolState::Ready(pool(8_750.0)),
+                Some(&pool(8_750.0)),
                 now(),
                 UsageDisplayUnit::Credits,
                 Appearance::as_ref(ctx),
@@ -47,7 +47,7 @@ fn included_pool_card_shows_remaining_over_monthly_total() {
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
             let card = render_card(
-                &PoolState::Ready(pool(8_750.0)),
+                Some(&pool(8_750.0)),
                 now(),
                 UsageDisplayUnit::Dollars,
                 Appearance::as_ref(ctx),
@@ -70,7 +70,7 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             let mut exhausted = pool(0.0);
             exhausted.usage_credits_used_since_last_refresh = 1500.0;
             let card = render_card(
-                &PoolState::Ready(exhausted.clone()),
+                Some(&exhausted.clone()),
                 now(),
                 UsageDisplayUnit::Dollars,
                 Appearance::as_ref(ctx),
@@ -80,7 +80,7 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             assert!(text.contains("/ $100.00 remaining"));
             assert!(!text.contains("Unavailable"));
             let card = render_card(
-                &PoolState::Ready(exhausted),
+                Some(&exhausted),
                 now(),
                 UsageDisplayUnit::Credits,
                 Appearance::as_ref(ctx),
@@ -101,7 +101,7 @@ fn included_pool_keeps_remaining_separate_from_monthly_total() {
         remaining_cents,
         monthly_cents,
         reset,
-    } = pool_balance(&PoolState::Ready(pool(8_750.25)), now())
+    } = pool_balance(Some(&pool(8_750.25)), now())
     else {
         panic!("Expected an available balance")
     };
@@ -121,7 +121,7 @@ fn included_pool_uses_configured_monthly_total_instead_of_hardcoded_allowance() 
         remaining_cents,
         monthly_cents,
         ..
-    } = pool_balance(&PoolState::Ready(configured), now())
+    } = pool_balance(Some(&configured), now())
     else {
         panic!("Expected an available balance")
     };
@@ -138,7 +138,7 @@ fn included_pool_preserves_fractional_cents_in_allowance_and_usage() {
         remaining_cents,
         monthly_cents,
         ..
-    } = pool_balance(&PoolState::Ready(info), now())
+    } = pool_balance(Some(&info), now())
     else {
         panic!("Expected an available balance")
     };
@@ -155,7 +155,7 @@ fn included_pool_clamps_overshoot_in_each_server_unit_independently() {
         remaining_credits,
         remaining_cents,
         ..
-    } = pool_balance(&PoolState::Ready(info), now())
+    } = pool_balance(Some(&info), now())
     else {
         panic!("Expected an exhausted balance")
     };
@@ -167,35 +167,26 @@ fn included_pool_clamps_overshoot_in_each_server_unit_independently() {
 fn included_pool_missing_or_expired_is_not_shown_as_exhausted() {
     let now = now();
     let unavailable = PoolBalance::Unavailable;
-    assert_eq!(pool_balance(&PoolState::Unavailable, now), unavailable);
+    assert_eq!(pool_balance(None, now), unavailable);
     let mut expired = pool(500.0);
     expired.next_refresh_time = (now - Duration::seconds(1)).into();
-    assert_eq!(pool_balance(&PoolState::Ready(expired), now), unavailable);
+    assert_eq!(pool_balance(Some(&expired), now), unavailable);
     for invalid in [f64::NAN, f64::INFINITY, -1.0] {
         let mut invalid_cents = pool(500.0);
         invalid_cents.usage_cents_used_since_last_refresh = invalid;
-        assert_eq!(
-            pool_balance(&PoolState::Ready(invalid_cents), now),
-            unavailable
-        );
+        assert_eq!(pool_balance(Some(&invalid_cents), now), unavailable);
         let mut invalid_cents_allowance = pool(500.0);
         invalid_cents_allowance.included_usage_cents = invalid;
         assert_eq!(
-            pool_balance(&PoolState::Ready(invalid_cents_allowance), now),
+            pool_balance(Some(&invalid_cents_allowance), now),
             unavailable
         );
         let mut invalid_credits = pool(500.0);
         invalid_credits.usage_credits_used_since_last_refresh = invalid;
-        assert_eq!(
-            pool_balance(&PoolState::Ready(invalid_credits), now),
-            unavailable,
-        );
+        assert_eq!(pool_balance(Some(&invalid_credits), now), unavailable,);
         let mut invalid_allowance = pool(500.0);
         invalid_allowance.included_usage_credits = invalid;
-        assert_eq!(
-            pool_balance(&PoolState::Ready(invalid_allowance), now),
-            unavailable,
-        );
+        assert_eq!(pool_balance(Some(&invalid_allowance), now), unavailable,);
     }
 }
 
@@ -210,7 +201,7 @@ fn scale_plan_identity_and_paid_plan_behavior() {
 }
 
 struct CardTestView {
-    state: PoolState,
+    state: Option<WorkspaceIncludedUsageInfo>,
 }
 
 impl Entity for CardTestView {
@@ -234,7 +225,7 @@ impl View for CardTestView {
                 Flex::row()
                     .with_spacing(8.)
                     .with_child(Expanded::new(1., render_card(
-                        &self.state, now(), UsageDisplayUnit::Dollars, appearance,
+                        self.state.as_ref(), now(), UsageDisplayUnit::Dollars, appearance,
                     )).finish())
                     .with_child(
                         Expanded::new(
@@ -258,12 +249,7 @@ impl View for CardTestView {
 fn included_pool_card_renders_and_lays_out_at_narrow_and_wide_widths() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        for state in [
-            PoolState::Idle,
-            PoolState::Unavailable,
-            PoolState::Ready(pool(8_750.0)),
-            PoolState::Ready(pool(0.0)),
-        ] {
+        for state in [None, Some(pool(8_750.0)), Some(pool(0.0))] {
             let (window_id, view) =
                 app.add_window(WindowStyle::NotStealFocus, |_| CardTestView { state });
             app.update(|ctx| {

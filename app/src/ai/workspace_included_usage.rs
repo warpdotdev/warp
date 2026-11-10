@@ -4,35 +4,20 @@ use warpui::{AppContext, SingletonEntity};
 use super::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::CustomerType;
-
-#[derive(Default)]
-pub(crate) enum WorkspaceIncludedUsageState {
-    #[default]
-    Idle,
-    Ready(WorkspaceIncludedUsageInfo),
-    Unavailable,
-}
 
 impl AIRequestUsageModel {
-    pub(crate) fn workspace_included_usage(&self, ctx: &AppContext) -> WorkspaceIncludedUsageState {
+    pub(crate) fn workspace_included_usage(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<&WorkspaceIncludedUsageInfo> {
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            return WorkspaceIncludedUsageState::Idle;
+            return None;
         }
-        let Some(workspace) = UserWorkspaces::as_ref(ctx).current_workspace() else {
-            return WorkspaceIncludedUsageState::Idle;
-        };
-        if workspace.billing_metadata.customer_type != CustomerType::Scale {
-            return WorkspaceIncludedUsageState::Idle;
-        }
+        let workspace = UserWorkspaces::as_ref(ctx).current_workspace()?;
         self.workspace_allowances
             .iter()
             .find(|allowance| allowance.workspace_uid == workspace.uid)
-            .map(|allowance| allowance.info.clone())
-            .map_or(
-                WorkspaceIncludedUsageState::Unavailable,
-                WorkspaceIncludedUsageState::Ready,
-            )
+            .map(|allowance| &allowance.info)
     }
 }
 

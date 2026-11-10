@@ -1,11 +1,12 @@
 use chrono::{DateTime, Local, Utc};
 use warp_core::ui::appearance::Appearance;
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::Text;
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 
+use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::view_util::usage_display_unit;
-use crate::ai::{AIRequestUsageModel, WorkspaceIncludedUsageState as PoolState};
 use crate::settings::ai::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::billing_and_usage_page_v2::{
     BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card, render_balance_card_contents,
@@ -48,7 +49,7 @@ impl View for IncludedUsagePoolView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
         render_card(
-            &AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
+            AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
             Utc::now(),
             usage_display_unit(ctx),
             Appearance::as_ref(ctx),
@@ -58,7 +59,6 @@ impl View for IncludedUsagePoolView {
 
 #[derive(Debug, PartialEq)]
 enum PoolBalance {
-    Loading,
     Unavailable,
     Available {
         remaining_credits: f64,
@@ -69,11 +69,10 @@ enum PoolBalance {
     },
 }
 
-fn pool_balance(state: &PoolState, now: DateTime<Utc>) -> PoolBalance {
-    match state {
-        PoolState::Idle => PoolBalance::Loading,
-        PoolState::Unavailable => PoolBalance::Unavailable,
-        PoolState::Ready(pool) => {
+fn pool_balance(info: Option<&WorkspaceIncludedUsageInfo>, now: DateTime<Utc>) -> PoolBalance {
+    match info {
+        None => PoolBalance::Unavailable,
+        Some(pool) => {
             if !pool.included_usage_cents.is_finite()
                 || pool.included_usage_cents <= 0.0
                 || !pool.included_usage_credits.is_finite()
@@ -107,7 +106,7 @@ fn pool_balance(state: &PoolState, now: DateTime<Utc>) -> PoolBalance {
 }
 
 fn render_card(
-    state: &PoolState,
+    info: Option<&WorkspaceIncludedUsageInfo>,
     now: DateTime<Utc>,
     unit: UsageDisplayUnit,
     appearance: &Appearance,
@@ -117,7 +116,7 @@ fn render_card(
         UsageDisplayUnit::Credits => "Included team credits",
         UsageDisplayUnit::Dollars => "Included team usage",
     };
-    let status = match pool_balance(state, now) {
+    let status = match pool_balance(info, now) {
         PoolBalance::Available {
             remaining_credits,
             monthly_credits,
@@ -145,7 +144,6 @@ fn render_card(
                 border_color,
             );
         }
-        PoolBalance::Loading => "Loading…",
         PoolBalance::Unavailable => "Unavailable",
     };
     render_balance_card_contents(

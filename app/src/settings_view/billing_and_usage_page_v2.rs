@@ -929,7 +929,7 @@ impl BillingAndUsagePageV2View {
         let unit = usage_display_unit(app);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        let has_included_pool = is_scale_workspace(workspaces.current_workspace());
+        let has_included_pool = ai_model.workspace_included_usage(app).is_some();
         if !has_included_pool && !has_base_credits && !classified.has_any() {
             return None;
         }

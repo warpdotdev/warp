@@ -26,7 +26,6 @@ use crate::workspaces::workspace::WorkspaceUid;
 
 #[path = "workspace_included_usage.rs"]
 mod workspace_included_usage;
-pub(crate) use workspace_included_usage::WorkspaceIncludedUsageState;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;

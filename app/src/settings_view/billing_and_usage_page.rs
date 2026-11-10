@@ -3052,7 +3052,10 @@ impl BillingAndUsagePageView {
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
         let unit = usage_display_unit(app);
 
-        if is_scale_workspace(workspace) {
+        if AIRequestUsageModel::as_ref(app)
+            .workspace_included_usage(app)
+            .is_some()
+        {
             let balance_header = Flex::row()
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
