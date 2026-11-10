@@ -711,7 +711,7 @@ mod hooks {
     }
 
     #[test]
-    fn a_hook_ask_for_a_hidden_child_ends_in_hook_denied_with_approval_unavailable() {
+    fn a_hook_ask_for_a_hidden_child_is_denied_by_hook_with_approval_unavailable() {
         App::test((), |mut app| async move {
             let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
