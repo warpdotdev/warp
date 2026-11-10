@@ -33,7 +33,7 @@ fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
 }
 
 #[test]
-fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
+fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let request = {
         let mut server = warp_core::channel::ChannelState::mock_server();
@@ -49,6 +49,7 @@ fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
     let response = block_on(api.list_run_previews(&task_id)).unwrap();
     assert_eq!(response.execution_id, Some(42));
     assert_eq!(response.previews.len(), 1);
+    assert_eq!(response.previews[0].port, 3000);
     request.assert();
 }
 

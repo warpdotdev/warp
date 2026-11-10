@@ -1,8 +1,10 @@
-use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::*;
 
 #[tokio::test]
 async fn downstream_disconnect_closes_upstream_stream() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -20,7 +22,9 @@ async fn downstream_disconnect_closes_upstream_stream() {
             0
         );
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut downstream = tests::request(port, app_port, "").await;
     assert!(
@@ -35,6 +39,7 @@ async fn downstream_disconnect_closes_upstream_stream() {
 
 #[tokio::test]
 async fn preserves_response_trailers_and_repeated_headers() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -42,7 +47,9 @@ async fn preserves_response_trailers_and_repeated_headers() {
         tests::headers(&mut stream).await;
         stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: x-checksum\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n4\r\ndata\r\n0\r\nx-checksum: value\r\n\r\n").await.unwrap();
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
@@ -73,6 +80,7 @@ async fn preserves_response_trailers_and_repeated_headers() {
 
 #[tokio::test]
 async fn forwards_early_response_without_waiting_for_upload_completion() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -85,7 +93,9 @@ async fn forwards_early_response_without_waiting_for_upload_completion() {
             .await
             .unwrap();
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = tests::request(port, app_port, "Content-Length: 10485760\r\n").await;
     assert!(

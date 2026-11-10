@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +19,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
@@ -25,21 +27,27 @@ use tokio_util::sync::CancellationToken;
 pub mod protocol;
 
 pub const TOKEN_HEADER: &str = "x-warp-preview-proxy-token";
-pub const ACTION_HEADER: &str = "x-warp-preview-proxy-action";
-pub const RELOCATE_PATH: &str = "/__warp_preview_proxy/relocate";
+pub const LISTENER_PORT: u16 = 49152;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+const PORT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONNECTIONS: usize = 256;
 
 type Body = BoxBody<Bytes, hyper::Error>;
 
-struct Routing {
-    token: String,
-    listener_port: u16,
-    relocate: Option<mpsc::Sender<u16>>,
+pub trait PortSource: Send + Sync {
+    fn ports(&self) -> impl Future<Output = Result<Vec<u16>>> + Send;
 }
 
-impl Routing {
+struct Routing<S> {
+    token: String,
+    listener_port: u16,
+    source: Arc<S>,
+    allowed: RwLock<HashSet<u16>>,
+    refreshing: Mutex<()>,
+}
+
+impl<S: PortSource> Routing<S> {
     fn authenticated(&self, headers: &HeaderMap) -> bool {
         headers
             .get(TOKEN_HEADER)
@@ -61,6 +69,24 @@ impl Routing {
         }
         Some(port)
     }
+
+    async fn allows(&self, port: u16) -> bool {
+        if self.allowed.read().await.contains(&port) {
+            return true;
+        }
+        let _refresh = self.refreshing.lock().await;
+        if self.allowed.read().await.contains(&port) {
+            return true;
+        }
+        match timeout(PORT_FETCH_TIMEOUT, self.source.ports()).await {
+            Ok(Ok(ports)) => {
+                let mut allowed = self.allowed.write().await;
+                *allowed = ports.into_iter().collect();
+                allowed.contains(&port)
+            }
+            _ => false,
+        }
+    }
 }
 
 pub struct Proxy {
@@ -77,26 +103,24 @@ impl Drop for Proxy {
 }
 
 impl Proxy {
-    pub async fn bind(token: String, deadline: Option<Instant>) -> Result<Self> {
-        Self::bind_managed(token, deadline, None).await
-    }
-
-    pub async fn bind_managed(
+    pub async fn bind(
         token: String,
         deadline: Option<Instant>,
-        relocate: Option<mpsc::Sender<u16>>,
+        source: Arc<impl PortSource + 'static>,
     ) -> Result<Self> {
         if token.len() < 32 || token.len() > 128 || HeaderValue::from_str(&token).is_err() {
             bail!("invalid preview proxy token");
         }
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, LISTENER_PORT))
             .await
             .context("Failed to bind preview listener")?;
         let port = listener.local_addr()?.port();
         let routing = Arc::new(Routing {
             token,
             listener_port: port,
-            relocate,
+            source,
+            allowed: RwLock::new(HashSet::new()),
+            refreshing: Mutex::new(()),
         });
         let cancel = CancellationToken::new();
         let task = tokio::spawn(serve(
@@ -119,9 +143,9 @@ impl Proxy {
     }
 }
 
-async fn serve(
+async fn serve<S: PortSource + 'static>(
     listener: TcpListener,
-    routing: Arc<Routing>,
+    routing: Arc<Routing<S>>,
     deadline: Option<Instant>,
     cancel: CancellationToken,
     capacity: Arc<Semaphore>,
@@ -172,28 +196,12 @@ async fn serve(
     while connections.join_next().await.is_some() {}
 }
 
-async fn forward(
+async fn forward<S: PortSource + 'static>(
     mut request: Request<Incoming>,
-    routing: Arc<Routing>,
+    routing: Arc<Routing<S>>,
     cancel: CancellationToken,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Result<Response<Body>, Infallible> {
-    if let Some(action) = request.headers().get(ACTION_HEADER) {
-        if !routing.authenticated(request.headers())
-            || action != "relocate"
-            || request.method() != Method::POST
-            || request.uri() != RELOCATE_PATH
-        {
-            return Ok(empty(StatusCode::FORBIDDEN));
-        }
-        let Some(relocate) = &routing.relocate else {
-            return Ok(empty(StatusCode::FORBIDDEN));
-        };
-        return Ok(empty(match relocate.try_send(routing.listener_port) {
-            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => StatusCode::ACCEPTED,
-            Err(mpsc::error::TrySendError::Closed(_)) => StatusCode::SERVICE_UNAVAILABLE,
-        }));
-    }
     let Some(app_port) = routing.resolve(request.headers()) else {
         return Ok(empty(StatusCode::FORBIDDEN));
     };
@@ -209,6 +217,9 @@ async fn forward(
         .is_some_and(|value| !value.as_bytes().eq_ignore_ascii_case(b"websocket"))
     {
         return Ok(empty(StatusCode::BAD_REQUEST));
+    }
+    if !routing.allows(app_port).await {
+        return Ok(empty(StatusCode::FORBIDDEN));
     }
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
     if !prepare_headers(request.headers_mut(), app_port) {

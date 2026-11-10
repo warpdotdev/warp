@@ -70,6 +70,21 @@ impl Manager {
     }
 }
 
+impl ::preview_proxy::PortSource for Client {
+    async fn ports(&self) -> anyhow::Result<Vec<u16>> {
+        let response = self.client.list_run_previews(&self.task_id).await?;
+        anyhow::ensure!(
+            response.execution_id.is_some_and(|id| id > 0),
+            "preview execution unavailable"
+        );
+        Ok(response
+            .previews
+            .into_iter()
+            .map(|preview| preview.port)
+            .collect())
+    }
+}
+
 impl Drop for Manager {
     fn drop(&mut self) {
         self.cancel.cancel();

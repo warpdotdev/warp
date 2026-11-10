@@ -1,12 +1,12 @@
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::Proxy;
+use crate::{PortSource, Proxy};
 
 pub const VERSION: u32 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -17,8 +17,6 @@ pub struct StartRequest {
     pub boot_nonce: String,
     pub proxy_port: u16,
     pub token: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replaces_proxy_port: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -31,7 +29,7 @@ pub enum Error {
     Transport,
 }
 
-pub trait ControlPlane: Send + Sync {
+pub trait ControlPlane: PortSource + 'static {
     fn start(&self, request: &StartRequest) -> impl Future<Output = Result<Session, Error>> + Send;
 }
 
@@ -42,10 +40,8 @@ pub async fn run(
     sandbox_deadline: Option<Instant>,
     cancel: CancellationToken,
 ) {
-    let (relocate, mut moves) = mpsc::channel(1);
-    let Ok(mut proxy) =
-        Proxy::bind_managed(token.clone(), sandbox_deadline, Some(relocate.clone())).await
-    else {
+    let control = Arc::new(control);
+    let Ok(mut proxy) = Proxy::bind(token.clone(), sandbox_deadline, control.clone()).await else {
         return;
     };
     let start = StartRequest {
@@ -53,39 +49,12 @@ pub async fn run(
         boot_nonce,
         proxy_port: proxy.port(),
         token,
-        replaces_proxy_port: None,
     };
     let lifecycle = async {
-        if !register(&control, &start).await {
+        if !register(control.as_ref(), &start).await {
             return;
         }
-        while let Some(previous_port) = moves.recv().await {
-            if previous_port != proxy.port() {
-                continue;
-            }
-            let Ok(mut replacement) = Proxy::bind_managed(
-                start.token.clone(),
-                sandbox_deadline,
-                Some(relocate.clone()),
-            )
-            .await
-            else {
-                continue;
-            };
-            let request = StartRequest {
-                protocol_version: VERSION,
-                boot_nonce: start.boot_nonce.clone(),
-                proxy_port: replacement.port(),
-                token: start.token.clone(),
-                replaces_proxy_port: Some(previous_port),
-            };
-            if !register(&control, &request).await {
-                replacement.shutdown().await;
-                return;
-            }
-            proxy.shutdown().await;
-            proxy = replacement;
-        }
+        std::future::pending::<()>().await;
     };
     tokio::select! {
         _ = cancel.cancelled() => {},

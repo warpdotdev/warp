@@ -1,7 +1,48 @@
-use super::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::*;
+
+pub(super) static PROXY_PORT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub(super) const TOKEN: &str = "a-valid-route-token-with-at-least-32-bytes";
+
+pub(super) struct Ports {
+    values: std::sync::Mutex<Vec<u16>>,
+    calls: AtomicUsize,
+    fail: AtomicBool,
+    pause: AtomicBool,
+    started: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+}
+
+impl Ports {
+    pub(super) fn new(values: Vec<u16>) -> Arc<Self> {
+        Arc::new(Self {
+            values: std::sync::Mutex::new(values),
+            calls: AtomicUsize::new(0),
+            fail: AtomicBool::new(false),
+            pause: AtomicBool::new(false),
+            started: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        })
+    }
+}
+
+impl PortSource for Ports {
+    async fn ports(&self) -> Result<Vec<u16>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail.load(Ordering::SeqCst) {
+            bail!("port list unavailable");
+        }
+        if self.pause.load(Ordering::SeqCst) {
+            self.started.notify_one();
+            self.resume.notified().await;
+        }
+        Ok(self.values.lock().unwrap().clone())
+    }
+}
 
 pub(super) async fn headers(stream: &mut TcpStream) -> String {
     let mut bytes = Vec::new();
@@ -53,6 +94,7 @@ async fn app() -> (u16, JoinHandle<()>) {
 
 #[tokio::test]
 async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let (app_port, app_task) = app().await;
     let mut direct = TcpStream::connect((Ipv4Addr::LOCALHOST, app_port))
         .await
@@ -63,7 +105,9 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
         .unwrap();
     assert!(headers(&mut direct).await.starts_with("HTTP/1.1 403"));
 
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(TOKEN.into(), None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port,
         "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nOrigin: https://preview.example\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Preview-Authorization: secret\r\nX-Forwarded-Host: forged\r\n").await;
@@ -97,7 +141,11 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
 
 #[tokio::test]
 async fn rejects_unauthenticated_and_arbitrary_destination_requests() {
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
+    let app_port = 12345;
+    let mut proxy = Proxy::bind(TOKEN.into(), None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     for (target, token, expected) in [
         ("GET /", "", "403"),
@@ -128,13 +176,18 @@ async fn rejects_unauthenticated_and_arbitrary_destination_requests() {
 
 #[tokio::test]
 async fn routes_eight_apps_through_one_listener_using_each_requests_port() {
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
+    let source = Ports::new(vec![]);
+    let mut proxy = Proxy::bind(TOKEN.into(), None, source.clone())
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut apps = Vec::new();
     let mut requests = JoinSet::new();
     for _ in 0..8 {
         let (app_port, task) = app().await;
         apps.push(task);
+        source.values.lock().unwrap().push(app_port);
         requests.spawn(async move {
             let mut stream = request(port, app_port, "Connection: close\r\n").await;
             assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
@@ -158,8 +211,56 @@ async fn routes_eight_apps_through_one_listener_using_each_requests_port() {
 }
 
 #[tokio::test]
+async fn replaces_allowed_ports_only_after_a_successful_cache_miss_fetch() {
+    let _port_guard = PROXY_PORT.lock().await;
+    let (first, first_task) = app().await;
+    let (second, second_task) = app().await;
+    let source = Ports::new(vec![first]);
+    let mut proxy = Proxy::bind(TOKEN.into(), None, source.clone())
+        .await
+        .unwrap();
+
+    let mut stream = request(proxy.port(), first, "Connection: close\r\n").await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+
+    *source.values.lock().unwrap() = vec![second];
+    source.fail.store(true, Ordering::SeqCst);
+    let mut stream = request(proxy.port(), second, "Connection: close\r\n").await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+    let mut stream = request(proxy.port(), first, "Connection: close\r\n").await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+
+    source.fail.store(false, Ordering::SeqCst);
+    source.pause.store(true, Ordering::SeqCst);
+    let mut refreshing = request(proxy.port(), second, "Connection: close\r\n").await;
+    timeout(Duration::from_secs(3), source.started.notified())
+        .await
+        .unwrap();
+    let mut stream = request(proxy.port(), first, "Connection: close\r\n").await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
+    source.pause.store(false, Ordering::SeqCst);
+    source.resume.notify_one();
+    assert!(headers(&mut refreshing).await.starts_with("HTTP/1.1 200"));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 3);
+    let mut stream = request(proxy.port(), first, "Connection: close\r\n").await;
+    assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
+    assert_eq!(source.calls.load(Ordering::SeqCst), 4);
+
+    proxy.shutdown().await;
+    first_task.abort();
+    second_task.abort();
+}
+
+#[tokio::test]
 async fn rejects_missing_invalid_and_control_ports() {
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
+    let source = Ports::new(vec![1023, 9277, 49152]);
+    let mut proxy = Proxy::bind(TOKEN.into(), None, source.clone())
+        .await
+        .unwrap();
     let port = proxy.port();
     for destination in ["", "not-a-port", "65536", "1023", "9277", &port.to_string()] {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -179,11 +280,13 @@ async fn rejects_missing_invalid_and_control_ports() {
             "{destination}"
         );
     }
+    assert_eq!(source.calls.load(Ordering::SeqCst), 0);
     proxy.shutdown().await;
 }
 
 #[tokio::test]
 async fn streams_first_chunk_before_completion_and_closes_at_sandbox_deadline() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
@@ -197,6 +300,7 @@ async fn streams_first_chunk_before_completion_and_closes_at_sandbox_deadline() 
     let mut proxy = Proxy::bind(
         TOKEN.into(),
         Some(Instant::now() + Duration::from_millis(500)),
+        Ports::new(vec![app_port]),
     )
     .await
     .unwrap();
@@ -229,6 +333,7 @@ async fn streams_first_chunk_before_completion_and_closes_at_sandbox_deadline() 
 
 #[tokio::test]
 async fn copies_upgraded_frames_and_closes_on_driver_shutdown() {
+    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -245,7 +350,9 @@ async fn copies_upgraded_frames_and_closes_on_driver_shutdown() {
         stream.write_all(&[0x81, 2, b'h', b'i']).await.unwrap();
         assert_eq!(stream.read(&mut frame).await.unwrap(), 0);
     });
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(TOKEN.into(), None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(
         port,
@@ -276,6 +383,7 @@ async fn copies_upgraded_frames_and_closes_on_driver_shutdown() {
 
 #[tokio::test]
 async fn connects_to_ipv6_only_apps() {
+    let _port_guard = PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -286,7 +394,9 @@ async fn connects_to_ipv6_only_apps() {
             .await
             .unwrap();
     });
-    let mut proxy = Proxy::bind(TOKEN.into(), None).await.unwrap();
+    let mut proxy = Proxy::bind(TOKEN.into(), None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port, "").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
