@@ -87,7 +87,6 @@ pub(super) fn finished_shell_command(payload: &HookPayload) -> Option<FinishedSh
             RequestCommandOutputResult::LongRunningCommandSnapshot { .. }
             | RequestCommandOutputResult::CancelledBeforeExecution
             | RequestCommandOutputResult::Denylisted { .. }
-            | RequestCommandOutputResult::HookDenied { .. }
             | RequestCommandOutputResult::TerminalBusy { .. } => None,
         },
         AIAgentActionResultType::ReadShellCommandOutput(_)
@@ -119,7 +118,8 @@ pub(super) fn finished_shell_command(payload: &HookPayload) -> Option<FinishedSh
         | AIAgentActionResultType::SendMessageToAgent(_)
         | AIAgentActionResultType::AskUserQuestion(_)
         | AIAgentActionResultType::RunAgents(_)
-        | AIAgentActionResultType::WaitForEvents(_) => None,
+        | AIAgentActionResultType::WaitForEvents(_)
+        | AIAgentActionResultType::DeniedByHook { .. } => None,
     }
 }
 

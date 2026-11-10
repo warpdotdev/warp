@@ -44,10 +44,9 @@ fn fixture_payload(event: CursorEvent) -> HookPayload {
         ),
         CursorEvent::PostToolUseFailure => tool_failure(
             shell_action("rm -rf /"),
-            AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::HookDenied {
-                command: "rm -rf /".to_owned(),
+            AIAgentActionResultType::DeniedByHook {
                 reason: "not allowed here".to_owned(),
-            }),
+            },
             None,
         ),
         CursorEvent::BeforeShellExecution => tool_pre(shell_action("git push --force")),

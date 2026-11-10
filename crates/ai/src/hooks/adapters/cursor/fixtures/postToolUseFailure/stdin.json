@@ -18,7 +18,7 @@
   },
   "tool_use_id": "call_1",
   "cwd": "/work/repo/src",
-  "error_message": "Command 'rm -rf /' was denied by an agent hook: not allowed here",
+  "error_message": "Denied by an agent hook: not allowed here",
   "failure_type": "permission_denied",
   "is_interrupt": false
 }
