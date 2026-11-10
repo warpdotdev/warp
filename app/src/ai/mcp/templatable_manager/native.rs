@@ -9,6 +9,7 @@ use mcp::oauth::{
     PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
     write_to_secure_storage,
 };
+use mcp::refreshable_headers::RefreshableHeaders;
 use mcp::runtime::{error_to_user_message, spawn_server};
 use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
@@ -430,6 +431,7 @@ impl TemplatableMCPServerManager {
             runtime_environment: Default::default(),
             spawned_servers: Default::default(),
             reconnectable_ephemeral_installations: Default::default(),
+            refreshable_headers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
             locally_installed_servers,
@@ -788,13 +790,20 @@ impl TemplatableMCPServerManager {
         );
     }
 
-    /// Spawns an ephemeral MCP server started via the CLI (`oz agent run --mcp`).
+    /// Spawns an ephemeral MCP server started via the CLI (`oz agent run --mcp`). With
+    /// `refreshable_headers`, its connection sends those headers, which their owner can replace
+    /// while the server runs.
     pub fn spawn_cli_ephemeral_server(
         &mut self,
         installation: TemplatableMCPServerInstallation,
+        refreshable_headers: Option<RefreshableHeaders>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
+        if let Some(refreshable_headers) = refreshable_headers {
+            self.refreshable_headers
+                .insert(installation.uuid(), refreshable_headers);
+        }
         self.spawn_ephemeral_server(installation, ctx);
     }
 
@@ -1173,6 +1182,7 @@ impl TemplatableMCPServerManager {
                 server.transport_type.clone(),
                 logger.clone(),
                 auth_context,
+                self.refreshable_headers.get(&installation_uuid).cloned(),
             )
             .compat(),
             move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
@@ -1278,6 +1288,7 @@ impl TemplatableMCPServerManager {
         }
         self.reconnectable_ephemeral_installations
             .remove(&installation_uuid);
+        self.refreshable_headers.remove(&installation_uuid);
         self.notify_reconnect_waiters(installation_uuid, Err("Server shut down".to_string()));
         // Close the log stream now rather than when async teardown drops the
         // last logger clone, so an immediate respawn of the same server can

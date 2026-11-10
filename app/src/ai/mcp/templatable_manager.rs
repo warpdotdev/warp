@@ -14,6 +14,8 @@ use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
 #[cfg(not(target_family = "wasm"))]
+use mcp::refreshable_headers::RefreshableHeaders;
+#[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
@@ -57,6 +59,10 @@ pub struct TemplatableMCPServerManager {
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
     #[cfg(not(target_family = "wasm"))]
     reconnectable_ephemeral_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
+    /// The replaceable request headers of the ephemeral servers spawned with them. A reconnect
+    /// sends these rather than the ones the cached installation was resolved with.
+    #[cfg(not(target_family = "wasm"))]
+    refreshable_headers: HashMap<Uuid, RefreshableHeaders>,
     /// Cached credentials for each server.
     ///
     /// We persist these to secure storage, and if they are present when the server is started,
