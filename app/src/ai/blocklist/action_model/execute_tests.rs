@@ -233,7 +233,6 @@ mod hooks {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use ai::agent::action_result::RequestCommandOutputResult;
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
     use ai::hooks::{HookBoundary, HookNoticeKind};
     use parking_lot::FairMutex;
@@ -245,7 +244,7 @@ mod hooks {
         TryExecuteResult,
     };
     use crate::ai::agent::conversation::AIConversationId;
-    use crate::ai::agent::{AIAgentAction, AIAgentActionResultType};
+    use crate::ai::agent::{AIAgentAction, AIAgentActionResult, AIAgentActionResultType};
     use crate::ai::blocklist::RecordingController;
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
     use crate::ai::blocklist::hooks::testing::{
@@ -319,9 +318,9 @@ mod hooks {
 
     fn result_kind(result: &AIAgentActionResultType) -> String {
         match result {
-            AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::HookDenied { command, reason },
-            ) => format!("hook_denied({command};{reason})"),
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                format!("denied_by_hook({reason})")
+            }
             AIAgentActionResultType::RequestCommandOutput(result) => {
                 format!("shell:{result}")
             }
@@ -508,7 +507,7 @@ mod hooks {
                 vec![
                     format!("verdict:<id>:{is_user_initiated}"),
                     "executing:<id>".to_owned(),
-                    "finished:<id>:hook_denied(rm -rf build;rm is not allowed here)".to_owned(),
+                    "finished:<id>:denied_by_hook(rm is not allowed here)".to_owned(),
                 ]
             );
 
@@ -522,26 +521,25 @@ mod hooks {
             assert_eq!(notices[0].kind, HookNoticeKind::Denied);
             assert_eq!(notices[0].text, "rm is not allowed here");
 
-            let wire = api::request::input::tool_call_result::Result::try_from(
-                RequestCommandOutputResult::HookDenied {
-                    command: "rm -rf build".to_owned(),
-                    reason: "rm is not allowed here".to_owned(),
+            let wire = api::request::input::user_inputs::user_input::Input::try_from(
+                AIAgentActionResult {
+                    id: shell.id.clone(),
+                    task_id: shell.task_id.clone(),
+                    result: AIAgentActionResultType::DeniedByHook {
+                        reason: "rm is not allowed here".to_owned(),
+                    },
                 },
             )
             .expect("hook denials reach the wire");
-            let api::request::input::tool_call_result::Result::RunShellCommand(shell_result) = wire
+            let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) = wire
             else {
-                panic!("expected a shell result");
+                panic!("expected a tool call result");
             };
-            let Some(api::run_shell_command_result::Result::PermissionDenied(denied)) =
-                shell_result.result
-            else {
-                panic!("expected a permission denied result");
-            };
+            assert_eq!(wire.tool_call_id, shell.id.to_string());
             assert_eq!(
-                denied.reason,
-                Some(api::permission_denied::Reason::HookDenied(
-                    api::permission_denied::HookDenied {
+                wire.result,
+                Some(api::request::input::tool_call_result::Result::DeniedByHook(
+                    api::DeniedByHook {
                         reason: "rm is not allowed here".to_owned(),
                     }
                 ))
@@ -550,7 +548,7 @@ mod hooks {
     }
 
     #[test]
-    fn a_scripted_deny_finishes_the_shell_action_with_hook_denied() {
+    fn a_scripted_deny_finishes_the_shell_action_as_denied_by_hook() {
         run_scripted_deny(false);
     }
 

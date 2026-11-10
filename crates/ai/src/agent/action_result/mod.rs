@@ -109,6 +109,10 @@ pub enum AIAgentActionResultType {
     /// Result of the client-side wait_for_events watchdog or inbound
     /// resume.
     WaitForEvents(WaitForEventsResult),
+
+    /// An agent hook denied the action before it ran. Unlike the other variants this is not tied
+    /// to one tool: any action can finish with it. `reason` is shown to the model.
+    DeniedByHook { reason: String },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ReadFilesFailedFile {
@@ -188,6 +192,9 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
             AIAgentActionResultType::RunAgents(result) => result.fmt(f),
             AIAgentActionResultType::WaitForEvents(result) => result.fmt(f),
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                write!(f, "Denied by an agent hook: {reason}")
+            }
             AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
                 Ok(())
             }
@@ -285,8 +292,6 @@ pub enum RequestCommandOutputResult {
     CancelledBeforeExecution,
     /// The command was denied because it was present on the denylist.
     Denylisted { command: String },
-    /// An agent hook denied the command. `reason` is the hook's own text, shown to the model.
-    HookDenied { command: String, reason: String },
     /// The requested command was not started because another command owns the terminal.
     TerminalBusy { command: String, block_id: BlockId },
 }
@@ -299,7 +304,6 @@ impl RequestCommandOutputResult {
             Self::ShellRecovered { .. }
             | Self::CancelledBeforeExecution
             | Self::Denylisted { .. }
-            | Self::HookDenied { .. }
             | Self::TerminalBusy { .. } => false,
         }
     }
@@ -307,10 +311,9 @@ impl RequestCommandOutputResult {
     pub fn failed(&self) -> bool {
         match self {
             Self::Completed { exit_code, .. } => !exit_code.was_successful(),
-            Self::ShellRecovered { .. }
-            | Self::Denylisted { .. }
-            | Self::HookDenied { .. }
-            | Self::TerminalBusy { .. } => true,
+            Self::ShellRecovered { .. } | Self::Denylisted { .. } | Self::TerminalBusy { .. } => {
+                true
+            }
             Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
         }
     }
@@ -347,12 +350,6 @@ impl Display for RequestCommandOutputResult {
             }
             RequestCommandOutputResult::Denylisted { .. } => {
                 write!(f, "Command output was on denylist")
-            }
-            RequestCommandOutputResult::HookDenied { command, reason } => {
-                write!(
-                    f,
-                    "Command '{command}' was denied by an agent hook: {reason}"
-                )
             }
             RequestCommandOutputResult::TerminalBusy { block_id, .. } => {
                 write!(
@@ -916,6 +913,9 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::WaitForEvents(_) => {
                 "The local watchdog timed out while waiting for inbound events"
             }
+            AIAgentActionResultType::DeniedByHook { .. } => {
+                "The reason an agent hook denied the action"
+            }
         }
     }
 
@@ -993,9 +993,8 @@ impl AIAgentActionResultType {
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Error(_),
             )
-            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
-                true
-            }
+            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. })
+            | Self::DeniedByHook { .. } => true,
             Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
                 .iter()
                 .all(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Failed { .. })),

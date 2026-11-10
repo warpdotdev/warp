@@ -104,9 +104,6 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                             grid_contents,
                             ..
                         } => redact_secrets(grid_contents),
-                        RequestCommandOutputResult::HookDenied { reason, .. } => {
-                            redact_secrets(reason)
-                        }
                         RequestCommandOutputResult::CancelledBeforeExecution
                         | RequestCommandOutputResult::Denylisted { .. }
                         | RequestCommandOutputResult::TerminalBusy { .. } => {}
@@ -270,6 +267,9 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     // Recording results carry an artifact ref and metadata only.
                     AIAgentActionResultType::StartRecording(_)
                     | AIAgentActionResultType::StopRecording(_) => {}
+
+                    // Hook authors may echo command text or file contents into the reason.
+                    AIAgentActionResultType::DeniedByHook { reason } => redact_secrets(reason),
                 }
             }
             AIAgentInput::InvokeSkill {

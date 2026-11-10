@@ -228,12 +228,9 @@ mod hooks {
             });
             assert_eq!(
                 result.map(|result| result.result.clone()),
-                Some(AIAgentActionResultType::RequestCommandOutput(
-                    RequestCommandOutputResult::HookDenied {
-                        command: "ls".to_owned(),
-                        reason: "policy says no".to_owned(),
-                    }
-                ))
+                Some(AIAgentActionResultType::DeniedByHook {
+                    reason: "policy says no".to_owned(),
+                })
             );
             assert!(model.read(&app, |model, _| {
                 model
