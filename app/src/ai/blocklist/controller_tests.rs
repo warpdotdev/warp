@@ -1086,8 +1086,8 @@ mod hooks {
     use warpui::{App, SingletonEntity};
 
     use super::{register_mock_response_stream, stream_init_event};
-    use crate::ai::agent::conversation::AIConversationId;
-    use crate::ai::agent::{AIAgentInput, CancellationReason};
+    use crate::ai::agent::AIAgentInput;
+    use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
     use crate::ai::blocklist::hooks::HookRuntime;
     use crate::ai::blocklist::hooks::test_utils::{
         TestHooks, create_task_with_messages, done_event, exchange_count, install_test_hooks,
@@ -1278,7 +1278,6 @@ mod hooks {
                     chain_id: FollowUpChainId::new(),
                 },
             );
-            let follow_up_id = follow_up.id();
 
             let (conversation_id, task_id) = controller.update(&mut app, |controller, ctx| {
                 let conversation_id = controller.bind_native_prompt_conversation(None, ctx);
@@ -1342,16 +1341,21 @@ mod hooks {
             // hooks with its provenance and its own turn id.
             let first_turn = app.read(|ctx| HookRuntime::as_ref(ctx).turn_id_for(conversation_id));
             controller.update(&mut app, |controller, ctx| {
-                controller.cancel_conversation_progress(
-                    conversation_id,
-                    CancellationReason::ManuallyCancelled,
-                    ctx,
-                );
-                controller.dispatch_queued_warp_agent_prompt(
-                    conversation_id,
-                    Some(follow_up_id),
-                    ctx,
-                );
+                for stream_id in controller
+                    .in_flight_response_streams
+                    .stream_ids_for_conversation(conversation_id, ctx)
+                {
+                    controller
+                        .in_flight_response_streams
+                        .cleanup_stream(&stream_id);
+                }
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                    history
+                        .conversation_mut(&conversation_id)
+                        .unwrap()
+                        .set_status_for_test(ConversationStatus::Success);
+                });
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
             });
             settle(&mut app, |_| fired(&hooks).len() == 2).await;
             let envelope = hooks.adapter.encoded_envelopes()[1].clone();

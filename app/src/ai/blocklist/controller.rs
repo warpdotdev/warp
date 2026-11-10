@@ -1160,17 +1160,15 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.turn_in_flight(conversation_id, ctx) {
-            return;
-        }
         let is_this_surfaces_conversation = self.native_prompt_conversation_id
             == Some(conversation_id)
             || BlocklistAIHistoryModel::as_ref(ctx)
                 .active_conversation_id(self.terminal_surface_id)
                 == Some(conversation_id);
-        if is_this_surfaces_conversation {
-            self.dispatch_queued_warp_agent_prompt_after_turn_stop(conversation_id, ctx);
+        if is_this_surfaces_conversation && !self.turn_in_flight(conversation_id, ctx) {
+            self.dispatch_queued_warp_agent_prompt(conversation_id, None, ctx);
         }
+        hooks::turn::end_follow_up_wait(conversation_id, ctx);
         if self.turn_in_flight(conversation_id, ctx) {
             return;
         }
@@ -3567,23 +3565,6 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         ctx: &AppContext,
     ) -> bool {
-        self.can_dispatch_queued_warp_agent_prompt_with_status(conversation_id, false, ctx)
-    }
-
-    fn can_dispatch_queued_warp_agent_prompt_after_turn_stop(
-        &self,
-        conversation_id: AIConversationId,
-        ctx: &AppContext,
-    ) -> bool {
-        self.can_dispatch_queued_warp_agent_prompt_with_status(conversation_id, true, ctx)
-    }
-
-    fn can_dispatch_queued_warp_agent_prompt_with_status(
-        &self,
-        conversation_id: AIConversationId,
-        allow_in_progress: bool,
-        ctx: &AppContext,
-    ) -> bool {
         !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
             && !self.has_active_stream_for_conversation(conversation_id, ctx)
             && !OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id)
@@ -3596,11 +3577,9 @@ impl BlocklistAIController {
                                 conversation.status(),
                                 ConversationStatus::Success | ConversationStatus::WaitingForEvents
                             )
-                            || allow_in_progress
-                                && matches!(
-                                    conversation.status(),
-                                    ConversationStatus::InProgress
-                                ))
+                            // The status is held in progress so the conversation never looks
+                            // finished between a stop hook and the follow-up it asked for.
+                            || hooks::turn::is_awaiting_follow_up(conversation_id, ctx))
                 })
     }
 
