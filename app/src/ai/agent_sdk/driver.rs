@@ -1704,7 +1704,6 @@ impl AgentDriver {
             workspace,
             skill_dirs,
             skill_reference_dirs,
-            hook_dirs,
             hook_options,
             computer_use_config,
             third_party_harness_model_config,
