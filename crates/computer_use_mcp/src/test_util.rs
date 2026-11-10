@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use computer_use::{
-    ActionResult, Actor, Options, Platform, Screenshot, ScreenshotParams, TargetedAction, Vector2I,
+    ActionResult, Actor, Options, Platform, Recorder, RecordingConfig, RecordingError,
+    RecordingHandle, RecordingOutput, Screenshot, ScreenshotParams, TargetedAction, Vector2I,
 };
 
 use crate::session::ActorFactory;
@@ -16,6 +17,23 @@ pub(crate) fn test_config() -> ComputerUseMcpConfig {
         image_constraints: ImageConstraints::ANTHROPIC,
         key_dialect: KeyDialect::Anthropic,
         settle_delay: Duration::from_millis(500),
+        recording: None,
+    }
+}
+
+/// A recorder whose recordings start but can't be finalized, since that needs real video.
+pub(crate) struct FakeRecorder;
+
+#[async_trait]
+impl Recorder for FakeRecorder {
+    async fn start(&self, _config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
+        Ok(RecordingHandle::new_test(1920, 1080).0)
+    }
+
+    async fn stop(&self, _handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
+        Err(RecordingError::Finalize {
+            reason: "test recordings have no video".to_owned(),
+        })
     }
 }
 
@@ -24,6 +42,8 @@ pub(crate) fn test_config() -> ComputerUseMcpConfig {
 pub(crate) struct RecordedBatch {
     pub actions: Vec<TargetedAction>,
     pub screenshot_params: Option<ScreenshotParams>,
+    /// Whether the batch was performed with a recording's pointer sink.
+    pub recorded: bool,
 }
 
 /// Shared view of everything performed by the actors a [`FakeActorFactory`] creates.
@@ -75,6 +95,7 @@ impl Actor for FakeActor {
         self.log.batches.lock().unwrap().push(RecordedBatch {
             actions: actions.to_vec(),
             screenshot_params: options.screenshot_params,
+            recorded: options.pointer_sink.is_some(),
         });
         if !actions.is_empty()
             && let Some(error) = self.log.fail_next_input.lock().unwrap().take()

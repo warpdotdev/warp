@@ -1,10 +1,16 @@
 //! Serving the MCP server over the process's stdin and stdout.
 
+use std::time::Duration;
+
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
 use tokio::io::AsyncWrite;
 
 use crate::{ComputerUseMcpConfig, ComputerUseMcpServer};
+
+/// How long to spend publishing a recording left running when the session ends, which can
+/// include uploading it.
+const FINISH_RECORDING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Serves computer-use tools over MCP on stdin and stdout until the client disconnects or the
 /// process is asked to terminate.
@@ -27,18 +33,28 @@ async fn serve(
     config: ComputerUseMcpConfig,
     output: impl AsyncWrite + Send + Unpin + 'static,
 ) -> anyhow::Result<()> {
-    let running = ComputerUseMcpServer::new(config)
+    let server = ComputerUseMcpServer::new(config);
+    let running = server
+        .clone()
         .serve((tokio::io::stdin(), output))
         .await
         .context("Failed to initialize the computer use MCP session")?;
-    tokio::select! {
-        quit_reason = running.waiting() => {
-            let quit_reason = quit_reason.context("The computer use MCP session failed")?;
-            log::info!("Computer use MCP session ended: {quit_reason:?}");
+    let session_result = tokio::select! {
+        quit_reason = running.waiting() => quit_reason
+            .map(|quit_reason| log::info!("Computer use MCP session ended: {quit_reason:?}"))
+            .context("The computer use MCP session failed"),
+        () = shutdown_signal() => {
+            log::info!("Computer use MCP server received a shutdown signal");
+            Ok(())
         }
-        () = shutdown_signal() => log::info!("Computer use MCP server received a shutdown signal"),
+    };
+    if tokio::time::timeout(FINISH_RECORDING_TIMEOUT, server.finish_recording())
+        .await
+        .is_err()
+    {
+        log::warn!("Timed out publishing the recording in progress when the session ended");
     }
-    Ok(())
+    session_result
 }
 
 /// Returns the stream to write protocol messages to, after redirecting stdout to stderr so that

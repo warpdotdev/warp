@@ -1301,6 +1301,7 @@ fn artifact_upload_requires_auth() {
             run_id: Some("run-123".to_string()),
             conversation_id: None,
             description: None,
+            title: None,
         },)
     )));
 }

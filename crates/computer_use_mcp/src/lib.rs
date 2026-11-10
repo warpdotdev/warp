@@ -9,6 +9,8 @@
 mod actions;
 mod coords;
 mod keys;
+mod publish;
+mod recording;
 mod server;
 mod session;
 mod stdio;
@@ -20,11 +22,12 @@ use std::time::Duration;
 
 pub use coords::ImageConstraints;
 pub use keys::KeyDialect;
+pub use recording::RecordingDestination;
 pub use server::ComputerUseMcpServer;
 pub use stdio::run_stdio;
 
 /// Configuration for a computer-use MCP server.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputerUseMcpConfig {
     /// Size limits for screenshots returned to the model.
     pub image_constraints: ImageConstraints,
@@ -33,6 +36,8 @@ pub struct ComputerUseMcpConfig {
     /// How long to wait after an action before capturing its screenshot, so the UI has time to
     /// react to the input.
     pub settle_delay: Duration,
+    /// Where finished screen recordings go. `None` disables the recording tools.
+    pub recording: Option<RecordingDestination>,
 }
 
 /// A failure the model can act on, reported as an error result of the tool call rather than as
