@@ -76,9 +76,13 @@ fn task_scoped_requests_preserve_workload_and_global_identity() {
 #[test]
 fn task_scoped_request_supports_interactive_client_without_ambient_identity() {
     let (client, events) = externally_authenticated_base_client("daemon-token");
+    client.set_ambient_workload_token_for_test("workload-proof".to_string(), None);
     let sends = Arc::new(AtomicUsize::new(0));
     let mut operation = FakeGraphqlOperation::successful(Some("daemon-token"), sends.clone());
-    operation.expected_ambient = Some(("conversation-run".to_string(), None));
+    operation.expected_ambient = Some((
+        "conversation-run".to_string(),
+        Some("workload-proof".to_string()),
+    ));
     block_on(send_task_scoped_graphql_request(
         &client,
         operation,
