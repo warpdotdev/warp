@@ -190,7 +190,10 @@ fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
                 ("root", repo.join(".agents/skills/root/SKILL.md")),
                 ("nested", nested_path.clone()),
                 ("selected", pinned.clone()),
-                ("unselected", workspace.join("global/.agents/skills/unselected/SKILL.md")),
+                (
+                    "unselected",
+                    workspace.join("global/.agents/skills/unselected/SKILL.md"),
+                ),
             ] {
                 manager.handle_skills_added(vec![ParsedSkill {
                     name: name.into(),
@@ -212,25 +215,45 @@ fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
             (Some(&nested), vec!["nested", "root", "selected"]),
         ] {
             let mut names = handle.read(&app, |manager, ctx| {
-                manager.get_skills_for_working_directory(cwd, ctx)
-                    .into_iter().map(|skill| skill.name).collect::<Vec<_>>()
+                manager
+                    .get_skills_for_working_directory(cwd, ctx)
+                    .into_iter()
+                    .map(|skill| skill.name)
+                    .collect::<Vec<_>>()
             });
             names.sort();
             assert_eq!(names, expected);
         }
         handle.read(&app, |manager, ctx| {
-            assert!(manager.active_skill_by_reference(
-                &SkillReference::Path(nested_path), ctx).is_some());
+            assert!(
+                manager
+                    .active_skill_by_reference(&SkillReference::Path(nested_path), ctx)
+                    .is_some()
+            );
             let remote_skills = manager.get_skills_for_working_directory_with_origin(
-                None, &SkillPathOrigin::Remote { host_id: remote_host }, ctx);
+                None,
+                &SkillPathOrigin::Remote {
+                    host_id: remote_host,
+                },
+                ctx,
+            );
             assert_eq!(remote_skills.len(), 1);
             assert_eq!(remote_skills[0].name, "remote-pinned");
-            assert!(manager.get_skills_for_working_directory_with_origin(
-                None, &SkillPathOrigin::Unavailable, ctx).is_empty());
+            assert!(
+                manager
+                    .get_skills_for_working_directory_with_origin(
+                        None,
+                        &SkillPathOrigin::Unavailable,
+                        ctx
+                    )
+                    .is_empty()
+            );
         });
         handle.update(&mut app, |manager, _| manager.handle_path_deleted(&pinned));
         assert!(handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(Some(&workspace), ctx).is_empty()
+            manager
+                .get_skills_for_working_directory(Some(&workspace), ctx)
+                .is_empty()
         }));
     });
 }

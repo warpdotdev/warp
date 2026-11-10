@@ -1,6 +1,6 @@
 # Cwd-scoped cloud skill listings
 
-Status: implementation authorized; validation in progress.
+Status: implemented; validation results and limitations are recorded in the draft PR.
 Tracking: [QUALITY-2387](https://linear.app/warpdotdev/issue/QUALITY-2387).
 Source: [request and decisions](https://warpdev.slack.com/archives/C0BDQDW8V5E/p1794263012687819).
 
