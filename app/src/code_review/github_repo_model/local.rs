@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
@@ -12,13 +13,16 @@ use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel}
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
 use crate::util::git::{
-    PrInfo, RepositoryInfo, get_pr_for_branch, get_repository_info, is_gh_auth_error,
-    is_gh_missing_error,
+    PrInfo, PrStackInfo, RepositoryInfo, StackDiscoveryResult, get_pr_for_branch, get_pr_stack,
+    get_repository_info, is_gh_auth_error, is_gh_missing_error,
 };
 
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const GITHUB_INFO_PERIODIC_REFRESH: Duration = Duration::from_secs(60);
 const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longer than [`PR_INFO_FETCH_TIMEOUT`] since stack discovery makes up to
+/// two sequential `gh` calls (REST topology, then GraphQL enrichment).
+const STACK_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Per-repository model that owns the GitHub-sourced metadata lifecycle for a
 /// single repo — the values fetched through the (relatively expensive) `gh`
@@ -59,6 +63,12 @@ pub struct LocalGitHubRepoModel {
     /// Repository info (name/owner) returned by `gh repo view`. Branch-
     /// independent; fetched on creation and re-checked on the periodic tick.
     repository_info: Option<RepositoryInfo>,
+    /// Latest known GitHub-native stack containing `pr_info`'s pull request,
+    /// gated behind `FeatureFlag::PrStackingInCodeReview`. `None` covers "not
+    /// stacked", discovery not yet available (branch/repository info still
+    /// loading), and no pull request at all. Preserved across a transient
+    /// (`Unavailable`) discovery failure; cleared immediately on branch change.
+    stack_info: Option<PrStackInfo>,
     /// Handle for the in-flight `gh pr view` fetch, if any. Aborted in `Drop`.
     /// Used to avoid overlapping PR-info fetches; branch changes abort the
     /// current handle before starting a new branch's fetch.
@@ -66,6 +76,9 @@ pub struct LocalGitHubRepoModel {
     /// Handle for the in-flight `gh repo view` fetch, if any. Aborted in
     /// `Drop`. Used to avoid overlapping repository-info fetches.
     repository_info_abort_handle: Option<SpawnedFutureHandle>,
+    /// Handle for the in-flight stack discovery fetch, if any. Aborted in
+    /// `Drop` and on branch change.
+    refreshing_stack_info_abort_handle: Option<SpawnedFutureHandle>,
     /// Handle for the pending periodic-refresh tick. Aborted in `Drop` so
     /// the timer doesn't outlive the model.
     periodic_refresh_handle: Option<SpawnedFutureHandle>,
@@ -111,6 +124,16 @@ impl LocalGitHubRepoModel {
                     if let Some(handle) = me.refreshing_pr_info_abort_handle.take() {
                         handle.abort();
                     }
+                    // Clear immediately on branch change (TECH.md "Keep stack
+                    // selection ephemeral" / stale-async-result decisions);
+                    // a stack snapshot for the previous branch's PR must
+                    // never linger under the new branch.
+                    if let Some(handle) = me.refreshing_stack_info_abort_handle.take() {
+                        handle.abort();
+                    }
+                    if me.stack_info.take().is_some() {
+                        ctx.emit(GitHubRepoEvent::StackInfoChanged);
+                    }
                     me.refresh_pr_info(ctx);
                 }
             }
@@ -122,8 +145,10 @@ impl LocalGitHubRepoModel {
             branch,
             pr_info: None,
             repository_info: None,
+            stack_info: None,
             refreshing_pr_info_abort_handle: None,
             repository_info_abort_handle: None,
+            refreshing_stack_info_abort_handle: None,
             periodic_refresh_handle: None,
         };
 
@@ -169,6 +194,17 @@ impl LocalGitHubRepoModel {
     /// Whether a `gh pr view` fetch is currently in flight.
     pub fn is_refreshing_pr_info(&self) -> bool {
         self.refreshing_pr_info_abort_handle.is_some()
+    }
+
+    /// The GitHub-native stack containing `pr_info`'s pull request, when it
+    /// belongs to one with two or more layers.
+    pub fn stack_info(&self) -> Option<&PrStackInfo> {
+        self.stack_info.as_ref()
+    }
+
+    /// Whether a stack discovery fetch is currently in flight.
+    pub fn is_refreshing_stack_info(&self) -> bool {
+        self.refreshing_stack_info_abort_handle.is_some()
     }
 
     /// Manually trigger a PR-info refresh. Called after `gh`/`gt` commands
@@ -267,6 +303,9 @@ impl LocalGitHubRepoModel {
                     self.repository_info = repository_info;
                     ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
                 }
+                // Repository info may be the last piece stack discovery was
+                // waiting on (e.g. `pr_info` already resolved first).
+                self.refresh_stack_info(ctx);
             }
             Err(err) => {
                 log::debug!("GitHubRepoModel: repository info load failed: {err}");
@@ -290,6 +329,18 @@ impl LocalGitHubRepoModel {
                     if changed {
                         ctx.emit(GitHubRepoEvent::PrInfoChanged);
                     }
+                    if self.pr_info.is_some() {
+                        self.refresh_stack_info(ctx);
+                    } else {
+                        // No PR on this branch: any in-flight stack fetch is
+                        // now moot, and there's nothing to display a stack for.
+                        if let Some(handle) = self.refreshing_stack_info_abort_handle.take() {
+                            handle.abort();
+                        }
+                        if self.stack_info.take().is_some() {
+                            ctx.emit(GitHubRepoEvent::StackInfoChanged);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -306,6 +357,112 @@ impl LocalGitHubRepoModel {
                 }
                 // On transient errors, keep existing PR info to avoid
                 // flashing the UI.
+            }
+        }
+    }
+
+    /// Kicks off GitHub-native stack discovery for the current branch's pull
+    /// request, gated behind `FeatureFlag::PrStackingInCodeReview`. No-ops
+    /// until `pr_info` and a `repository_info` with an owner are both known;
+    /// per TECH.md this simply waits for the next trigger (branch change,
+    /// periodic refresh, or the other fetch's completion) to retry rather
+    /// than chaining a dedicated retry mechanism.
+    fn refresh_stack_info(&mut self, ctx: &mut ModelContext<Self>) {
+        if !FeatureFlag::PrStackingInCodeReview.is_enabled() {
+            return;
+        }
+        // Branch changes abort in-flight fetches, so any handle here is
+        // already for the current branch/PR.
+        if self.refreshing_stack_info_abort_handle.is_some() {
+            return;
+        }
+        let Some(branch) = self.branch.clone() else {
+            return;
+        };
+        let Some(pr_number) = self.pr_info.as_ref().map(|pr| pr.number) else {
+            return;
+        };
+        let Some(owner) = self
+            .repository_info
+            .as_ref()
+            .and_then(|info| info.owner.clone())
+        else {
+            return;
+        };
+        let Some(repo_name) = self.repository_info.as_ref().map(|info| info.name.clone()) else {
+            return;
+        };
+        let repo_path = self.repo_path.clone();
+        #[cfg(feature = "local_tty")]
+        let path_future = {
+            LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+                shell_state.get_interactive_path_env_var(ctx)
+            })
+        };
+        #[cfg(not(feature = "local_tty"))]
+        let path_future = futures::future::ready(None);
+        let branch_for_callback = branch.clone();
+        let abort_handle = ctx.spawn(
+            async move {
+                let path_env = path_future.await;
+                let fetch = get_pr_stack(
+                    &repo_path,
+                    path_env.as_deref(),
+                    pr_number,
+                    &owner,
+                    &repo_name,
+                );
+                let timeout = async_io::Timer::after(STACK_INFO_FETCH_TIMEOUT);
+                futures::pin_mut!(fetch);
+                match futures::future::select(fetch, timeout).await {
+                    futures::future::Either::Left((result, _)) => result,
+                    futures::future::Either::Right((_, _)) => StackDiscoveryResult::Unavailable {
+                        reason: "Stack discovery timed out".to_string(),
+                    },
+                }
+            },
+            move |me, result, ctx| {
+                me.refreshing_stack_info_abort_handle = None;
+                me.handle_stack_info_result(result, branch_for_callback, pr_number, ctx);
+            },
+        );
+        self.refreshing_stack_info_abort_handle = Some(abort_handle);
+    }
+
+    /// Applies a stack discovery result, dropping it if the branch or pull
+    /// request it was started for is no longer current (the branch/PR
+    /// generation token described in TECH.md's "Stale async results" risk).
+    fn handle_stack_info_result(
+        &mut self,
+        result: StackDiscoveryResult,
+        branch: String,
+        pr_number: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let still_current = self.branch.as_deref() == Some(branch.as_str())
+            && self.pr_info.as_ref().map(|pr| pr.number) == Some(pr_number);
+        if !still_current {
+            return;
+        }
+        match result {
+            StackDiscoveryResult::Available(stack_info) => {
+                if self.stack_info.as_ref() != Some(&stack_info) {
+                    self.stack_info = Some(stack_info);
+                    ctx.emit(GitHubRepoEvent::StackInfoChanged);
+                }
+            }
+            // A successful lookup with no matching stack is authoritative,
+            // not a transient failure, so it clears any prior snapshot.
+            StackDiscoveryResult::NotStacked => {
+                if self.stack_info.take().is_some() {
+                    ctx.emit(GitHubRepoEvent::StackInfoChanged);
+                }
+            }
+            // Preserve the last valid snapshot across a transient failure
+            // (TECH.md "Large stacks and repeated metadata calls" / cached
+            // snapshot decision).
+            StackDiscoveryResult::Unavailable { reason } => {
+                log::debug!("GitHubRepoModel: stack discovery unavailable: {reason}");
             }
         }
     }
@@ -349,8 +506,10 @@ impl LocalGitHubRepoModel {
             branch: None,
             pr_info: None,
             repository_info: None,
+            stack_info: None,
             refreshing_pr_info_abort_handle: None,
             repository_info_abort_handle: None,
+            refreshing_stack_info_abort_handle: None,
             periodic_refresh_handle: None,
         }
     }
@@ -372,6 +531,15 @@ impl LocalGitHubRepoModel {
         self.repository_info = repository_info;
         ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
     }
+
+    pub(crate) fn set_stack_info_for_test(
+        &mut self,
+        stack_info: Option<PrStackInfo>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.stack_info = stack_info;
+        ctx.emit(GitHubRepoEvent::StackInfoChanged);
+    }
 }
 
 #[cfg(test)]
@@ -384,6 +552,9 @@ impl Drop for LocalGitHubRepoModel {
             h.abort();
         }
         if let Some(h) = self.repository_info_abort_handle.take() {
+            h.abort();
+        }
+        if let Some(h) = self.refreshing_stack_info_abort_handle.take() {
             h.abort();
         }
         if let Some(h) = self.periodic_refresh_handle.take() {

@@ -23,6 +23,7 @@ pub(crate) mod diff_menu;
 pub(crate) mod diff_selector;
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub(crate) mod file_invalidation_queue;
+pub(crate) mod stack_map;
 
 use code_review_view::CodeReviewAction;
 use warpui::keymap::{EditableBinding, FixedBinding};
@@ -106,6 +107,7 @@ pub fn init(app: &mut AppContext) {
     diff_menu::init(app);
     diff_selector::init(app);
     git_dialog::init(app);
+    stack_map::init(app);
 }
 
 /// Uses heuristics to determine if a file is auto-generated.

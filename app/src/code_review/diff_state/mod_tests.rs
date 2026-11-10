@@ -29,6 +29,34 @@ fn diff_mode_defaults_to_head() {
 }
 
 #[test]
+fn only_pull_request_layer_is_read_only() {
+    assert!(!DiffMode::Head.is_read_only());
+    assert!(!DiffMode::MainBranch.is_read_only());
+    assert!(!DiffMode::OtherBranch("feature".to_string()).is_read_only());
+    assert!(
+        DiffMode::PullRequestLayer {
+            pr_number: 1,
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+        }
+        .is_read_only()
+    );
+}
+
+#[test]
+fn pull_request_layer_equality_is_field_based() {
+    let layer = |pr_number, base: &str, head: &str| DiffMode::PullRequestLayer {
+        pr_number,
+        base_oid: base.repeat(40),
+        head_oid: head.repeat(40),
+    };
+
+    assert_eq!(layer(1, "a", "b"), layer(1, "a", "b"));
+    assert_ne!(layer(1, "a", "b"), layer(1, "a", "c"));
+    assert_ne!(layer(1, "a", "b"), layer(2, "a", "b"));
+}
+
+#[test]
 fn has_head_false_for_test_model() {
     warpui::App::test((), |mut app| async move {
         let handle = app.add_model(DiffStateModel::new_for_test);
