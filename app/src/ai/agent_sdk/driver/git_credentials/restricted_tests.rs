@@ -3,9 +3,11 @@ use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 
 use command::Stdio;
+use warp_cli::agent::{Harness, HarnessTransport};
 use warp_graphql::queries::task_restricted_git_credentials::RestrictedTaskGitCredential;
 
 use super::*;
+use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, split_run_options};
 
 fn with_home(
     test_name: &str,
@@ -177,6 +179,80 @@ fn github_refresh_failure_preserves_other_forge_store() -> Result<()> {
                 fs::read_to_string(home.join(".git-credentials"))?,
                 "https://oauth2:gitlab-test-token@gitlab.com\n"
             );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn third_party_run_options_preserve_restricted_github_environment() -> Result<()> {
+    with_home(
+        "third_party_run_options_preserve_restricted_github_environment",
+        &[("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")],
+        |home| {
+            for harness in [
+                Harness::Claude,
+                Harness::Codex,
+                Harness::Gemini,
+                Harness::Pi,
+                Harness::OpenCode,
+            ] {
+                for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
+                    let (_, config) = split_run_options(AgentDriverOptions {
+                        working_dir: home.to_path_buf(),
+                        task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
+                        selected_harness: harness,
+                        harness_transport: transport,
+                        environment_variables: HashMap::from([
+                            ("GH_TOKEN".to_owned(), "task-provided-test-token".to_owned()),
+                            ("RUN_SETTING".to_owned(), "keep".to_owned()),
+                        ]),
+                        ..Default::default()
+                    })
+                    .unwrap();
+
+                    assert_eq!(config.resolved_env_vars[OsStr::new("GH_TOKEN")], "");
+                    assert_eq!(config.resolved_env_vars[OsStr::new("GITHUB_TOKEN")], "");
+                    assert_eq!(config.resolved_env_vars[OsStr::new("RUN_SETTING")], "keep");
+                    assert_eq!(
+                        config.resolved_env_vars[OsStr::new("WARP_GITHUB_CREDENTIAL_MODE")],
+                        "restricted_installation"
+                    );
+                    assert_eq!(
+                        config.resolved_env_vars[OsStr::new("GH_CONFIG_DIR")],
+                        home.join(".warp")
+                            .join("github-git")
+                            .join("550e8400-e29b-41d4-a716-446655440000")
+                            .join("gh")
+                            .into_os_string()
+                    );
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn third_party_run_options_reject_git_configuration_overrides() -> Result<()> {
+    with_home(
+        "third_party_run_options_reject_git_configuration_overrides",
+        &[("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")],
+        |home| {
+            let result = split_run_options(AgentDriverOptions {
+                working_dir: home.to_path_buf(),
+                task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
+                selected_harness: Harness::Claude,
+                environment_variables: HashMap::from([(
+                    "GIT_CONFIG_COUNT".to_owned(),
+                    "1".to_owned(),
+                )]),
+                ..Default::default()
+            });
+            assert!(matches!(
+                result,
+                Err(AgentDriverError::ConfigBuildFailed(_))
+            ));
             Ok(())
         },
     )

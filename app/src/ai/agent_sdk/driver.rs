@@ -885,11 +885,6 @@ fn split_run_options(
     })?;
     env_vars.extend(harness_env);
     if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)? {
-        if selected_harness != Harness::Oz {
-            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
-                "Restricted GitHub mode requires the native harness"
-            )));
-        }
         let task_id = task_id.ok_or(AgentDriverError::InvalidRuntimeState)?;
         git_credentials::validate_restricted_child_environment(&env_vars)
             .map_err(AgentDriverError::ConfigBuildFailed)?;

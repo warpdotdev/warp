@@ -218,7 +218,11 @@ impl AcpHarness {
                 )
             }
             Harness::Gemini => {
-                prepare_gemini_environment_config(harness_working_dir, system_prompt)?;
+                prepare_gemini_environment_config(
+                    harness_working_dir,
+                    system_prompt,
+                    &HashMap::new(),
+                )?;
                 publish_skills_for_gemini(
                     workspace_root,
                     harness_working_dir,

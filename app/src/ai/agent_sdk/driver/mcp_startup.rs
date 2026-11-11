@@ -24,7 +24,7 @@ use warpui::r#async::{FutureExt as _, TimeoutError};
 use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::harness::ResolvedMCPServers;
-use super::{AgentDriver, AgentDriverError};
+use super::{AgentDriver, AgentDriverError, git_credentials};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -680,7 +680,27 @@ impl AgentDriver {
             &taken_server_names,
             &ambient_headers,
         ));
-        Self::mcp_installations_to_json(installations, secrets.as_ref())
+        let resolved = Self::mcp_installations_to_json(installations, secrets.as_ref())?;
+        if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)? {
+            Self::require_managed_github_mcp(&resolved)?;
+        }
+        Ok(resolved)
+    }
+
+    fn require_managed_github_mcp(resolved: &ResolvedMCPServers) -> Result<(), AgentDriverError> {
+        if resolved
+            .warp_ids
+            .iter()
+            .any(|(name, warp_id)| warp_id == "github" && resolved.configs.contains_key(name))
+        {
+            Ok(())
+        } else {
+            Err(AgentDriverError::MCPStartupFailed {
+                details: vec![
+                    "Restricted GitHub mode requires the managed GitHub MCP integration".to_owned(),
+                ],
+            })
+        }
     }
 
     fn mcp_installations_to_json(
@@ -690,12 +710,6 @@ impl AgentDriver {
         let mut result = ResolvedMCPServers::default();
 
         for installation in installations.iter_mut() {
-            if installation.warp_id() == Some("github") {
-                log::warn!(
-                    "Skipping managed GitHub MCP: third-party harnesses do not provide native tool-call context"
-                );
-                continue;
-            }
             let unresolved_secret_names = installation.apply_secrets(secrets);
             if !unresolved_secret_names.is_empty() {
                 return Err(AgentDriverError::MCPUnresolvedSecrets {
