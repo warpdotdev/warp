@@ -17,9 +17,9 @@ use warp_graphql::queries::task_restricted_git_credentials::{
 };
 
 use super::{
-    GIT_CREDENTIALS_REFRESH_INTERVAL, GITHUB_HOST, GitCredential, READ_ONLY_CREDENTIAL_HELPER, TaskGitCredentialsError,
-    ensure_workload_token_available, gh_config_dir, home_dir, record_host_identities,
-    unique_credentials_by_host, write_git_credentials,
+    GIT_CREDENTIALS_REFRESH_INTERVAL, GITHUB_HOST, GitCredential, READ_ONLY_CREDENTIAL_HELPER,
+    TaskGitCredentialsError, ensure_workload_token_available, gh_config_dir, home_dir,
+    record_host_identities, unique_credentials_by_host, write_git_credentials,
 };
 use crate::server::server_api::ai::AIClient;
 
@@ -271,7 +271,9 @@ fn validate_response(
                     && !credential.token.contains(['\n', '\r', '@', '/']),
                 "Restricted GitHub credential is missing valid expiry, repository scope, or bot identity",
             );
-            let expires_at = credential.expires_at.context("Missing GitHub credential expiry")?;
+            let expires_at = credential
+                .expires_at
+                .context("Missing GitHub credential expiry")?;
             let interval = (expires_at.utc() - now - REFRESH_EXPIRY_BUFFER)
                 .to_std()
                 .unwrap_or_default()
@@ -311,17 +313,20 @@ async fn fetch(
     let response = ai_client
         .get_restricted_task_git_credentials(task_id.to_owned(), token, use_factory_repositories)
         .await?;
-    validate_response(response, Utc::now(), Instant::now()).map_err(TaskGitCredentialsError::Request)
+    validate_response(response, Utc::now(), Instant::now())
+        .map_err(TaskGitCredentialsError::Request)
 }
 
 fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
-    let content = response.credentials
+    let content = response
+        .credentials
         .iter()
         .find(|credential| credential.host == GITHUB_HOST)
         .map(|credential| format!("https://x-access-token:{}@github.com\n", credential.token))
         .unwrap_or_default();
     write_store(&store.directory, &content)?;
-    let other = response.credentials
+    let other = response
+        .credentials
         .iter()
         .filter(|credential| credential.host != GITHUB_HOST)
         .cloned()
@@ -339,8 +344,10 @@ pub(crate) async fn bootstrap_restricted_credentials(
     let directory = prepare(task_id).map_err(TaskGitCredentialsError::Request)?;
     let result = async {
         let response = fetch(task_id, ai_client, use_factory_repositories).await?;
-        install_helper(&directory, &response.credentials).map_err(TaskGitCredentialsError::Request)?;
-        if let Some(github) = response.credentials
+        install_helper(&directory, &response.credentials)
+            .map_err(TaskGitCredentialsError::Request)?;
+        if let Some(github) = response
+            .credentials
             .iter()
             .find(|credential| credential.host == GITHUB_HOST)
         {
@@ -350,7 +357,8 @@ pub(crate) async fn bootstrap_restricted_credentials(
                 .map_err(TaskGitCredentialsError::Request)?;
         }
         record_host_identities(&response.credentials);
-        with_store(task_id, |store| apply(store, &response)).map_err(TaskGitCredentialsError::Request)
+        with_store(task_id, |store| apply(store, &response))
+            .map_err(TaskGitCredentialsError::Request)
     }
     .await;
     if result.is_err() {
@@ -393,7 +401,9 @@ pub(crate) fn clear_restricted_credentials(task_id: &str) -> Result<()> {
 
 pub(super) fn refresh_delay(task_id: &str, now: Instant) -> Duration {
     with_store(task_id, |store| {
-        Ok(store.refresh_at.map(|deadline| deadline.saturating_duration_since(now)))
+        Ok(store
+            .refresh_at
+            .map(|deadline| deadline.saturating_duration_since(now)))
     })
     .ok()
     .flatten()

@@ -93,7 +93,10 @@ fn github_refresh_is_scheduled_ten_minutes_before_expiry() -> Result<()> {
 
     let validated = validate_response(response(), now(), received_at)?;
 
-    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(3000));
+    assert_eq!(
+        validated.refresh_at - received_at,
+        Duration::from_secs(3000)
+    );
     Ok(())
 }
 
@@ -106,7 +109,10 @@ fn shorter_lived_github_credentials_refresh_earlier() -> Result<()> {
 
     let validated = validate_response(response, now(), received_at)?;
 
-    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(1200));
+    assert_eq!(
+        validated.refresh_at - received_at,
+        Duration::from_secs(1200)
+    );
     Ok(())
 }
 
@@ -119,7 +125,10 @@ fn longer_lived_github_credentials_still_refresh_within_fifty_minutes() -> Resul
 
     let validated = validate_response(response, now(), received_at)?;
 
-    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(3000));
+    assert_eq!(
+        validated.refresh_at - received_at,
+        Duration::from_secs(3000)
+    );
     Ok(())
 }
 
@@ -140,7 +149,9 @@ fn credentials_inside_the_refresh_buffer_do_not_cause_a_busy_loop() -> Result<()
 fn mixed_gitlab_credentials_keep_the_existing_refresh_interval() -> Result<()> {
     let received_at = Instant::now();
     let mut response = response();
-    response.credentials.push(other_forge_credential("gitlab.com"));
+    response
+        .credentials
+        .push(other_forge_credential("gitlab.com"));
 
     let validated = validate_response(response, now(), received_at)?;
 
@@ -152,7 +163,9 @@ fn mixed_gitlab_credentials_keep_the_existing_refresh_interval() -> Result<()> {
 fn mixed_azure_credentials_keep_the_existing_refresh_interval() -> Result<()> {
     let received_at = Instant::now();
     let mut response = response();
-    response.credentials.insert(0, other_forge_credential("dev.azure.com"));
+    response
+        .credentials
+        .insert(0, other_forge_credential("dev.azure.com"));
 
     let validated = validate_response(response, now(), received_at)?;
 
@@ -203,19 +216,23 @@ fn setup_time_counts_toward_the_refresh_deadline() -> Result<()> {
 
 #[test]
 fn overdue_credentials_refresh_without_another_interval() -> Result<()> {
-    with_home("overdue_credentials_refresh_without_another_interval", &[], |_| {
-        prepare("task")?;
-        let received_at = Instant::now();
-        let credentials = validate_response(response(), now(), received_at)?;
+    with_home(
+        "overdue_credentials_refresh_without_another_interval",
+        &[],
+        |_| {
+            prepare("task")?;
+            let received_at = Instant::now();
+            let credentials = validate_response(response(), now(), received_at)?;
 
-        apply_refresh("task", Ok(credentials))?;
+            apply_refresh("task", Ok(credentials))?;
 
-        assert_eq!(
-            refresh_delay("task", received_at + Duration::from_secs(3600)),
-            Duration::ZERO
-        );
-        Ok(())
-    })
+            assert_eq!(
+                refresh_delay("task", received_at + Duration::from_secs(3600)),
+                Duration::ZERO
+            );
+            Ok(())
+        },
+    )
 }
 
 #[test]
@@ -246,9 +263,15 @@ fn successful_refresh_after_failure_restores_expiry_schedule() -> Result<()> {
             assert!(apply_refresh("task", Err(error)).is_err());
             let received_at = Instant::now();
 
-            apply_refresh("task", Ok(validate_response(response(), now(), received_at)?))?;
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
 
-            assert_eq!(refresh_delay("task", received_at), Duration::from_secs(3000));
+            assert_eq!(
+                refresh_delay("task", received_at),
+                Duration::from_secs(3000)
+            );
             Ok(())
         },
     )
@@ -262,12 +285,18 @@ fn failed_credential_write_does_not_retain_a_long_refresh_deadline() -> Result<(
         |_| {
             let directory = prepare("task")?;
             apply_refresh("task", Ok(validated_response()?))?;
-            fs::rename(directory.join("credentials"), directory.join("previous-credentials"))?;
+            fs::rename(
+                directory.join("credentials"),
+                directory.join("previous-credentials"),
+            )?;
             fs::create_dir(directory.join("credentials"))?;
 
             assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
 
-            assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
+            assert_eq!(
+                refresh_delay("task", Instant::now()),
+                Duration::from_secs(60)
+            );
             Ok(())
         },
     )
@@ -568,7 +597,10 @@ fn any_failed_refresh_clears_managed_github_store() -> Result<()> {
             let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-            assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
+            assert_eq!(
+                refresh_delay("task", Instant::now()),
+                Duration::from_secs(60)
+            );
             Ok(())
         },
     )
@@ -603,7 +635,10 @@ fn completed_run_cannot_restore_credentials() -> Result<()> {
 
         assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
         assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-        assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
+        assert_eq!(
+            refresh_delay("task", Instant::now()),
+            Duration::from_secs(60)
+        );
         Ok(())
     })
 }
@@ -616,13 +651,22 @@ fn another_task_cannot_replace_or_clear_managed_credentials() -> Result<()> {
         |_| {
             let directory = prepare("task")?;
             let received_at = Instant::now();
-            apply_refresh("task", Ok(validate_response(response(), now(), received_at)?))?;
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
             close_restricted_credentials("other-task")?;
 
             assert!(prepare("other-task").is_err());
             assert!(apply_refresh("other-task", Ok(validated_response()?)).is_err());
-            assert_eq!(refresh_delay("other-task", received_at), Duration::from_secs(60));
-            assert_eq!(refresh_delay("task", received_at), Duration::from_secs(3000));
+            assert_eq!(
+                refresh_delay("other-task", received_at),
+                Duration::from_secs(60)
+            );
+            assert_eq!(
+                refresh_delay("task", received_at),
+                Duration::from_secs(3000)
+            );
             assert_eq!(
                 fs::read_to_string(directory.join("credentials"))?,
                 "https://x-access-token:installation-test-token@github.com\n"
