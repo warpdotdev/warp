@@ -535,6 +535,21 @@ pub enum WorkerCommand {
         launch_file: std::path::PathBuf,
     },
 
+    /// Print the current credential of a managed MCP server, as held by the agent driver that
+    /// started the harness running this command.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    McpCredential {
+        /// File the driver wrote with the address to connect to and the token to present.
+        #[clap(long = "endpoint-file")]
+        endpoint_file: std::path::PathBuf,
+        /// Name of the MCP server in the harness's configuration.
+        #[clap(long)]
+        server: String,
+        #[clap(long, value_enum, default_value_t)]
+        format: mcp::McpCredentialFormat,
+    },
+
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]
     #[clap(hide = true)]

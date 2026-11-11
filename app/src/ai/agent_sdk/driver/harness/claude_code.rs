@@ -28,6 +28,7 @@ use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::mcp_credential_broker::McpCredentialHelper;
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
     CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
@@ -199,7 +200,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             server_api,
             terminal_driver,
             claude_resume,
-            &resolved_mcp_servers.configs,
+            resolved_mcp_servers,
         )?))
     }
 
@@ -287,7 +288,7 @@ impl ClaudeHarnessRunner {
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<ClaudeResumeInfo>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
     ) -> Result<Self, AgentDriverError> {
         // Write the prompt to a temp file so we can feed it via stdin redirect,
         // avoiding shell-quoting issues with complex content (e.g. skill instructions).
@@ -314,10 +315,13 @@ impl ClaudeHarnessRunner {
             .as_ref()
             .map(|f| f.path().display().to_string());
 
-        let temp_mcp_config_file = (!resolved_mcp_servers.is_empty())
+        let temp_mcp_config_file = (!resolved_mcp_servers.configs.is_empty())
             .then(|| {
-                let mcp_json = serialize_claude_mcp_config(resolved_mcp_servers)
-                    .map_err(AgentDriverError::ConfigBuildFailed)?;
+                let mcp_json = serialize_claude_mcp_config(
+                    &resolved_mcp_servers.configs,
+                    &resolved_mcp_servers.credential_helpers,
+                )
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
                 write_temp_file("oz_mcp_config_", &mcp_json, ".json")
             })
             .transpose()?;
@@ -946,11 +950,18 @@ enum ClaudeMcpServerEntry {
         url: String,
         #[serde(skip_serializing_if = "HashMap::is_empty")]
         headers: HashMap<String, String>,
+        /// A command whose output takes the place of same-named `headers` on every connection.
+        /// The fixed headers stay so a failing command leaves the server as it was.
+        #[serde(rename = "headersHelper", skip_serializing_if = "Option::is_none")]
+        headers_helper: Option<String>,
     },
 }
 
 impl ClaudeMcpServerEntry {
-    fn from_json_mcp_server(server: &JSONMCPServer) -> Self {
+    fn from_json_mcp_server(
+        server: &JSONMCPServer,
+        credential_helper: Option<&McpCredentialHelper>,
+    ) -> Self {
         match &server.transport_type {
             JSONTransportType::CLIServer {
                 command,
@@ -966,9 +977,28 @@ impl ClaudeMcpServerEntry {
             JSONTransportType::SSEServer { url, headers } => Self::Http {
                 url: url.clone(),
                 headers: headers.clone(),
+                headers_helper: credential_helper.map(|helper| helper.headers_command().to_owned()),
             },
         }
     }
+}
+
+/// The servers in `servers` that have a credential helper, as the Claude Agent SDK's
+/// `mcpServers` option takes them.
+pub(crate) fn claude_credential_helper_servers(
+    servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
+) -> Result<HashMap<String, serde_json::Value>> {
+    credential_helpers
+        .iter()
+        .filter_map(|(name, helper)| Some((name, servers.get(name)?, helper)))
+        .map(|(name, server, helper)| {
+            let entry = ClaudeMcpServerEntry::from_json_mcp_server(server, Some(helper));
+            let entry = serde_json::to_value(entry)
+                .context("Failed to serialize Claude MCP server options")?;
+            Ok((name.clone(), entry))
+        })
+        .collect()
 }
 
 /// Serialize resolved MCP servers into Claude Code's `--mcp-config` JSON format.
@@ -976,6 +1006,7 @@ impl ClaudeMcpServerEntry {
 /// Produces `{ "mcpServers": { "name": { "type": "stdio"|"http", ... }, ... } }`.
 pub(crate) fn serialize_claude_mcp_config(
     servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
 ) -> Result<String> {
     let config = ClaudeMcpConfig {
         mcp_servers: servers
@@ -983,7 +1014,10 @@ pub(crate) fn serialize_claude_mcp_config(
             .map(|(name, server)| {
                 (
                     name.clone(),
-                    ClaudeMcpServerEntry::from_json_mcp_server(server),
+                    ClaudeMcpServerEntry::from_json_mcp_server(
+                        server,
+                        credential_helpers.get(name),
+                    ),
                 )
             })
             .collect(),

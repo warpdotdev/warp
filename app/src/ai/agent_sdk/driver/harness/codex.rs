@@ -30,6 +30,7 @@ use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::read_json_file_or_default;
+use super::mcp_credential_broker::McpCredentialHelper;
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
     CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
@@ -37,8 +38,8 @@ use super::transcript_persistence::{
 };
 use super::usage_reporting::CaptureIdentity;
 use super::{
-    HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
-    install_docs_url, write_temp_file,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload,
+    SavePoint, ThirdPartyHarness, install_docs_url, parse_release_version, write_temp_file,
 };
 use crate::ai::agent::BaseUserQuery;
 use crate::ai::agent::api::ServerConversationToken;
@@ -51,6 +52,7 @@ use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
+use crate::util::path::resolve_executable;
 
 pub(crate) struct CodexHarness;
 
@@ -146,6 +148,10 @@ impl ThirdPartyHarness for CodexHarness {
         resolved_mcp_servers: &ResolvedMCPServers,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
+        let credential_helpers = runnable_credential_helpers(
+            &resolved_mcp_servers.credential_helpers,
+            installed_codex_version,
+        );
         // Prepare the environment config files.
         prepare_codex_environment_config(
             harness_working_dir,
@@ -153,6 +159,7 @@ impl ThirdPartyHarness for CodexHarness {
             resolved_env_vars,
             resolved_secrets,
             &resolved_mcp_servers.configs,
+            &credential_helpers,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -199,6 +206,7 @@ impl ThirdPartyHarness for CodexHarness {
             client,
             terminal_driver,
             codex_resume,
+            credential_helpers,
         )?))
     }
 }
@@ -252,6 +260,9 @@ struct CodexHarnessRunner {
     transcript_path: OnceLock<PathBuf>,
     /// Optionally supply an existing conversation ID.
     preexisting_conversation_id: Option<ServerConversationToken>,
+    /// The credential helpers this run wrote into Codex's config, which stop answering when
+    /// the run ends.
+    credential_helpers: HashMap<String, McpCredentialHelper>,
 }
 
 impl CodexHarnessRunner {
@@ -264,6 +275,7 @@ impl CodexHarnessRunner {
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
+        credential_helpers: HashMap<String, McpCredentialHelper>,
     ) -> Result<Self, AgentDriverError> {
         let temp_file = write_temp_file("oz_prompt_", prompt, ".txt")?;
         let prompt_path = temp_file.path().display().to_string();
@@ -307,6 +319,7 @@ impl CodexHarnessRunner {
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
+            credential_helpers,
         })
     }
 
@@ -533,6 +546,14 @@ impl HarnessRunner for CodexHarnessRunner {
         )
         .await
     }
+
+    async fn cleanup(
+        &self,
+        _cleanup_disposition: HarnessCleanupDisposition,
+        _foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        remove_codex_credential_helper_servers(&self.credential_helpers)
+    }
 }
 
 pub(super) fn capture_transcript_with_usage(
@@ -603,6 +624,7 @@ pub(super) fn prepare_codex_environment_config(
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<()> {
     let codex_dir = codex_config_dir()?;
@@ -625,10 +647,118 @@ pub(super) fn prepare_codex_environment_config(
         &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
         harness_working_dir,
         resolved_mcp_servers,
+        credential_helpers,
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
     Ok(())
+}
+
+/// The first Codex release that runs `http_headers_helper`.
+const CODEX_HEADERS_HELPER_MIN_VERSION: (u64, u64, u64) = (0, 149, 0);
+
+/// The credential helpers a Codex of `installed_version()` can run: all of `credential_helpers`,
+/// or none when it predates `http_headers_helper` or does not say which version it is. Such a
+/// Codex would ignore the helper and connect without the credential.
+fn runnable_credential_helpers(
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
+    installed_version: impl FnOnce() -> Option<(u64, u64, u64)>,
+) -> HashMap<String, McpCredentialHelper> {
+    if credential_helpers.is_empty() {
+        return HashMap::new();
+    }
+    match installed_version() {
+        Some(version) if version >= CODEX_HEADERS_HELPER_MIN_VERSION => credential_helpers.clone(),
+        Some(_) | None => {
+            log::info!(
+                "The installed Codex does not run MCP header helpers; managed MCP credentials \
+                 will not be refreshed"
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// The version of the Codex CLI on `PATH`, when it can be run and prints one.
+fn installed_codex_version() -> Option<(u64, u64, u64)> {
+    let executable = resolve_executable(CLIAgent::Codex.command_prefix())?;
+    let output = command::blocking::Command::new(executable.as_ref())
+        .arg("--version")
+        .output()
+        .ok()?;
+    parse_codex_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parses the version out of `codex --version` output such as `codex-cli 0.160.0`.
+fn parse_codex_version(output: &str) -> Option<(u64, u64, u64)> {
+    parse_release_version(output.split_whitespace().last()?)
+}
+
+/// Removes from Codex's config the MCP servers that still name one of `credential_helpers`.
+/// Their helper cannot answer once the run that wrote them has ended.
+pub(super) fn remove_codex_credential_helper_servers(
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
+) -> Result<()> {
+    if credential_helpers.is_empty() {
+        return Ok(());
+    }
+    remove_credential_helper_servers_from(
+        &codex_config_dir()?.join(CODEX_CONFIG_TOML_FILE_NAME),
+        credential_helpers,
+    )
+}
+
+fn remove_credential_helper_servers_from(
+    config_toml_path: &Path,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
+) -> Result<()> {
+    let existing = match fs::read_to_string(config_toml_path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "Failed to read Codex config.toml at {}",
+                    config_toml_path.display()
+                )
+            });
+        }
+    };
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| {
+            format!(
+                "Failed to parse Codex config.toml at {}",
+                config_toml_path.display()
+            )
+        })?;
+    let Some(mcp_tbl) = doc
+        .get_mut("mcp_servers")
+        .and_then(|item| item.as_table_mut())
+    else {
+        return Ok(());
+    };
+    let mut removed = false;
+    for (name, helper) in credential_helpers {
+        let names_helper = mcp_tbl
+            .get(name)
+            .and_then(|entry| entry.get(CODEX_HTTP_HEADERS_HELPER_KEY))
+            .and_then(|command| command.as_str())
+            .is_some_and(|command| command == helper.headers_command());
+        if names_helper {
+            mcp_tbl.remove(name);
+            removed = true;
+        }
+    }
+    if !removed {
+        return Ok(());
+    }
+    fs::write(config_toml_path, doc.to_string()).with_context(|| {
+        format!(
+            "Failed to write Codex config.toml at {}",
+            config_toml_path.display()
+        )
+    })
 }
 
 /// Publish configured and eligible bundled skills under
@@ -842,6 +972,7 @@ fn prepare_codex_config_toml(
     config_toml_path: &Path,
     working_dir: &Path,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
     openai_base_url: Option<&str>,
 ) -> Result<()> {
@@ -887,7 +1018,7 @@ fn prepare_codex_config_toml(
         set_codex_project_trust_level(&mut doc, &key, CODEX_TRUST_LEVEL_TRUSTED);
     }
 
-    write_codex_mcp_servers(&mut doc, resolved_mcp_servers);
+    write_codex_mcp_servers(&mut doc, resolved_mcp_servers, credential_helpers);
 
     if let Some(parent) = config_toml_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1010,10 +1141,16 @@ fn set_codex_project_trust_level(
     proj_tbl["trust_level"] = toml_edit::value(trust_level);
 }
 
-/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config.
+const CODEX_HTTP_HEADERS_KEY: &str = "http_headers";
+const CODEX_HTTP_HEADERS_HELPER_KEY: &str = "http_headers_helper";
+
+/// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config. A server
+/// with a credential helper names it in place of the header the helper supplies: Codex does not
+/// let a helper replace a header that is also configured as a fixed value.
 fn write_codex_mcp_servers(
     doc: &mut toml_edit::DocumentMut,
     servers: &HashMap<String, JSONMCPServer>,
+    credential_helpers: &HashMap<String, McpCredentialHelper>,
 ) {
     if servers.is_empty() {
         return;
@@ -1063,12 +1200,30 @@ fn write_codex_mcp_servers(
             }
             JSONTransportType::SSEServer { url, headers } => {
                 entry["url"] = toml_edit::value(url.as_str());
-                if !headers.is_empty() {
-                    let mut hdrs_tbl = toml_edit::InlineTable::new();
-                    for (k, v) in headers {
+                let credential_helper = credential_helpers.get(name);
+                let mut hdrs_tbl = toml_edit::InlineTable::new();
+                for (k, v) in headers {
+                    let from_helper = credential_helper
+                        .is_some_and(|helper| helper.header_name.eq_ignore_ascii_case(k));
+                    if !from_helper {
                         hdrs_tbl.insert(k, v.as_str().into());
                     }
-                    entry["http_headers"] = toml_edit::value(hdrs_tbl);
+                }
+                // Both keys are rewritten on every run: one left over from an earlier run would
+                // send a stale credential, or name a helper that no longer answers.
+                if hdrs_tbl.is_empty() {
+                    entry.remove(CODEX_HTTP_HEADERS_KEY);
+                } else {
+                    entry[CODEX_HTTP_HEADERS_KEY] = toml_edit::value(hdrs_tbl);
+                }
+                match credential_helper {
+                    Some(helper) => {
+                        entry[CODEX_HTTP_HEADERS_HELPER_KEY] =
+                            toml_edit::value(helper.headers_command());
+                    }
+                    None => {
+                        entry.remove(CODEX_HTTP_HEADERS_HELPER_KEY);
+                    }
                 }
             }
         }

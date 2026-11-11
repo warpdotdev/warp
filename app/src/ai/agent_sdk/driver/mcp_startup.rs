@@ -372,9 +372,11 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
     let existing_uuids = resolved_mcp_specs.local_uuids;
     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
     let leases = match mode {
-        McpStartupMode::Run => resolved_mcp_specs.leases,
+        McpStartupMode::Run if FeatureFlag::ManagedMcpCredentialRefresh.is_enabled() => {
+            resolved_mcp_specs.leases
+        }
         // An assignment resolves its servers again, so standby credentials are never refreshed.
-        McpStartupMode::Standby => Vec::new(),
+        McpStartupMode::Run | McpStartupMode::Standby => Vec::new(),
     };
 
     attach_builtin_mcp_servers(
@@ -700,6 +702,7 @@ impl AgentDriver {
             })
             .await??;
         installations.extend(resolved_specs.ephemeral_installations);
+        let leases = resolved_specs.leases;
         let credentials = foreground
             .spawn(|_, ctx| {
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
@@ -723,11 +726,12 @@ impl AgentDriver {
             &taken_server_names,
             &ambient_headers,
         ));
-        Self::mcp_installations_to_json(installations, secrets.as_ref())
+        Self::mcp_installations_to_json(installations, &leases, secrets.as_ref())
     }
 
     fn mcp_installations_to_json(
         mut installations: Vec<TemplatableMCPServerInstallation>,
+        leases: &[ManagedMcpLease],
         secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<ResolvedMCPServers, AgentDriverError> {
         let mut result = ResolvedMCPServers::default();
@@ -749,11 +753,18 @@ impl AgentDriver {
             let resolved = resolve_json(installation);
             let servers: HashMap<String, JSONMCPServer> = serde_json::from_str(&resolved)
                 .map_err(|e| AgentDriverError::MCPJsonParseError(e.to_string()))?;
+            let lease = leases
+                .iter()
+                .find(|lease| lease.installation_id == installation.uuid());
             for name in servers.keys() {
                 match installation.warp_id() {
                     Some(warp_id) => result.warp_ids.insert(name.clone(), warp_id.to_owned()),
                     // A later server of the same name replaces the earlier one's identity too.
                     None => result.warp_ids.remove(name),
+                };
+                match lease {
+                    Some(lease) => result.leases.insert(name.clone(), lease.clone()),
+                    None => result.leases.remove(name),
                 };
             }
             result.configs.extend(servers);

@@ -144,7 +144,7 @@ fn serialize_claude_mcp_config_cli_server() {
             },
         },
     )]);
-    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let json = serialize_claude_mcp_config(&servers, &HashMap::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let server = &parsed["mcpServers"]["test-server"];
     assert_eq!(server["type"], "stdio");
@@ -166,7 +166,7 @@ fn serialize_claude_mcp_config_cli_server_with_cwd() {
             },
         },
     )]);
-    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let json = serialize_claude_mcp_config(&servers, &HashMap::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let server = &parsed["mcpServers"]["test-server"];
     assert_eq!(server["cwd"], "/opt/mcp");
@@ -185,7 +185,7 @@ fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
             },
         },
     )]);
-    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let json = serialize_claude_mcp_config(&servers, &HashMap::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let server = &parsed["mcpServers"]["test-server"];
     assert!(server.get("cwd").is_none());
@@ -205,12 +205,46 @@ fn serialize_claude_mcp_config_preserves_factory_mcp_auth() {
             },
         },
     )]);
-    let json = serialize_claude_mcp_config(&servers).unwrap();
+    let json = serialize_claude_mcp_config(&servers, &HashMap::new()).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let server = &parsed["mcpServers"]["warp-factory"];
     assert_eq!(server["type"], "http");
     assert_eq!(server["url"], "https://app.warp.dev/api/v1/mcp/factory");
     assert_eq!(server["headers"]["Authorization"], "Bearer wk-test-key");
+    assert!(server.get("headersHelper").is_none());
+}
+
+/// The fixed header stays beside the helper, so a helper that fails leaves the server with the
+/// credential it was resolved with.
+#[test]
+fn serialize_claude_mcp_config_names_the_credential_helper_beside_the_fixed_header() {
+    let servers = HashMap::from([(
+        "linear".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::SSEServer {
+                url: "https://app.warp.dev/mcp/integration-proxy/linear".to_string(),
+                headers: HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer proxy-token".to_string(),
+                )]),
+            },
+        },
+    )]);
+    let helper_command = "'/usr/local/bin/oz' mcp-credential --server 'linear'";
+    let credential_helpers = HashMap::from([(
+        "linear".to_string(),
+        McpCredentialHelper::for_test("Authorization", helper_command),
+    )]);
+
+    let json = serialize_claude_mcp_config(&servers, &credential_helpers).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let server = &parsed["mcpServers"]["linear"];
+    assert_eq!(server["headersHelper"], helper_command);
+    assert_eq!(server["headers"]["Authorization"], "Bearer proxy-token");
+
+    let options = claude_credential_helper_servers(&servers, &credential_helpers).unwrap();
+    assert_eq!(options.len(), 1);
+    assert_eq!(options["linear"], *server);
 }
 
 #[test]

@@ -41,7 +41,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, future, pin_mut, select};
 use parking_lot::Mutex;
 use prost::Message as _;
-use serde_json::Value;
+use serde_json::{Value, json};
 use session_sharing_protocol::common::ParticipantId;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
@@ -66,7 +66,7 @@ use self::mapping::AcpTurnMapper;
 use self::model_config::configure_model_and_thinking_through_acp;
 use self::policy::{PolicyDecision, PolicyRequest};
 use self::protocol::{
-    CancelParams, ClientCapabilities, ClientInfo, FsCapabilities, InitializeParams,
+    AgentInfo, CancelParams, ClientCapabilities, ClientInfo, FsCapabilities, InitializeParams,
     InitializeResponse, McpServer, PROTOCOL_VERSION, PermissionOptionKind, PermissionOutcome,
     ReadTextFileParams, ReadTextFileResponse, RequestPermissionParams, RequestPermissionResponse,
     WriteTextFileParams,
@@ -81,12 +81,16 @@ use self::turn_driver::{
 };
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::claude_code::prepare_claude_environment_config;
-use super::codex::{prepare_codex_environment_config, publish_skills_for_codex};
+use super::claude_code::{claude_credential_helper_servers, prepare_claude_environment_config};
+use super::codex::{
+    prepare_codex_environment_config, publish_skills_for_codex,
+    remove_codex_credential_helper_servers,
+};
 use super::gemini::{prepare_gemini_environment_config, publish_skills_for_gemini};
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_conversation_data,
 };
+use super::mcp_credential_broker::McpCredentialHelper;
 use super::pi::{self, prepare_pi_environment_config, publish_skills_for_pi};
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
@@ -95,7 +99,7 @@ use super::transcript_persistence::{
 use super::{
     AcpAdapter, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResolvedMCPServers,
     ResumePayload, SavePoint, ThirdPartyHarness, TransportFallbackReason, install_docs_url,
-    validate_cli_installed,
+    parse_release_version, validate_cli_installed,
 };
 use crate::ai::agent::api::{ServerConversationToken, mcp_server_identity};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -184,7 +188,7 @@ impl AcpHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        resolved_mcp_servers: &ResolvedMCPServers,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<()> {
         match self.harness {
@@ -198,13 +202,23 @@ impl AcpHarness {
             ),
             // MCP servers are handed to the agent in `session/new` and the model is selected
             // through the session's config options, so neither is written into `config.toml`.
+            // The exception is a server with a credential helper: a session request cannot name
+            // a helper, so the server goes into `config.toml`, whose entry Codex runs itself.
             Harness::Codex => {
+                let credential_helpers = &resolved_mcp_servers.credential_helpers;
+                let helper_servers: HashMap<String, JSONMCPServer> = resolved_mcp_servers
+                    .configs
+                    .iter()
+                    .filter(|(name, _)| credential_helpers.contains_key(*name))
+                    .map(|(name, server)| (name.clone(), server.clone()))
+                    .collect();
                 prepare_codex_environment_config(
                     harness_working_dir,
                     system_prompt,
                     resolved_env_vars,
                     resolved_secrets,
-                    &HashMap::new(),
+                    &helper_servers,
+                    credential_helpers,
                     None,
                 )?;
                 publish_skills_for_codex(
@@ -230,7 +244,8 @@ impl AcpHarness {
                     harness_working_dir,
                     system_prompt,
                     resolved_env_vars,
-                    resolved_mcp_servers,
+                    &resolved_mcp_servers.configs,
+                    &resolved_mcp_servers.credential_helpers,
                     resolved_secrets,
                     third_party_harness_model_config,
                 )?;
@@ -356,7 +371,7 @@ impl ThirdPartyHarness for AcpHarness {
             skill_dirs,
             factory_repository_contract,
             resolved_secrets,
-            &resolved_mcp_servers.configs,
+            resolved_mcp_servers,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -419,12 +434,17 @@ impl ThirdPartyHarness for AcpHarness {
             client: server_api,
             terminal_driver,
             attachments: Arc::new(attachments),
-            mcp_servers: resolved_mcp_servers
-                .configs
-                .iter()
-                .filter(|_| self.harness != Harness::Pi)
-                .map(|(name, server)| mcp_server_for_acp(name, server))
-                .collect(),
+            mcp_servers: SessionMcpServers::new(self.harness, resolved_mcp_servers)
+                .map_err(AgentDriverError::ConfigBuildFailed)?,
+            codex_credential_helpers: match self.harness {
+                Harness::Codex => resolved_mcp_servers.credential_helpers.clone(),
+                Harness::Claude
+                | Harness::Gemini
+                | Harness::Pi
+                | Harness::Oz
+                | Harness::OpenCode
+                | Harness::Unknown => HashMap::new(),
+            },
             mcp_server_identities: resolved_mcp_servers
                 .configs
                 .keys()
@@ -528,7 +548,10 @@ pub(crate) struct AcpHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     attachments: Arc<AttachmentResolver>,
-    mcp_servers: Vec<McpServer>,
+    mcp_servers: SessionMcpServers,
+    /// The credential helpers this run wrote into Codex's config, which stop answering when
+    /// the run ends.
+    codex_credential_helpers: HashMap<String, McpCredentialHelper>,
     /// Stamped on the agent's MCP tool calls, keyed by server name.
     mcp_server_identities: HashMap<String, McpServerIdentity>,
     /// Set before the first turn.
@@ -930,11 +953,14 @@ impl HarnessRunner for AcpHarnessRunner {
                 .set_prompt_capabilities(capabilities.prompt_capabilities);
             clock.restart("opening its session");
             let plan = plan_session(rehydration, &capabilities.session_capabilities).await?;
+            let (mcp_servers, session_meta) =
+                self.mcp_servers.for_agent(initialize.agent_info.as_ref());
             let (mut session, origin) = open_session(
                 &connection,
                 plan,
                 self.harness_working_dir.display().to_string(),
-                self.mcp_servers.clone(),
+                mcp_servers,
+                session_meta,
                 &clock,
             )
             .await?;
@@ -1197,7 +1223,7 @@ impl HarnessRunner for AcpHarnessRunner {
         _foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()> {
         self.agent.lock().take();
-        Ok(())
+        remove_codex_credential_helper_servers(&self.codex_credential_helpers)
     }
 }
 
@@ -1598,6 +1624,80 @@ fn tool_call_server_identity(name: &str, warp_id: Option<&str>) -> McpServerIden
     McpServerIdentity {
         display_name: name.to_owned(),
         ..warp_id.and_then(mcp_server_identity).unwrap_or_default()
+    }
+}
+
+/// The first `claude-agent-acp` release known to forward the MCP servers in
+/// `_meta.claudeCode.options`, header helper included, to Claude Code.
+const CLAUDE_ADAPTER_MCP_OPTIONS_MIN_VERSION: (u64, u64, u64) = (0, 93, 0);
+
+fn forwards_claude_mcp_options(agent_info: Option<&AgentInfo>) -> bool {
+    agent_info.is_some_and(|info| {
+        info.name.ends_with("claude-agent-acp")
+            && parse_release_version(&info.version)
+                .is_some_and(|version| version >= CLAUDE_ADAPTER_MCP_OPTIONS_MIN_VERSION)
+    })
+}
+
+/// How the run's MCP servers reach the agent when its session is opened.
+#[derive(Default)]
+struct SessionMcpServers {
+    /// The servers a session request names, each with the headers it was resolved with.
+    in_request: Vec<McpServer>,
+    /// For Claude, the servers that have a credential helper, as Claude Agent SDK options. A
+    /// session request has no field for a helper, so an adapter that forwards these options is
+    /// sent them in place of the same servers in `in_request`.
+    claude_helper_options: HashMap<String, Value>,
+}
+
+impl SessionMcpServers {
+    fn new(harness: Harness, resolved: &ResolvedMCPServers) -> Result<Self> {
+        let servers_in_request = |leave_out: &HashMap<String, McpCredentialHelper>| {
+            resolved
+                .configs
+                .iter()
+                .filter(|(name, _)| !leave_out.contains_key(*name))
+                .map(|(name, server)| mcp_server_for_acp(name, server))
+                .collect()
+        };
+        match harness {
+            // Pi's adapter reads its servers from `mcp.json`.
+            Harness::Pi => Ok(Self::default()),
+            // Codex runs its own config entry for a server with a credential helper.
+            Harness::Codex => Ok(Self {
+                in_request: servers_in_request(&resolved.credential_helpers),
+                claude_helper_options: HashMap::new(),
+            }),
+            Harness::Claude => Ok(Self {
+                in_request: servers_in_request(&HashMap::new()),
+                claude_helper_options: claude_credential_helper_servers(
+                    &resolved.configs,
+                    &resolved.credential_helpers,
+                )?,
+            }),
+            Harness::Gemini | Harness::Oz | Harness::OpenCode | Harness::Unknown => Ok(Self {
+                in_request: servers_in_request(&HashMap::new()),
+                claude_helper_options: HashMap::new(),
+            }),
+        }
+    }
+
+    /// The servers and adapter options to open a session with, for the agent that answered
+    /// `initialize` as `agent_info`.
+    fn for_agent(&self, agent_info: Option<&AgentInfo>) -> (Vec<McpServer>, Option<Value>) {
+        if self.claude_helper_options.is_empty() || !forwards_claude_mcp_options(agent_info) {
+            return (self.in_request.clone(), None);
+        }
+        let servers = self
+            .in_request
+            .iter()
+            .filter(|server| !self.claude_helper_options.contains_key(server.name()))
+            .cloned()
+            .collect();
+        let meta = json!({
+            "claudeCode": { "options": { "mcpServers": self.claude_helper_options } }
+        });
+        (servers, Some(meta))
     }
 }
 

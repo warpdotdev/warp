@@ -391,7 +391,7 @@ fn render_installations(
     installations: Vec<TemplatableMCPServerInstallation>,
     secrets: HashMap<String, ManagedSecretValue>,
 ) -> HashMap<String, JSONMCPServer> {
-    AgentDriver::mcp_installations_to_json(installations, &secrets)
+    AgentDriver::mcp_installations_to_json(installations, &[], &secrets)
         .unwrap()
         .configs
 }
@@ -439,6 +439,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
     assert_eq!(resolved.ephemeral_installations.len(), 1);
     let rendered = AgentDriver::mcp_installations_to_json(
         resolved.ephemeral_installations,
+        &resolved.leases,
         &HashMap::from([("API_TOKEN".to_string(), raw_secret("token"))]),
     )
     .unwrap();
@@ -486,7 +487,6 @@ fn resolve_managed_uuid(
 
 #[test]
 fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
-    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
 
@@ -508,26 +508,23 @@ fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
     assert_eq!(lease.header_name, "Authorization");
     assert_eq!(lease.credential.header_value, "Bearer proxy-token");
     assert_eq!(lease.credential.expires_at, expires_at);
-}
 
-#[test]
-fn managed_resolver_leases_nothing_while_credential_refresh_is_disabled() {
-    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(false);
-    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
-
-    let resolved = resolve_managed_uuid(
-        uuid,
-        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    // A third-party harness knows the server by name, so that is how its lease is found.
+    let rendered = AgentDriver::mcp_installations_to_json(
+        resolved.ephemeral_installations,
+        &resolved.leases,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(rendered.leases.keys().collect::<Vec<_>>(), ["GitHub MCP"]);
+    assert_eq!(
+        rendered.leases["GitHub MCP"].credential.header_value,
+        "Bearer proxy-token"
     );
-
-    assert_eq!(resolved.ephemeral_installations.len(), 1);
-    assert!(resolved.leases.is_empty());
 }
 
 #[test]
 fn managed_resolver_leases_nothing_without_an_expiring_credential() {
-    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
     let resolved = resolve_managed_uuid(
@@ -545,7 +542,6 @@ fn managed_resolver_leases_nothing_without_an_expiring_credential() {
 /// really sends the credential the server says it issued.
 #[test]
 fn managed_resolver_leases_nothing_when_the_config_does_not_send_the_issued_credential() {
-    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
 
@@ -876,7 +872,8 @@ fn third_party_export_skips_managed_github_without_removing_other_servers() {
         .unwrap(),
     );
 
-    let resolved = AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+    let resolved =
+        AgentDriver::mcp_installations_to_json(installations, &[], &HashMap::new()).unwrap();
 
     assert_eq!(resolved.configs.len(), 2);
     assert!(resolved.configs.contains_key("github"));
@@ -1029,7 +1026,7 @@ fn managed_command_config_missing_secret_is_rejected_before_serialization() {
         "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .expect("managed MCP config should parse");
-    let error = AgentDriver::mcp_installations_to_json(installations, &HashMap::new())
+    let error = AgentDriver::mcp_installations_to_json(installations, &[], &HashMap::new())
         .expect_err("an unresolved secret must not reach the harness config");
 
     match error {
@@ -1315,7 +1312,7 @@ fn builtin_preview_urls_mcp_for_oz_attaches_when_eligible() {
         installation.templatable_mcp_server().name,
         PREVIEW_URLS_MCP_SERVER_NAME
     );
-    let resolved = AgentDriver::mcp_installations_to_json(vec![installation], &HashMap::new())
+    let resolved = AgentDriver::mcp_installations_to_json(vec![installation], &[], &HashMap::new())
         .unwrap()
         .configs;
     let JSONTransportType::SSEServer { headers, .. } =

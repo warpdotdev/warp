@@ -339,3 +339,120 @@ fn a_resumed_session_is_not_sent_the_system_prompt_again() {
     assert_eq!(resumed, "recovery\n\ncontext\n\ninspect these");
     assert_eq!(fresh, "recovery\n\ncontext\n\nsystem\n\ninspect these");
 }
+
+const HELPER_COMMAND: &str = "/usr/local/bin/oz mcp-credential --server linear";
+
+/// Two resolved servers, of which `linear` carries an expiring credential and has a helper.
+fn servers_with_a_credential_helper() -> ResolvedMCPServers {
+    let configs: HashMap<String, JSONMCPServer> = serde_json::from_value(json!({
+        "linear": {
+            "url": "https://app.warp.dev/mcp/integration-proxy/linear",
+            "headers": {"Authorization": "Bearer proxy-token"}
+        },
+        "docs": {"url": "https://docs.example.test/mcp"}
+    }))
+    .unwrap();
+    ResolvedMCPServers {
+        configs,
+        credential_helpers: HashMap::from([(
+            "linear".to_owned(),
+            McpCredentialHelper::for_test("Authorization", HELPER_COMMAND),
+        )]),
+        ..Default::default()
+    }
+}
+
+fn agent_info(name: &str, version: &str) -> AgentInfo {
+    AgentInfo {
+        name: name.to_owned(),
+        version: version.to_owned(),
+    }
+}
+
+/// The names of `servers`, sorted.
+fn server_names(servers: &[McpServer]) -> Vec<&str> {
+    let mut names: Vec<_> = servers.iter().map(McpServer::name).collect();
+    names.sort_unstable();
+    names
+}
+
+#[test]
+fn only_claude_adapters_known_to_forward_mcp_options_are_sent_them() {
+    let forwards = |name, version| forwards_claude_mcp_options(Some(&agent_info(name, version)));
+
+    assert!(forwards("@agentclientprotocol/claude-agent-acp", "0.93.0"));
+    assert!(forwards("@agentclientprotocol/claude-agent-acp", "1.2.0"));
+    assert!(!forwards("@agentclientprotocol/claude-agent-acp", "0.92.9"));
+    assert!(!forwards(
+        "@agentclientprotocol/claude-agent-acp",
+        "nightly"
+    ));
+    assert!(!forwards("@zed-industries/claude-code-acp", "0.93.0"));
+    assert!(!forwards("codex-acp", "2.6.0"));
+    assert!(!forwards_claude_mcp_options(None));
+}
+
+/// A session request has no field for a helper, so a Claude adapter that forwards SDK options
+/// gets the helper-backed server there and not in the request's list, where the adapter would
+/// prefer the entry with the fixed credential.
+#[test]
+fn claude_gets_helper_backed_servers_as_options_when_the_adapter_forwards_them() {
+    let resolved = servers_with_a_credential_helper();
+    let servers = SessionMcpServers::new(Harness::Claude, &resolved).unwrap();
+
+    let forwarding = agent_info("@agentclientprotocol/claude-agent-acp", "0.93.0");
+    let (in_request, meta) = servers.for_agent(Some(&forwarding));
+    assert_eq!(server_names(&in_request), ["docs"]);
+    let meta = meta.expect("adapter options");
+    let linear = &meta["claudeCode"]["options"]["mcpServers"]["linear"];
+    assert_eq!(linear["type"], "http");
+    assert_eq!(linear["headersHelper"], HELPER_COMMAND);
+    assert_eq!(linear["headers"]["Authorization"], "Bearer proxy-token");
+
+    // An adapter that is not known to forward options keeps the fixed credential.
+    let (in_request, meta) = servers.for_agent(Some(&agent_info("claude-code-acp", "0.16.0")));
+    assert_eq!(server_names(&in_request), ["docs", "linear"]);
+    assert!(meta.is_none());
+}
+
+#[test]
+fn claude_without_credential_helpers_sends_no_adapter_options() {
+    let resolved = ResolvedMCPServers {
+        credential_helpers: HashMap::new(),
+        ..servers_with_a_credential_helper()
+    };
+    let servers = SessionMcpServers::new(Harness::Claude, &resolved).unwrap();
+
+    let forwarding = agent_info("@agentclientprotocol/claude-agent-acp", "0.93.0");
+    let (in_request, meta) = servers.for_agent(Some(&forwarding));
+    assert_eq!(server_names(&in_request), ["docs", "linear"]);
+    assert!(meta.is_none());
+}
+
+/// Codex runs its own config entry for a server with a helper, and would report a second entry
+/// of the same name in the session request as a server it did not start.
+#[test]
+fn codex_is_not_sent_the_servers_its_config_runs_with_a_helper() {
+    let resolved = servers_with_a_credential_helper();
+    let servers = SessionMcpServers::new(Harness::Codex, &resolved).unwrap();
+
+    let (in_request, meta) = servers.for_agent(Some(&agent_info("codex-acp", "2.6.0")));
+    assert_eq!(server_names(&in_request), ["docs"]);
+    assert!(meta.is_none());
+}
+
+#[test]
+fn harnesses_without_a_helper_mechanism_keep_every_server_as_resolved() {
+    let resolved = servers_with_a_credential_helper();
+
+    let gemini = SessionMcpServers::new(Harness::Gemini, &resolved).unwrap();
+    let (in_request, meta) = gemini.for_agent(None);
+    assert_eq!(server_names(&in_request), ["docs", "linear"]);
+    assert!(meta.is_none());
+
+    // Pi's adapter reads its servers from its own config file.
+    let pi = SessionMcpServers::new(Harness::Pi, &resolved).unwrap();
+    let (in_request, meta) = pi.for_agent(None);
+    assert!(in_request.is_empty());
+    assert!(meta.is_none());
+}

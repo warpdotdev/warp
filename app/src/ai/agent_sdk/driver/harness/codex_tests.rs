@@ -202,6 +202,7 @@ fn prepare_codex_environment_config_honors_codex_home() {
         &resolved,
         &HashMap::new(),
         &HashMap::new(),
+        &HashMap::new(),
         Some(&model_config),
     );
 
@@ -251,7 +252,15 @@ fn prepare_codex_config_toml_writes_fresh_config() {
     let working_dir = tmp.path().join("workspace/proj");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -277,7 +286,15 @@ fn prepare_codex_config_toml_preserves_unrelated_keys() {
 
     // Pass `None` — the `model` key is intentionally removed (managed
     // key), but unrelated keys like existing project entries are kept.
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let canonical = working_dir.canonicalize().unwrap();
     let key = canonical.to_string_lossy().into_owned();
@@ -301,9 +318,25 @@ fn prepare_codex_config_toml_is_idempotent() {
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
     let after_first = fs::read_to_string(&config_path).unwrap();
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
     let after_second = fs::read_to_string(&config_path).unwrap();
 
     assert_eq!(after_first, after_second);
@@ -331,7 +364,15 @@ fn prepare_codex_config_toml_upgrades_untrusted_entry() {
     )
     .unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert_eq!(
@@ -350,7 +391,15 @@ fn prepare_codex_config_toml_trusts_multiple_child_repos() {
     fs::create_dir_all(repo_a.join(".git")).unwrap();
     fs::create_dir_all(repo_b.join(".git")).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let projects = cfg["projects"].as_table().unwrap();
@@ -382,6 +431,7 @@ fn prepare_codex_config_toml_overwrites_stale_openai_base_url() {
         &config_path,
         &working_dir,
         &HashMap::new(),
+        &HashMap::new(),
         None,
         Some("https://custom.api.openai.com/v1"),
     )
@@ -412,7 +462,15 @@ fn write_codex_mcp_servers_cli_server() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &servers,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -443,7 +501,15 @@ fn write_codex_mcp_servers_sse_server() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &servers,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["remote-mcp"];
@@ -469,7 +535,15 @@ fn write_codex_mcp_servers_cli_server_with_cwd() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &servers,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -495,7 +569,15 @@ fn write_codex_mcp_servers_cli_server_without_cwd_omits_key() {
             },
         },
     )]);
-    prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &servers,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     let mcp = &cfg["mcp_servers"]["my-mcp"];
@@ -516,6 +598,7 @@ fn prepare_codex_config_toml_writes_model_when_specified() {
     prepare_codex_config_toml(
         &config_path,
         &working_dir,
+        &HashMap::new(),
         &HashMap::new(),
         Some(&harness_model_config("gpt-5.5", None)),
         None,
@@ -543,6 +626,7 @@ fn prepare_codex_config_toml_writes_model_migration_for_older_model() {
         &config_path,
         &working_dir,
         &HashMap::new(),
+        &HashMap::new(),
         Some(&harness_model_config("gpt-5.2", None)),
         None,
     )
@@ -569,6 +653,7 @@ fn prepare_codex_config_toml_skips_model_for_default_sentinel() {
         &config_path,
         &working_dir,
         &HashMap::new(),
+        &HashMap::new(),
         Some(&harness_model_config("default", None)),
         None,
     )
@@ -594,7 +679,15 @@ fn prepare_codex_config_toml_skips_model_when_none() {
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert!(
@@ -618,6 +711,7 @@ fn prepare_codex_config_toml_writes_model_reasoning_effort_when_specified() {
         &config_path,
         &working_dir,
         &HashMap::new(),
+        &HashMap::new(),
         Some(&harness_model_config("gpt-5.5", Some("medium"))),
         None,
     )
@@ -636,7 +730,15 @@ fn prepare_codex_config_toml_removes_stale_model_reasoning_effort_when_none() {
     fs::create_dir_all(&working_dir).unwrap();
     fs::write(&config_path, "model_reasoning_effort = \"high\"\n").unwrap();
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let cfg = read_codex_config(&config_path);
     assert!(cfg.get("model_reasoning_effort").is_none());
@@ -872,4 +974,188 @@ async fn fetch_resume_payload_returns_codex_variant_on_success() {
         }
         other => panic!("expected ResumePayload::Codex, got {other:?}"),
     }
+}
+
+const HELPER_COMMAND: &str = "/usr/local/bin/oz mcp-credential --server linear";
+
+fn proxied_server() -> HashMap<String, JSONMCPServer> {
+    HashMap::from([(
+        "linear".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::SSEServer {
+                url: "https://app.warp.dev/mcp/integration-proxy/linear".to_string(),
+                headers: HashMap::from([
+                    (
+                        "Authorization".to_string(),
+                        "Bearer proxy-token".to_string(),
+                    ),
+                    ("X-Team".to_string(), "core".to_string()),
+                ]),
+            },
+        },
+    )])
+}
+
+fn linear_credential_helper() -> HashMap<String, McpCredentialHelper> {
+    HashMap::from([(
+        "linear".to_string(),
+        McpCredentialHelper::for_test("authorization", HELPER_COMMAND),
+    )])
+}
+
+/// Codex ignores a helper's header when the same header is also configured as a fixed value, so
+/// the helper's header must not be written alongside it.
+#[test]
+fn write_codex_mcp_servers_names_the_credential_helper_in_place_of_its_header() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &proxied_server(),
+        &linear_credential_helper(),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    let mcp = &cfg["mcp_servers"]["linear"];
+    assert_eq!(mcp["http_headers_helper"].as_str(), Some(HELPER_COMMAND));
+    assert_eq!(mcp["http_headers"]["X-Team"].as_str(), Some("core"));
+    assert!(mcp["http_headers"].get("Authorization").is_none());
+}
+
+/// A later run without a helper must not inherit the helper of an earlier one, whose driver is
+/// gone, nor may a run with a helper keep an earlier run's fixed credential.
+#[test]
+fn write_codex_mcp_servers_replaces_the_credential_keys_of_an_earlier_run() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    let write = |credential_helpers: &HashMap<String, McpCredentialHelper>| {
+        prepare_codex_config_toml(
+            &config_path,
+            &working_dir,
+            &proxied_server(),
+            credential_helpers,
+            None,
+            None,
+        )
+        .unwrap();
+        read_codex_config(&config_path)
+    };
+
+    let fixed = write(&HashMap::new());
+    assert_eq!(
+        fixed["mcp_servers"]["linear"]["http_headers"]["Authorization"].as_str(),
+        Some("Bearer proxy-token")
+    );
+
+    let with_helper = write(&linear_credential_helper());
+    let mcp = &with_helper["mcp_servers"]["linear"];
+    assert_eq!(mcp["http_headers_helper"].as_str(), Some(HELPER_COMMAND));
+    assert!(mcp["http_headers"].get("Authorization").is_none());
+
+    let fixed_again = write(&HashMap::new());
+    let mcp = &fixed_again["mcp_servers"]["linear"];
+    assert!(mcp.get("http_headers_helper").is_none());
+    assert_eq!(
+        mcp["http_headers"]["Authorization"].as_str(),
+        Some("Bearer proxy-token")
+    );
+}
+
+#[test]
+fn credential_helper_servers_are_removed_when_they_still_name_this_runs_helper() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    let mut servers = proxied_server();
+    servers.insert(
+        "other".to_string(),
+        JSONMCPServer {
+            transport_type: JSONTransportType::SSEServer {
+                url: "https://mcp.example.com/sse".to_string(),
+                headers: HashMap::new(),
+            },
+        },
+    );
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &servers,
+        &linear_credential_helper(),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Another run has since taken over the entry: it is not this run's to remove.
+    let other_run = HashMap::from([(
+        "linear".to_string(),
+        McpCredentialHelper::for_test(
+            "authorization",
+            "/usr/local/bin/oz mcp-credential --server other-run",
+        ),
+    )]);
+    remove_credential_helper_servers_from(&config_path, &other_run).unwrap();
+    assert!(
+        read_codex_config(&config_path)["mcp_servers"]
+            .get("linear")
+            .is_some()
+    );
+
+    remove_credential_helper_servers_from(&config_path, &linear_credential_helper()).unwrap();
+    let cfg = read_codex_config(&config_path);
+    assert!(cfg["mcp_servers"].get("linear").is_none());
+    assert!(cfg["mcp_servers"].get("other").is_some());
+
+    remove_credential_helper_servers_from(
+        &tmp.path().join("missing.toml"),
+        &linear_credential_helper(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn codex_version_is_read_from_its_version_output() {
+    assert_eq!(
+        parse_codex_version("codex-cli 0.160.0\n"),
+        Some((0, 160, 0))
+    );
+    assert_eq!(
+        parse_codex_version("codex-cli 0.149.0-alpha.3"),
+        Some((0, 149, 0))
+    );
+    assert_eq!(parse_codex_version("0.150.1"), Some((0, 150, 1)));
+    assert_eq!(parse_codex_version("codex-cli"), None);
+    assert_eq!(parse_codex_version("codex-cli 1.2"), None);
+    assert_eq!(parse_codex_version(""), None);
+}
+
+#[test]
+fn credential_helpers_are_used_only_by_a_codex_that_runs_them() {
+    let helpers = linear_credential_helper();
+
+    assert_eq!(
+        runnable_credential_helpers(&helpers, || Some((0, 149, 0))),
+        helpers
+    );
+    assert_eq!(
+        runnable_credential_helpers(&helpers, || Some((1, 0, 0))),
+        helpers
+    );
+    assert!(runnable_credential_helpers(&helpers, || Some((0, 148, 9))).is_empty());
+    assert!(runnable_credential_helpers(&helpers, || None).is_empty());
+    // Without helpers there is nothing to decide, so Codex is not asked for its version.
+    assert!(
+        runnable_credential_helpers(&HashMap::new(), || panic!("version should not be read"))
+            .is_empty()
+    );
 }
