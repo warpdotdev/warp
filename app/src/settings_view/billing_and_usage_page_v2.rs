@@ -31,7 +31,7 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::IncludedUsagePoolView;
+use super::billing_and_usage::included_usage_pool::render_included_usage_card;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -348,7 +348,6 @@ impl ClassifiedGrants {
 }
 
 pub struct BillingAndUsagePageV2View {
-    included_usage_pool: ViewHandle<IncludedUsagePoolView>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -453,7 +452,6 @@ impl BillingAndUsagePageV2View {
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
-            included_usage_pool: ctx.add_view(IncludedUsagePoolView::new),
             self_handle: ctx.handle(),
             auth_state,
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -929,8 +927,8 @@ impl BillingAndUsagePageV2View {
         let unit = usage_display_unit(app);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        let has_included_pool = ai_model.workspace_included_usage(app).is_some();
-        if !has_included_pool && !has_base_credits && !classified.has_any() {
+        let included_pool = ai_model.workspace_included_usage(app);
+        if included_pool.is_none() && !has_base_credits && !classified.has_any() {
             return None;
         }
 
@@ -940,9 +938,9 @@ impl BillingAndUsagePageV2View {
 
         let outline_color = theme.outline().into_solid();
 
-        if has_included_pool {
+        if let Some(pool) = included_pool {
             cards_row.add_child(
-                Expanded::new(1., ChildView::new(&self.included_usage_pool).finish()).finish(),
+                Expanded::new(1., render_included_usage_card(pool, unit, appearance)).finish(),
             );
         }
 

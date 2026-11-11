@@ -36,7 +36,7 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::IncludedUsagePoolView;
+use super::billing_and_usage::included_usage_pool::render_included_usage_card;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -242,7 +242,6 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
-    included_usage_pool: ViewHandle<IncludedUsagePoolView>,
     self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -426,7 +425,6 @@ impl BillingAndUsagePageView {
             ctx.add_typed_action_view(|_| chatgpt_manage_usage_button());
 
         let mut me = Self {
-            included_usage_pool: ctx.add_view(IncludedUsagePoolView::new),
             self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
@@ -3052,10 +3050,7 @@ impl BillingAndUsagePageView {
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
         let unit = usage_display_unit(app);
 
-        if AIRequestUsageModel::as_ref(app)
-            .workspace_included_usage(app)
-            .is_some()
-        {
+        if let Some(pool) = AIRequestUsageModel::as_ref(app).workspace_included_usage(app) {
             let balance_header = Flex::row()
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -3087,7 +3082,7 @@ impl BillingAndUsagePageView {
                                 .with_margin_bottom(12.)
                                 .finish(),
                         )
-                        .with_child(ChildView::new(&self.included_usage_pool).finish())
+                        .with_child(render_included_usage_card(pool, unit, appearance))
                         .finish(),
                 )
                 .with_margin_bottom(24.)
