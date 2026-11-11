@@ -20,6 +20,7 @@ use anyhow::{Context, Result, bail};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
+use instant::Instant;
 use warp_isolation_platform::IsolationPlatformError;
 
 use crate::server::retry_strategies::with_retry;
@@ -1001,8 +1002,8 @@ async fn try_refresh(
     }
 }
 
-/// Infinite async loop that refreshes git credentials every
-/// [`GIT_CREDENTIALS_REFRESH_INTERVAL`].
+/// Refreshes Git credentials before restricted GitHub-only credentials expire, or at the normal
+/// interval for other credential modes.
 ///
 /// On each iteration:
 /// 1. Issue a short-lived workload token.
@@ -1026,7 +1027,7 @@ pub(crate) async fn refresh_loop(
 ) {
     loop {
         let interval = if restricted_github_mode().unwrap_or(true) {
-            Duration::from_secs(60)
+            restricted::refresh_delay(&task_id, Instant::now())
         } else {
             GIT_CREDENTIALS_REFRESH_INTERVAL
         };
