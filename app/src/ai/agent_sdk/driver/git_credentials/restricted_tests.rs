@@ -72,6 +72,207 @@ fn response() -> RestrictedTaskGitCredentialsOutput {
     }
 }
 
+fn validated_response() -> Result<ValidatedCredentials> {
+    validate_response(response(), now(), Instant::now())
+}
+
+fn other_forge_credential(host: &str) -> RestrictedTaskGitCredential {
+    RestrictedTaskGitCredential {
+        host: host.into(),
+        token: "other-forge-test-token".into(),
+        username: None,
+        email: None,
+        expires_at: None,
+        repository_scope: None,
+    }
+}
+
+#[test]
+fn github_refresh_is_scheduled_ten_minutes_before_expiry() -> Result<()> {
+    let received_at = Instant::now();
+
+    let validated = validate_response(response(), now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(3000));
+    Ok(())
+}
+
+#[test]
+fn shorter_lived_github_credentials_refresh_earlier() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials[0].expires_at =
+        Some(DateTime::from_timestamp(1_800_001_800, 0).unwrap().into());
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(1200));
+    Ok(())
+}
+
+#[test]
+fn longer_lived_github_credentials_still_refresh_within_fifty_minutes() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials[0].expires_at =
+        Some(DateTime::from_timestamp(1_800_007_200, 0).unwrap().into());
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(3000));
+    Ok(())
+}
+
+#[test]
+fn credentials_inside_the_refresh_buffer_do_not_cause_a_busy_loop() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials[0].expires_at =
+        Some(DateTime::from_timestamp(1_800_000_360, 0).unwrap().into());
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(60));
+    Ok(())
+}
+
+#[test]
+fn mixed_gitlab_credentials_keep_the_existing_refresh_interval() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials.push(other_forge_credential("gitlab.com"));
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(60));
+    Ok(())
+}
+
+#[test]
+fn mixed_azure_credentials_keep_the_existing_refresh_interval() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials.insert(0, other_forge_credential("dev.azure.com"));
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(60));
+    Ok(())
+}
+
+#[test]
+fn responses_without_github_keep_the_existing_refresh_interval() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials = vec![other_forge_credential("gitlab.com")];
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(60));
+    Ok(())
+}
+
+#[test]
+fn empty_responses_keep_the_existing_refresh_interval() -> Result<()> {
+    let received_at = Instant::now();
+    let mut response = response();
+    response.credentials.clear();
+
+    let validated = validate_response(response, now(), received_at)?;
+
+    assert_eq!(validated.refresh_at - received_at, Duration::from_secs(60));
+    Ok(())
+}
+
+#[test]
+fn setup_time_counts_toward_the_refresh_deadline() -> Result<()> {
+    with_home("setup_time_counts_toward_the_refresh_deadline", &[], |_| {
+        prepare("task")?;
+        let received_at = Instant::now();
+        let credentials = validate_response(response(), now(), received_at)?;
+
+        apply_refresh("task", Ok(credentials))?;
+
+        assert_eq!(
+            refresh_delay("task", received_at + Duration::from_secs(600)),
+            Duration::from_secs(2400)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn overdue_credentials_refresh_without_another_interval() -> Result<()> {
+    with_home("overdue_credentials_refresh_without_another_interval", &[], |_| {
+        prepare("task")?;
+        let received_at = Instant::now();
+        let credentials = validate_response(response(), now(), received_at)?;
+
+        apply_refresh("task", Ok(credentials))?;
+
+        assert_eq!(
+            refresh_delay("task", received_at + Duration::from_secs(3600)),
+            Duration::ZERO
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn missing_expiry_is_not_accepted() {
+    let mut response = response();
+    response.credentials[0].expires_at = None;
+
+    assert!(validate_response(response, now(), Instant::now()).is_err());
+}
+
+#[test]
+fn five_minutes_of_remaining_validity_is_not_accepted() {
+    let mut response = response();
+    response.credentials[0].expires_at =
+        Some(DateTime::from_timestamp(1_800_000_300, 0).unwrap().into());
+
+    assert!(validate_response(response, now(), Instant::now()).is_err());
+}
+
+#[test]
+fn successful_refresh_after_failure_restores_expiry_schedule() -> Result<()> {
+    with_home(
+        "successful_refresh_after_failure_restores_expiry_schedule",
+        &[],
+        |_| {
+            prepare("task")?;
+            let error = TaskGitCredentialsError::Request(anyhow::anyhow!("test failure"));
+            assert!(apply_refresh("task", Err(error)).is_err());
+            let received_at = Instant::now();
+
+            apply_refresh("task", Ok(validate_response(response(), now(), received_at)?))?;
+
+            assert_eq!(refresh_delay("task", received_at), Duration::from_secs(3000));
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn failed_credential_write_does_not_retain_a_long_refresh_deadline() -> Result<()> {
+    with_home(
+        "failed_credential_write_does_not_retain_a_long_refresh_deadline",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            fs::rename(directory.join("credentials"), directory.join("previous-credentials"))?;
+            fs::create_dir(directory.join("credentials"))?;
+
+            assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
+
+            assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
+            Ok(())
+        },
+    )
+}
+
 #[test]
 fn unknown_mode_uses_legacy_credentials() -> Result<()> {
     with_home(
@@ -108,28 +309,28 @@ fn absent_mode_uses_legacy_credentials() -> Result<()> {
 fn legacy_response_is_not_accepted_in_restricted_mode() {
     let mut response = response();
     response.github_credential_mode = GitHubCredentialMode::Legacy;
-    assert!(validate_response(response, now()).is_err());
+    assert!(validate_response(response, now(), Instant::now()).is_err());
 }
 
 #[test]
 fn expiring_installation_token_is_not_installed() {
     let mut response = response();
     response.credentials[0].expires_at = Some(now().into());
-    assert!(validate_response(response, now()).is_err());
+    assert!(validate_response(response, now(), Instant::now()).is_err());
 }
 
 #[test]
 fn installation_scope_is_required() {
     let mut response = response();
     response.credentials[0].repository_scope = None;
-    assert!(validate_response(response, now()).is_err());
+    assert!(validate_response(response, now(), Instant::now()).is_err());
 }
 
 #[test]
 fn partial_response_is_not_accepted() {
     let mut response = response();
     response.failed_hosts.push("github.com".into());
-    assert!(validate_response(response, now()).is_err());
+    assert!(validate_response(response, now(), Instant::now()).is_err());
 }
 
 #[test]
@@ -139,7 +340,7 @@ fn refresh_does_not_change_fixed_bot_identity() -> Result<()> {
         git_config(&["user.name", "fixed-bot[bot]"])?;
         git_config(&["user.email", "fixed-bot@example.com"])?;
 
-        apply_refresh("task", Ok(validate_response(response(), now())?))?;
+        apply_refresh("task", Ok(validated_response()?))?;
 
         let output = Command::new("git")
             .args(["config", "--global", "user.name"])
@@ -157,8 +358,8 @@ fn github_refresh_failure_preserves_other_forge_store() -> Result<()> {
         &[],
         |home| {
             prepare("task")?;
-            let mut credentials = validate_response(response(), now())?;
-            credentials.push(GitCredential {
+            let mut credentials = validated_response()?;
+            credentials.credentials.push(GitCredential {
                 host: "gitlab.com".into(),
                 token: "gitlab-test-token".into(),
                 username: Some("oauth2".into()),
@@ -266,7 +467,7 @@ fn cleared_github_helper_does_not_use_legacy_store() -> Result<()> {
         |home| {
             let directory = prepare("task")?;
             install_helper(&directory, &[])?;
-            apply_refresh("task", Ok(validate_response(response(), now())?))?;
+            apply_refresh("task", Ok(validated_response()?))?;
             fs::write(
                 home.join(".git-credentials"),
                 "https://legacy:legacy-test-token@github.com\n",
@@ -332,7 +533,7 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
         |home| {
             let directory = prepare("task")?;
             install_helper(&directory, &[])?;
-            apply_refresh("task", Ok(validate_response(response(), now())?))?;
+            apply_refresh("task", Ok(validated_response()?))?;
 
             assert_eq!(
                 fs::read_to_string(directory.join("credentials"))?,
@@ -362,11 +563,12 @@ fn any_failed_refresh_clears_managed_github_store() -> Result<()> {
         &[],
         |_| {
             let directory = prepare("task")?;
-            apply_refresh("task", Ok(validate_response(response(), now())?))?;
+            apply_refresh("task", Ok(validated_response()?))?;
 
             let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
             Ok(())
         },
     )
@@ -379,10 +581,14 @@ fn missing_github_credential_clears_managed_store() -> Result<()> {
         &[],
         |_| {
             let directory = prepare("task")?;
-            apply_refresh("task", Ok(validate_response(response(), now())?))?;
+            apply_refresh("task", Ok(validated_response()?))?;
 
-            apply_refresh("task", Ok(Vec::new()))?;
+            let received_at = Instant::now();
+            let mut response = response();
+            response.credentials.clear();
+            apply_refresh("task", Ok(validate_response(response, now(), received_at)?))?;
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert_eq!(refresh_delay("task", received_at), Duration::from_secs(60));
             Ok(())
         },
     )
@@ -392,11 +598,12 @@ fn missing_github_credential_clears_managed_store() -> Result<()> {
 fn completed_run_cannot_restore_credentials() -> Result<()> {
     with_home("completed_run_cannot_restore_credentials", &[], |_| {
         let directory = prepare("task")?;
-        apply_refresh("task", Ok(validate_response(response(), now())?))?;
+        apply_refresh("task", Ok(validated_response()?))?;
         close_restricted_credentials("task")?;
 
-        assert!(apply_refresh("task", Ok(validate_response(response(), now())?)).is_err());
+        assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
         assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+        assert_eq!(refresh_delay("task", Instant::now()), Duration::from_secs(60));
         Ok(())
     })
 }
@@ -408,11 +615,14 @@ fn another_task_cannot_replace_or_clear_managed_credentials() -> Result<()> {
         &[],
         |_| {
             let directory = prepare("task")?;
-            apply_refresh("task", Ok(validate_response(response(), now())?))?;
+            let received_at = Instant::now();
+            apply_refresh("task", Ok(validate_response(response(), now(), received_at)?))?;
             close_restricted_credentials("other-task")?;
 
             assert!(prepare("other-task").is_err());
-            assert!(apply_refresh("other-task", Ok(Vec::new())).is_err());
+            assert!(apply_refresh("other-task", Ok(validated_response()?)).is_err());
+            assert_eq!(refresh_delay("other-task", received_at), Duration::from_secs(60));
+            assert_eq!(refresh_delay("task", received_at), Duration::from_secs(3000));
             assert_eq!(
                 fs::read_to_string(directory.join("credentials"))?,
                 "https://x-access-token:installation-test-token@github.com\n"
