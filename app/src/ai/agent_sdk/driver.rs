@@ -120,6 +120,7 @@ pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod preview_retention;
 mod prewarmed;
+mod restored_children;
 mod setup_vars;
 mod skill_references;
 mod snapshot;
@@ -884,6 +885,15 @@ fn split_run_options(
         error,
     })?;
     env_vars.extend(harness_env);
+    if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)? {
+        let task_id = task_id.ok_or(AgentDriverError::InvalidRuntimeState)?;
+        git_credentials::validate_restricted_child_environment(&env_vars)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        env_vars.extend(
+            git_credentials::restricted_child_environment(&task_id.to_string())
+                .map_err(AgentDriverError::ConfigBuildFailed)?,
+        );
+    }
     let preparation_file = environment_preparation::launch_environment(
         workspace.preparation_policy.as_ref(),
         task_id.map(|id| id.to_string()).as_deref(),
@@ -1938,6 +1948,11 @@ impl AgentDriver {
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
+                            if let Some(task_id) = task_id {
+                                report_if_error!(git_credentials::close_restricted_credentials(
+                                    &task_id.to_string()
+                                ));
+                            }
                             let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
                             if tx.send(Err(error)).is_err() {
                                 report_error!("Caller did not wait for agent driver to finish");
@@ -1945,6 +1960,11 @@ impl AgentDriver {
                             return;
                         }
                     };
+                if let Some(task_id) = task_id {
+                    report_if_error!(git_credentials::close_restricted_credentials(
+                        &task_id.to_string()
+                    ));
+                }
                 match cause {
                     RunEndCause::SandboxDeadline => {
                         tracing::info!(tags.cloud_agent = true, "sandbox deadline approaching");
@@ -2460,7 +2480,9 @@ impl AgentDriver {
                 bedrock_config_for_refresh,
             ) = foreground
                 .spawn(|me, ctx| {
-                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
+                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled()
+                        || git_credentials::restricted_github_mode().unwrap_or(true)
+                    {
                         me.task_id.map(|id| id.to_string())
                     } else {
                         None
@@ -2517,6 +2539,7 @@ impl AgentDriver {
                 )
                 .await?;
 
+                Self::prepare_local_subtree(&foreground).await?;
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
@@ -4048,6 +4071,12 @@ impl AgentDriver {
                         return;
                     }
                     let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                    let bound_conversation_id = me.run_conversation_id
+                        .or(restored_conversation_id)
+                        .or_else(|| history_model.active_conversation_id(terminal_id));
+                    if bound_conversation_id != Some(*conversation_id) {
+                        return;
+                    }
                     let Some(conversation) = history_model.conversation(conversation_id) else {
                         log::warn!("No active conversation for terminal view {conversation_terminal_id} with id {conversation_id}");
                         return;
@@ -4313,26 +4342,6 @@ impl AgentDriver {
                     }
                 })
             });
-
-            // Dispatch any shared-session startup follow-up that arrived while the initial
-            // prompt was being prepared. Must run after the update above returns, since
-            // `dispatch_queued_warp_agent_prompt` targets this terminal surface's *active*
-            // conversation, which the initial send just set. If more than one row accumulated,
-            // the rest are picked up one at a time by `Steering`'s piggyback-on-next-request
-            // mechanism or the idle-triggered drain, not flushed here all at once.
-            if let Some(conversation_id) = prepared_conversation_id {
-                self.terminal_driver.update(ctx, |td, ctx| {
-                    td.with_terminal_view(ctx, |terminal, ctx| {
-                        terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.dispatch_queued_warp_agent_prompt(
-                                conversation_id,
-                                None,
-                                ctx,
-                            );
-                        });
-                    });
-                });
-            }
         }
 
         if self.skip_initial_turn

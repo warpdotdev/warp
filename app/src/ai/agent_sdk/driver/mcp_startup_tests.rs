@@ -445,6 +445,10 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         rendered.warp_ids,
         HashMap::from([("GitHub MCP".to_string(), uuid.to_string())])
     );
+    assert_eq!(
+        rendered.installation_ids.keys().collect::<Vec<_>>(),
+        vec!["GitHub MCP"]
+    );
 }
 
 #[test]
@@ -752,11 +756,79 @@ fn managed_config_installations_carry_the_spec_token_as_warp_id() {
 }
 
 #[test]
+fn third_party_export_preserves_managed_github_and_other_servers() {
+    let mut installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"managed-github":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer unused"}}}"#,
+        None,
+        "github",
+    ).unwrap();
+    installations.extend(
+        AgentDriver::installations_from_user_mcp_json(
+            r#"{"github":{"command":"custom-github"},"other":{"command":"other"}}"#,
+        )
+        .unwrap(),
+    );
+
+    let resolved = AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+
+    assert_eq!(resolved.configs.len(), 3);
+    assert!(resolved.configs.contains_key("github"));
+    assert!(resolved.configs.contains_key("other"));
+    assert!(resolved.configs.contains_key("managed-github"));
+    assert_eq!(
+        resolved.warp_ids,
+        HashMap::from([("managed-github".to_owned(), "github".to_owned())])
+    );
+    match &resolved.configs["managed-github"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(headers["Authorization"], "Bearer unused");
+        }
+        other => panic!("expected HTTP server, got {other:?}"),
+    }
+    AgentDriver::require_managed_github_mcp(&resolved).unwrap();
+}
+
+#[test]
+fn restricted_github_requires_managed_identity_not_server_name() {
+    for config in [
+        "{}",
+        r#"{"github":{"command":"custom-github"}}"#,
+        r#"{"github":{"url":"https://proxy.example/mcp"}}"#,
+    ] {
+        let installations = AgentDriver::installations_from_user_mcp_json(config).unwrap();
+        let resolved =
+            AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+        assert!(matches!(
+            AgentDriver::require_managed_github_mcp(&resolved),
+            Err(AgentDriverError::MCPStartupFailed { .. })
+        ));
+    }
+}
+
+#[test]
+fn custom_server_replacing_managed_github_cannot_satisfy_restricted_mode() {
+    let mut installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"github":{"url":"https://proxy.example/mcp"}}"#,
+        None,
+        "github",
+    )
+    .unwrap();
+    installations.extend(
+        AgentDriver::installations_from_user_mcp_json(r#"{"github":{"command":"custom-github"}}"#)
+            .unwrap(),
+    );
+    let resolved = AgentDriver::mcp_installations_to_json(installations, &HashMap::new()).unwrap();
+    assert!(resolved.warp_ids.is_empty());
+    assert!(AgentDriver::require_managed_github_mcp(&resolved).is_err());
+}
+
+#[test]
 fn managed_command_config_env_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -777,7 +849,7 @@ fn managed_command_config_arg_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -798,7 +870,7 @@ fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholde
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -820,7 +892,7 @@ fn managed_url_config_preserves_proxy_url_and_header() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -844,7 +916,7 @@ fn managed_url_config_preserves_header_despite_colliding_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -871,7 +943,7 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .unwrap();
     let rendered = render_installations(
@@ -892,7 +964,7 @@ fn managed_command_config_missing_secret_is_rejected_before_serialization() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .expect("managed MCP config should parse");
     let error = AgentDriver::mcp_installations_to_json(installations, &HashMap::new())
@@ -915,7 +987,7 @@ fn ephemeral_mcp_missing_secret_is_filtered_before_spawn() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer {{API_TOKEN}}"}}}}"#,
         None,
-        "github",
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a",
     )
     .expect("managed MCP config should parse");
     let (ready, failures) =

@@ -40,7 +40,7 @@ use warp_cli::skill::SkillSpec;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::execution_config::ExecutionConfiguration;
 use warp_isolation_platform::IsolationPlatformError;
@@ -1126,6 +1126,9 @@ impl AgentDriverRunner {
         if let Err(ref err) = result
             && let Some(task_id) = task_id
         {
+            report_if_error!(driver::git_credentials::close_restricted_credentials(
+                &task_id.to_string()
+            ));
             driver::report_driver_error(task_id, err, &server_api).await;
         }
         result
@@ -1292,6 +1295,20 @@ impl AgentDriverRunner {
         configure_git_credentials_with_github: bool,
         use_factory_repositories: bool,
     ) -> Result<(), AgentDriverError> {
+        if driver::git_credentials::restricted_github_mode()
+            .map_err(AgentDriverError::ConfigBuildFailed)?
+        {
+            let ai_client = foreground
+                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_ai_client())
+                .await?;
+            return driver::git_credentials::bootstrap_restricted_credentials(
+                task_id_str,
+                &ai_client,
+                use_factory_repositories,
+            )
+            .await
+            .map_err(AgentDriverError::GitCredentialsFetchFailed);
+        }
         // The gh CLI only covers github.com, so this must not replace the
         // server fetch below — other forges (GitLab, Azure DevOps) get their
         // credentials exclusively from the server.

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -17,6 +16,7 @@ use warp_multi_agent_api::{QueryAuthor, WarpUser, query_author};
 use warpui::r#async::executor::Background;
 
 use super::super::connection::AgentRequestHandler;
+use super::super::mcp_projection::KnownMcpServers;
 use super::*;
 use crate::ai::agent::BaseUserQuery;
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryOrigin};
@@ -608,7 +608,11 @@ fn start(
     let (cancel_tx, cancel_rx) = async_channel::unbounded();
     let (save_tx, _save_rx) = async_channel::unbounded();
     let turn = block_on(host.begin_turn(None)).unwrap();
-    let mapper = AcpTurnMapper::new("task-1".to_owned(), turn.request_id.clone(), HashMap::new());
+    let mapper = AcpTurnMapper::new(
+        "task-1".to_owned(),
+        turn.request_id.clone(),
+        KnownMcpServers::default(),
+    );
     let driver = TurnDriver {
         connection: connection.clone(),
         notifications,

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tempfile::{NamedTempFile, TempDir};
+use uuid::Uuid;
 use warp_cli::agent::{Harness, HarnessTransport};
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
@@ -149,6 +150,9 @@ pub(crate) struct ResolvedMCPServers {
     /// The `warp_id` of each server resolved from a managed MCP server or a well-known
     /// integration, with the semantics of `MCPServerConfig.warp_id`.
     pub(crate) warp_ids: HashMap<String, String>,
+    /// The installation id of each server, which the native conversation records as
+    /// `CallMCPTool.server_id`.
+    pub(crate) installation_ids: HashMap<String, Uuid>,
 }
 
 /// Trait for third-party agent harnesses that execute prompts via their own CLIs.

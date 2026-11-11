@@ -46,15 +46,17 @@ You have access to messaging commands for communicating with other agents:
 Use all of these parameters on `"$OZ_CLI" run message send`: `--sender-run-id "$OZ_RUN_ID"`, `--to "$OZ_PARENT_RUN_ID"`, `--subject "<subject>"`, and `--body "<body>"`. If `OZ_RUN_ID`, `OZ_PARENT_RUN_ID`, or `OZ_CLI` is missing, that is a blocker.
 
 ### Checking for messages
-Usually, your harness will surface messages for you automatically, but you can poll for messages proactively by running
+Your harness will surface messages for you automatically, but you may also check for messages proactively by running
 `"$OZ_CLI" run message list "$OZ_RUN_ID" --unread --limit 25`.
 
 Omit the `--unread` flag if you expect new messages to exist but don't see them - it's possible they were mistakenly marked as read even if you didn't actually read them.
 
 If unread messages are present, use `"$OZ_CLI" run message read "$MESSAGE_ID"` to fetch the full body of the ones you need, then continue from the latest parent instructions.
 
-It's a good idea to poll your inbox at these times:
+It's a good idea to check your inbox at these times:
 - you just sent a message
 - before starting a new chunk of work after any pause,
 - before deciding you still need to wait for parent input,
 - before saying you are done, waiting, standing by, or otherwise ending your turn.
+
+Do NOT start a background poll checking for messages. Only check as needed.

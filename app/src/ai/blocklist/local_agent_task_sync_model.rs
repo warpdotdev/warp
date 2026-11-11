@@ -13,7 +13,9 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 use super::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
-use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, LocalChildRestorationStatus,
+};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApiProvider;
@@ -307,6 +309,12 @@ impl LocalAgentTaskSyncModel {
     ) {
         let Some((task_id, Some(update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
+                if conversation
+                    .local_child_restoration_status()
+                    .is_some_and(|state| state != LocalChildRestorationStatus::Restored)
+                {
+                    return None;
+                }
                 // When the conversation transitions to Error but the last exchange is
                 // still streaming, the stream hasn't finished processing the error yet.
                 // Skip this update — `mark_request_completed_with_error` will fire

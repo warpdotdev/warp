@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
 use warp_errors::report_error;
@@ -28,6 +28,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
@@ -72,15 +73,18 @@ impl ThirdPartyHarness for GeminiHarness {
         skill_dirs: &[PathBuf],
         factory_repository_contract: bool,
         _resolved_secrets: &HashMap<String, ManagedSecretValue>,
-        _resolved_mcp_servers: &ResolvedMCPServers,
+        resolved_mcp_servers: &ResolvedMCPServers,
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_gemini_environment_config(harness_working_dir, system_prompt).map_err(|error| {
-            AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            }
+        prepare_gemini_environment_config(
+            harness_working_dir,
+            system_prompt,
+            &resolved_mcp_servers.configs,
+        )
+        .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
         })?;
         publish_skills_for_gemini(
             workspace_root,
@@ -298,6 +302,7 @@ impl HarnessRunner for GeminiHarnessRunner {
 pub(super) fn prepare_gemini_environment_config(
     harness_working_dir: &Path,
     system_prompt: Option<&str>,
+    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
 ) -> Result<()> {
     let home_dir =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
@@ -305,6 +310,7 @@ pub(super) fn prepare_gemini_environment_config(
     prepare_gemini_settings(
         &gemini_dir.join(GEMINI_SETTINGS_FILE_NAME),
         system_prompt.is_some(),
+        resolved_mcp_servers,
     )?;
     prepare_gemini_trusted_folders(
         &gemini_dir.join(GEMINI_TRUSTED_FOLDERS_FILE_NAME),
@@ -322,7 +328,11 @@ pub(super) fn prepare_gemini_environment_config(
     Ok(())
 }
 
-fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Result<()> {
+fn prepare_gemini_settings(
+    settings_path: &Path,
+    has_system_prompt: bool,
+    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+) -> Result<()> {
     let mut settings: GeminiSettings = read_json_file_or_default(settings_path)?;
     settings
         .security
@@ -337,6 +347,27 @@ fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Res
         if !context.file_name.contains(&file_name) {
             context.file_name.push(file_name);
         }
+    }
+
+    for (name, server) in resolved_mcp_servers {
+        let config = match &server.transport_type {
+            JSONTransportType::SSEServer { url, headers } => {
+                json!({"httpUrl": url, "headers": headers})
+            }
+            JSONTransportType::CLIServer {
+                command,
+                args,
+                env,
+                working_directory,
+            } => {
+                let mut config = json!({"command": command, "args": args, "env": env});
+                if let Some(cwd) = working_directory {
+                    config["cwd"] = json!(cwd);
+                }
+                config
+            }
+        };
+        settings.mcp_servers.insert(name.clone(), config);
     }
 
     write_json_file(
@@ -377,6 +408,8 @@ struct GeminiSettings {
     security: Option<GeminiSecurity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<GeminiContext>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    mcp_servers: Map<String, Value>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
