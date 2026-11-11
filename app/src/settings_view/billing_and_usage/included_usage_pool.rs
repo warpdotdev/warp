@@ -11,12 +11,6 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{CustomerType, Workspace};
-
-pub(crate) fn is_scale_workspace(workspace: Option<&Workspace>) -> bool {
-    workspace
-        .is_some_and(|workspace| workspace.billing_metadata.customer_type == CustomerType::Scale)
-}
 
 pub struct IncludedUsagePoolView;
 

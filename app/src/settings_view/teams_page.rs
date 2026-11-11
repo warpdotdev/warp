@@ -2838,8 +2838,7 @@ impl TeamsWidget {
             "Your admin will be charged for a portion of the team member's usage of Warp."
         };
 
-        let additional_members_cost_money_msg = if team_metadata.billing_metadata.customer_type
-            == CustomerType::Scale
+        let additional_members_cost_money_msg = if team_metadata.billing_metadata.is_on_scale_plan()
         {
             "Scale uses flat workspace pricing. Adding members within your plan's member limit does not add per-seat subscription charges.".to_string()
         } else if let Some((monthly_cost, yearly_cost)) =

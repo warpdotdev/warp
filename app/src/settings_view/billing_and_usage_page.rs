@@ -36,7 +36,7 @@ use super::admin_actions::AdminActions;
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
-use super::billing_and_usage::included_usage_pool::{IncludedUsagePoolView, is_scale_workspace};
+use super::billing_and_usage::included_usage_pool::IncludedUsagePoolView;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -3236,7 +3236,7 @@ impl BillingAndUsagePageView {
             }
         }
 
-        if is_scale_workspace(workspace) {
+        if workspace.is_some_and(|workspace| workspace.billing_metadata.is_on_scale_plan()) {
             if workspace_is_delinquent_due_to_payment_issue {
                 usage.add_child(
                     Text::new(

@@ -758,6 +758,10 @@ impl BillingMetadata {
         BillingMetadata::is_stripe_paid_plan(self.customer_type)
     }
 
+    pub fn is_on_scale_plan(&self) -> bool {
+        self.customer_type == CustomerType::Scale
+    }
+
     pub fn is_on_build_plan(&self) -> bool {
         self.customer_type == CustomerType::Build
     }

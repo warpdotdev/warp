@@ -26,21 +26,16 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
 }
 
 #[test]
-fn scale_selects_shared_pool_presentation_instead_of_individual_allowances() {
+fn scale_routes_to_v2_without_personal_plan_upgrade_offers() {
     let workspace = workspace_with_customer_type(CustomerType::Scale);
     assert!(BillingAndUsageDispatchView::workspace_uses_v2(Some(
         &workspace
     )));
-    assert!(
-        super::super::billing_and_usage::included_usage_pool::is_scale_workspace(Some(&workspace))
-    );
+    assert!(workspace.billing_metadata.is_on_scale_plan());
     assert!(!workspace.billing_metadata.can_upgrade_to_build_plan());
     assert!(!workspace.billing_metadata.can_upgrade_to_build_max_plan());
     let build = workspace_with_customer_type(CustomerType::Build);
-    assert!(
-        !super::super::billing_and_usage::included_usage_pool::is_scale_workspace(Some(&build))
-    );
-    assert!(!super::super::billing_and_usage::included_usage_pool::is_scale_workspace(None));
+    assert!(!build.billing_metadata.is_on_scale_plan());
 }
 
 #[test]

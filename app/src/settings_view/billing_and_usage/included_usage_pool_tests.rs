@@ -6,6 +6,7 @@ use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, TypedActionView, WindowInvalidation};
 
 use super::*;
+use crate::workspaces::workspace::CustomerType;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 6, 0, 0, 0).unwrap()
