@@ -20,7 +20,8 @@ use itertools::Itertools;
 use mockall::automock;
 #[cfg(not(target_family = "wasm"))]
 use preview_proxy::protocol::{
-    Session as PreviewProxySession, StartRequest as PreviewProxyStartRequest,
+    RegisterRequest as RegisterPreviewProxyRequest,
+    RegisterResponse as RegisterPreviewProxyResponse,
 };
 use prost::Message;
 use warp_core::channel::ChannelState;
@@ -1286,11 +1287,11 @@ pub struct UpdateMemoryResponse {
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait AIClient: 'static + Send + Sync {
     #[cfg(not(target_family = "wasm"))]
-    async fn start_preview_proxy(
+    async fn register_preview_proxy(
         &self,
         task_id: &AmbientAgentTaskId,
-        request: &PreviewProxyStartRequest,
-    ) -> anyhow::Result<PreviewProxySession>;
+        request: &RegisterPreviewProxyRequest,
+    ) -> anyhow::Result<RegisterPreviewProxyResponse>;
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2043,14 +2044,14 @@ fn convert_upload_field(
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
     #[cfg(not(target_family = "wasm"))]
-    async fn start_preview_proxy(
+    async fn register_preview_proxy(
         &self,
         task_id: &AmbientAgentTaskId,
-        request: &PreviewProxyStartRequest,
-    ) -> anyhow::Result<PreviewProxySession> {
+        request: &RegisterPreviewProxyRequest,
+    ) -> anyhow::Result<RegisterPreviewProxyResponse> {
         self.post_public_api_response_for_task(
             task_id,
-            &format!("agent/runs/{task_id}/preview-proxy/sessions"),
+            &format!("agent/runs/{task_id}/preview-proxy/register"),
             request,
         )
         .await?

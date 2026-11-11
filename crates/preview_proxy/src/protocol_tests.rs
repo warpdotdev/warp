@@ -18,10 +18,10 @@ impl PortSource for Control {
 }
 
 impl ControlPlane for Control {
-    async fn start(&self, request: &StartRequest) -> Result<Session, Error> {
+    async fn register(&self, request: &RegisterRequest) -> Result<RegisterResponse, Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.ports.send(request.proxy_port).unwrap();
-        Ok(Session {
+        Ok(RegisterResponse {
             session_id: "session".into(),
         })
     }

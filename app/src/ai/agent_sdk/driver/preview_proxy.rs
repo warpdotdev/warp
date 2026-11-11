@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use ::preview_proxy::protocol::{self, ControlPlane, Error, Session, StartRequest};
+use ::preview_proxy::protocol::{self, ControlPlane, Error, RegisterRequest, RegisterResponse};
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 use warp_server_client::HttpStatusError;
@@ -111,9 +111,9 @@ fn classify(error: anyhow::Error) -> Error {
 }
 
 impl ControlPlane for Client {
-    async fn start(&self, request: &StartRequest) -> Result<Session, Error> {
+    async fn register(&self, request: &RegisterRequest) -> Result<RegisterResponse, Error> {
         self.client
-            .start_preview_proxy(&self.task_id, request)
+            .register_preview_proxy(&self.task_id, request)
             .await
             .map_err(classify)
     }

@@ -12,7 +12,7 @@ pub const VERSION: u32 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize)]
-pub struct StartRequest {
+pub struct RegisterRequest {
     pub protocol_version: u32,
     pub boot_nonce: String,
     pub proxy_port: u16,
@@ -20,7 +20,7 @@ pub struct StartRequest {
 }
 
 #[derive(Deserialize)]
-pub struct Session {
+pub struct RegisterResponse {
     pub session_id: String,
 }
 
@@ -30,7 +30,10 @@ pub enum Error {
 }
 
 pub trait ControlPlane: PortSource + 'static {
-    fn start(&self, request: &StartRequest) -> impl Future<Output = Result<Session, Error>> + Send;
+    fn register(
+        &self,
+        request: &RegisterRequest,
+    ) -> impl Future<Output = Result<RegisterResponse, Error>> + Send;
 }
 
 pub async fn run(
@@ -44,14 +47,14 @@ pub async fn run(
     let Ok(mut proxy) = Proxy::bind(token.clone(), sandbox_deadline, control.clone()).await else {
         return;
     };
-    let start = StartRequest {
+    let request = RegisterRequest {
         protocol_version: VERSION,
         boot_nonce,
         proxy_port: proxy.port(),
         token,
     };
     let lifecycle = async {
-        if !register(control.as_ref(), &start).await {
+        if !register(control.as_ref(), &request).await {
             return;
         }
         std::future::pending::<()>().await;
@@ -69,10 +72,10 @@ pub async fn run(
     proxy.shutdown().await;
 }
 
-async fn register(control: &impl ControlPlane, request: &StartRequest) -> bool {
+async fn register(control: &impl ControlPlane, request: &RegisterRequest) -> bool {
     let mut attempt = 0;
     loop {
-        match timeout(REQUEST_TIMEOUT, control.start(request)).await {
+        match timeout(REQUEST_TIMEOUT, control.register(request)).await {
             Ok(Ok(_)) => return true,
             Ok(Err(Error::Fenced)) => return false,
             Ok(Err(Error::Transport)) | Err(_) => {}
