@@ -98,7 +98,6 @@ impl Proxy {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
             .await
             .context("Failed to bind preview listener")?;
-        let port = listener.local_addr()?.port();
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
@@ -205,9 +204,7 @@ async fn forward<S: PortSource + 'static>(
         return Ok(empty(StatusCode::FORBIDDEN));
     }
     let downstream_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut request));
-    if !prepare_headers(request.headers_mut(), app_port) {
-        return Ok(empty(StatusCode::BAD_REQUEST));
-    }
+    prepare_headers(request.headers_mut(), app_port);
     if let Some(value) = upgrade {
         request.headers_mut().insert(UPGRADE, value);
         request
@@ -288,11 +285,10 @@ async fn connect(port: u16) -> Result<TcpStream> {
     .context("Failed to connect to preview app")
 }
 
-fn prepare_headers(headers: &mut HeaderMap, port: u16) -> bool {
+fn prepare_headers(headers: &mut HeaderMap, port: u16) {
     strip_hop_headers(headers);
     strip_credentials(headers);
     for name in [
-        "x-nsc-ingress-auth",
         "x-warp-cloud-agent-id",
         "x-warp-ambient-task-token",
         "forwarded",
@@ -302,11 +298,9 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16) -> bool {
     ] {
         headers.remove(name);
     }
-    let Ok(host) = HeaderValue::from_str(&format!("localhost:{port}")) else {
-        return false;
-    };
+    let host = HeaderValue::from_str(&format!("localhost:{port}"))
+        .expect("loopback host is a valid header");
     headers.insert(HOST, host);
-    true
 }
 
 fn strip_credentials(headers: &mut HeaderMap) {
