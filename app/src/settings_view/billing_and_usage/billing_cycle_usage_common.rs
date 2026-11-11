@@ -270,6 +270,10 @@ pub fn format_cost_cents(cents: f64) -> String {
     }
 }
 
+pub fn format_usage_cost(credits: f64) -> String {
+    format_cost_cents(credits * 1.8)
+}
+
 /// Section subheader (e.g. "Team totals", "Member usage"). One step below
 /// the v2 page's bold section title.
 pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn Element> {
@@ -284,7 +288,6 @@ pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn
 pub fn render_breakdown_tooltip(
     segments: &[BarSegment],
     total_credits: f64,
-    total_cost_cents: f64,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -312,7 +315,6 @@ pub fn render_breakdown_tooltip(
             Some(cost_type_color(&line.cost_type)),
             label,
             line.credits,
-            line.cost_cents,
             sub,
             main,
             font_family,
@@ -332,7 +334,6 @@ pub fn render_breakdown_tooltip(
         /* no swatch on the total row */ None,
         "Total usage".to_string(),
         total_credits,
-        total_cost_cents,
         main,
         main,
         font_family,
@@ -358,12 +359,10 @@ pub fn render_breakdown_tooltip(
 
 /// Single tooltip row: `[swatch + label] [spacer] [credits / cost]` with
 /// fixed-width right-aligned number columns.
-#[allow(clippy::too_many_arguments)]
 fn render_tooltip_row(
     swatch_color: Option<ColorU>,
     label: String,
     credits: f64,
-    cost_cents: f64,
     label_color: ColorU,
     value_color: ColorU,
     font_family: warpui::fonts::FamilyId,
@@ -402,7 +401,7 @@ fn render_tooltip_row(
         .with_color(value_color)
         .with_style(style)
         .finish();
-    let cost_text = Text::new_inline(format_cost_cents(cost_cents), font_family, 12.)
+    let cost_text = Text::new_inline(format_usage_cost(credits), font_family, 12.)
         .with_color(value_color)
         .with_style(style)
         .finish();
