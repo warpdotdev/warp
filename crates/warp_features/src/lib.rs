@@ -1091,7 +1091,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitMirrorCache,
     FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
-    FeatureFlag::FactorySkillReferences,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -1106,6 +1105,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::FactorySkillReferences,
     FeatureFlag::VideoRecording,
     FeatureFlag::WindowsVideoRecording,
     FeatureFlag::ImeMarkedText,
