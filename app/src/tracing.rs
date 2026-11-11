@@ -61,6 +61,15 @@ pub fn start_auth_refresh(
     native::start_auth_refresh(client, ctx);
 }
 
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn assign_run_credentials(
+    runtime_env: &mut std::collections::HashMap<String, String>,
+    client: std::sync::Arc<crate::server::server_api::managed_secrets::AppManagedSecretsClient>,
+    ctx: &mut warpui::AppContext,
+) {
+    native::assign_run_credentials(runtime_env, client, ctx);
+}
+
 fn install_no_subscriber() -> anyhow::Result<()> {
     // Configure the global tracing subscriber to not care about any spans or
     // events.
