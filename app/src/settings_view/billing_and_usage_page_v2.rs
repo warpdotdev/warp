@@ -2518,27 +2518,6 @@ pub(super) fn render_balance_card(
         )
         .with_cross_axis_alignment(CrossAxisAlignment::End);
 
-    render_balance_card_contents(
-        appearance,
-        dot_color,
-        label,
-        date,
-        value_row.finish(),
-        border_color,
-    )
-}
-
-pub(super) fn render_balance_card_contents(
-    appearance: &Appearance,
-    dot_color: ColorU,
-    label: &str,
-    date: &str,
-    value: Box<dyn Element>,
-    border_color: ColorU,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let sub_color = blended_colors::text_sub(theme, theme.background());
-
     let status_dot = ConstrainedBox::new(
         Container::new(Empty::new().finish())
             .with_background_color(dot_color)
@@ -2577,7 +2556,7 @@ pub(super) fn render_balance_card_contents(
     Container::new(
         Flex::column()
             .with_child(header)
-            .with_child(value)
+            .with_child(value_row.finish())
             .with_spacing(8.)
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .finish(),

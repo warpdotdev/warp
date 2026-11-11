@@ -1,15 +1,14 @@
-use chrono::{DateTime, Local, Utc};
+use chrono::Local;
 use warp_core::ui::appearance::Appearance;
 use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
-use warpui::elements::Text;
-use warpui::fonts::{Properties, Weight};
+use warpui::elements::Empty;
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 
 use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::view_util::usage_display_unit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::settings_view::billing_and_usage_page_v2::{
-    BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card, render_balance_card_contents,
+    BASE_CREDITS_DOT_COLOR, BalanceAmount, render_balance_card,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{CustomerType, Workspace};
@@ -48,114 +47,66 @@ impl View for IncludedUsagePoolView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
-        render_card(
-            AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx),
-            Utc::now(),
-            usage_display_unit(ctx),
-            Appearance::as_ref(ctx),
-        )
+        match AIRequestUsageModel::as_ref(ctx).workspace_included_usage(ctx) {
+            Some(info) => render_card(info, usage_display_unit(ctx), Appearance::as_ref(ctx)),
+            None => Empty::new().finish(),
+        }
     }
 }
 
 #[derive(Debug, PartialEq)]
-enum PoolBalance {
-    Unavailable,
-    Available {
-        remaining_credits: f64,
-        monthly_credits: f64,
-        remaining_cents: f64,
-        monthly_cents: f64,
-        reset: String,
-    },
+struct PoolBalance {
+    remaining_credits: f64,
+    monthly_credits: f64,
+    remaining_cents: f64,
+    monthly_cents: f64,
+    reset: String,
 }
 
-fn pool_balance(info: Option<&WorkspaceIncludedUsageInfo>, now: DateTime<Utc>) -> PoolBalance {
-    match info {
-        None => PoolBalance::Unavailable,
-        Some(pool) => {
-            if !pool.included_usage_cents.is_finite()
-                || pool.included_usage_cents <= 0.0
-                || !pool.included_usage_credits.is_finite()
-                || pool.included_usage_credits <= 0.0
-                || !pool.usage_credits_used_since_last_refresh.is_finite()
-                || pool.usage_credits_used_since_last_refresh < 0.0
-                || !pool.usage_cents_used_since_last_refresh.is_finite()
-                || pool.usage_cents_used_since_last_refresh < 0.0
-                || pool.next_refresh_time.utc() <= now
-            {
-                return PoolBalance::Unavailable;
-            }
-            PoolBalance::Available {
-                remaining_credits: (pool.included_usage_credits
-                    - pool.usage_credits_used_since_last_refresh)
-                    .max(0.0),
-                monthly_credits: pool.included_usage_credits,
-                remaining_cents: (pool.included_usage_cents
-                    - pool.usage_cents_used_since_last_refresh)
-                    .max(0.0),
-                monthly_cents: pool.included_usage_cents,
-                reset: pool
-                    .next_refresh_time
-                    .utc()
-                    .with_timezone(&Local)
-                    .format("Resets %b %d at %-I:%M %p")
-                    .to_string(),
-            }
-        }
+fn pool_balance(pool: &WorkspaceIncludedUsageInfo) -> PoolBalance {
+    PoolBalance {
+        remaining_credits: (pool.included_usage_credits
+            - pool.usage_credits_used_since_last_refresh)
+            .max(0.0),
+        monthly_credits: pool.included_usage_credits,
+        remaining_cents: (pool.included_usage_cents - pool.usage_cents_used_since_last_refresh)
+            .max(0.0),
+        monthly_cents: pool.included_usage_cents,
+        reset: pool
+            .next_refresh_time
+            .utc()
+            .with_timezone(&Local)
+            .format("Resets %b %d at %-I:%M %p")
+            .to_string(),
     }
 }
 
 fn render_card(
-    info: Option<&WorkspaceIncludedUsageInfo>,
-    now: DateTime<Utc>,
+    info: &WorkspaceIncludedUsageInfo,
     unit: UsageDisplayUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let border_color = appearance.theme().outline().into_solid();
-    let label = match unit {
-        UsageDisplayUnit::Credits => "Included team credits",
-        UsageDisplayUnit::Dollars => "Included team usage",
+    let pool = pool_balance(info);
+    let (label, remaining, monthly) = match unit {
+        UsageDisplayUnit::Credits => (
+            "Included team credits",
+            BalanceAmount::RoundedCredits(pool.remaining_credits),
+            BalanceAmount::Credits(pool.monthly_credits.round() as i64),
+        ),
+        UsageDisplayUnit::Dollars => (
+            "Included team usage",
+            BalanceAmount::Cents(pool.remaining_cents),
+            BalanceAmount::Cents(pool.monthly_cents),
+        ),
     };
-    let status = match pool_balance(info, now) {
-        PoolBalance::Available {
-            remaining_credits,
-            monthly_credits,
-            remaining_cents,
-            monthly_cents,
-            reset,
-        } => {
-            let (remaining, monthly) = match unit {
-                UsageDisplayUnit::Credits => (
-                    BalanceAmount::RoundedCredits(remaining_credits),
-                    BalanceAmount::Credits(monthly_credits.round() as i64),
-                ),
-                UsageDisplayUnit::Dollars => (
-                    BalanceAmount::Cents(remaining_cents),
-                    BalanceAmount::Cents(monthly_cents),
-                ),
-            };
-            return render_balance_card(
-                appearance,
-                BASE_CREDITS_DOT_COLOR,
-                label,
-                &reset,
-                remaining,
-                Some(monthly),
-                border_color,
-            );
-        }
-        PoolBalance::Unavailable => "Unavailable",
-    };
-    render_balance_card_contents(
+    render_balance_card(
         appearance,
         BASE_CREDITS_DOT_COLOR,
         label,
-        "",
-        Text::new_inline(status, appearance.ui_font_family(), 24.)
-            .with_color(appearance.theme().active_ui_text_color().into())
-            .with_style(Properties::default().weight(Weight::Semibold))
-            .finish(),
-        border_color,
+        &pool.reset,
+        remaining,
+        Some(monthly),
+        appearance.theme().outline().into_solid(),
     )
 }
 

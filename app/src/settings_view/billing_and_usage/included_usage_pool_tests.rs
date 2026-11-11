@@ -1,4 +1,4 @@
-use chrono::{Duration, TimeZone};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use pathfinder_geometry::vector::vec2f;
 use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warpui::elements::{Expanded, Flex, ParentElement, Text};
@@ -17,8 +17,7 @@ fn included_pool_credit_display_rounds_exact_remainder_without_currency_conversi
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
             let card = render_card(
-                Some(&pool(8_750.0)),
-                now(),
+                &pool(8_750.0),
                 UsageDisplayUnit::Credits,
                 Appearance::as_ref(ctx),
             );
@@ -40,12 +39,7 @@ fn included_pool_rounds_after_subtraction_and_preserves_positive_remainders() {
             info.included_usage_credits = 1.49;
             for (used, expected) in [(1.01, "<1 / 1 remaining"), (1.49, "0 / 1 remaining")] {
                 info.usage_credits_used_since_last_refresh = used;
-                let card = render_card(
-                    Some(&info),
-                    now(),
-                    UsageDisplayUnit::Credits,
-                    Appearance::as_ref(ctx),
-                );
+                let card = render_card(&info, UsageDisplayUnit::Credits, Appearance::as_ref(ctx));
                 let text = card.debug_text_content().unwrap_or_default();
                 assert!(text.contains(expected), "{text}");
             }
@@ -69,8 +63,7 @@ fn included_pool_card_shows_remaining_over_monthly_total() {
         app.add_singleton_model(|_| Appearance::mock());
         app.update(|ctx| {
             let card = render_card(
-                Some(&pool(8_750.0)),
-                now(),
+                &pool(8_750.0),
                 UsageDisplayUnit::Dollars,
                 Appearance::as_ref(ctx),
             );
@@ -92,8 +85,7 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             let mut exhausted = pool(0.0);
             exhausted.usage_credits_used_since_last_refresh = 1500.0;
             let card = render_card(
-                Some(&exhausted.clone()),
-                now(),
+                &exhausted.clone(),
                 UsageDisplayUnit::Dollars,
                 Appearance::as_ref(ctx),
             );
@@ -102,8 +94,7 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
             assert!(text.contains("/ $100.00 remaining"));
             assert!(!text.contains("Unavailable"));
             let card = render_card(
-                Some(&exhausted),
-                now(),
+                &exhausted,
                 UsageDisplayUnit::Credits,
                 Appearance::as_ref(ctx),
             );
@@ -117,16 +108,13 @@ fn included_pool_exhausted_card_keeps_monthly_allowance_visible() {
 
 #[test]
 fn included_pool_keeps_remaining_separate_from_monthly_total() {
-    let PoolBalance::Available {
+    let PoolBalance {
         remaining_credits,
         monthly_credits,
         remaining_cents,
         monthly_cents,
         reset,
-    } = pool_balance(Some(&pool(8_750.25)), now())
-    else {
-        panic!("Expected an available balance")
-    };
+    } = pool_balance(&pool(8_750.25));
     assert_eq!(remaining_cents, 8_750.25);
     assert_eq!(remaining_credits, 984.625);
     assert_eq!(monthly_credits, 1234.75);
@@ -139,14 +127,11 @@ fn included_pool_uses_configured_monthly_total_instead_of_hardcoded_allowance() 
     let mut configured = pool(300.0);
     configured.included_usage_cents = 500.0;
     configured.usage_cents_used_since_last_refresh = 200.0;
-    let PoolBalance::Available {
+    let PoolBalance {
         remaining_cents,
         monthly_cents,
         ..
-    } = pool_balance(Some(&configured), now())
-    else {
-        panic!("Expected an available balance")
-    };
+    } = pool_balance(&configured);
     assert_eq!(remaining_cents, 300.0);
     assert_eq!(monthly_cents, 500.0);
 }
@@ -156,14 +141,11 @@ fn included_pool_preserves_fractional_cents_in_allowance_and_usage() {
     let mut info = pool(0.0);
     info.included_usage_cents = 500.125;
     info.usage_cents_used_since_last_refresh = 200.0625;
-    let PoolBalance::Available {
+    let PoolBalance {
         remaining_cents,
         monthly_cents,
         ..
-    } = pool_balance(Some(&info), now())
-    else {
-        panic!("Expected an available balance")
-    };
+    } = pool_balance(&info);
     assert_eq!(monthly_cents, 500.125);
     assert_eq!(remaining_cents, 300.0625);
 }
@@ -173,43 +155,13 @@ fn included_pool_clamps_overshoot_in_each_server_unit_independently() {
     let mut info = pool(10_000.0);
     info.usage_credits_used_since_last_refresh = info.included_usage_credits + 0.125;
     info.usage_cents_used_since_last_refresh = info.included_usage_cents + 0.25;
-    let PoolBalance::Available {
+    let PoolBalance {
         remaining_credits,
         remaining_cents,
         ..
-    } = pool_balance(Some(&info), now())
-    else {
-        panic!("Expected an exhausted balance")
-    };
+    } = pool_balance(&info);
     assert_eq!(remaining_credits, 0.0);
     assert_eq!(remaining_cents, 0.0);
-}
-
-#[test]
-fn included_pool_missing_or_expired_is_not_shown_as_exhausted() {
-    let now = now();
-    let unavailable = PoolBalance::Unavailable;
-    assert_eq!(pool_balance(None, now), unavailable);
-    let mut expired = pool(500.0);
-    expired.next_refresh_time = (now - Duration::seconds(1)).into();
-    assert_eq!(pool_balance(Some(&expired), now), unavailable);
-    for invalid in [f64::NAN, f64::INFINITY, -1.0] {
-        let mut invalid_cents = pool(500.0);
-        invalid_cents.usage_cents_used_since_last_refresh = invalid;
-        assert_eq!(pool_balance(Some(&invalid_cents), now), unavailable);
-        let mut invalid_cents_allowance = pool(500.0);
-        invalid_cents_allowance.included_usage_cents = invalid;
-        assert_eq!(
-            pool_balance(Some(&invalid_cents_allowance), now),
-            unavailable
-        );
-        let mut invalid_credits = pool(500.0);
-        invalid_credits.usage_credits_used_since_last_refresh = invalid;
-        assert_eq!(pool_balance(Some(&invalid_credits), now), unavailable,);
-        let mut invalid_allowance = pool(500.0);
-        invalid_allowance.included_usage_credits = invalid;
-        assert_eq!(pool_balance(Some(&invalid_allowance), now), unavailable,);
-    }
 }
 
 #[test]
@@ -223,7 +175,7 @@ fn scale_plan_identity_and_paid_plan_behavior() {
 }
 
 struct CardTestView {
-    state: Option<WorkspaceIncludedUsageInfo>,
+    state: WorkspaceIncludedUsageInfo,
 }
 
 impl Entity for CardTestView {
@@ -247,7 +199,7 @@ impl View for CardTestView {
                 Flex::row()
                     .with_spacing(8.)
                     .with_child(Expanded::new(1., render_card(
-                        self.state.as_ref(), now(), UsageDisplayUnit::Dollars, appearance,
+                        &self.state, UsageDisplayUnit::Dollars, appearance,
                     )).finish())
                     .with_child(
                         Expanded::new(
@@ -271,7 +223,7 @@ impl View for CardTestView {
 fn included_pool_card_renders_and_lays_out_at_narrow_and_wide_widths() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        for state in [None, Some(pool(8_750.0)), Some(pool(0.0))] {
+        for state in [pool(8_750.0), pool(0.0)] {
             let (window_id, view) =
                 app.add_window(WindowStyle::NotStealFocus, |_| CardTestView { state });
             app.update(|ctx| {
