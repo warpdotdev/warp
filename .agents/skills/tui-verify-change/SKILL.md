@@ -340,17 +340,25 @@ ffmpeg -y -ss 1.5 -i /tmp/tui.mp4 -frames:v 1 /tmp/tui.png
 
 **Attach the capture as conversation artifacts (required, not an afterthought).**
 Once you have the still and/or the recording, attach *each* to the run as a
-**conversation artifact** so the proof persists beyond `/tmp`, travels with the
-task, and can surface into the PR description in the native Oz flow — don't leave
-it sitting in a temp file. Call the `upload_artifact` tool once per file, passing
-the local `file_path` and a short `description` (e.g. `file_path=/tmp/tui.png`,
-`description="TUI <surface> after <change> — verification screenshot"`, and
-likewise `/tmp/tui.mp4` for the recording). For any user-visible TUI change you
-verified here, attaching the screenshot and any recording is **expected**. These
-are FILE artifacts capped at 25 MB each, so keep recordings short (see below). If
-you're running somewhere the `upload_artifact` tool isn't available (a plain
-local dev shell rather than a cloud/ambient agent), keep the files and reference
-them in the PR instead.
+**conversation artifact** so the proof persists beyond `/tmp` and travels with
+the task — don't leave it sitting in a temp file. Call the `upload_artifact` tool
+once per file, passing the local `file_path` and a short `description` (e.g.
+`file_path=/tmp/tui.png`, `description="TUI <surface> after <change> —
+verification screenshot"`, and likewise `/tmp/tui.mp4` for the recording). For
+any user-visible TUI change you verified here, attaching the screenshot and any
+recording is **expected**. These are FILE artifacts capped at 25 MB each, so keep
+recordings short (see below). If you're running somewhere the `upload_artifact`
+tool isn't available (a plain local dev shell rather than a cloud/ambient agent),
+keep the files and reference them in the PR instead.
+
+**Then surface them.** Uploading is all it takes to make a capture shareable,
+even though these come from asciinema rather than from computer use:
+`get_artifacts_for_pull_request_description` returns the managed markdown block
+for the PR body, and `get_media_artifact_links` returns view links for any other
+destination (a PR comment, a Slack message, a report to another agent). Both
+cover the uploaded PNG and the MP4. Never open the PNG in an image viewer and
+screenshot it with computer use to convert it into a "real" capture — the upload
+is already enough, and the round trip only degrades the image.
 
 Capture pitfalls:
 - **asciinema must run under a PTY.** Wrap it in tmux (above) or `script`; a
