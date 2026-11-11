@@ -2164,9 +2164,7 @@ impl BillingAndUsagePageV2View {
             TeamUpdateManager::handle(ctx)
                 .update(ctx, |mgr, ctx| mgr.refresh_workspace_metadata(ctx)),
         );
-        AIRequestUsageModel::handle(ctx).update(ctx, |m, ctx| {
-            m.refresh_request_usage_async(ctx);
-        });
+        AIRequestUsageModel::handle(ctx).update(ctx, |m, ctx| m.refresh_request_usage_async(ctx));
         self.usage_history
             .model
             .update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
@@ -2287,9 +2285,8 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     TeamUpdateManager::handle(ctx)
                         .update(ctx, |mgr, ctx| mgr.refresh_workspace_metadata(ctx)),
                 );
-                AIRequestUsageModel::handle(ctx).update(ctx, |m, ctx| {
-                    m.refresh_request_usage_async(ctx);
-                });
+                AIRequestUsageModel::handle(ctx)
+                    .update(ctx, |m, ctx| m.refresh_request_usage_async(ctx));
             }
             BillingAndUsagePageAction::SelectTab(tab) => {
                 if self.selected_tab != *tab {
