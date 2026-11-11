@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::str::Lines;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -65,6 +66,20 @@ fn reserved_key(key: &str) -> bool {
     key.starts_with("WARP_") || key.starts_with("OZ_")
 }
 
+fn read_heredoc(lines: &mut Lines<'_>, delimiter: &str) -> Option<String> {
+    if delimiter.is_empty() {
+        return None;
+    }
+    let mut value = Vec::new();
+    for line in lines {
+        if line == delimiter {
+            return Some(value.join("\n"));
+        }
+        value.push(line);
+    }
+    None
+}
+
 fn parse(contents: &str, metadata: &HashMap<String, String>) -> HashMap<String, String> {
     let mut values = HashMap::new();
     let mut lines = contents.trim_start_matches('\u{feff}').lines();
@@ -72,33 +87,16 @@ fn parse(contents: &str, metadata: &HashMap<String, String>) -> HashMap<String, 
         if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
-        let assignment = line.find('=');
-        let heredoc = line.find("<<");
-        let (key, value) = if let Some(index) =
-            heredoc.filter(|index| assignment.is_none_or(|assignment| *index < assignment))
+        let (key, value) = if let Some((key, value)) =
+            line.split_once('=').filter(|(key, _)| !key.contains("<<"))
         {
-            let key = &line[..index];
-            let delimiter = &line[index + 2..];
-            if delimiter.is_empty() {
+            (key, value.to_owned())
+        } else if let Some((key, delimiter)) = line.split_once("<<") {
+            let Some(value) = read_heredoc(&mut lines, delimiter) else {
                 warn_invalid_key(key);
                 continue;
-            }
-            let mut value = Vec::new();
-            let mut terminated = false;
-            for line in lines.by_ref() {
-                if line == delimiter {
-                    terminated = true;
-                    break;
-                }
-                value.push(line);
-            }
-            if !terminated {
-                warn_invalid_key(key);
-                continue;
-            }
-            (key, value.join("\n"))
-        } else if let Some(index) = assignment {
-            (&line[..index], line[index + 1..].to_owned())
+            };
+            (key, value)
         } else {
             log::warn!("Skipping malformed .warp.vars line (key unknown)");
             continue;

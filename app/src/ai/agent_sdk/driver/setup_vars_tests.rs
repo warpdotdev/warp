@@ -234,6 +234,22 @@ fn parses_literal_assignments_with_bom_and_last_write_wins() {
 }
 
 #[test]
+fn first_separator_determines_the_entry_format() {
+    let values = parse(
+        "ASSIGNMENT=a<<b\nHEREDOC<<END=marker\nbody\nEND=marker\n",
+        &HashMap::new(),
+    );
+
+    assert_eq!(
+        values,
+        HashMap::from([
+            ("ASSIGNMENT".into(), "a<<b".into()),
+            ("HEREDOC".into(), "body".into()),
+        ])
+    );
+}
+
+#[test]
 #[cfg(windows)]
 fn cold_powershell_assignments_preserve_unicode_and_literal_metacharacters() {
     let root = tempfile::tempdir().unwrap();
@@ -271,7 +287,7 @@ fn cold_powershell_assignments_preserve_unicode_and_literal_metacharacters() {
 #[test]
 fn heredocs_preserve_blank_lines_and_comment_contents() {
     let values = parse(
-        "TEXT<<END\r\nfirst=one\r\n\r\n# literal\r\n'$(cmd)'; `cmd`\r\nEND\r\nAFTER=ok\n",
+        "TEXT<<END\r\nfirst=one\r\n\r\n# literal\r\n'$(cmd)'; `cmd`\r\nEND\r\nEMPTY<<END\nEND\nAFTER=ok\n",
         &HashMap::new(),
     );
 
@@ -282,6 +298,7 @@ fn heredocs_preserve_blank_lines_and_comment_contents() {
                 "TEXT".into(),
                 "first=one\n\n# literal\n'$(cmd)'; `cmd`".into()
             ),
+            ("EMPTY".into(), String::new()),
             ("AFTER".into(), "ok".into()),
         ])
     );
