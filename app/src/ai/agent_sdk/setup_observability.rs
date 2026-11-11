@@ -5,6 +5,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use enum_iterator::Sequence;
 use futures::FutureExt as _;
+use futures::future::lazy;
 use tracing::Instrument as _;
 use warp_cli::agent::HarnessTransport;
 use warpui::r#async::executor::Background;
@@ -79,79 +80,80 @@ impl SetupClientEventReporter {
     }
 
     /// Records a setup step's duration and error state without changing its result.
-    pub(crate) async fn record_result<T, E: Display>(
+    pub(crate) fn record_result<T, E: Display>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
-    ) -> Result<T, E> {
+    ) -> impl Future<Output = Result<T, E>> {
         self.record_result_with_outcome(step, future, |_| None)
-            .await
     }
 
     /// Like [`Self::record_result`], with a bounded outcome label derived from a successful
     /// value. A failed step reports no outcome; its error flag says what happened.
-    pub(crate) async fn record_result_with_outcome<T, E: Display>(
+    pub(crate) fn record_result_with_outcome<T, E: Display>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
         outcome: impl FnOnce(&T) -> Option<&'static str>,
-    ) -> Result<T, E> {
-        let (step_name, span) = self.start_step(step);
-
-        let start_timestamp = Utc::now();
-        let result = future
-            .map(|result| {
-                result.inspect_err(|err| {
-                    tracing::error!(error = %err);
-                })
+    ) -> impl Future<Output = Result<T, E>> {
+        let logged = future.map(|result| {
+            result.inspect_err(|err| {
+                tracing::error!(error = %err);
             })
-            .instrument(span)
-            .await;
-        let finish_timestamp = Utc::now();
-
-        let outcome = result.as_ref().ok().and_then(outcome);
-        self.post_metric_event_best_effort(
-            step_name,
-            start_timestamp,
-            finish_timestamp,
-            result.is_err(),
-            outcome,
-        );
-        result
+        });
+        self.record_value_with_error_flag_and_outcome(step, logged, |result| {
+            (result.is_err(), result.as_ref().ok().and_then(outcome))
+        })
     }
 
     /// Records a setup step's duration without interpreting its return value as an error.
-    pub(crate) async fn record_value<T>(
+    pub(crate) fn record_value<T>(
         &self,
         step: SetupStep,
         future: impl Future<Output = T>,
-    ) -> T {
+    ) -> impl Future<Output = T> {
         self.record_value_with_error_flag(step, future, |_| false)
-            .await
     }
 
     /// Like [`Self::record_value`], with the metric's error flag derived from the value.
-    pub(crate) async fn record_value_with_error_flag<T>(
+    pub(crate) fn record_value_with_error_flag<T>(
         &self,
         step: SetupStep,
         future: impl Future<Output = T>,
         is_error: impl FnOnce(&T) -> bool,
-    ) -> T {
-        let (step_name, span) = self.start_step(step);
-
-        let start_timestamp = Utc::now();
-        let value = future.instrument(span).await;
-        let finish_timestamp = Utc::now();
-
-        self.post_metric_event_best_effort(
-            step_name,
-            start_timestamp,
-            finish_timestamp,
-            is_error(&value),
-            None,
-        );
-        value
+    ) -> impl Future<Output = T> {
+        self.record_value_with_error_flag_and_outcome(step, future, |value| (is_error(value), None))
     }
+
+    /// Every recorded step is built from combinators rather than an `async fn`: an `async fn`
+    /// keeps its by-value `future` argument alive for its whole lifetime alongside the state
+    /// that awaits it, so the wrapped future is stored twice, and that doubling compounds
+    /// through the nested steps of standby preparation until it overflows the 1 MiB thread
+    /// stack on Windows.
+    fn record_value_with_error_flag_and_outcome<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T>,
+        classify: impl FnOnce(&T) -> (bool, Option<&'static str>),
+    ) -> impl Future<Output = T> {
+        let (step_name, span) = self.start_step(step);
+        let instrumented = future.instrument(span);
+        lazy(|_| Utc::now()).then(move |start_timestamp| {
+            instrumented.map(move |value| {
+                let finish_timestamp = Utc::now();
+                let (is_error, outcome) = classify(&value);
+                self.post_metric_event_best_effort(
+                    step_name,
+                    start_timestamp,
+                    finish_timestamp,
+                    is_error,
+                    outcome,
+                );
+                value
+            })
+        })
+    }
+
     /// Records setup work in the background without making startup wait for it.
     pub(crate) fn record_value_detached<T>(
         &self,

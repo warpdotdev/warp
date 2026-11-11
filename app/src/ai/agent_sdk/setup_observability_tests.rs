@@ -1,3 +1,4 @@
+use std::mem::size_of_val;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -176,6 +177,37 @@ fn standby_record_value_detached_rejects_run_steps_before_spawning() {
             });
         });
     }
+}
+
+/// Holds a large local across an await so the future itself is large.
+async fn large_future() -> Result<u8, std::io::Error> {
+    let buffer = [0u8; 64 * 1024];
+    futures::future::ready(()).await;
+    Ok(buffer[0])
+}
+
+/// Standby preparation nests several recorded steps and Windows threads get a 1 MiB stack, so
+/// each recording layer may add only a constant amount to the future it wraps; forwarding the
+/// wrapped future through another `async fn` would store it twice.
+#[test]
+fn recording_a_step_adds_constant_overhead_to_the_wrapped_future() {
+    const OVERHEAD_LIMIT: usize = 4 * 1024;
+    let reporter = standby_reporter();
+    let inner_size = size_of_val(&large_future());
+
+    let recorded_result = reporter.record_result(SetupStep::TeamMetadataRefresh, large_future());
+    assert!(
+        size_of_val(&recorded_result) < inner_size + OVERHEAD_LIMIT,
+        "record_result wraps {inner_size} bytes in {} bytes",
+        size_of_val(&recorded_result),
+    );
+
+    let recorded_value = reporter.record_value(SetupStep::TeamMetadataRefresh, large_future());
+    assert!(
+        size_of_val(&recorded_value) < inner_size + OVERHEAD_LIMIT,
+        "record_value wraps {inner_size} bytes in {} bytes",
+        size_of_val(&recorded_value),
+    );
 }
 
 #[test]

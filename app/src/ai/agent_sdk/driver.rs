@@ -2927,12 +2927,14 @@ impl AgentDriver {
 
         if let Some(cmd) = harness.auth_check_command() {
             log::info!("Running auth check for {harness_name}: {cmd}");
-            let preflight = Self::run_single_preflight(&cmd, &harness_name, foreground);
             if harness.drives_cli_agent_session() {
-                preflight.await?;
+                Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
             } else {
                 events
-                    .record_result(SetupStep::AcpAuthPreflight, preflight)
+                    .record_result(
+                        SetupStep::AcpAuthPreflight,
+                        Self::run_single_preflight(&cmd, &harness_name, foreground),
+                    )
                     .await?;
             }
         }
