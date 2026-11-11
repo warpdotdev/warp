@@ -2582,6 +2582,9 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 }
             }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
+            HarnessSupportCommand::WaitForEvents(_) => {
+                CliTelemetryEvent::HarnessSupportWaitForEvents
+            }
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {
                     success: finish_args.status == TaskStatus::Success,

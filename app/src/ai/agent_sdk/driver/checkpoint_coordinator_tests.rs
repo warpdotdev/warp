@@ -20,7 +20,7 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
     CommitSnapshotRequest, CommitSnapshotResponse, ReportArtifactResponse, ResolvePromptRequest,
-    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget,
+    ResolvedHarnessPrompt, SnapshotUploadRequest, UploadTarget, WaitForEventsResponse,
 };
 
 fn fresh_task_id() -> AmbientAgentTaskId {
@@ -92,6 +92,10 @@ impl FailingUploadTargetsClient {
 
 #[async_trait]
 impl HarnessSupportClient for FailingUploadTargetsClient {
+    async fn wait_for_events(&self, _run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+
     async fn create_external_conversation(
         &self,
         _format: &str,
@@ -213,6 +217,10 @@ impl RecordingClient {
 
 #[async_trait]
 impl HarnessSupportClient for RecordingClient {
+    async fn wait_for_events(&self, _run_ids: &[String]) -> Result<WaitForEventsResponse> {
+        unimplemented!("not used by the coordinator")
+    }
+
     async fn create_external_conversation(
         &self,
         _format: &str,
