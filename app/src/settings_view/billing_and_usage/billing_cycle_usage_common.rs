@@ -29,6 +29,7 @@ use crate::workspaces::workspace::{
 pub const ROW_BORDER_RADIUS: f32 = 8.;
 pub const ROW_BORDER_WIDTH: f32 = 1.;
 pub const TOOLTIP_GAP: f32 = 6.;
+pub const CENTS_PER_CREDIT: f64 = 1.8;
 
 const COST_TYPE_ORDER: &[AiCreditsUsageAndCostType] = &[
     AiCreditsUsageAndCostType::BaseLimit,
@@ -271,7 +272,7 @@ pub fn format_cost_cents(cents: f64) -> String {
 }
 
 pub fn format_usage_cost(credits: f64) -> String {
-    format_cost_cents(credits * 1.8)
+    format_cost_cents(credits * CENTS_PER_CREDIT)
 }
 
 /// Section subheader (e.g. "Team totals", "Member usage"). One step below
