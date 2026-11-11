@@ -1613,7 +1613,7 @@ impl AgentDriver {
         self.execution_id = execution_id;
         self.preview_proxy = None;
         if preview_retention::is_namespace_sandbox(warp_isolation_platform::detect())
-            && std::env::var("WARP_PREVIEW_PROXY_PROTOCOL").as_deref() == Ok("1")
+            && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
             && let Some(task_id) = task_id
         {
             match preview_proxy::Manager::start(
