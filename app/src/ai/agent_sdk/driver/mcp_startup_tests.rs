@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
@@ -28,7 +29,7 @@ use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
-    attach_builtin_mcp_servers,
+    ResolvedMcpSpecs, attach_builtin_mcp_servers,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
@@ -453,7 +454,7 @@ const PROXY_CONFIG_JSON: &str = r#"{"mcpServers":{"GitHub MCP":{"url":"https://p
 /// credential it carries and when that credential expires.
 fn managed_proxy_config_output(
     authorization_header_value: &str,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    expires_at: DateTime<Utc>,
 ) -> CreateManagedMcpClientConfigOutput {
     CreateManagedMcpClientConfigOutput {
         transport_kind: ManagedMcpTransportKind::Url,
@@ -469,7 +470,7 @@ fn managed_proxy_config_output(
 fn resolve_managed_uuid(
     uuid: Uuid,
     output: CreateManagedMcpClientConfigOutput,
-) -> super::ResolvedMcpSpecs {
+) -> ResolvedMcpSpecs {
     let mut mock = MockManagedMcpClient::new();
     mock.expect_create_managed_mcp_client_config()
         .times(1)
@@ -487,7 +488,7 @@ fn resolve_managed_uuid(
 fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
     let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let expires_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
 
     let resolved = resolve_managed_uuid(
         uuid,
@@ -513,7 +514,7 @@ fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
 fn managed_resolver_leases_nothing_while_credential_refresh_is_disabled() {
     let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(false);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let expires_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
 
     let resolved = resolve_managed_uuid(
         uuid,
@@ -546,7 +547,7 @@ fn managed_resolver_leases_nothing_without_an_expiring_credential() {
 fn managed_resolver_leases_nothing_when_the_config_does_not_send_the_issued_credential() {
     let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
     let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    let expires_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
 
     let resolved = resolve_managed_uuid(
         uuid,

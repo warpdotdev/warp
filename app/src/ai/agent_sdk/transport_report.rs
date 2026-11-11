@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use http::StatusCode;
 use warp_cli::agent::HarnessTransport;
-use warp_server_client::graphql_helpers::AUTH_REJECTED_MESSAGE;
+use warp_server_client::graphql_helpers::is_auth_rejection;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt as _, Timer};
 
@@ -107,9 +107,7 @@ fn is_transient_report_error(error: &anyhow::Error) -> bool {
     if error.chain().any(|cause| cause.is::<GraphQLError>()) {
         return is_transient_graphql_or_http_error(error);
     }
-    !error
-        .chain()
-        .any(|cause| cause.to_string() == AUTH_REJECTED_MESSAGE)
+    !is_auth_rejection(error)
 }
 
 /// Whether `error` means the server's schema does not accept the report, as an older server

@@ -12,16 +12,18 @@ use std::time::Duration;
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
-use rmcp::ServiceExt as _;
 use rmcp::model::{
     ClientConfig, ClientJsonRpcMessage, ClientRequest, DiscoverRequest, DiscoverRequestParams,
     ErrorCode, Implementation, InitializeRequest, ProtocolVersion, RequestId, RequestMetaObject,
     ServerJsonRpcMessage, ServerResult,
 };
 use rmcp::service::{
-    ClientInitializeError, ClientLifecycleMode, ClientServiceExt as _, select_protocol_version,
+    ClientInitializeError, ClientLifecycleMode, ClientServiceExt as _, DynService, RunningService,
+    select_protocol_version,
 };
 use rmcp::transport::ConfigureCommandExt as _;
+use rmcp::transport::streamable_http_client::StreamableHttpClient;
+use rmcp::{RoleClient, ServiceExt as _};
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
@@ -342,7 +344,7 @@ pub async fn spawn_server(
             // others connect with the ones that are current now.
             let headers = match &refreshable_headers {
                 Some(refreshable_headers) => refreshable_headers.applied_to(&configured_headers).0,
-                None => configured_headers,
+                None => configured_headers.clone(),
             };
             match transport {
                 // TODO: these need headers also?
@@ -368,28 +370,20 @@ pub async fn spawn_server(
                 }
                 Ok(Transport::Http(None, protocol)) => {
                     logger.log("[info] MCP: Using Streaming HTTP transport".to_string());
-                    let client_info = make_client_info()
-                        .with_protocol_version(protocol.version.clone())
-                        .into_dyn();
                     if let Some(refreshable_headers) = refreshable_headers {
                         let client = RefreshableHeaderClient::new(
                             build_client_with_headers(
-                                &refreshable_headers.excluded_from(&headers),
+                                &refreshable_headers.excluded_from(&configured_headers),
                             )?,
                             refreshable_headers,
                         );
-                        let transport = TransportLoggingWrapper {
-                            transport: rmcp::transport::StreamableHttpClientTransport::with_client(
-                                client,
-                                rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
-                                    sse_server.url.clone(),
-                                ),
+                        let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+                            client,
+                            rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
+                                sse_server.url.clone(),
                             ),
-                            logger: logger.clone(),
-                        };
-                        Ok(client_info
-                            .serve_with_lifecycle(transport, protocol.lifecycle())
-                            .await?)
+                        );
+                        serve_streamable_http(transport, &protocol, &logger).await
                     } else {
                         let transport = if headers.is_empty() {
                             rmcp::transport::StreamableHttpClientTransport::from_uri(
@@ -404,13 +398,7 @@ pub async fn spawn_server(
                                 ),
                             )
                         };
-                        let transport = TransportLoggingWrapper {
-                            transport,
-                            logger: logger.clone(),
-                        };
-                        Ok(client_info
-                            .serve_with_lifecycle(transport, protocol.lifecycle())
-                            .await?)
+                        serve_streamable_http(transport, &protocol, &logger).await
                     }
                 }
                 Ok(Transport::Sse(Some(client))) => {
@@ -495,6 +483,24 @@ pub async fn spawn_server(
         description,
         is_authenticated_transport,
     })
+}
+
+/// Connects to a server over the Streamable HTTP `transport`, logging its traffic to `logger`.
+#[allow(clippy::result_large_err)]
+async fn serve_streamable_http<C: StreamableHttpClient>(
+    transport: rmcp::transport::StreamableHttpClientTransport<C>,
+    protocol: &NegotiatedProtocol,
+    logger: &SimpleLogger,
+) -> Result<RunningService<RoleClient, Box<dyn DynService<RoleClient>>>, rmcp::RmcpError> {
+    let transport = TransportLoggingWrapper {
+        transport,
+        logger: logger.clone(),
+    };
+    Ok(make_client_info()
+        .with_protocol_version(protocol.version.clone())
+        .into_dyn()
+        .serve_with_lifecycle(transport, protocol.lifecycle())
+        .await?)
 }
 
 /// The transport to use for MCP.

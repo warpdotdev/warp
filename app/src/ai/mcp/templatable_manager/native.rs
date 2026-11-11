@@ -800,9 +800,14 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
-        if let Some(refreshable_headers) = refreshable_headers {
-            self.refreshable_headers
-                .insert(installation.uuid(), refreshable_headers);
+        match refreshable_headers {
+            Some(refreshable_headers) => {
+                self.refreshable_headers
+                    .insert(installation.uuid(), refreshable_headers);
+            }
+            None => {
+                self.refreshable_headers.remove(&installation.uuid());
+            }
         }
         self.spawn_ephemeral_server(installation, ctx);
     }

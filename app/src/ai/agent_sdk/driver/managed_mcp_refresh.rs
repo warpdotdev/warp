@@ -5,21 +5,22 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
-use futures::future::{self, BoxFuture, Either};
+use futures::future::{self, BoxFuture};
 use futures::{FutureExt as _, StreamExt as _};
-use http::StatusCode;
 use mcp::refreshable_headers::{RefreshableHeaders, RejectionHandler};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
-use warp_server_client::graphql_helpers::AUTH_REJECTED_MESSAGE;
+use warp_server_client::HttpStatusError;
+use warp_server_client::graphql_helpers::is_auth_rejection;
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{ModelSpawner, SingletonEntity};
 
@@ -48,6 +49,9 @@ const RETRY_JITTER: f32 = 0.2;
 const MAX_SLEEP: Duration = Duration::from_secs(60);
 /// How long a rejected request waits for the refresh it asked for before failing.
 const REJECTION_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
+/// Longest wait for the answer to one mint. Shorter than [`REJECTION_REFRESH_TIMEOUT`], so a
+/// request that asked for the mint still hears how it ended.
+const MINT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A credential the managed MCP proxy accepts until it expires.
 #[derive(Clone)]
@@ -88,7 +92,7 @@ pub(super) fn leases_for_installations(
     let Some((header_name, credential)) = credential_from_client_config(config) else {
         return Vec::new();
     };
-    installations
+    let leases: Vec<_> = installations
         .iter()
         .filter(|installation| sends_header(installation, &header_name, &credential.header_value))
         .map(|installation| ManagedMcpLease {
@@ -98,7 +102,14 @@ pub(super) fn leases_for_installations(
             header_name: header_name.clone(),
             credential: credential.clone(),
         })
-        .collect()
+        .collect();
+    if leases.is_empty() && !installations.is_empty() {
+        log::warn!(
+            "The credential of managed MCP server '{warp_id}' will not be refreshed: no \
+             installation resolved from its config sends it"
+        );
+    }
+    leases
 }
 
 /// The header name and expiring credential of a URL-backed config.
@@ -153,28 +164,19 @@ impl MintError {
         {
             return Self::Rejected(error);
         }
-        if is_auth_rejection(&error) {
+        if is_auth_error(&error) || is_auth_rejection(&error) {
             return Self::Unauthenticated(error);
         }
-        if is_transient_graphql_or_http_error(&error) {
-            return Self::Transient(error);
+        let is_transport_error = error
+            .chain()
+            .any(|cause| cause.is::<GraphQLError>() || cause.is::<HttpStatusError>());
+        if is_transport_error && !is_transient_graphql_or_http_error(&error) {
+            return Self::Rejected(error);
         }
-        Self::Rejected(error)
+        // Anything else never reached the server or got no verdict from it (a failure before the
+        // request was sent, GraphQL errors without data), so it says nothing about the next try.
+        Self::Transient(error)
     }
-}
-
-/// Whether the server rejected the credentials the request was sent with. The GraphQL layer
-/// reports that as a `401` or `403`, or as a plain error when the process may not refresh them.
-fn is_auth_rejection(error: &anyhow::Error) -> bool {
-    is_auth_error(error)
-        || error.chain().any(|cause| {
-            cause.to_string() == AUTH_REJECTED_MESSAGE
-                || matches!(
-                    cause.downcast_ref::<GraphQLError>(),
-                    Some(GraphQLError::HttpError { status, .. })
-                        if matches!(*status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-                )
-        })
 }
 
 /// Mints a credential that can take the place of the one `lease` holds.
@@ -257,6 +259,9 @@ struct RefreshRequest {
 pub(crate) struct ManagedMcpRefresh {
     leases: Vec<(ManagedMcpLease, RefreshableHeaders)>,
     requests: mpsc::UnboundedReceiver<RefreshRequest>,
+    /// Whether the loop has started answering `requests`. Servers connect before it does, and a
+    /// request sent then would only be waited on until it timed out.
+    running: Arc<AtomicBool>,
 }
 
 impl ManagedMcpRefresh {
@@ -264,6 +269,7 @@ impl ManagedMcpRefresh {
     /// lease can be.
     pub(super) fn new(leases: impl IntoIterator<Item = ManagedMcpLease>) -> Option<Self> {
         let (sender, requests) = mpsc::unbounded();
+        let running = Arc::new(AtomicBool::new(false));
         let leases: Vec<_> = leases
             .into_iter()
             .filter_map(|lease| {
@@ -272,7 +278,11 @@ impl ManagedMcpRefresh {
                         lease.header_name.clone(),
                         lease.credential.header_value.clone(),
                     )]),
-                    Some(rejection_handler(lease.installation_id, sender.clone())),
+                    Some(rejection_handler(
+                        lease.installation_id,
+                        sender.clone(),
+                        running.clone(),
+                    )),
                 );
                 match headers {
                     Ok(headers) => Some((lease, headers)),
@@ -286,7 +296,11 @@ impl ManagedMcpRefresh {
                 }
             })
             .collect();
-        (!leases.is_empty()).then_some(Self { leases, requests })
+        (!leases.is_empty()).then_some(Self {
+            leases,
+            requests,
+            running,
+        })
     }
 
     /// The headers the connection of each installation sends, by installation id.
@@ -311,8 +325,12 @@ impl ManagedMcpRefresh {
         A: Fn() -> AFut,
         AFut: Future<Output = bool>,
     {
-        let Self { leases, requests } = self;
-        let mut requests = Some(requests);
+        let Self {
+            leases,
+            mut requests,
+            running,
+        } = self;
+        running.store(true, Ordering::Relaxed);
         let mut refresher = Refresher {
             client,
             clock,
@@ -334,34 +352,22 @@ impl ManagedMcpRefresh {
             }
 
             let now = (refresher.clock.now)();
-            let sleep_for = states
-                .iter()
-                .filter_map(LeaseState::refresh_at)
-                .min()
-                .map_or(MAX_SLEEP, |at| {
-                    (at - now).to_std().unwrap_or(Duration::ZERO)
-                })
-                .min(MAX_SLEEP);
-            let request = {
-                let sleep = (refresher.clock.sleep)(sleep_for).fuse();
-                let next_request = match requests.as_mut() {
-                    Some(requests) => Either::Left(requests.next()),
-                    None => Either::Right(future::pending()),
+            let next_refresh = states.iter().filter_map(LeaseState::refresh_at).min();
+            let mut sleep = match next_refresh {
+                Some(at) => {
+                    let sleep_for = (at - now).to_std().unwrap_or(Duration::ZERO);
+                    (refresher.clock.sleep)(sleep_for.min(MAX_SLEEP))
                 }
-                .fuse();
-                futures::pin_mut!(sleep, next_request);
-                futures::select! {
-                    _ = sleep => continue,
-                    request = next_request => request,
-                }
-            };
-            let Some(RefreshRequest {
+                None => future::pending().boxed(),
+            }
+            .fuse();
+            // Every lease's headers hold a sender, so the requests do not end while this runs.
+            let RefreshRequest {
                 installation_id,
                 done,
-            }) = request
-            else {
-                requests = None;
-                continue;
+            } = futures::select! {
+                _ = sleep => continue,
+                request = requests.select_next_some() => request,
             };
             if let Some(state) = states
                 .iter_mut()
@@ -409,15 +415,18 @@ pub(super) async fn keep_run_credentials_valid(foreground: &ModelSpawner<AgentDr
 }
 
 /// Asks the refresh loop for a new credential when the proxy rejects the current one, and waits
-/// for the answer so the rejected request can be sent again.
+/// for the answer so the rejected request can be sent again. Asks for nothing until the loop is
+/// `running`.
 fn rejection_handler(
     installation_id: Uuid,
     requests: mpsc::UnboundedSender<RefreshRequest>,
+    running: Arc<AtomicBool>,
 ) -> RejectionHandler {
     Arc::new(move |challenge| {
         let requests = requests.clone();
+        let running = running.load(Ordering::Relaxed);
         async move {
-            if !is_refreshable_rejection(&challenge) {
+            if !running || !is_refreshable_rejection(&challenge) {
                 return;
             }
             let (done, refreshed) = oneshot::channel();
@@ -437,8 +446,8 @@ struct LeaseState {
     lease: ManagedMcpLease,
     headers: RefreshableHeaders,
     /// Whether a replacement is worth requesting ahead of the expiry. It is not once the
-    /// credential outlives the run, or once the server has answered with an expiry that is no
-    /// later than the current one.
+    /// credential outlives the run, or once the server has answered with one that was due for
+    /// replacement as soon as it arrived.
     extendable: bool,
     lead_time: Duration,
     /// Earliest time of the next mint attempt.
@@ -495,7 +504,17 @@ where
             state.not_before = (self.clock.now)() + MAX_RETRY_INTERVAL;
             return;
         }
-        let minted = mint_credential(self.client.as_ref(), &state.lease).await;
+        let minted = {
+            let mint = mint_credential(self.client.as_ref(), &state.lease).fuse();
+            let mut timeout = (self.clock.sleep)(MINT_TIMEOUT).fuse();
+            futures::pin_mut!(mint);
+            futures::select_biased! {
+                minted = mint => minted,
+                _ = timeout => Err(MintError::Transient(anyhow!(
+                    "the server did not answer within {MINT_TIMEOUT:?}"
+                ))),
+            }
+        };
         let now = (self.clock.now)();
         let credential = match minted {
             Ok(credential) => credential,
@@ -540,11 +559,11 @@ where
             "Refreshed the credential of managed MCP server '{server_name}'; it expires at {}",
             credential.expires_at
         );
-        state.extendable = credential.expires_at > state.lease.credential.expires_at
+        state.not_before = now + MIN_ATTEMPT_INTERVAL;
+        state.extendable = credential.expires_at - state.lead_time > state.not_before
             && self.expires_during_run(&credential);
         state.lease.credential = credential;
         state.consecutive_failures = 0;
-        state.not_before = now + MIN_ATTEMPT_INTERVAL;
         self.reported_unauthenticated = false;
     }
 

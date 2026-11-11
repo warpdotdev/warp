@@ -289,6 +289,8 @@ where
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
+        // rmcp's reqwest client reports a rejected `DELETE` as a client error rather than
+        // `AuthRequired`, so closing a session after the headers have expired is not retried.
         self.call_with_current_headers(custom_headers, |headers| {
             let uri = uri.clone();
             let session_id = session_id.clone();

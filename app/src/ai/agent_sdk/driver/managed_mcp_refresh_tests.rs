@@ -1,11 +1,12 @@
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
 use futures::executor::LocalPool;
@@ -156,6 +157,19 @@ fn client_answering(
     (client, mints)
 }
 
+/// A client that never answers a mint, counting the mints it was asked for.
+struct UnansweringClient {
+    mints: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl ManagedMcpClient for UnansweringClient {
+    async fn create_managed_mcp_client_config(&self, _uid: String) -> MintResult {
+        self.mints.fetch_add(1, Ordering::SeqCst);
+        future::pending().await
+    }
+}
+
 /// A refresh loop for one lease, driven by a [`TestClock`].
 struct Run {
     pool: LocalPool,
@@ -168,7 +182,7 @@ struct Run {
 impl Run {
     fn start(
         clock: &TestClock,
-        client: MockManagedMcpClient,
+        client: impl ManagedMcpClient,
         lease: ManagedMcpLease,
         must_outlive: Option<DateTime<Utc>>,
     ) -> Self {
@@ -177,13 +191,14 @@ impl Run {
 
     fn start_authenticated(
         clock: &TestClock,
-        client: MockManagedMcpClient,
+        client: impl ManagedMcpClient,
         lease: ManagedMcpLease,
         must_outlive: Option<DateTime<Utc>>,
         authenticated: bool,
     ) -> Self {
         let (sender, requests) = mpsc::unbounded();
-        let reject = rejection_handler(lease.installation_id, sender);
+        let running = Arc::new(AtomicBool::new(false));
+        let reject = rejection_handler(lease.installation_id, sender, running.clone());
         let headers = RefreshableHeaders::new(
             HashMap::from([(
                 lease.header_name.clone(),
@@ -195,6 +210,7 @@ impl Run {
         let refresh = ManagedMcpRefresh {
             leases: vec![(lease, headers.clone())],
             requests,
+            running,
         };
         let authenticated = Rc::new(Cell::new(authenticated));
         let is_authenticated = {
@@ -355,8 +371,19 @@ fn request_errors_are_classified_by_what_retrying_can_fix() {
         MintError::Rejected(_)
     ));
     assert!(matches!(
-        MintError::from_request_error(anyhow!("Unknown error")),
+        MintError::from_request_error(
+            GraphQLError::HttpError {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                body: String::new(),
+            }
+            .into()
+        ),
         MintError::Rejected(_)
+    ));
+    // A failure with no status behind it never got the server's verdict.
+    assert!(matches!(
+        MintError::from_request_error(anyhow!("failed to refresh the ID token")),
+        MintError::Transient(_)
     ));
 }
 
@@ -492,6 +519,45 @@ fn credential_the_server_will_not_extend_is_applied_but_not_requested_again() {
     assert_eq!(mints.load(Ordering::SeqCst), 1);
 }
 
+/// Two mints for the same deadline can differ by a fraction of the lifetime, so an expiry that
+/// is merely later does not show the server extending the credential.
+#[test]
+fn credential_that_is_due_as_soon_as_it_arrives_is_not_requested_again() {
+    let clock = TestClock::new();
+    let expires_at = clock.now() + 10 * MINUTE;
+    let (client, mints) = client_answering([Ok(url_config(
+        "second",
+        expires_at + Duration::from_secs(1),
+    ))]);
+    let mut run = Run::start(&clock, client, lease(expires_at), None);
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+    assert_eq!(run.authorization(), "Bearer second");
+
+    run.advance(HOUR);
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+}
+
+/// With the local clock ahead of the server's, every credential looks expired when it arrives.
+#[test]
+fn credentials_that_look_expired_on_arrival_are_replaced_only_when_rejected() {
+    let clock = TestClock::new();
+    let (client, mints) = client_answering([
+        Ok(url_config("second", clock.now() - 9 * MINUTE)),
+        Ok(url_config("third", clock.now() - 4 * MINUTE)),
+    ]);
+    let mut run = Run::start(&clock, client, lease(clock.now() - 10 * MINUTE), None);
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+    assert_eq!(run.authorization(), "Bearer second");
+
+    run.advance(5 * MINUTE);
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+
+    let answered = run.reject(EXPIRED_CHALLENGE);
+    assert!(answered.get());
+    assert_eq!(mints.load(Ordering::SeqCst), 2);
+    assert_eq!(run.authorization(), "Bearer third");
+}
+
 #[test]
 fn credential_that_outlives_the_run_is_not_replaced_ahead_of_expiry() {
     let clock = TestClock::new();
@@ -552,6 +618,78 @@ fn rejections_close_together_share_one_mint() {
     assert!(second.get());
     assert_eq!(mints.load(Ordering::SeqCst), 1);
     assert_eq!(run.authorization(), "Bearer second");
+}
+
+/// The mint that follows a resume can fail before the network is back, which says nothing about
+/// the one after it.
+#[test]
+fn mint_that_fails_before_reaching_the_server_is_tried_again_soon() {
+    let clock = TestClock::new();
+    let (client, mints) = client_answering([
+        Err(anyhow!("network is unreachable")),
+        Ok(url_config("second", clock.now() + 3 * HOUR)),
+    ]);
+    let mut run = Run::start(&clock, client, lease(clock.now() + 3 * HOUR), None);
+
+    let first = run.reject(EXPIRED_CHALLENGE);
+    assert!(first.get());
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+    assert_eq!(run.authorization(), "Bearer first");
+
+    run.advance(MIN_ATTEMPT_INTERVAL);
+    let second = run.reject(EXPIRED_CHALLENGE);
+    assert!(second.get());
+    assert_eq!(mints.load(Ordering::SeqCst), 2);
+    assert_eq!(run.authorization(), "Bearer second");
+}
+
+#[test]
+fn mint_that_is_never_answered_is_given_up_on() {
+    let clock = TestClock::new();
+    let mints = Arc::new(AtomicUsize::new(0));
+    let client = UnansweringClient {
+        mints: mints.clone(),
+    };
+    let mut run = Run::start(&clock, client, lease(clock.now() + 3 * HOUR), None);
+
+    let first = run.reject(EXPIRED_CHALLENGE);
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+    assert!(!first.get());
+
+    run.advance(MINT_TIMEOUT);
+    assert!(first.get());
+    assert_eq!(run.authorization(), "Bearer first");
+
+    // The loop is serving requests again, and holds off the next mint like after any failure.
+    let second = run.reject(EXPIRED_CHALLENGE);
+    assert!(second.get());
+    assert_eq!(mints.load(Ordering::SeqCst), 1);
+
+    run.advance(MIN_ATTEMPT_INTERVAL);
+    run.reject(EXPIRED_CHALLENGE);
+    assert_eq!(mints.load(Ordering::SeqCst), 2);
+}
+
+/// Servers connect before the loop starts, when a request for a refresh would go unanswered.
+#[test]
+fn rejection_before_the_loop_runs_is_not_held_back() {
+    let (sender, mut requests) = mpsc::unbounded();
+    let reject = rejection_handler(Uuid::from_u128(1), sender, Arc::new(AtomicBool::new(false)));
+    let mut pool = LocalPool::new();
+    let answered = Rc::new(Cell::new(false));
+    let handled = reject(EXPIRED_CHALLENGE.to_owned());
+    let flag = answered.clone();
+    pool.spawner()
+        .spawn_local(async move {
+            handled.await;
+            flag.set(true);
+        })
+        .expect("spawn rejection");
+    pool.run_until_stalled();
+    assert!(answered.get());
+
+    drop(reject);
+    assert!(pool.run_until(requests.next()).is_none());
 }
 
 #[test]
