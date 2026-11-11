@@ -31,6 +31,7 @@ use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSect
 use super::billing_and_usage::chatgpt_usage_card::{
     chatgpt_manage_usage_button, render_chatgpt_usage_card,
 };
+use super::billing_and_usage::included_usage_pool::render_included_usage_card;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -208,8 +209,9 @@ struct UsageHistoryState {
 
 /// A balance in the unit it is displayed in.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum BalanceAmount {
+pub(super) enum BalanceAmount {
     Credits(i64),
+    RoundedCredits(f64),
     /// US cents, shown as dollars.
     Cents(f64),
 }
@@ -218,6 +220,14 @@ impl BalanceAmount {
     fn format(self) -> String {
         match self {
             BalanceAmount::Credits(credits) => credits.separate_with_commas(),
+            BalanceAmount::RoundedCredits(credits) => {
+                let rounded = credits.round() as i64;
+                if credits > 0.0 && rounded == 0 {
+                    "<1".to_string()
+                } else {
+                    rounded.separate_with_commas()
+                }
+            }
             BalanceAmount::Cents(cents) => format_dollars(cents as f32),
         }
     }
@@ -225,7 +235,9 @@ impl BalanceAmount {
     /// Names the pool a balance card shows, e.g. `Team credits` or `Team usage`.
     fn pool_label(self, pool: &str) -> String {
         match self {
-            BalanceAmount::Credits(_) => format!("{pool} credits"),
+            BalanceAmount::Credits(_) | BalanceAmount::RoundedCredits(_) => {
+                format!("{pool} credits")
+            }
             BalanceAmount::Cents(_) => format!("{pool} usage"),
         }
     }
@@ -301,7 +313,11 @@ impl ClassifiedGrants {
             if grant.expiration.is_some_and(|exp| now >= exp) {
                 continue;
             }
-            if grant.request_credits_remaining <= 0 {
+            if grant.request_credits_remaining <= 0
+                && grant
+                    .usage_cents_remaining
+                    .is_none_or(|cents| !cents.is_finite() || cents <= 0.0)
+            {
                 continue;
             }
             if grant.grant_type == BonusGrantType::AmbientOnly {
@@ -911,7 +927,8 @@ impl BillingAndUsagePageV2View {
         let unit = usage_display_unit(app);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        if !has_base_credits && !classified.has_any() {
+        let included_pool = ai_model.workspace_included_usage(app);
+        if included_pool.is_none() && !has_base_credits && !classified.has_any() {
             return None;
         }
 
@@ -920,6 +937,12 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_size(MainAxisSize::Max);
 
         let outline_color = theme.outline().into_solid();
+
+        if let Some(pool) = included_pool {
+            cards_row.add_child(
+                Expanded::new(1., render_included_usage_card(pool, unit, appearance)).finish(),
+            );
+        }
 
         if has_base_credits {
             let reset_str = ai_model
@@ -2455,7 +2478,7 @@ fn base_allowance_balance(
     }
 }
 
-fn render_balance_card(
+pub(super) fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
     label: &str,
@@ -2466,6 +2489,29 @@ fn render_balance_card(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_color = blended_colors::text_sub(theme, theme.background());
+
+    let credit_count = Text::new_inline(remaining.format(), appearance.ui_font_family(), 24.)
+        .with_color(theme.active_ui_text_color().into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish();
+
+    let remaining_label_text = match total {
+        Some(limit) => format!("/ {} remaining", limit.format()),
+        None => "remaining".to_string(),
+    };
+    let remaining_label = Text::new_inline(remaining_label_text, appearance.ui_font_family(), 14.)
+        .with_color(sub_color)
+        .finish();
+
+    let value_row = Flex::row()
+        .with_child(credit_count)
+        .with_child(
+            Container::new(remaining_label)
+                .with_margin_left(4.)
+                .with_padding_bottom(1.)
+                .finish(),
+        )
+        .with_cross_axis_alignment(CrossAxisAlignment::End);
 
     let status_dot = ConstrainedBox::new(
         Container::new(Empty::new().finish())
@@ -2501,29 +2547,6 @@ fn render_balance_card(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
         .finish();
-
-    let credit_count = Text::new_inline(remaining.format(), appearance.ui_font_family(), 24.)
-        .with_color(theme.active_ui_text_color().into())
-        .with_style(Properties::default().weight(Weight::Semibold))
-        .finish();
-
-    let remaining_label_text = match total {
-        Some(limit) => format!("/ {} remaining", limit.format()),
-        None => "remaining".to_string(),
-    };
-    let remaining_label = Text::new_inline(remaining_label_text, appearance.ui_font_family(), 14.)
-        .with_color(sub_color)
-        .finish();
-
-    let value_row = Flex::row()
-        .with_child(credit_count)
-        .with_child(
-            Container::new(remaining_label)
-                .with_margin_left(4.)
-                .with_padding_bottom(1.)
-                .finish(),
-        )
-        .with_cross_axis_alignment(CrossAxisAlignment::End);
 
     Container::new(
         Flex::column()

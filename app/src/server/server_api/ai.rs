@@ -176,6 +176,8 @@ use crate::ai::llms::{
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
+#[cfg(not(feature = "agent_mode_evals"))]
+use crate::ai::request_usage_model::WorkspaceIncludedUsage;
 use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
@@ -2455,6 +2457,7 @@ impl AIClient for ServerApi {
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error> {
         Ok(RequestUsageInfo {
             request_limit_info: RequestLimitInfo::new_for_evals(),
+            workspace_allowances: Default::default(),
             bonus_grants: vec![],
         })
     }
@@ -2470,6 +2473,23 @@ impl AIClient for ServerApi {
         match response.user {
             warp_graphql::queries::get_request_limit_info::UserResult::UserOutput(user_output) => {
                 let request_limit_info = user_output.user.request_limit_info.into();
+
+                let workspace_allowances = user_output
+                    .user
+                    .workspaces
+                    .iter()
+                    .filter_map(|workspace| {
+                        workspace
+                            .included_usage_info
+                            .clone()
+                            .map(|info| WorkspaceIncludedUsage {
+                                workspace_uid: WorkspaceUid::from(ServerId::from_string_lossy(
+                                    workspace.uid.inner(),
+                                )),
+                                info,
+                            })
+                    })
+                    .collect();
 
                 let workspace_and_team_bonus_grants = user_output
                     .user
@@ -2502,6 +2522,7 @@ impl AIClient for ServerApi {
                 Ok(RequestUsageInfo {
                     request_limit_info,
                     bonus_grants,
+                    workspace_allowances,
                 })
             }
             warp_graphql::queries::get_request_limit_info::UserResult::UserFacingError(e) => {

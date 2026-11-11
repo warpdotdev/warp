@@ -26,6 +26,19 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
 }
 
 #[test]
+fn scale_routes_to_v2_without_personal_plan_upgrade_offers() {
+    let workspace = workspace_with_customer_type(CustomerType::Scale);
+    assert!(BillingAndUsageDispatchView::workspace_uses_v2(Some(
+        &workspace
+    )));
+    assert!(workspace.billing_metadata.is_on_scale_plan());
+    assert!(!workspace.billing_metadata.can_upgrade_to_build_plan());
+    assert!(!workspace.billing_metadata.can_upgrade_to_build_max_plan());
+    let build = workspace_with_customer_type(CustomerType::Build);
+    assert!(!build.billing_metadata.is_on_scale_plan());
+}
+
+#[test]
 fn uses_v2_when_user_has_no_workspace() {
     assert!(BillingAndUsageDispatchView::workspace_uses_v2(None));
 }

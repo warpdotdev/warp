@@ -1196,6 +1196,7 @@ enum CustomerType {
   LIGHTSPEED
   PROSUMER
   PRO_TRIAL
+  SCALE
   SELF_SERVE
   TEAM_TRIAL
   TURBO
@@ -5215,6 +5216,7 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
+  includedUsageInfo: WorkspaceIncludedUsageInfo
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
@@ -5232,6 +5234,17 @@ type Workspace {
   teams: [Team!]!
   totalRequestsUsedSinceLastRefresh: Int!
   uid: ID!
+}
+
+"""
+A plan's shared workspace allowance for the current monthly AI cycle.
+"""
+type WorkspaceIncludedUsageInfo {
+  includedUsageCredits: Float!
+  usageCreditsUsedSinceLastRefresh: Float!
+  includedUsageCents: Float!
+  usageCentsUsedSinceLastRefresh: Float!
+  nextRefreshTime: Time!
 }
 
 type WorkspaceMember {

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::report_error;
 pub use warp_graphql::billing::BonusGrantType;
+use warp_graphql::queries::get_request_limit_info::WorkspaceIncludedUsageInfo;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -155,10 +156,17 @@ pub struct CodebaseContextUsageLimit {
     pub embedding_generation_batch_size: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct WorkspaceIncludedUsage {
+    pub workspace_uid: WorkspaceUid,
+    pub info: WorkspaceIncludedUsageInfo,
+}
+
 /// Contains all usage-related information fetched from the server.
 pub struct RequestUsageInfo {
     pub request_limit_info: RequestLimitInfo,
     pub bonus_grants: Vec<BonusGrant>,
+    pub workspace_allowances: Vec<WorkspaceIncludedUsage>,
 }
 
 #[cfg(feature = "agent_mode_evals")]
@@ -225,6 +233,7 @@ struct ServerAvailabilityState {
 
 pub struct AIRequestUsageModel {
     ai_client: Arc<dyn AIClient>,
+    workspace_allowances: Vec<WorkspaceIncludedUsage>,
 
     /// The last time at which `request_limit_info` was updated.
     last_update_time: Option<Instant>,
@@ -259,6 +268,20 @@ pub enum AIRequestUsageModelEvent {
 }
 
 impl AIRequestUsageModel {
+    pub(crate) fn workspace_included_usage(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<&WorkspaceIncludedUsageInfo> {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return None;
+        }
+        let workspace = UserWorkspaces::as_ref(ctx).current_workspace()?;
+        self.workspace_allowances
+            .iter()
+            .find(|allowance| allowance.workspace_uid == workspace.uid)
+            .map(|allowance| &allowance.info)
+    }
+
     pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         // Check if the user has cached request limit info from before.
         // This is only used to show the latest known value before we finish refreshing from the server below.
@@ -268,6 +291,7 @@ impl AIRequestUsageModel {
 
         Self {
             ai_client,
+            workspace_allowances: Vec::new(),
             request_limit_info,
             last_update_time: None,
             bonus_grants: vec![],
@@ -281,6 +305,7 @@ impl AIRequestUsageModel {
     pub fn new_for_test(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         Self {
             ai_client,
+            workspace_allowances: Vec::new(),
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
@@ -318,6 +343,7 @@ impl AIRequestUsageModel {
                     Ok(usage_info) => {
                         let request_limit = usage_info.request_limit_info.limit;
                         model.bonus_grants = usage_info.bonus_grants;
+                        model.workspace_allowances = usage_info.workspace_allowances;
                         model.update_request_limit_info(usage_info.request_limit_info, ctx);
                         Some(request_limit)
                     }
