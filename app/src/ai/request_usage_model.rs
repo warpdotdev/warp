@@ -24,9 +24,6 @@ use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::WorkspaceUid;
 
-#[path = "workspace_included_usage.rs"]
-mod workspace_included_usage;
-
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 
@@ -271,6 +268,20 @@ pub enum AIRequestUsageModelEvent {
 }
 
 impl AIRequestUsageModel {
+    pub(crate) fn workspace_included_usage(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<&WorkspaceIncludedUsageInfo> {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return None;
+        }
+        let workspace = UserWorkspaces::as_ref(ctx).current_workspace()?;
+        self.workspace_allowances
+            .iter()
+            .find(|allowance| allowance.workspace_uid == workspace.uid)
+            .map(|allowance| &allowance.info)
+    }
+
     pub fn new(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         // Check if the user has cached request limit info from before.
         // This is only used to show the latest known value before we finish refreshing from the server below.
