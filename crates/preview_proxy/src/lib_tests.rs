@@ -59,7 +59,7 @@ pub(super) async fn request(port: u16, app_port: u16, extra: &str) -> TcpStream 
         .await
         .unwrap();
     stream.write_all(format!(
-        "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-Port: {app_port}\r\nX-Warp-Preview-Public-Host: preview.example\r\nX-Warp-Preview-Public-Proto: https\r\nX-Warp-Preview-Public-Port: 443\r\n{extra}\r\n"
+        "GET /path?q=preserved HTTP/1.1\r\nHost: ingress.invalid\r\nX-Warp-Preview-Port: {app_port}\r\n{extra}\r\n"
     ).as_bytes()).await.unwrap();
     stream
 }
@@ -91,26 +91,27 @@ async fn app() -> (u16, JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn rebinds_fixed_port_after_shutdown() {
+async fn rebinds_configured_port_after_shutdown() {
     let _port_guard = PROXY_PORT.lock().await;
     let source = Ports::new(vec![]);
-    let mut proxy = Proxy::bind(None, source.clone()).await.unwrap();
-    assert_eq!(proxy.port(), 49152);
+    assert!(Proxy::bind(0, None, source.clone()).await.is_err());
+    let mut proxy = Proxy::bind(49153, None, source.clone()).await.unwrap();
+    assert_eq!(proxy.port(), 49153);
     assert_eq!(source.calls.load(Ordering::SeqCst), 0);
-    assert!(Proxy::bind(None, source.clone()).await.is_err());
+    assert!(Proxy::bind(49153, None, source.clone()).await.is_err());
 
-    let mut stream = request(49152, 12345, "Connection: close\r\n").await;
+    let mut stream = request(49153, 12345, "Connection: close\r\n").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 403"));
     let (app_port, app_task) = app().await;
     *source.values.lock().unwrap() = vec![app_port];
-    let mut stream = request(49152, app_port, "Connection: close\r\n").await;
+    let mut stream = request(49153, app_port, "Connection: close\r\n").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
     assert_eq!(source.calls.load(Ordering::SeqCst), 2);
     proxy.shutdown().await;
 
-    let mut restarted = Proxy::bind(None, source.clone()).await.unwrap();
-    assert_eq!(restarted.port(), 49152);
-    let mut stream = request(49152, app_port, "Connection: close\r\n").await;
+    let mut restarted = Proxy::bind(49153, None, source.clone()).await.unwrap();
+    assert_eq!(restarted.port(), 49153);
+    let mut stream = request(49153, app_port, "Connection: close\r\n").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
     assert_eq!(source.calls.load(Ordering::SeqCst), 3);
     restarted.shutdown().await;
@@ -130,10 +131,12 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
         .unwrap();
     assert!(headers(&mut direct).await.starts_with("HTTP/1.1 403"));
 
-    let mut proxy = Proxy::bind(None, Ports::new(vec![app_port])).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port,
-        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nOrigin: https://preview.example\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Preview-Authorization: secret\r\nX-Forwarded-Host: forged\r\n").await;
+        "Connection: close, x-remove-me\r\nX-Remove-Me: hidden\r\nOrigin: https://preview.example\r\nAuthorization: Bearer application\r\nCookie: __session=secret; app=visible; __Host-warp_preview_ingress=secret\r\nX-Nsc-Other: secret\r\nX-Warp-Preview-Authorization: secret\r\nX-Forwarded-Host: preview.example\r\nX-Forwarded-Proto: https\r\nX-Forwarded-Port: 443\r\n").await;
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"));
@@ -148,13 +151,7 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
     ] {
         assert!(response.contains(expected), "{expected}: {response}");
     }
-    for absent in [
-        "secret",
-        "x-remove-me",
-        "forged",
-        "x-nsc-",
-        "x-warp-preview-",
-    ] {
+    for absent in ["secret", "x-remove-me", "x-nsc-", "x-warp-preview-"] {
         assert!(!response.contains(absent), "{absent}: {response}");
     }
     proxy.shutdown().await;
@@ -165,7 +162,9 @@ async fn normalizes_host_without_rewriting_origin_or_application_credentials() {
 async fn rejects_arbitrary_destination_requests() {
     let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let app_port = 12345;
-    let mut proxy = Proxy::bind(None, Ports::new(vec![app_port])).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     for target in ["CONNECT other.example:443", "GET http://other.example/"] {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -189,7 +188,9 @@ async fn rejects_arbitrary_destination_requests() {
 async fn routes_eight_apps_through_one_listener_using_each_requests_port() {
     let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let source = Ports::new(vec![]);
-    let mut proxy = Proxy::bind(None, source.clone()).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, source.clone())
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut apps = Vec::new();
     let mut requests = JoinSet::new();
@@ -225,7 +226,9 @@ async fn replaces_allowed_ports_only_after_a_successful_cache_miss_fetch() {
     let (first, first_task) = app().await;
     let (second, second_task) = app().await;
     let source = Ports::new(vec![first]);
-    let mut proxy = Proxy::bind(None, source.clone()).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, source.clone())
+        .await
+        .unwrap();
 
     let mut stream = request(proxy.port(), first, "Connection: close\r\n").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));
@@ -264,8 +267,8 @@ async fn replaces_allowed_ports_only_after_a_successful_cache_miss_fetch() {
 #[tokio::test]
 async fn rejects_missing_invalid_and_control_ports() {
     let _port_guard = crate::tests::PROXY_PORT.lock().await;
-    let source = Ports::new(vec![1023, 9277, 49152]);
-    let mut proxy = Proxy::bind(None, source.clone()).await.unwrap();
+    let source = Ports::new(vec![1023, 9277, 49153]);
+    let mut proxy = Proxy::bind(49153, None, source.clone()).await.unwrap();
     let port = proxy.port();
     for destination in ["", "not-a-port", "65536", "1023", "9277", &port.to_string()] {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -305,6 +308,7 @@ async fn streams_first_chunk_before_completion_and_closes_at_sandbox_deadline() 
         let _ = closed_tx.send(stream.read(&mut byte).await.unwrap());
     });
     let mut proxy = Proxy::bind(
+        DEFAULT_LISTENER_PORT,
         Some(Instant::now() + Duration::from_millis(500)),
         Ports::new(vec![app_port]),
     )
@@ -356,7 +360,9 @@ async fn copies_upgraded_frames_and_closes_on_driver_shutdown() {
         stream.write_all(&[0x81, 2, b'h', b'i']).await.unwrap();
         assert_eq!(stream.read(&mut frame).await.unwrap(), 0);
     });
-    let mut proxy = Proxy::bind(None, Ports::new(vec![app_port])).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(
         port,
@@ -398,7 +404,9 @@ async fn connects_to_ipv6_only_apps() {
             .await
             .unwrap();
     });
-    let mut proxy = Proxy::bind(None, Ports::new(vec![app_port])).await.unwrap();
+    let mut proxy = Proxy::bind(DEFAULT_LISTENER_PORT, None, Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = request(port, app_port, "").await;
     assert!(headers(&mut stream).await.starts_with("HTTP/1.1 200"));

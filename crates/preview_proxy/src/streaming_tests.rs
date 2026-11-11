@@ -22,9 +22,13 @@ async fn downstream_disconnect_closes_upstream_stream() {
             0
         );
     });
-    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
-        .await
-        .unwrap();
+    let mut proxy = Proxy::bind(
+        DEFAULT_LISTENER_PORT,
+        None,
+        tests::Ports::new(vec![app_port]),
+    )
+    .await
+    .unwrap();
     let port = proxy.port();
     let mut downstream = tests::request(port, app_port, "").await;
     assert!(
@@ -47,9 +51,13 @@ async fn preserves_response_trailers_and_repeated_headers() {
         tests::headers(&mut stream).await;
         stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: x-checksum\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n4\r\ndata\r\n0\r\nx-checksum: value\r\n\r\n").await.unwrap();
     });
-    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
-        .await
-        .unwrap();
+    let mut proxy = Proxy::bind(
+        DEFAULT_LISTENER_PORT,
+        None,
+        tests::Ports::new(vec![app_port]),
+    )
+    .await
+    .unwrap();
     let port = proxy.port();
     let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
@@ -60,9 +68,6 @@ async fn preserves_response_trailers_and_repeated_headers() {
         .uri("/")
         .header(HOST, "ingress.invalid")
         .header("x-warp-preview-port", app_port.to_string())
-        .header("x-warp-preview-public-host", "preview.example")
-        .header("x-warp-preview-public-proto", "https")
-        .header("x-warp-preview-public-port", "443")
         .header("te", "trailers")
         .body(Full::new(Bytes::new()))
         .unwrap();
@@ -92,9 +97,13 @@ async fn forwards_early_response_without_waiting_for_upload_completion() {
             .await
             .unwrap();
     });
-    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
-        .await
-        .unwrap();
+    let mut proxy = Proxy::bind(
+        DEFAULT_LISTENER_PORT,
+        None,
+        tests::Ports::new(vec![app_port]),
+    )
+    .await
+    .unwrap();
     let port = proxy.port();
     let mut stream = tests::request(port, app_port, "Content-Length: 10485760\r\n").await;
     assert!(

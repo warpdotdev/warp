@@ -23,7 +23,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-pub const LISTENER_PORT: u16 = 49152;
+pub const DEFAULT_LISTENER_PORT: u16 = 49152;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const PORT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -90,10 +90,12 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(
+        port: u16,
         deadline: Option<Instant>,
         source: Arc<impl PortSource + 'static>,
     ) -> Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, LISTENER_PORT))
+        anyhow::ensure!(port != 0, "Preview listener port must not be zero");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
             .await
             .context("Failed to bind preview listener")?;
         let port = listener.local_addr()?.port();
@@ -287,22 +289,6 @@ async fn connect(port: u16) -> Result<TcpStream> {
 }
 
 fn prepare_headers(headers: &mut HeaderMap, port: u16) -> bool {
-    let mut public = Vec::new();
-    for (source, destination) in [
-        ("x-warp-preview-public-host", "x-forwarded-host"),
-        ("x-warp-preview-public-proto", "x-forwarded-proto"),
-        ("x-warp-preview-public-port", "x-forwarded-port"),
-    ] {
-        let Some(value) = headers.remove(source) else {
-            return false;
-        };
-        public.push((HeaderName::from_static(destination), value));
-    }
-    if !public[1].1.as_bytes().eq_ignore_ascii_case(b"https")
-        && !public[1].1.as_bytes().eq_ignore_ascii_case(b"http")
-    {
-        return false;
-    }
     strip_hop_headers(headers);
     strip_credentials(headers);
     for name in [
@@ -315,9 +301,6 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16) -> bool {
         "x-forwarded-prefix",
     ] {
         headers.remove(name);
-    }
-    for (name, value) in public {
-        headers.insert(name, value);
     }
     let Ok(host) = HeaderValue::from_str(&format!("localhost:{port}")) else {
         return false;
