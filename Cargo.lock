@@ -10520,8 +10520,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "serde",
- "subtle",
  "tokio",
  "tokio-util",
 ]

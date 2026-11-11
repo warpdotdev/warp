@@ -22,7 +22,7 @@ async fn downstream_disconnect_closes_upstream_stream() {
             0
         );
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
         .await
         .unwrap();
     let port = proxy.port();
@@ -47,7 +47,7 @@ async fn preserves_response_trailers_and_repeated_headers() {
         tests::headers(&mut stream).await;
         stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: x-checksum\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n4\r\ndata\r\n0\r\nx-checksum: value\r\n\r\n").await.unwrap();
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
         .await
         .unwrap();
     let port = proxy.port();
@@ -59,7 +59,6 @@ async fn preserves_response_trailers_and_repeated_headers() {
     let request = Request::builder()
         .uri("/")
         .header(HOST, "ingress.invalid")
-        .header(TOKEN_HEADER, tests::TOKEN)
         .header("x-warp-preview-port", app_port.to_string())
         .header("x-warp-preview-public-host", "preview.example")
         .header("x-warp-preview-public-proto", "https")
@@ -93,7 +92,7 @@ async fn forwards_early_response_without_waiting_for_upload_completion() {
             .await
             .unwrap();
     });
-    let mut proxy = Proxy::bind(tests::TOKEN.into(), None, tests::Ports::new(vec![app_port]))
+    let mut proxy = Proxy::bind(None, tests::Ports::new(vec![app_port]))
         .await
         .unwrap();
     let port = proxy.port();

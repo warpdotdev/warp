@@ -12,10 +12,5 @@ http.workspace = true
 http-body-util = "0.1"
 hyper = { workspace = true, features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-serde = { workspace = true, features = ["derive"] }
-subtle = "2.6"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros", "test-util"] }

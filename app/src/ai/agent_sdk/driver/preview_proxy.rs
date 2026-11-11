@@ -2,10 +2,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use ::preview_proxy::protocol::{self, ControlPlane, Error, RegisterRequest, RegisterResponse};
+use ::preview_proxy::Proxy;
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
-use warp_server_client::HttpStatusError;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::AIClient;
@@ -37,29 +36,24 @@ impl Manager {
                                 .duration_since(SystemTime::now())
                                 .unwrap_or_default()
                     });
-                    let control = Client { task_id, client };
-                    let manager = protocol::run(
-                        control,
-                        uuid::Uuid::new_v4().to_string(),
-                        format!(
-                            "{}{}",
-                            uuid::Uuid::new_v4().simple(),
-                            uuid::Uuid::new_v4().simple()
-                        ),
-                        deadline,
-                        task_cancel.clone(),
-                    );
-                    tokio::pin!(manager);
-                    match deadline {
-                        Some(deadline) => tokio::select! {
-                            _ = &mut manager => {},
-                            _ = tokio::time::sleep_until(deadline) => {
-                                task_cancel.cancel();
-                                manager.await;
+                    let source = Arc::new(Client { task_id, client });
+                    let mut proxy = match Proxy::bind(deadline, source).await {
+                        Ok(proxy) => proxy,
+                        Err(_) => {
+                            log::error!("Preview proxy listener failed to bind");
+                            return;
+                        }
+                    };
+                    tokio::select! {
+                        _ = task_cancel.cancelled() => {},
+                        _ = async {
+                            match deadline {
+                                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                                None => std::future::pending().await,
                             }
-                        },
-                        None => manager.await,
+                        } => {},
                     }
+                    proxy.shutdown().await;
                 });
             })
             .context("Failed to start preview proxy thread")?;
@@ -97,24 +91,4 @@ impl Drop for Manager {
 struct Client {
     task_id: AmbientAgentTaskId,
     client: Arc<dyn AIClient>,
-}
-
-fn classify(error: anyhow::Error) -> Error {
-    if error
-        .downcast_ref::<HttpStatusError>()
-        .is_some_and(|error| matches!(error.status, 401 | 403 | 404 | 409 | 410))
-    {
-        Error::Fenced
-    } else {
-        Error::Transport
-    }
-}
-
-impl ControlPlane for Client {
-    async fn register(&self, request: &RegisterRequest) -> Result<RegisterResponse, Error> {
-        self.client
-            .register_preview_proxy(&self.task_id, request)
-            .await
-            .map_err(classify)
-    }
 }

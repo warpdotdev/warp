@@ -16,7 +16,6 @@ use hyper::client::conn::http1 as client;
 use hyper::server::conn::http1 as server;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
-use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
@@ -24,9 +23,6 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-pub mod protocol;
-
-pub const TOKEN_HEADER: &str = "x-warp-preview-proxy-token";
 pub const LISTENER_PORT: u16 = 49152;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -40,7 +36,6 @@ pub trait PortSource: Send + Sync {
 }
 
 struct Routing<S> {
-    token: String,
     listener_port: u16,
     source: Arc<S>,
     allowed: RwLock<HashSet<u16>>,
@@ -48,16 +43,7 @@ struct Routing<S> {
 }
 
 impl<S: PortSource> Routing<S> {
-    fn authenticated(&self, headers: &HeaderMap) -> bool {
-        headers
-            .get(TOKEN_HEADER)
-            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(self.token.as_bytes())))
-    }
-
     fn resolve(&self, headers: &HeaderMap) -> Option<u16> {
-        if !self.authenticated(headers) {
-            return None;
-        }
         let port = headers
             .get("x-warp-preview-port")?
             .to_str()
@@ -104,19 +90,14 @@ impl Drop for Proxy {
 
 impl Proxy {
     pub async fn bind(
-        token: String,
         deadline: Option<Instant>,
         source: Arc<impl PortSource + 'static>,
     ) -> Result<Self> {
-        if token.len() < 32 || token.len() > 128 || HeaderValue::from_str(&token).is_err() {
-            bail!("invalid preview proxy token");
-        }
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, LISTENER_PORT))
             .await
             .context("Failed to bind preview listener")?;
         let port = listener.local_addr()?.port();
         let routing = Arc::new(Routing {
-            token,
             listener_port: port,
             source,
             allowed: RwLock::new(HashSet::new()),
@@ -325,7 +306,6 @@ fn prepare_headers(headers: &mut HeaderMap, port: u16) -> bool {
     strip_hop_headers(headers);
     strip_credentials(headers);
     for name in [
-        TOKEN_HEADER,
         "x-nsc-ingress-auth",
         "x-warp-cloud-agent-id",
         "x-warp-ambient-task-token",
