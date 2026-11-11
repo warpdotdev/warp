@@ -16,7 +16,9 @@ use super::{
     prepare_harness_failure_output, validate_cli_installed,
 };
 use crate::ai::agent_sdk::driver::terminal::{CommandHandle, TerminalDriver};
-use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, IdleTimeoutSender};
+use crate::ai::agent_sdk::driver::{
+    AgentDriver, AgentDriverError, HarnessSetupStage, IdleTimeoutSender,
+};
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::terminal::CLIAgent;
@@ -29,8 +31,12 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
     match err {
-        AgentDriverError::HarnessSetupFailed { harness, reason } => (harness, reason),
-        other => panic!("expected HarnessSetupFailed, got: {other}"),
+        AgentDriverError::HarnessSetupFailed {
+            harness,
+            stage: None,
+            reason,
+        } => (harness, reason),
+        other => panic!("expected a stage-less HarnessSetupFailed, got: {other}"),
     }
 }
 
@@ -45,12 +51,12 @@ fn harness_failure_output_uses_harness_truncation_marker() {
 #[cfg(not(windows))]
 #[test]
 fn validate_cli_installed_succeeds_for_known_binary() {
-    assert!(validate_cli_installed("ls", None).is_ok());
+    assert!(validate_cli_installed("ls", None, None).is_ok());
 }
 
 #[test]
 fn validate_cli_installed_fails_for_missing_binary() {
-    let err = validate_cli_installed("__nonexistent_cli_abc123__", None).unwrap_err();
+    let err = validate_cli_installed("__nonexistent_cli_abc123__", None, None).unwrap_err();
     let (harness, reason) = assert_harness_setup_failed(&err);
     assert_eq!(harness, "__nonexistent_cli_abc123__");
     assert!(reason.contains("not found"));
@@ -60,10 +66,27 @@ fn validate_cli_installed_fails_for_missing_binary() {
 #[test]
 fn validate_cli_installed_includes_docs_url_in_error() {
     let url = "https://example.com/install";
-    let err = validate_cli_installed("__nonexistent_cli_abc123__", Some(url)).unwrap_err();
+    let err = validate_cli_installed("__nonexistent_cli_abc123__", Some(url), None).unwrap_err();
     let (_, reason) = assert_harness_setup_failed(&err);
     assert!(reason.contains(url));
     assert!(reason.contains("Install it first"));
+}
+
+#[test]
+fn validate_cli_installed_carries_the_acp_stage_it_was_given() {
+    let err = validate_cli_installed(
+        "__nonexistent_cli_abc123__",
+        None,
+        Some(HarnessSetupStage::Validate),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        AgentDriverError::HarnessSetupFailed {
+            stage: Some(HarnessSetupStage::Validate),
+            ..
+        }
+    ));
 }
 
 // --- Runtime error pattern tests ---

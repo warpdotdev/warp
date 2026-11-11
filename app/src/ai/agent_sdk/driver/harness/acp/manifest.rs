@@ -7,7 +7,7 @@ use typed_path::{WindowsComponent, WindowsPath};
 use warp_cli::agent::Harness;
 use warp_util::path::file_exists_and_is_executable;
 
-use super::super::super::AgentDriverError;
+use super::super::super::{AgentDriverError, HarnessSetupStage};
 use super::super::ThirdPartyHarness;
 use super::super::claude_code::ClaudeHarness;
 use super::super::codex::CodexHarness;
@@ -125,6 +125,7 @@ pub(super) fn resolve(harness: Harness) -> Result<HarnessManifest, AgentDriverEr
     discover(harness, override_dir.as_deref(), Path::new("/mnt")).map_err(|error| {
         AgentDriverError::HarnessSetupFailed {
             harness: harness.to_string(),
+            stage: Some(HarnessSetupStage::Manifest),
             reason: format!("{error:#}"),
         }
     })

@@ -1169,6 +1169,37 @@ pub enum AgentRunPrompt {
     },
 }
 
+/// The stage of bringing up a third-party harness over ACP at which setup failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HarnessSetupStage {
+    Manifest,
+    Validate,
+    BridgeSpawn,
+    BridgeAccept,
+    Initialize,
+    SessionOpen,
+    ModelConfig,
+    ExternalConversation,
+    BeginTurn,
+}
+
+impl HarnessSetupStage {
+    /// The stage's snake_case label, as recorded on failure metrics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manifest => "manifest",
+            Self::Validate => "validate",
+            Self::BridgeSpawn => "bridge_spawn",
+            Self::BridgeAccept => "bridge_accept",
+            Self::Initialize => "initialize",
+            Self::SessionOpen => "session_open",
+            Self::ModelConfig => "model_config",
+            Self::ExternalConversation => "external_conversation",
+            Self::BeginTurn => "begin_turn",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentDriverError {
     #[error("Terminal session is not available.")]
@@ -1302,7 +1333,13 @@ pub enum AgentDriverError {
         output: Option<String>,
     },
     #[error("Harness '{harness}' setup failed: {reason}")]
-    HarnessSetupFailed { harness: String, reason: String },
+    HarnessSetupFailed {
+        harness: String,
+        /// Set when the failure belongs to one stage of ACP setup; `None` for failures of
+        /// harness setup that is not stage-specific.
+        stage: Option<HarnessSetupStage>,
+        reason: String,
+    },
     #[error("Harness '{harness}' config setup failed")]
     HarnessConfigSetupFailed {
         harness: String,
@@ -2016,6 +2053,10 @@ impl AgentDriver {
                             .await;
                         }
                         let result = finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState));
+                        if let Err(AgentDriverError::HarnessExitTimedOut { harness }) = &result {
+                            Self::send_harness_exit_telemetry(harness, "timed_out", &foreground)
+                                .await;
+                        }
                         let result = driver_result_after_harness_run(result);
                         let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
                         if tx.send(result).is_err() {
@@ -2559,6 +2600,14 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
+                // Harnesses that render through the native conversation are driven over ACP;
+                // the rest run their interactive CLI in the terminal.
+                let transport = if harness.drives_cli_agent_session() {
+                    HarnessTransport::Pty
+                } else {
+                    HarnessTransport::Acp
+                };
+                let setup_events = setup_events.with_transport(transport);
                 let harness_setup_events = setup_events.clone();
                 let (harness_exit_rx, runner) = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
@@ -2576,7 +2625,12 @@ impl AgentDriver {
                         )
                         .await?;
 
-                        Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
+                        Self::run_preflight_checks(
+                            harness.as_ref(),
+                            &foreground,
+                            &harness_setup_events,
+                        )
+                        .await?;
                         Self::show_transport_fallback_notice(harness.harness(), &foreground).await;
                         Ok::<_, AgentDriverError>((harness_exit_rx, runner))
                     })
@@ -2603,6 +2657,7 @@ impl AgentDriver {
             }
             HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
                 harness: harness.to_string(),
+                stage: None,
                 reason: format!(
                     "The {harness} harness is only supported for local child agent launches."
                 ),
@@ -2889,12 +2944,22 @@ impl AgentDriver {
     async fn run_preflight_checks(
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = harness.cli_agent().command_prefix().to_owned();
 
         if let Some(cmd) = harness.auth_check_command() {
             log::info!("Running auth check for {harness_name}: {cmd}");
-            Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
+            if harness.drives_cli_agent_session() {
+                Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
+            } else {
+                events
+                    .record_result(
+                        SetupStep::AcpAuthPreflight,
+                        Self::run_single_preflight(&cmd, &harness_name, foreground),
+                    )
+                    .await?;
+            }
         }
 
         Ok(())
@@ -3202,6 +3267,7 @@ impl AgentDriver {
     ) -> AgentDriverError {
         AgentDriverError::HarnessSetupFailed {
             harness: harness.to_owned(),
+            stage: None,
             reason: reason.into(),
         }
     }
@@ -3749,9 +3815,9 @@ impl AgentDriver {
 
     /// Emits a telemetry event for one attempt in the harness exit
     /// escalation ladder (`method` is `"exit"`, `"exit_followup"`, or
-    /// `"force_kill"`), so how often graceful exit succeeds vs. requires
-    /// escalation is measurable in production instead of only
-    /// reconstructable from logs.
+    /// `"force_kill"`), or for the ladder running out (`"timed_out"`), so
+    /// how often graceful exit succeeds vs. requires escalation is
+    /// measurable in production instead of only reconstructable from logs.
     async fn send_harness_exit_telemetry(
         harness_name: &str,
         method: &'static str,

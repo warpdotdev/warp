@@ -307,13 +307,13 @@ fn a_dropped_rehydration_fails_the_handshake() {
 #[test]
 fn a_restarted_phase_gets_the_full_budget_again() {
     let budget = Duration::from_millis(400);
-    let clock = PhaseClock::start("first");
+    let clock = PhaseClock::start(HarnessSetupStage::Initialize, "first");
     block_on(async {
         let expire = clock.expire(budget).fuse();
         // 500ms of work in total, which outruns one budget but not two phases of it.
         let work = async {
             Timer::after(Duration::from_millis(200)).await;
-            clock.restart("second");
+            clock.restart(HarnessSetupStage::SessionOpen, "second");
             Timer::after(Duration::from_millis(300)).await;
         }
         .fuse();
@@ -324,11 +324,12 @@ fn a_restarted_phase_gets_the_full_budget_again() {
         }
     });
     assert_eq!(clock.phase(), "second");
+    assert_eq!(clock.stage(), HarnessSetupStage::SessionOpen);
 }
 
 #[test]
 fn a_phase_that_is_not_restarted_expires() {
-    let clock = PhaseClock::start("only");
+    let clock = PhaseClock::start(HarnessSetupStage::Initialize, "only");
     block_on(async {
         let expire = clock.expire(Duration::from_millis(100)).fuse();
         let work = Timer::after(Duration::from_millis(400)).fuse();
@@ -360,7 +361,7 @@ async fn answer_next(agent: &mut FakeAgent, result: Option<Value>) -> Value {
 #[test]
 fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
     let (connection, _notifications, mut agent) = connect(rejecting_handler());
-    let clock = PhaseClock::start("opening");
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
     block_on(async {
         let open = open_session(
             &connection,
@@ -388,7 +389,7 @@ fn a_rehydrated_session_is_resumed_in_place_of_a_new_one() {
 #[test]
 fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
     let (connection, _notifications, mut agent) = connect(rejecting_handler());
-    let clock = PhaseClock::start("opening");
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
     block_on(async {
         let open = open_session(
             &connection,
@@ -412,12 +413,13 @@ fn a_refused_resume_falls_back_to_a_new_session_with_a_fresh_phase() {
         );
     });
     assert_eq!(clock.phase(), FALLBACK_SESSION_PHASE);
+    assert_eq!(clock.stage(), HarnessSetupStage::SessionOpen);
 }
 
 #[test]
 fn a_resume_the_agent_does_not_answer_fails_the_handshake() {
     let (connection, _notifications, mut agent) = connect(rejecting_handler());
-    let clock = PhaseClock::start("opening");
+    let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
     block_on(async {
         let open = open_session(
             &connection,
@@ -452,7 +454,7 @@ fn without_a_session_to_resume_a_new_one_is_opened() {
         ),
     ] {
         let (connection, _notifications, mut agent) = connect(rejecting_handler());
-        let clock = PhaseClock::start("opening");
+        let clock = PhaseClock::start(HarnessSetupStage::SessionOpen, "opening");
         block_on(async {
             let open = open_session(
                 &connection,

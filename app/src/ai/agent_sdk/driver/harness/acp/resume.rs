@@ -38,7 +38,7 @@ use super::protocol::{
     ResumeSessionResponse, SessionCapabilities,
 };
 use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::{AgentDriverError, HarnessSetupStage};
 use crate::server::server_api::harness_support::HarnessSupportClient;
 
 /// Where the run's ACP session came from.
@@ -50,6 +50,17 @@ pub(super) enum SessionOrigin {
     Resumed,
     /// The restored conversation's agent session could not be resumed, so a fresh one was opened.
     ResumeMissed(ResumeMiss),
+}
+
+impl SessionOrigin {
+    /// A bounded label for metrics.
+    pub(super) fn metric_label(&self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Resumed => "resumed",
+            Self::ResumeMissed(miss) => miss.metric_label(),
+        }
+    }
 }
 
 /// Why a restored conversation's agent session was not resumed. None of these fail the run.
@@ -66,6 +77,19 @@ pub(super) enum ResumeMiss {
     AgentCannotResume,
     /// The agent answered `session/resume` with an error.
     Rejected(String),
+}
+
+impl ResumeMiss {
+    /// A bounded label for metrics.
+    pub(super) fn metric_label(&self) -> &'static str {
+        match self {
+            Self::Unsupported => "resume_missed_unsupported",
+            Self::TranscriptRootUnresolved(_) => "resume_missed_transcript_root_unresolved",
+            Self::NoTranscript => "resume_missed_no_transcript",
+            Self::AgentCannotResume => "resume_missed_agent_cannot_resume",
+            Self::Rejected(_) => "resume_missed_rejected",
+        }
+    }
 }
 
 impl std::fmt::Display for ResumeMiss {
@@ -254,20 +278,23 @@ pub(super) struct PhaseClock(Arc<Mutex<Phase>>);
 
 struct Phase {
     started: Instant,
+    stage: HarnessSetupStage,
     name: &'static str,
 }
 
 impl PhaseClock {
-    pub(super) fn start(name: &'static str) -> Self {
+    pub(super) fn start(stage: HarnessSetupStage, name: &'static str) -> Self {
         Self(Arc::new(Mutex::new(Phase {
             started: Instant::now(),
+            stage,
             name,
         })))
     }
 
-    pub(super) fn restart(&self, name: &'static str) {
+    pub(super) fn restart(&self, stage: HarnessSetupStage, name: &'static str) {
         *self.0.lock() = Phase {
             started: Instant::now(),
+            stage,
             name,
         };
     }
@@ -275,6 +302,11 @@ impl PhaseClock {
     /// What the handshake is doing now, for the timeout's error.
     pub(super) fn phase(&self) -> &'static str {
         self.0.lock().name
+    }
+
+    /// The setup stage the handshake is in now, for the failure's classification.
+    pub(super) fn stage(&self) -> HarnessSetupStage {
+        self.0.lock().stage
     }
 
     /// Resolves once the current phase has run for `budget` without a restart.
@@ -324,7 +356,7 @@ pub(super) async fn open_session(
                 }
                 Err(error) => match error.downcast::<RpcError>() {
                     Ok(refusal) => {
-                        clock.restart(FALLBACK_SESSION_PHASE);
+                        clock.restart(HarnessSetupStage::SessionOpen, FALLBACK_SESSION_PHASE);
                         SessionOrigin::ResumeMissed(ResumeMiss::Rejected(refusal.to_string()))
                     }
                     Err(error) => return Err(error.context("session/resume failed")),

@@ -1,10 +1,13 @@
+use std::fmt::Display;
 use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use enum_iterator::Sequence;
 use futures::FutureExt as _;
+use futures::future::lazy;
 use tracing::Instrument as _;
+use warp_cli::agent::HarnessTransport;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -18,6 +21,8 @@ pub(crate) struct SetupClientEventReporter {
     run_id: Option<AmbientAgentTaskId>,
     /// Keeps execution scope separate from the run ID that controls event reporting.
     scope: SetupScope,
+    /// Stamped on every metric event, so harness steps can be split by how the harness is driven.
+    transport: Option<HarnessTransport>,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
 }
@@ -32,6 +37,7 @@ impl SetupClientEventReporter {
         Self {
             run_id: Some(run_id),
             scope: SetupScope::Run,
+            transport: None,
             ai_client,
             background,
         }
@@ -42,8 +48,17 @@ impl SetupClientEventReporter {
         Self {
             run_id: None,
             scope: SetupScope::Run,
+            transport: None,
             ai_client,
             background,
+        }
+    }
+
+    /// A reporter for the same run whose metric events carry `transport`.
+    pub(crate) fn with_transport(&self, transport: HarnessTransport) -> Self {
+        Self {
+            transport: Some(transport),
+            ..self.clone()
         }
     }
 
@@ -65,64 +80,80 @@ impl SetupClientEventReporter {
     }
 
     /// Records a setup step's duration and error state without changing its result.
-    pub(crate) async fn record_result<T, E: std::error::Error>(
+    pub(crate) fn record_result<T, E: Display>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
-    ) -> Result<T, E> {
-        let (step_name, span) = self.start_step(step);
+    ) -> impl Future<Output = Result<T, E>> {
+        self.record_result_with_outcome(step, future, |_| None)
+    }
 
-        let start_timestamp = Utc::now();
-        let result = future
-            .map(|result| {
-                result.inspect_err(|err| {
-                    tracing::error!(error = %err);
-                })
+    /// Like [`Self::record_result`], with a bounded outcome label derived from a successful
+    /// value. A failed step reports no outcome; its error flag says what happened.
+    pub(crate) fn record_result_with_outcome<T, E: Display>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = Result<T, E>>,
+        outcome: impl FnOnce(&T) -> Option<&'static str>,
+    ) -> impl Future<Output = Result<T, E>> {
+        let logged = future.map(|result| {
+            result.inspect_err(|err| {
+                tracing::error!(error = %err);
             })
-            .instrument(span)
-            .await;
-        let finish_timestamp = Utc::now();
-
-        self.post_setup_metric_event_best_effort(
-            step_name,
-            start_timestamp,
-            finish_timestamp,
-            result.is_err(),
-        );
-        result
+        });
+        self.record_value_with_error_flag_and_outcome(step, logged, |result| {
+            (result.is_err(), result.as_ref().ok().and_then(outcome))
+        })
     }
 
     /// Records a setup step's duration without interpreting its return value as an error.
-    pub(crate) async fn record_value<T>(
+    pub(crate) fn record_value<T>(
         &self,
         step: SetupStep,
         future: impl Future<Output = T>,
-    ) -> T {
+    ) -> impl Future<Output = T> {
         self.record_value_with_error_flag(step, future, |_| false)
-            .await
     }
 
     /// Like [`Self::record_value`], with the metric's error flag derived from the value.
-    pub(crate) async fn record_value_with_error_flag<T>(
+    pub(crate) fn record_value_with_error_flag<T>(
         &self,
         step: SetupStep,
         future: impl Future<Output = T>,
         is_error: impl FnOnce(&T) -> bool,
-    ) -> T {
-        let (step_name, span) = self.start_step(step);
-
-        let start_timestamp = Utc::now();
-        let value = future.instrument(span).await;
-        let finish_timestamp = Utc::now();
-
-        self.post_setup_metric_event_best_effort(
-            step_name,
-            start_timestamp,
-            finish_timestamp,
-            is_error(&value),
-        );
-        value
+    ) -> impl Future<Output = T> {
+        self.record_value_with_error_flag_and_outcome(step, future, |value| (is_error(value), None))
     }
+
+    /// Every recorded step is built from combinators rather than an `async fn`: an `async fn`
+    /// keeps its by-value `future` argument alive for its whole lifetime alongside the state
+    /// that awaits it, so the wrapped future is stored twice, and that doubling compounds
+    /// through the nested steps of standby preparation until it overflows the 1 MiB thread
+    /// stack on Windows.
+    fn record_value_with_error_flag_and_outcome<T>(
+        &self,
+        step: SetupStep,
+        future: impl Future<Output = T>,
+        classify: impl FnOnce(&T) -> (bool, Option<&'static str>),
+    ) -> impl Future<Output = T> {
+        let (step_name, span) = self.start_step(step);
+        let instrumented = future.instrument(span);
+        lazy(|_| Utc::now()).then(move |start_timestamp| {
+            instrumented.map(move |value| {
+                let finish_timestamp = Utc::now();
+                let (is_error, outcome) = classify(&value);
+                self.post_metric_event_best_effort(
+                    step_name,
+                    start_timestamp,
+                    finish_timestamp,
+                    is_error,
+                    outcome,
+                );
+                value
+            })
+        })
+    }
+
     /// Records setup work in the background without making startup wait for it.
     pub(crate) fn record_value_detached<T>(
         &self,
@@ -139,14 +170,34 @@ impl SetupClientEventReporter {
                 let start_timestamp = Utc::now();
                 future.instrument(span).await;
                 let finish_timestamp = Utc::now();
-                reporter.post_setup_metric_event_best_effort(
+                reporter.post_metric_event_best_effort(
                     step_name,
                     start_timestamp,
                     finish_timestamp,
                     false,
+                    None,
                 );
             })
             .detach();
+    }
+
+    /// Reports how an ACP action that began at `started` turned out, in the background.
+    pub(crate) fn post_action_event(
+        &self,
+        event: AcpActionEvent,
+        outcome: &'static str,
+        started: DateTime<Utc>,
+        is_error: bool,
+    ) {
+        let event_name = event.as_event_name();
+        tracing::info!(event_name, outcome, is_error, tags.cloud_agent = true);
+        self.post_metric_event_best_effort(
+            event_name,
+            started,
+            Utc::now(),
+            is_error,
+            Some(outcome),
+        );
     }
 
     /// Reports a run milestone without making delivery failures fatal.
@@ -179,18 +230,20 @@ impl SetupClientEventReporter {
         self.background.spawn(post).detach();
     }
 
-    fn post_setup_metric_event_best_effort(
+    fn post_metric_event_best_effort(
         &self,
         event_name: &'static str,
         start_timestamp: DateTime<Utc>,
         finish_timestamp: DateTime<Utc>,
         is_error: bool,
+        outcome: Option<&'static str>,
     ) {
         let Some(run_id) = self.run_id else {
             return;
         };
 
         let ai_client = self.ai_client.clone();
+        let transport = self.transport.map(transport_label);
         self.background
             .spawn(async move {
                 let request = AgentRunClientEventRequest::setup_metric_event(
@@ -198,6 +251,8 @@ impl SetupClientEventReporter {
                     start_timestamp,
                     finish_timestamp,
                     is_error,
+                    outcome.map(str::to_owned),
+                    transport.map(str::to_owned),
                 );
                 Self::post_client_event(run_id, ai_client, event_name, request).await;
             })
@@ -221,6 +276,14 @@ impl SetupClientEventReporter {
     }
 }
 
+/// The `transport` label the server records on metric events.
+fn transport_label(transport: HarnessTransport) -> &'static str {
+    match transport {
+        HarnessTransport::Acp => "acp",
+        HarnessTransport::Pty => "pty",
+    }
+}
+
 /// Names run milestones that have a timestamp rather than a setup duration.
 #[derive(Clone, Copy)]
 pub(crate) enum OzRunTimelineEvent {
@@ -235,6 +298,30 @@ impl OzRunTimelineEvent {
             Self::AgentStarted => "agent_started",
             Self::WorkerContainerReady => "worker_container_ready",
             Self::SkillSourcesResolved => "skill_sources_resolved",
+        }
+    }
+}
+
+/// Names ACP actions whose latency and outcome are reported as client events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AcpActionEvent {
+    /// A follow-up steered into the running turn.
+    Steer,
+    /// A `session/cancel` of the running turn.
+    Cancel,
+    /// A prompt turn, from its prompt to its response.
+    Turn,
+    /// Held follow-ups that could not be sent; counted through the error flag.
+    FollowupsDropped,
+}
+
+impl AcpActionEvent {
+    fn as_event_name(self) -> &'static str {
+        match self {
+            Self::Steer => "acp_steer",
+            Self::Cancel => "acp_cancel",
+            Self::Turn => "acp_turn",
+            Self::FollowupsDropped => "acp_followups_dropped",
         }
     }
 }
@@ -290,6 +377,15 @@ pub(crate) enum SetupStep {
     ThirdPartyHarnessPreparationNotificationPluginUpdate,
     ThirdPartyHarnessPreparationPlatformPluginInstall,
     ThirdPartyHarnessPreparationPlatformPluginUpdate,
+    /// Sub-steps of [`SetupStep::ThirdPartyHarnessPreparation`] and
+    /// [`SetupStep::ThirdPartyHarnessStart`] that time each stage of bringing up a harness
+    /// over ACP.
+    AcpAuthPreflight,
+    AcpBridgeAccept,
+    AcpInitialize,
+    AcpSessionOpen,
+    AcpModelConfig,
+    AcpBeginTurn,
 }
 
 macro_rules! span_and_name {
@@ -340,7 +436,13 @@ impl SetupStep {
             | Self::ThirdPartyHarnessPreparationNotificationPluginInstall
             | Self::ThirdPartyHarnessPreparationNotificationPluginUpdate
             | Self::ThirdPartyHarnessPreparationPlatformPluginInstall
-            | Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => SetupScope::Run,
+            | Self::ThirdPartyHarnessPreparationPlatformPluginUpdate
+            | Self::AcpAuthPreflight
+            | Self::AcpBridgeAccept
+            | Self::AcpInitialize
+            | Self::AcpSessionOpen
+            | Self::AcpModelConfig
+            | Self::AcpBeginTurn => SetupScope::Run,
         }
     }
 
@@ -446,6 +548,12 @@ impl SetupStep {
             Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => {
                 span_and_name!("setup_third_party_harness_preparation_platform_plugin_update")
             }
+            Self::AcpAuthPreflight => span_and_name!("setup_acp_auth_preflight"),
+            Self::AcpBridgeAccept => span_and_name!("setup_acp_bridge_accept"),
+            Self::AcpInitialize => span_and_name!("setup_acp_initialize"),
+            Self::AcpSessionOpen => span_and_name!("setup_acp_session_open"),
+            Self::AcpModelConfig => span_and_name!("setup_acp_model_config"),
+            Self::AcpBeginTurn => span_and_name!("setup_acp_begin_turn"),
         }
     }
 }

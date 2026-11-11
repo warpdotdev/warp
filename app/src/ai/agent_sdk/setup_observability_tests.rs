@@ -1,13 +1,16 @@
+use std::mem::size_of_val;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use chrono::Utc;
 use futures::executor::block_on;
-use serde_json::json;
+use serde_json::{Value, json};
+use warp_cli::agent::HarnessTransport;
 use warpui::r#async::executor::Background;
 
-use super::{OzRunTimelineEvent, SetupClientEventReporter, SetupScope, SetupStep};
+use super::{AcpActionEvent, OzRunTimelineEvent, SetupClientEventReporter, SetupScope, SetupStep};
 use crate::server::server_api::ai::MockAIClient;
 
 /// Expected scope classification for every setup step.
@@ -60,6 +63,12 @@ const EXPECTED: &[(SetupStep, SetupScope)] = &[
         SetupStep::ThirdPartyHarnessPreparationPlatformPluginUpdate,
         SetupScope::Run,
     ),
+    (SetupStep::AcpAuthPreflight, SetupScope::Run),
+    (SetupStep::AcpBridgeAccept, SetupScope::Run),
+    (SetupStep::AcpInitialize, SetupScope::Run),
+    (SetupStep::AcpSessionOpen, SetupScope::Run),
+    (SetupStep::AcpModelConfig, SetupScope::Run),
+    (SetupStep::AcpBeginTurn, SetupScope::Run),
 ];
 
 #[test]
@@ -170,6 +179,37 @@ fn standby_record_value_detached_rejects_run_steps_before_spawning() {
     }
 }
 
+/// Holds a large local across an await so the future itself is large.
+async fn large_future() -> Result<u8, std::io::Error> {
+    let buffer = [0u8; 64 * 1024];
+    futures::future::ready(()).await;
+    Ok(buffer[0])
+}
+
+/// Standby preparation nests several recorded steps and Windows threads get a 1 MiB stack, so
+/// each recording layer may add only a constant amount to the future it wraps; forwarding the
+/// wrapped future through another `async fn` would store it twice.
+#[test]
+fn recording_a_step_adds_constant_overhead_to_the_wrapped_future() {
+    const OVERHEAD_LIMIT: usize = 4 * 1024;
+    let reporter = standby_reporter();
+    let inner_size = size_of_val(&large_future());
+
+    let recorded_result = reporter.record_result(SetupStep::TeamMetadataRefresh, large_future());
+    assert!(
+        size_of_val(&recorded_result) < inner_size + OVERHEAD_LIMIT,
+        "record_result wraps {inner_size} bytes in {} bytes",
+        size_of_val(&recorded_result),
+    );
+
+    let recorded_value = reporter.record_value(SetupStep::TeamMetadataRefresh, large_future());
+    assert!(
+        size_of_val(&recorded_value) < inner_size + OVERHEAD_LIMIT,
+        "record_value wraps {inner_size} bytes in {} bytes",
+        size_of_val(&recorded_value),
+    );
+}
+
 #[test]
 fn noop_reporter_allows_all_steps_without_a_run_id() {
     let mut client = MockAIClient::new();
@@ -224,4 +264,86 @@ fn payload_timeline_events_post_in_the_background_and_tolerate_rejection() {
     let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(request["event_name"], "skill_sources_resolved");
     assert_eq!(request["payload"], payload);
+}
+
+/// A run reporter whose client forwards every posted request, serialized, to the returned channel.
+fn recording_run_reporter(
+    expected_posts: usize,
+) -> (SetupClientEventReporter, mpsc::Receiver<Value>) {
+    let (tx, rx) = mpsc::channel();
+    let mut client = MockAIClient::new();
+    client
+        .expect_post_agent_run_client_event()
+        .times(expected_posts)
+        .returning(move |_, request| {
+            tx.send(serde_json::to_value(request).unwrap()).unwrap();
+            Ok(())
+        });
+    let reporter = SetupClientEventReporter::new(
+        "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
+        Arc::new(client),
+        background(),
+    );
+    (reporter, rx)
+}
+
+#[test]
+fn metric_events_omit_outcome_and_transport_unless_given() {
+    let (reporter, rx) = recording_run_reporter(1);
+    assert_eq!(
+        block_on(reporter.record_result(SetupStep::TerminalBootstrap, async {
+            Ok::<_, std::io::Error>(1)
+        }))
+        .unwrap(),
+        1
+    );
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["event_name"], "setup_terminal_bootstrap");
+    assert_eq!(request["payload"]["is_error"], false);
+    assert!(request["payload"].get("outcome").is_none(), "{request}");
+    assert!(request["payload"].get("transport").is_none(), "{request}");
+}
+
+#[test]
+fn acp_setup_steps_carry_their_outcome_and_transport() {
+    let (reporter, rx) = recording_run_reporter(2);
+    let reporter = reporter.with_transport(HarnessTransport::Acp);
+    let outcome = block_on(reporter.record_result_with_outcome(
+        SetupStep::AcpSessionOpen,
+        async { Ok::<_, std::io::Error>("resumed") },
+        |origin| Some(*origin),
+    ))
+    .unwrap();
+    assert_eq!(outcome, "resumed");
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["event_name"], "setup_acp_session_open");
+    assert_eq!(request["payload"]["is_error"], false);
+    assert_eq!(request["payload"]["outcome"], "resumed");
+    assert_eq!(request["payload"]["transport"], "acp");
+
+    // A failed step reports no outcome, only its error flag.
+    block_on(reporter.record_result_with_outcome(
+        SetupStep::AcpInitialize,
+        async { Err::<&str, _>(std::io::Error::other("nope")) },
+        |origin| Some(*origin),
+    ))
+    .unwrap_err();
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["event_name"], "setup_acp_initialize");
+    assert_eq!(request["payload"]["is_error"], true);
+    assert!(request["payload"].get("outcome").is_none(), "{request}");
+    assert_eq!(request["payload"]["transport"], "acp");
+}
+
+#[test]
+fn acp_action_events_are_posted_in_the_background() {
+    let (reporter, rx) = recording_run_reporter(1);
+    let reporter = reporter.with_transport(HarnessTransport::Acp);
+    reporter.post_action_event(AcpActionEvent::Steer, "injected", Utc::now(), false);
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(request["event_name"], "acp_steer");
+    assert_eq!(request["payload"]["outcome"], "injected");
+    assert_eq!(request["payload"]["is_error"], false);
+    assert_eq!(request["payload"]["transport"], "acp");
+    assert!(request["payload"]["latency_ms"].as_i64().unwrap() >= 0);
 }

@@ -710,6 +710,12 @@ pub struct AgentRunClientSetupMetricPayload {
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+    /// A bounded, event-specific label for how the step turned out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// `acp` or `pty`, when the step belongs to a third-party harness transport.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
 }
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunEnvironmentSnapshotRequest {
@@ -743,6 +749,8 @@ impl AgentRunClientEventRequest {
         start_timestamp: DateTime<Utc>,
         finish_timestamp: DateTime<Utc>,
         is_error: bool,
+        outcome: Option<String>,
+        transport: Option<String>,
     ) -> Self {
         Self {
             event_uuid: uuid::Uuid::new_v4().to_string(),
@@ -757,6 +765,8 @@ impl AgentRunClientEventRequest {
                         .num_milliseconds()
                         .max(0),
                     is_error,
+                    outcome,
+                    transport,
                 },
             )),
         }

@@ -5,9 +5,9 @@ use warp_graphql::platform_error::{PlatformErrorInfo, PlatformErrorMessageFormat
 
 use super::{classify_driver_error, markdown_code_span};
 use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
-use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::environment::{PrepareEnvironmentError, SetupCommandPhase};
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
+use crate::ai::agent_sdk::driver::{AgentDriverError, HarnessSetupStage};
 use crate::server::server_api::ai::TaskGitCredentialsError;
 
 fn assert_state_and_code(
@@ -556,12 +556,26 @@ fn harness_auth_check_failed_does_not_double_punctuate_detail() {
     );
 }
 
+#[test]
+fn harness_auth_check_failed_is_categorized_for_metrics() {
+    let (_, update) = classify_driver_error(&AgentDriverError::HarnessAuthCheckFailed {
+        harness: "claude".into(),
+        detail: "exit code 1".into(),
+    });
+    let platform_error = update.platform_error.expect("structured platform error");
+    assert_eq!(
+        platform_error.metrics_category.as_deref(),
+        Some("acp_auth_failed")
+    );
+}
+
 // --- Harness setup failures ---
 
 #[test]
 fn harness_setup_failed_is_failed_with_reason() {
     let (state, update) = classify_driver_error(&AgentDriverError::HarnessSetupFailed {
         harness: "pi".into(),
+        stage: None,
         reason: "the agent did not complete its handshake within 60s".into(),
     });
     assert_eq!(state, AgentTaskState::Failed);
@@ -573,6 +587,53 @@ fn harness_setup_failed_is_failed_with_reason() {
         update.message,
         "Harness 'pi' setup failed: the agent did not complete its handshake within 60s"
     );
+    let platform_error = update.platform_error.expect("structured platform error");
+    assert!(platform_error.metadata.is_empty());
+    assert_eq!(platform_error.metrics_category, None);
+}
+
+#[test]
+fn harness_setup_failed_at_an_acp_stage_carries_the_stage_for_metrics() {
+    let stages = [
+        (HarnessSetupStage::Manifest, "manifest"),
+        (HarnessSetupStage::Validate, "validate"),
+        (HarnessSetupStage::BridgeSpawn, "bridge_spawn"),
+        (HarnessSetupStage::BridgeAccept, "bridge_accept"),
+        (HarnessSetupStage::Initialize, "initialize"),
+        (HarnessSetupStage::SessionOpen, "session_open"),
+        (HarnessSetupStage::ModelConfig, "model_config"),
+        (
+            HarnessSetupStage::ExternalConversation,
+            "external_conversation",
+        ),
+        (HarnessSetupStage::BeginTurn, "begin_turn"),
+    ];
+    for (stage, label) in stages {
+        let (state, update) = classify_driver_error(&AgentDriverError::HarnessSetupFailed {
+            harness: "codex".into(),
+            stage: Some(stage),
+            reason: "boom".into(),
+        });
+        assert_eq!(state, AgentTaskState::Failed);
+        assert_eq!(
+            update.error_code,
+            Some(PlatformErrorCode::EnvironmentSetupFailed)
+        );
+        let platform_error = update.platform_error.expect("structured platform error");
+        assert_eq!(
+            platform_error
+                .metadata
+                .get("harness_stage")
+                .map(String::as_str),
+            Some(label),
+            "{stage:?}"
+        );
+        assert_eq!(
+            platform_error.metrics_category,
+            Some(format!("acp_{label}_failed")),
+            "{stage:?}"
+        );
+    }
 }
 
 // --- Runtime failure detection ---

@@ -245,7 +245,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             build_local_codex_child_command(&prompt)
         }
         Harness::OpenCode => {
-            validate_cli_installed("opencode", Some("https://opencode.ai/docs"))
+            validate_cli_installed("opencode", Some("https://opencode.ai/docs"), None)
                 .map_err(|error: AgentDriverError| error.to_string())?;
             build_local_opencode_child_command(&prompt)
         }

@@ -1046,6 +1046,7 @@ impl AgentDriverRunner {
                 HarnessKind::Unsupported(harness) => {
                     return Err(AgentDriverError::HarnessSetupFailed {
                         harness: harness.to_string(),
+                        stage: None,
                         reason: format!(
                             "The {harness} harness is only supported for local child agent launches."
                         ),
@@ -2073,6 +2074,7 @@ impl AgentDriverRunner {
             HarnessKind::Unsupported(harness) => {
                 return Err(AgentDriverError::HarnessSetupFailed {
                     harness: harness.to_string(),
+                    stage: None,
                     reason: format!(
                         "The {harness} harness is only supported for local child agent launches."
                     ),
@@ -2458,6 +2460,10 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             has_environment: args.environment.is_some(),
             task_id: args.task_id.clone(),
             harness: args.harness.to_string(),
+            requested_transport: args.harness_transport.map(|transport| match transport {
+                HarnessTransport::Acp => "acp",
+                HarnessTransport::Pty => "pty",
+            }),
         },
         CliCommand::Agent(AgentCommand::RunCloud(_)) => CliTelemetryEvent::AgentRunAmbient,
         CliCommand::Agent(AgentCommand::RunCloudStandby(_)) => {

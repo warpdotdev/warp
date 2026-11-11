@@ -16,6 +16,9 @@ pub(super) enum CliTelemetryEvent {
         task_id: Option<String>,
         /// Which execution harness was selected (e.g. "oz", "claude").
         harness: String,
+        /// The `--harness-transport` the run asked for (`"acp"` or `"pty"`), when given. The
+        /// transport the run actually got is reported to the server separately.
+        requested_transport: Option<&'static str>,
     },
     /// Executing `warp agent run-ambient`
     AgentRunAmbient,
@@ -189,12 +192,14 @@ impl TelemetryEvent for CliTelemetryEvent {
                 has_environment,
                 task_id,
                 harness,
+                requested_transport,
             } => Some(json!({
                 "gui": gui,
                 "requested_mcp_servers": requested_mcp_servers,
                 "has_environment": has_environment,
                 "task_id": task_id,
                 "harness": harness,
+                "requested_transport": requested_transport,
             })),
             CliTelemetryEvent::AgentRunAmbient => None,
             CliTelemetryEvent::AgentRunCloudStandby => None,
