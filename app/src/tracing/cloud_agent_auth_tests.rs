@@ -84,6 +84,38 @@ fn concurrent_refresh_cannot_mix_snapshot_token_and_expiry() {
     });
 }
 
+#[test]
+#[cfg(not(feature = "skip_login"))]
+fn policy_disable_cancels_scheduled_refresh() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let auth = AuthContext::from_snapshot(CredentialSnapshot {
+            token: "standby-token".into(),
+            expires_at: Utc::now() + TimeDelta::hours(1),
+        })
+        .unwrap();
+        app.update(|ctx| {
+            let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+            start_refresh_coordinator(auth.clone(), client, ctx);
+            AuthRefreshCoordinator::handle(ctx).update(ctx, |coordinator, ctx| {
+                coordinator.stop();
+                coordinator.schedule_proactive_refresh(Utc::now() + TimeDelta::hours(1), ctx);
+                assert!(coordinator.scheduled_refresh.is_some());
+            });
+
+            auth.disable();
+            stop_refresh_coordinator(&auth, ctx);
+
+            AuthRefreshCoordinator::handle(ctx).update(ctx, |coordinator, ctx| {
+                coordinator.start_refresh(ctx);
+                assert!(coordinator.scheduled_refresh.is_none());
+                assert!(coordinator.refresh_request.is_none());
+            });
+            assert!(auth.snapshot().is_none());
+        });
+    });
+}
+
 fn client_with_expiry(token: &str, expires_at: DateTime<Utc>) -> AuthenticatedHttpClient {
     let (refresh_hint_sender, _) = async_channel::bounded(1);
     AuthenticatedHttpClient {
@@ -359,13 +391,13 @@ fn assignment_flushes_standby_spans_before_switching_export_and_refresh_identity
 
 #[test]
 #[cfg(not(feature = "skip_login"))]
-fn active_exporter_retains_standby_credential_when_assignment_is_unusable() {
+fn active_exporter_distinguishes_invalid_credentials_from_policy_disable() {
     // The global subscriber and exporter require a process isolated from all other tests.
     if std::env::var_os("WARP_TEST_OTLP_INVALID_ASSIGNMENT").is_none() {
         let output = command::blocking::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "tracing::cloud_agent_auth::tests::active_exporter_retains_standby_credential_when_assignment_is_unusable",
+                "tracing::cloud_agent_auth::tests::active_exporter_distinguishes_invalid_credentials_from_policy_disable",
                 "--nocapture",
             ])
             .env("WARP_TEST_OTLP_INVALID_ASSIGNMENT", "1")
@@ -395,6 +427,12 @@ fn active_exporter_retains_standby_credential_when_assignment_is_unusable() {
         let future = (Utc::now() + TimeDelta::hours(1)).to_rfc3339();
         let expired = (Utc::now() - TimeDelta::hours(1)).to_rfc3339();
         let cases = [
+            (
+                "empty credentials without policy",
+                Some(""),
+                Some(""),
+                Some("run-id"),
+            ),
             ("missing token", None, Some(future.as_str()), Some("run-id")),
             (
                 "missing expiry",
@@ -462,6 +500,44 @@ fn active_exporter_retains_standby_credential_when_assignment_is_unusable() {
             assert_eq!(snapshot.token, original.token, "{name}");
             assert_eq!(snapshot.expires_at, original.expires_at, "{name}");
         }
+        app.update(|ctx| {
+            let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+            crate::tracing::native::start_auth_refresh(client.clone(), ctx);
+            let generation = AuthRefreshCoordinator::as_ref(ctx).generation;
+            let mut runtime_env = HashMap::from([
+                ("WARP_CLOUD_AGENT_OTLP_ENDPOINT".into(), String::new()),
+                (CLOUD_AGENT_OTLP_TOKEN.into(), String::new()),
+                (CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT.into(), String::new()),
+            ]);
+
+            crate::tracing::assign_run_credentials(&mut runtime_env, client, ctx);
+
+            assert!(crate::tracing::native::child_process_snapshot().is_none());
+            assert!(!runtime_env.contains_key(CLOUD_AGENT_OTLP_TOKEN));
+            assert!(!runtime_env.contains_key(CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT));
+            AuthRefreshCoordinator::handle(ctx).update(ctx, |coordinator, ctx| {
+                coordinator.start_refresh(ctx);
+                coordinator.finish_refresh(
+                    generation,
+                    Ok(TaskIdentityToken {
+                        token: jwt_with_payload(serde_json::json!({ "sandbox_id": "sandbox-id" })),
+                        expires_at: Utc::now() + TimeDelta::hours(1),
+                        issuer: "test-issuer".into(),
+                    }),
+                    ctx,
+                );
+                assert!(
+                    coordinator
+                        .token_store
+                        .valid_authorization_header()
+                        .is_none()
+                );
+                assert!(coordinator.expected_identity.read().unwrap().is_none());
+                assert!(coordinator.refresh_request.is_none());
+                assert!(coordinator.scheduled_refresh.is_none());
+                assert_eq!(coordinator.consecutive_failures, 0);
+            });
+        });
     });
 }
 

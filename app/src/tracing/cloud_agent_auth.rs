@@ -40,8 +40,8 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
 
 /// The environment variables form the immutable dispatch-time authentication bootstrap.
-const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
-const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
+pub(super) const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
+pub(super) const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
 const OZ_RUN_ID: &str = "OZ_RUN_ID";
 const PREWARMED_SANDBOX_ID: &str = "WARP_PREWARMED_SANDBOX_ID";
 /// The collector audience and requested lifetime are fixed by the cloud-agent trace contract.
@@ -186,9 +186,22 @@ impl AuthContext {
             .token_store
             .inner
             .write()
-            .unwrap_or_else(|err| err.into_inner()) = snapshot;
+            .unwrap_or_else(|err| err.into_inner()) = Some(snapshot);
         *expected = Some(identity);
         Ok(())
+    }
+
+    pub(super) fn disable(&self) {
+        let mut expected = self
+            .expected_identity
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        *self
+            .token_store
+            .inner
+            .write()
+            .unwrap_or_else(|err| err.into_inner()) = None;
+        *expected = None;
     }
 
     /// Creates a transport sharing the latest credential while leaving the exporter itself stable.
@@ -257,25 +270,27 @@ impl fmt::Debug for AuthContext {
 /// preserve the last valid credential.
 #[derive(Clone)]
 struct TokenStore {
-    inner: Arc<RwLock<TokenSnapshot>>,
+    inner: Arc<RwLock<Option<TokenSnapshot>>>,
 }
 
 impl TokenStore {
     /// Creates the initial store from the validated dispatch credential.
     fn new(token: String, expires_at: DateTime<Utc>) -> anyhow::Result<Self> {
         Ok(Self {
-            inner: Arc::new(RwLock::new(TokenSnapshot::new(token, expires_at)?)),
+            inner: Arc::new(RwLock::new(Some(TokenSnapshot::new(token, expires_at)?))),
         })
     }
 
     /// Returns a cloned sensitive header only while the current credential remains unexpired.
     fn valid_authorization_header(&self) -> Option<HeaderValue> {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
+        let snapshot = snapshot.as_ref()?;
         (snapshot.expires_at > Utc::now()).then(|| snapshot.authorization_header.clone())
     }
 
     fn valid_snapshot(&self) -> Option<CredentialSnapshot> {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
+        let snapshot = snapshot.as_ref()?;
         if snapshot.expires_at <= Utc::now() {
             return None;
         }
@@ -297,7 +312,9 @@ impl TokenStore {
             "Refreshed cloud-agent OTLP token is already expired"
         );
         let snapshot = TokenSnapshot::new(token, expires_at)?;
-        *self.inner.write().unwrap_or_else(|err| err.into_inner()) = snapshot;
+        let mut current = self.inner.write().unwrap_or_else(|err| err.into_inner());
+        anyhow::ensure!(current.is_some(), "Cloud-agent OTLP export is disabled");
+        *current = Some(snapshot);
         Ok(())
     }
 
@@ -318,7 +335,10 @@ impl fmt::Debug for TokenStore {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
         formatter
             .debug_struct("TokenStore")
-            .field("expires_at", &snapshot.expires_at)
+            .field(
+                "expires_at",
+                &snapshot.as_ref().map(|snapshot| snapshot.expires_at),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -541,6 +561,19 @@ pub(super) fn restart_refresh_coordinator(
     });
 }
 
+pub(super) fn stop_refresh_coordinator(auth_context: &AuthContext, ctx: &mut AppContext) {
+    if auth_context
+        .refresh_hint_receiver
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .is_none()
+    {
+        AuthRefreshCoordinator::handle(ctx).update(ctx, |coordinator, _| {
+            coordinator.stop();
+        });
+    }
+}
+
 /// Owns serialized credential minting, proactive scheduling, failure backoff, and diagnostics.
 ///
 /// At most one mint is in flight and one scheduled wakeup is retained. A bounded nonblocking 401
@@ -585,6 +618,12 @@ impl AuthRefreshCoordinator {
     }
 
     fn reset(&mut self, client: Arc<AppManagedSecretsClient>, ctx: &mut ModelContext<Self>) {
+        self.stop();
+        self.client = client;
+        self.start_refresh(ctx);
+    }
+
+    fn stop(&mut self) {
         self.cancel_scheduled_refresh();
         if let Some(refresh) = self.refresh_request.take() {
             refresh.abort();
@@ -592,8 +631,6 @@ impl AuthRefreshCoordinator {
         self.generation += 1;
         self.consecutive_failures = 0;
         self.last_failure_diagnostic = None;
-        self.client = client;
-        self.start_refresh(ctx);
     }
 
     /// Starts one mint and coalesces all triggers while it remains in flight.
@@ -602,6 +639,15 @@ impl AuthRefreshCoordinator {
     /// timeout guarantees a stalled request eventually enters the ordinary failure path.
     fn start_refresh(&mut self, ctx: &mut ModelContext<Self>) {
         if self.refresh_request.is_some() {
+            return;
+        }
+        if self
+            .token_store
+            .inner
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_none()
+        {
             return;
         }
         self.cancel_scheduled_refresh();

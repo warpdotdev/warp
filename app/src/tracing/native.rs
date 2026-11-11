@@ -70,7 +70,10 @@ use warpui::AppContext;
 
 use super::Initialization;
 use super::child_process::ChildProcessTracingConfig;
-use super::cloud_agent_auth::{self, AssignmentCredential, AuthContext};
+use super::cloud_agent_auth::{
+    self, AssignmentCredential, AuthContext, CLOUD_AGENT_OTLP_TOKEN,
+    CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT,
+};
 use crate::channel::ChannelState;
 use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
 use crate::tracing::install_no_subscriber;
@@ -253,12 +256,25 @@ pub(super) fn assign_run_credentials(
     client: Arc<AppManagedSecretsClient>,
     ctx: &mut AppContext,
 ) {
+    let disable = [
+        CLOUD_AGENT_OTLP_ENDPOINT,
+        CLOUD_AGENT_OTLP_TOKEN,
+        CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT,
+    ]
+    .iter()
+    .all(|key| runtime_env.get(*key).is_some_and(String::is_empty));
     // Scrub assignment secrets even when this process never enabled tracing.
     let credential = AssignmentCredential::take(runtime_env);
     let Some(context) = AUTH_CONTEXT.get() else {
         log::debug!("Cloud-agent OTLP assignment skipped: exporter is inactive");
         return;
     };
+    if disable {
+        context.auth.disable();
+        cloud_agent_auth::stop_refresh_coordinator(&context.auth, ctx);
+        log::info!("Cloud-agent OTLP export disabled by assignment policy");
+        return;
+    }
     let credential = match credential {
         Ok(credential) => credential,
         Err(err) => {
