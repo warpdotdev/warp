@@ -977,7 +977,7 @@ pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
 
 /// Executes a CLI command after initializing TUI-scoped settings and secure storage.
 #[cfg(feature = "tui")]
-pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut warpui::AppContext)>) -> Result<()> {
+pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut AppContext)>) -> Result<()> {
     run_internal(LaunchMode::Tui {
         entrypoint: TuiEntryPoint::CliCommand { execute },
     })
@@ -2509,17 +2509,20 @@ pub(crate) fn initialize_app(
         };
     });
 
-    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
-    // surface failures synchronously. Other interactive clients gate startup user authentication
-    // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
-    // which authenticates immediately and resolves IAP out of band (see
-    // `startup_auth_is_non_blocking`).
-    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-        None
-    } else {
-        pending_api_key
+    let startup_authentication = match launch_mode {
+        // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+        // surface failures synchronously. Other interactive clients gate startup user authentication
+        // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
+        // which authenticates immediately and resolves IAP out of band (see
+        // `startup_auth_is_non_blocking`).
+        LaunchMode::CommandLine { .. } => None,
+        // Login-required TUI commands subscribe before starting authentication in their dispatch path.
+        LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::CliCommand { .. },
+        } => None,
+        _ => pending_api_key
             .map(StartupUserAuthentication::ApiKey)
-            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
+            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser)),
     };
     if let Some(authentication) = startup_authentication {
         authenticate_user_after_iap_access(

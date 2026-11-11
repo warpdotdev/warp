@@ -16221,6 +16221,7 @@ dependencies = [
  "fs4",
  "futures",
  "futures-lite 1.13.0",
+ "hex",
  "http_client",
  "inquire",
  "instant",
@@ -16233,6 +16234,7 @@ dependencies = [
  "pathfinder_geometry",
  "rangemap",
  "serde_json",
+ "sha2 0.10.9",
  "shell-words",
  "similar",
  "string-offset",
@@ -16259,6 +16261,7 @@ dependencies = [
  "warp_util",
  "warpui",
  "warpui_core",
+ "warpui_extras",
 ]
 
 [[package]]
