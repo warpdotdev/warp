@@ -21,6 +21,35 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 
 const TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
 
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn assignment_without_active_exporter_removes_otlp_secret_without_starting_tracing() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let mut runtime_env = HashMap::from([
+            (
+                "WARP_CLOUD_AGENT_OTLP_TOKEN".into(),
+                "assigned-token".into(),
+            ),
+            (
+                "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT".into(),
+                (Utc::now() + TimeDelta::hours(1)).to_rfc3339(),
+            ),
+            ("OZ_RUN_ID".into(), TASK_ID.into()),
+            ("WARP_API_KEY".into(), "run-key".into()),
+        ]);
+
+        app.update(|ctx| {
+            let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+            crate::tracing::assign_run_credentials(&mut runtime_env, client, ctx);
+        });
+
+        assert!(!runtime_env.contains_key("WARP_CLOUD_AGENT_OTLP_TOKEN"));
+        assert_eq!(runtime_env["WARP_API_KEY"], "run-key");
+        assert!(crate::tracing::create_child_process_handoff(Path::new("unused-scope")).is_none());
+    });
+}
+
 fn server_assignment() -> ExecutionConfiguration {
     let event: PrewarmedSandboxControlEvent = serde_json::from_str(include_str!(
         "../../../server/server_api/testdata/prewarmed_assignment_fresh_run.json"

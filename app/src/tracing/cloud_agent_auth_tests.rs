@@ -1,7 +1,18 @@
 use base64::Engine as _;
 use chrono::TimeDelta;
+use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 
 use super::*;
+#[cfg(not(feature = "skip_login"))]
+use crate::auth::AuthStateProvider;
+#[cfg(not(feature = "skip_login"))]
+use crate::auth::credentials::Credentials;
+#[cfg(not(feature = "skip_login"))]
+use crate::server::server_api::ServerApiProvider;
+#[cfg(not(feature = "skip_login"))]
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn jwt_with_payload(payload: serde_json::Value) -> String {
     let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -154,34 +165,58 @@ fn authorized_request_debug_redacts_token() {
 fn refreshed_token_run_id_exactly_matches() {
     let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
 
-    validate_refreshed_token_run_id(&token, Some("expected-run-id")).unwrap();
+    validate_refreshed_token_identity(
+        &token,
+        Some(&ExpectedIdentity::Run("expected-run-id".into())),
+    )
+    .unwrap();
 }
 
 #[test]
 fn refreshed_token_run_id_is_required() {
     let token = jwt_with_payload(serde_json::json!({}));
-    assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    assert!(
+        validate_refreshed_token_identity(
+            &token,
+            Some(&ExpectedIdentity::Run("expected-run-id".into()))
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn expected_run_id_is_required() {
     let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
 
-    assert!(validate_refreshed_token_run_id(&token, None).is_err());
-    assert!(validate_refreshed_token_run_id(&token, Some("")).is_err());
+    assert!(validate_refreshed_token_identity(&token, None).is_err());
+    assert!(
+        validate_refreshed_token_identity(&token, Some(&ExpectedIdentity::Run("".into()))).is_err()
+    );
 }
 
 #[test]
 fn refreshed_token_run_id_must_match() {
     let token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
 
-    assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    assert!(
+        validate_refreshed_token_identity(
+            &token,
+            Some(&ExpectedIdentity::Run("expected-run-id".into()))
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn refreshed_token_run_id_must_be_a_string() {
     let token = jwt_with_payload(serde_json::json!({ "run_id": 123 }));
-    assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    assert!(
+        validate_refreshed_token_identity(
+            &token,
+            Some(&ExpectedIdentity::Run("expected-run-id".into()))
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -193,7 +228,13 @@ fn malformed_refreshed_tokens_are_rejected() {
     };
 
     for token in ["not-a-jwt", "header.!!!.signature", &invalid_json] {
-        assert!(validate_refreshed_token_run_id(token, Some("expected-run-id")).is_err());
+        assert!(
+            validate_refreshed_token_identity(
+                token,
+                Some(&ExpectedIdentity::Run("expected-run-id".into()))
+            )
+            .is_err()
+        );
     }
 }
 
@@ -211,7 +252,7 @@ fn rejected_refreshed_token_preserves_previous_token() {
             .replace_refreshed(
                 wrong_run_token,
                 Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-                Some("expected-run-id"),
+                Some(&ExpectedIdentity::Run("expected-run-id".into())),
             )
             .is_err()
     );
@@ -219,4 +260,211 @@ fn rejected_refreshed_token_preserves_previous_token() {
         token_store.valid_authorization_header().unwrap(),
         "Bearer current-test-token"
     );
+}
+
+#[test]
+fn standby_refresh_requires_matching_sandbox_identity() {
+    let expected = ExpectedIdentity::Standby("sandbox-id".into());
+    let matching = jwt_with_payload(serde_json::json!({ "sandbox_id": "sandbox-id" }));
+    let mismatched = jwt_with_payload(serde_json::json!({ "sandbox_id": "other-sandbox" }));
+    let run_only = jwt_with_payload(serde_json::json!({ "run_id": "sandbox-id" }));
+
+    validate_refreshed_token_identity(&matching, Some(&expected)).unwrap();
+    assert!(validate_refreshed_token_identity(&mismatched, Some(&expected)).is_err());
+    assert!(validate_refreshed_token_identity(&run_only, Some(&expected)).is_err());
+}
+
+#[test]
+fn startup_identity_prefers_run_and_falls_back_to_standby() {
+    assert_eq!(
+        ExpectedIdentity::from_ids(Some("run-id".into()), Some("sandbox-id".into())),
+        Some(ExpectedIdentity::Run("run-id".into()))
+    );
+    assert_eq!(
+        ExpectedIdentity::from_ids(Some(" ".into()), Some("sandbox-id".into())),
+        Some(ExpectedIdentity::Standby("sandbox-id".into()))
+    );
+    assert_eq!(ExpectedIdentity::from_ids(None, None), None);
+}
+
+#[derive(Debug)]
+struct CredentialRecordingExporter {
+    store: TokenStore,
+    exported: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl SpanExporter for CredentialRecordingExporter {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        let credential = self.store.valid_snapshot().unwrap();
+        self.exported.lock().unwrap().extend(
+            batch
+                .into_iter()
+                .map(|span| (span.name.into_owned(), credential.token.clone())),
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn assignment_flushes_standby_spans_before_switching_export_and_refresh_identity() {
+    let standby_token = jwt_with_payload(serde_json::json!({ "sandbox_id": "sandbox-id" }));
+    let auth = AuthContext::from_snapshot(CredentialSnapshot {
+        token: standby_token.clone(),
+        expires_at: Utc::now() + TimeDelta::hours(1),
+    })
+    .unwrap();
+    *auth.expected_identity.write().unwrap() = Some(ExpectedIdentity::Standby("sandbox-id".into()));
+    let exported = Arc::new(Mutex::new(Vec::new()));
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(CredentialRecordingExporter {
+            store: auth.token_store.clone(),
+            exported: exported.clone(),
+        })
+        .build();
+    let tracer = provider.tracer("assignment-test");
+    tracer.start("standby").end();
+    let run_token = jwt_with_payload(serde_json::json!({ "run_id": "run-id" }));
+    let expires_at = Utc::now() + TimeDelta::minutes(45);
+    let mut runtime_env = HashMap::from([
+        (CLOUD_AGENT_OTLP_TOKEN.into(), run_token.clone()),
+        (
+            CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT.into(),
+            expires_at.to_rfc3339(),
+        ),
+        (OZ_RUN_ID.into(), "run-id".into()),
+    ]);
+
+    auth.assign_run(
+        AssignmentCredential::take(&mut runtime_env).unwrap(),
+        &provider,
+    )
+    .unwrap();
+
+    assert!(!runtime_env.contains_key(CLOUD_AGENT_OTLP_TOKEN));
+    let snapshot = auth.snapshot().unwrap();
+    assert_eq!(snapshot.token, run_token);
+    assert_eq!(snapshot.expires_at, expires_at);
+    let expected = auth.expected_identity.read().unwrap();
+    validate_refreshed_token_identity(&run_token, expected.as_ref()).unwrap();
+    assert!(validate_refreshed_token_identity(&standby_token, expected.as_ref()).is_err());
+    drop(expected);
+    tracer.start("run").end();
+    provider.force_flush().unwrap();
+    assert_eq!(
+        *exported.lock().unwrap(),
+        [("standby".into(), standby_token), ("run".into(), run_token),]
+    );
+    provider.shutdown().unwrap();
+}
+
+#[test]
+fn invalid_assignment_preserves_standby_credential() {
+    let auth = AuthContext::from_snapshot(CredentialSnapshot {
+        token: "standby-token".into(),
+        expires_at: Utc::now() + TimeDelta::hours(1),
+    })
+    .unwrap();
+    let provider = SdkTracerProvider::builder().build();
+    let credential = AssignmentCredential {
+        snapshot: CredentialSnapshot {
+            token: jwt_with_payload(serde_json::json!({ "run_id": "other-run" })),
+            expires_at: Utc::now() + TimeDelta::hours(1),
+        },
+        run_id: "run-id".into(),
+    };
+
+    assert!(auth.assign_run(credential, &provider).is_err());
+
+    assert_eq!(auth.snapshot().unwrap().token, "standby-token");
+}
+
+#[test]
+#[cfg(not(feature = "skip_login"))]
+fn assignment_rearms_refresh_with_run_api_credential() {
+    if std::env::var_os("WARP_TEST_OTLP_ASSIGNMENT").is_none() {
+        let output = command::blocking::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tracing::cloud_agent_auth::tests::assignment_rearms_refresh_with_run_api_credential",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_OTLP_ASSIGNMENT", "1")
+            .env("WARP_ISOLATION_PLATFORM", "docker")
+            .env("WARP_WORKLOAD_TOKEN", "test-workload-token")
+            .env_remove(CLOUD_AGENT_OTLP_TOKEN)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (sent, received) = async_channel::bounded(1);
+    let run_token = jwt_with_payload(serde_json::json!({ "run_id": "run-id" }));
+    let mut server = crate::ChannelState::mock_server();
+    let response = serde_json::json!({
+        "data": { "issueTaskIdentityToken": {
+            "__typename": "IssueTaskIdentityTokenOutput",
+            "token": run_token,
+            "expiresAt": (Utc::now() + TimeDelta::hours(1)).to_rfc3339(),
+            "issuer": "test-issuer",
+        } }
+    })
+    .to_string();
+    let refresh = server
+        .mock("POST", "/graphql/v2?op=IssueTaskIdentityToken")
+        .match_header("authorization", "Bearer assigned-run-api-key")
+        .with_body_from_request(move |_| {
+            sent.try_send(()).unwrap();
+            response.clone().into_bytes()
+        })
+        .expect(1)
+        .create();
+    drop(server);
+
+    warpui::App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| {
+            warp_server_client::network_logging::NetworkLogModel::default()
+        });
+        let state = app.read(|ctx| AuthStateProvider::as_ref(ctx).get().clone());
+        ServerApiProvider::handle(&app).update(&mut app, |provider, ctx| {
+            *provider = ServerApiProvider::new(state.clone(), None, None, ctx);
+        });
+        let auth = AuthContext::from_snapshot(CredentialSnapshot {
+            token: "standby-token".into(),
+            expires_at: Utc::now() + TimeDelta::hours(1),
+        })
+        .unwrap();
+        let provider = SdkTracerProvider::builder().build();
+        app.update(|ctx| {
+            let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+            start_refresh_coordinator(auth.clone(), client.clone(), ctx);
+            state.set_credentials(Some(Credentials::ApiKey {
+                key: "assigned-run-api-key".into(),
+                owner_type: None,
+            }));
+            auth.assign_run(
+                AssignmentCredential {
+                    snapshot: CredentialSnapshot {
+                        token: run_token,
+                        expires_at: Utc::now() + TimeDelta::hours(1),
+                    },
+                    run_id: "run-id".into(),
+                },
+                &provider,
+            )
+            .unwrap();
+            restart_refresh_coordinator(auth, client, ctx);
+        });
+        received
+            .recv()
+            .with_timeout(Duration::from_secs(10))
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    refresh.assert();
 }

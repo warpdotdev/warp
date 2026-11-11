@@ -107,6 +107,18 @@ impl AgentDriver {
         expires_at: DateTime<Utc>,
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            runtime_env = spawner
+                .spawn(move |_, ctx| {
+                    let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+                    crate::tracing::assign_run_credentials(&mut runtime_env, client, ctx);
+                    runtime_env
+                })
+                .await?;
+        }
+        #[cfg(target_family = "wasm")]
+        runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
         if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
             || runtime_env
                 .get("WARP_GITHUB_CREDENTIAL_MODE")
