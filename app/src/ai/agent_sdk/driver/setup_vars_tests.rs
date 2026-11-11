@@ -120,10 +120,42 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        let pending = ParsedTemplatableMCPServerResult::from_user_json(
+            r#"{"pending": {"command": "sh", "args": ["-c", "exec sleep 30"]}}"#,
+        )
+        .unwrap()
+        .pop()
+        .unwrap()
+        .templatable_mcp_server_installation
+        .unwrap();
+        let pending_uuid = pending.uuid();
+        TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.spawn_cli_ephemeral_server(pending, ctx);
+        });
+
+        AgentDriver::read_setup_vars(&foreground, false, true)
+            .await
+            .unwrap();
+        TemplatableMCPServerManager::handle(&app).read(&app, |manager, _| {
+            assert!(matches!(
+                manager.get_server_state(pending_uuid),
+                Some(crate::ai::mcp::MCPServerState::Starting)
+            ));
+        });
 
         AgentDriver::initialize_setup_vars(&foreground, true)
             .await
             .unwrap();
+        AgentDriver::read_setup_vars(&foreground, false, true)
+            .await
+            .unwrap();
+        TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
+            assert!(matches!(
+                manager.get_server_state(pending_uuid),
+                Some(crate::ai::mcp::MCPServerState::Starting)
+            ));
+            manager.shutdown_server(pending_uuid, ctx);
+        });
         let path = driver.read(&app, |driver, _| {
             PathBuf::from(&driver.resolved_env_vars[OsStr::new(VARS_FILE_ENV)])
         });
@@ -135,7 +167,7 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
         );
         writeln!(
             open_vars_file(&path).unwrap(),
-            "CUSTOM_VALUE=from-cold-setup"
+            "CUSTOM_VALUE=from-cold-setup\nHOME=setup-home"
         )
         .unwrap();
         AgentDriver::read_setup_vars(&foreground, false, true)
@@ -148,7 +180,7 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
                 "command": "sh",
                 "args": [
                     "-c",
-                    "printf '%s\\n%s' \"$CUSTOM_VALUE\" \"$WARP_VARS_FILE\" > \"$1\"",
+                    "printf '%s\\n%s\\n%s' \"$CUSTOM_VALUE\" \"$WARP_VARS_FILE\" \"$HOME\" > \"$1\"",
                     "sh",
                     output_path,
                 ]
@@ -165,7 +197,7 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
             manager.spawn_cli_ephemeral_server(installation, ctx);
         });
         let deadline = instant::Instant::now() + Duration::from_secs(5);
-        let expected = format!("from-cold-setup\n{}", path.display());
+        let expected = format!("from-cold-setup\n{}\nsetup-home", path.display());
         loop {
             if std::fs::read_to_string(&output_path).ok().as_ref() == Some(&expected) {
                 break;
@@ -313,8 +345,9 @@ fn path_entries_prepend_and_deduplicate_without_dropping_existing_paths() {
 #[test]
 fn metadata_is_available_before_setup_and_user_entries_remain_untrusted() {
     let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".warp.vars"), "STALE_VALUE=untrusted\n").unwrap();
     let mut vars = SetupVars::create(
-        root.path(),
+        &root.path().join(".warp.vars"),
         HashMap::from([("WARP_METADATA_NAME".into(), "first\nsecond".into())]),
     )
     .unwrap();
@@ -341,6 +374,78 @@ fn metadata_is_available_before_setup_and_user_entries_remain_untrusted() {
 }
 
 #[test]
+#[cfg(unix)]
+fn recreating_vars_file_does_not_modify_link_targets() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(".warp.vars");
+    let target = root.path().join("target");
+    std::fs::write(&target, "untouched").unwrap();
+    symlink(&target, &path).unwrap();
+
+    SetupVars::create(&path, HashMap::new()).unwrap();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+    assert!(!std::fs::symlink_metadata(&path).unwrap().is_symlink());
+
+    std::fs::remove_file(&path).unwrap();
+    std::fs::hard_link(&target, &path).unwrap();
+    SetupVars::create(&path, HashMap::new()).unwrap();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+}
+
+#[test]
+fn initialization_uses_exported_path_and_disables_persistence_if_creation_fails() {
+    use warpui::App;
+
+    use super::super::AgentDriverOptions;
+    use super::super::terminal::TerminalDriver;
+    use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let (_, mut config) = super::super::split_run_options(AgentDriverOptions {
+            working_dir: root.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let exported = root.path().join("exported-vars");
+        Arc::make_mut(&mut config.resolved_env_vars)
+            .insert(VARS_FILE_ENV.into(), exported.as_os_str().to_owned());
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal = TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(root.path().into(), terminal, ctx);
+            driver.apply_run_configuration(config, ctx);
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+
+        AgentDriver::initialize_setup_vars(&foreground, false)
+            .await
+            .unwrap();
+        assert!(exported.is_file());
+        assert!(!root.path().join(".warp.vars").exists());
+
+        driver.update(&mut app, |driver, _| {
+            Arc::make_mut(&mut driver.resolved_env_vars).insert(
+                VARS_FILE_ENV.into(),
+                root.path().join("missing/.warp.vars").into_os_string(),
+            );
+        });
+        AgentDriver::initialize_setup_vars(&foreground, false)
+            .await
+            .unwrap();
+        driver.read(&app, |driver, _| assert!(driver.setup_vars.is_none()));
+        AgentDriver::read_setup_vars(&foreground, true, true)
+            .await
+            .unwrap();
+    });
+}
+
+#[test]
 fn standby_values_survive_assignment_and_metadata_is_written_without_rereading() {
     use warpui::App;
 
@@ -351,10 +456,12 @@ fn standby_values_survive_assignment_and_metadata_is_written_without_rereading()
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let root = tempfile::tempdir().unwrap();
-        let mut vars = SetupVars::create(root.path(), HashMap::new()).unwrap();
+        let mut vars = SetupVars::create(&root.path().join(".warp.vars"), HashMap::new()).unwrap();
+        let worker_key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        assert!(std::env::var_os(worker_key).is_some());
         writeln!(
             open_vars_file(&vars.path).unwrap(),
-            "CUSTOM_VALUE=from-standby\nRUN_VALUE=blocked\nSECRET_VALUE=blocked"
+            "CUSTOM_VALUE=from-standby\nRUN_VALUE=blocked\nSECRET_VALUE=blocked\n{worker_key}=setup-home"
         )
         .unwrap();
         vars.read();
@@ -403,6 +510,11 @@ fn standby_values_survive_assignment_and_metadata_is_written_without_rereading()
                 "managed"
             );
             assert_eq!(mcp["CUSTOM_VALUE"], "from-standby");
+            assert_eq!(mcp[worker_key], "setup-home");
+            assert_eq!(
+                driver.resolved_env_vars[OsStr::new(worker_key)],
+                "setup-home"
+            );
             assert_eq!(mcp["RUN_VALUE"], "assigned");
             assert!(!mcp.contains_key("SECRET_VALUE"));
             assert_eq!(mcp["WARP_METADATA_NAME"], "assigned-metadata");

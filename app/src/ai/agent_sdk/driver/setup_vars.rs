@@ -132,26 +132,49 @@ fn warn_invalid_key(key: &str) {
 
 fn open_vars_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
-    options.create(true).append(true);
+    options.append(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        let file = options.open(path)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        Ok(file)
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
     }
-    #[cfg(not(unix))]
-    options.open(path)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::from(io::ErrorKind::InvalidInput));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
 }
 
 impl SetupVars {
-    fn create(root: &Path, metadata: HashMap<String, String>) -> io::Result<Self> {
-        let path = root.join(".warp.vars");
-        let mut file = open_vars_file(&path)?;
+    fn create(path: &Path, metadata: HashMap<String, String>) -> io::Result<Self> {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
         write_metadata(&mut file, &metadata)?;
         Ok(Self {
-            path,
+            path: path.to_owned(),
             metadata,
             values: HashMap::new(),
         })
@@ -304,6 +327,11 @@ impl AgentDriver {
     ) -> Result<(), AgentDriverError> {
         foreground
             .spawn(move |me, _| {
+                me.setup_vars = None;
+                let Some(path) = me.resolved_env_vars.get(OsStr::new(VARS_FILE_ENV)) else {
+                    log::warn!("Could not initialize .warp.vars: exported path is missing");
+                    return;
+                };
                 let mut runtime: HashMap<_, _> = std::env::vars_os().collect();
                 extend_environment(
                     &mut runtime,
@@ -311,7 +339,6 @@ impl AgentDriver {
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone())),
                 );
-                let path = file_path(&me.working_dir, &runtime);
                 let metadata = if include_metadata {
                     runtime
                         .iter()
@@ -324,15 +351,15 @@ impl AgentDriver {
                 } else {
                     HashMap::new()
                 };
-                let vars = SetupVars::create(path.parent().unwrap(), metadata).map_err(|_| {
-                    AgentDriverError::EnvironmentSetupFailed(
-                        "Could not initialize .warp.vars".into(),
-                    )
-                })?;
-                me.setup_vars = Some(vars);
-                Ok::<_, AgentDriverError>(())
+                match SetupVars::create(Path::new(path), metadata) {
+                    Ok(vars) => me.setup_vars = Some(vars),
+                    Err(error) => {
+                        log::warn!("Could not initialize .warp.vars: {}", error.kind());
+                    }
+                }
             })
-            .await?
+            .await?;
+        Ok(())
     }
 
     pub(super) async fn read_setup_vars(
@@ -342,14 +369,14 @@ impl AgentDriver {
     ) -> Result<(), AgentDriverError> {
         let (values, mcp_environment) = foreground
             .spawn(move |me, ctx| {
-                let mut protected: HashMap<_, _> = std::env::vars_os().collect();
+                let protected = &me.resolved_env_vars;
+                let mut environment: HashMap<_, _> = std::env::vars_os().collect();
                 extend_environment(
-                    &mut protected,
+                    &mut environment,
                     me.resolved_env_vars
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone())),
                 );
-                let mut environment = protected.clone();
                 if apply_to_session
                     && let Some(path) = me.terminal_driver.as_ref(ctx).session_path(ctx)
                 {
@@ -359,19 +386,21 @@ impl AgentDriver {
                     return (HashMap::new(), HashMap::new());
                 };
                 vars.read();
-                let applied = merge(&vars.values, &protected, &mut environment);
+                let applied = merge(&vars.values, protected, &mut environment);
                 let mut mcp: HashMap<_, _> = std::env::vars_os().collect();
-                let mcp_applied = merge(&vars.values, &protected, &mut mcp);
+                let mcp_applied = merge(&vars.values, protected, &mut mcp);
                 let mut mcp_environment: HashMap<_, _> = mcp_applied
                     .into_iter()
                     .filter_map(|(key, value)| {
                         Some((key.into_string().ok()?, value.into_string().ok()?))
                     })
                     .collect();
-                mcp_environment.insert(
-                    VARS_FILE_ENV.into(),
-                    vars.path.to_string_lossy().into_owned(),
-                );
+                if !mcp_environment.is_empty() {
+                    mcp_environment.insert(
+                        VARS_FILE_ENV.into(),
+                        vars.path.to_string_lossy().into_owned(),
+                    );
+                }
                 extend_environment(Arc::make_mut(&mut me.resolved_env_vars), applied.clone());
                 (applied, mcp_environment)
             })
@@ -379,7 +408,7 @@ impl AgentDriver {
         if apply_to_session {
             Self::apply_setup_vars_to_session(foreground, values).await?;
         }
-        if update_mcp {
+        if update_mcp && !mcp_environment.is_empty() {
             let result = Self::replace_prewarmed_mcp_environment(foreground, mcp_environment).await;
             Self::handle_mcp_startup_result(result, foreground).await?;
         }
@@ -393,14 +422,14 @@ impl AgentDriver {
         let Some(vars) = self.setup_vars.as_ref() else {
             return;
         };
-        let mut protected: HashMap<_, _> = std::env::vars_os().collect();
+        let protected = self.resolved_env_vars.clone();
+        let mut environment: HashMap<_, _> = std::env::vars_os().collect();
         extend_environment(
-            &mut protected,
+            &mut environment,
             self.resolved_env_vars
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
-        let mut environment = protected.clone();
         let applied = merge(&vars.values, &protected, &mut environment);
         extend_environment(Arc::make_mut(&mut self.resolved_env_vars), applied);
         Arc::make_mut(&mut self.resolved_env_vars)
