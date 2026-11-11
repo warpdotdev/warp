@@ -179,10 +179,18 @@ jobs:
 
       - name: Install Shells
         uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
-        if: ${{ matrix.is_self_hosted == false }}
+        if: ${{ matrix.is_self_hosted == false && matrix.os == 'linux' }}
         with:
           apt: zsh fish
-          brew: fish bash
+
+      - name: Install Shells (macOS)
+        if: ${{ matrix.is_self_hosted == false && matrix.os == 'macos' }}
+        # The install-package action runs `brew update` first, which fails outright when another
+        # brew process on the runner still holds the update lock. The runner image's cached
+        # formula index is recent enough for these packages.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install fish bash
 
       - name: Echo Shells (UNIX)
         id: echo_shells_unix
@@ -275,11 +283,16 @@ jobs:
           version: '>= 397.0.0'
 
       - name: Install vim for richer alt-screen tests
-        if: ${{ matrix.is_self_hosted == false }}
+        if: ${{ matrix.is_self_hosted == false && matrix.os == 'linux' }}
         uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
         with:
-          brew: vim
           apt: vim
+
+      - name: Install vim for richer alt-screen tests (macOS)
+        if: ${{ matrix.is_self_hosted == false && matrix.os == 'macos' }}
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install vim
 
       # The cache-stats and timings steps below are temporary diagnostics for slow
       # macOS test compiles. Remove them once the cause has been pinned down.
