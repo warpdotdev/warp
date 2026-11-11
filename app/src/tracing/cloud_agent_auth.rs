@@ -171,7 +171,8 @@ impl AuthContext {
         );
         let snapshot =
             TokenSnapshot::new(credential.snapshot.token, credential.snapshot.expires_at)?;
-        // Queued preparation spans must be sent before requests begin using the run identity.
+        // Flush preparation spans under the standby identity without making export a prerequisite
+        // for assigning the run.
         if provider.force_flush().is_err() {
             log::warn!(
                 "Failed to flush standby traces before assigning cloud-agent OTLP credentials"
@@ -215,13 +216,11 @@ pub(super) struct AssignmentCredential {
 
 impl AssignmentCredential {
     pub(super) fn take(runtime_env: &mut HashMap<String, String>) -> anyhow::Result<Self> {
-        let token = runtime_env
-            .remove(CLOUD_AGENT_OTLP_TOKEN)
-            .context("Assigned cloud-agent OTLP token is missing")?;
-        let expires_at = runtime_env
-            .get(CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT)
-            .context("Assigned cloud-agent OTLP expiry is missing")?;
-        let expires_at = DateTime::parse_from_rfc3339(expires_at)
+        let token = runtime_env.remove(CLOUD_AGENT_OTLP_TOKEN);
+        let expires_at = runtime_env.remove(CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT);
+        let token = token.context("Assigned cloud-agent OTLP token is missing")?;
+        let expires_at = expires_at.context("Assigned cloud-agent OTLP expiry is missing")?;
+        let expires_at = DateTime::parse_from_rfc3339(&expires_at)
             .map_err(|_| anyhow!("Assigned cloud-agent OTLP expiry is invalid"))?;
         anyhow::ensure!(
             expires_at.offset().local_minus_utc() == 0,
@@ -538,16 +537,7 @@ pub(super) fn restart_refresh_coordinator(
         return;
     }
     AuthRefreshCoordinator::handle(ctx).update(ctx, |coordinator, ctx| {
-        coordinator.cancel_scheduled_refresh();
-        if let Some(refresh) = coordinator.refresh_request.take() {
-            refresh.abort();
-        }
-        coordinator.generation += 1;
-        coordinator.refresh_in_flight = false;
-        coordinator.consecutive_failures = 0;
-        coordinator.last_failure_diagnostic = None;
-        coordinator.client = client;
-        coordinator.start_refresh(ctx);
+        coordinator.reset(client, ctx);
     });
 }
 
@@ -559,7 +549,6 @@ struct AuthRefreshCoordinator {
     token_store: TokenStore,
     expected_identity: Arc<RwLock<Option<ExpectedIdentity>>>,
     client: Arc<AppManagedSecretsClient>,
-    refresh_in_flight: bool,
     consecutive_failures: u32,
     scheduled_refresh: Option<AbortHandle>,
     last_failure_diagnostic: Option<Instant>,
@@ -580,7 +569,6 @@ impl AuthRefreshCoordinator {
             token_store,
             expected_identity,
             client,
-            refresh_in_flight: false,
             consecutive_failures: 0,
             scheduled_refresh: None,
             last_failure_diagnostic: None,
@@ -596,16 +584,27 @@ impl AuthRefreshCoordinator {
         coordinator
     }
 
+    fn reset(&mut self, client: Arc<AppManagedSecretsClient>, ctx: &mut ModelContext<Self>) {
+        self.cancel_scheduled_refresh();
+        if let Some(refresh) = self.refresh_request.take() {
+            refresh.abort();
+        }
+        self.generation += 1;
+        self.consecutive_failures = 0;
+        self.last_failure_diagnostic = None;
+        self.client = client;
+        self.start_refresh(ctx);
+    }
+
     /// Starts one mint and coalesces all triggers while it remains in flight.
     ///
     /// Each request asks for the fixed collector audience and principal-only subject, and the
     /// timeout guarantees a stalled request eventually enters the ordinary failure path.
     fn start_refresh(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.refresh_in_flight {
+        if self.refresh_request.is_some() {
             return;
         }
         self.cancel_scheduled_refresh();
-        self.refresh_in_flight = true;
         let client = self.client.clone();
         let generation = self.generation;
         let task = ctx.spawn(
@@ -624,9 +623,7 @@ impl AuthRefreshCoordinator {
                     .map_err(|_| anyhow!("Cloud-agent OTLP authorization refresh timed out"))?
             },
             move |coordinator, result, ctx| {
-                if coordinator.generation == generation {
-                    coordinator.finish_refresh(result, ctx);
-                }
+                coordinator.finish_refresh(generation, result, ctx);
             },
         );
         self.refresh_request = Some(task.abort_handle());
@@ -638,10 +635,13 @@ impl AuthRefreshCoordinator {
     /// the same bounded retry path without logging token contents.
     fn finish_refresh(
         &mut self,
+        generation: u64,
         result: anyhow::Result<TaskIdentityToken>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.refresh_in_flight = false;
+        if self.generation != generation {
+            return;
+        }
         self.refresh_request = None;
         match result {
             Ok(token) => {

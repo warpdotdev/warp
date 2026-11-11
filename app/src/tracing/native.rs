@@ -253,21 +253,21 @@ pub(super) fn assign_run_credentials(
     client: Arc<AppManagedSecretsClient>,
     ctx: &mut AppContext,
 ) {
+    // Scrub assignment secrets even when this process never enabled tracing.
     let credential = AssignmentCredential::take(runtime_env);
     let Some(context) = AUTH_CONTEXT.get() else {
         log::debug!("Cloud-agent OTLP assignment skipped: exporter is inactive");
         return;
     };
-    let Ok(credential) = credential else {
-        log::debug!("Cloud-agent OTLP assignment skipped: run credential is unavailable");
-        return;
+    let credential = match credential {
+        Ok(credential) => credential,
+        Err(err) => {
+            log::warn!("Cloud-agent OTLP assignment retained its previous credential: {err:#}");
+            return;
+        }
     };
-    if context
-        .auth
-        .assign_run(credential, &context.provider)
-        .is_err()
-    {
-        log::warn!("Cloud-agent OTLP assignment rejected an invalid run credential");
+    if let Err(err) = context.auth.assign_run(credential, &context.provider) {
+        log::warn!("Cloud-agent OTLP assignment retained its previous credential: {err:#}");
         return;
     }
     cloud_agent_auth::restart_refresh_coordinator(context.auth.clone(), client, ctx);

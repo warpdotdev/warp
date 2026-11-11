@@ -24,6 +24,27 @@ const TASK_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn assignment_without_active_exporter_removes_otlp_secret_without_starting_tracing() {
+    // Exporter initialization is process-global and cannot be undone between tests.
+    if std::env::var_os("WARP_TEST_OTLP_INACTIVE_ASSIGNMENT").is_none() {
+        let output = command::blocking::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::prewarmed::tests::assignment_without_active_exporter_removes_otlp_secret_without_starting_tracing",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_OTLP_INACTIVE_ASSIGNMENT", "1")
+            .env_remove("WARP_CLOUD_AGENT_OTLP_ENDPOINT")
+            .env_remove("WARP_CLOUD_AGENT_OTLP_TOKEN")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let mut runtime_env = HashMap::from([
@@ -45,6 +66,7 @@ fn assignment_without_active_exporter_removes_otlp_secret_without_starting_traci
         });
 
         assert!(!runtime_env.contains_key("WARP_CLOUD_AGENT_OTLP_TOKEN"));
+        assert!(!runtime_env.contains_key("WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT"));
         assert_eq!(runtime_env["WARP_API_KEY"], "run-key");
         assert!(crate::tracing::create_child_process_handoff(Path::new("unused-scope")).is_none());
     });
