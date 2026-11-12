@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,9 +8,13 @@ use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::future::{self, AbortHandle};
+use tempfile::NamedTempFile;
+use uuid::Uuid;
 use warp_harness_usage::{CaptureDiagnostics, JsonlDiagnostics, JsonlReadStatus, extract_claude};
 use warpui::r#async::executor::Background;
 
+use super::super::pi_usage::capture_transcript_with_usage;
+use super::super::transcript_persistence::JSONL_LIMITS;
 use super::*;
 use crate::server::server_api::ServerApiProvider;
 
@@ -25,6 +30,31 @@ fn reporter(client: Arc<ServerApi>) -> UsageReporter {
         Some(HarnessUsageCapability { execution_id: 41 }),
     );
     reporter
+}
+
+#[test]
+fn pi_parser_limits_do_not_block_raw_capture() {
+    for body in [
+        vec![b' '; JSONL_LIMITS.max_line_bytes + 1],
+        vec![b' '; JSONL_LIMITS.max_total_bytes + 1],
+        b"{}\n".repeat(JSONL_LIMITS.max_records + 1),
+    ] {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(file.path(), &body).unwrap();
+        for identity in [
+            None,
+            Some(CaptureIdentity {
+                execution_id: 41,
+                sequence: 1,
+            }),
+        ] {
+            let capture =
+                capture_transcript_with_usage(Uuid::new_v4(), file.path(), true, identity).unwrap();
+            assert_eq!(capture.transcript_body, body);
+            assert!(capture.usage_request.is_none());
+            assert_eq!(capture.needs_retry, identity.is_some());
+        }
+    }
 }
 
 fn request(sequence: i64) -> HarnessUsageRequest {
