@@ -2,8 +2,50 @@ use std::fs::{self, File};
 use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::{Path, PathBuf};
 
+use anyhow::{Result, ensure};
+use chrono::Utc;
 use serde_json::Value;
 use uuid::Uuid;
+use warp_harness_usage::{CaptureDiagnostics, JsonlReadStatus, extract_pi, parse_jsonl};
+
+use super::transcript_persistence::{CapturedTranscript, JSONL_LIMITS, needs_capture_retry};
+use super::usage_reporting::CaptureIdentity;
+
+pub(super) fn capture_transcript_with_usage(
+    session_id: Uuid,
+    path: &Path,
+    is_final: bool,
+    identity: Option<CaptureIdentity>,
+) -> Result<CapturedTranscript> {
+    let mut transcript_body = Vec::new();
+    File::open(path)?
+        .take(JSONL_LIMITS.max_total_bytes as u64 + 1)
+        .read_to_end(&mut transcript_body)?;
+    ensure!(
+        transcript_body.len() <= JSONL_LIMITS.max_total_bytes,
+        "Pi transcript capture exceeded byte limit"
+    );
+    let capture = parse_jsonl(transcript_body.as_slice(), JSONL_LIMITS);
+    ensure!(
+        capture.diagnostics.status != JsonlReadStatus::ResourceLimited,
+        "Pi transcript capture exceeded resource limits"
+    );
+    let diagnostics = CaptureDiagnostics {
+        root: capture.diagnostics,
+        ..Default::default()
+    };
+    let usage_request = identity.and_then(|identity| {
+        identity.build_usage_request(
+            Utc::now(),
+            extract_pi(&session_id.to_string(), &capture.entries, &diagnostics),
+        )
+    });
+    Ok(CapturedTranscript {
+        transcript_body,
+        usage_request,
+        needs_retry: is_final && needs_capture_retry(&diagnostics),
+    })
+}
 
 pub(super) fn find_session_file(root: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
     let session_dir = root.join("sessions");

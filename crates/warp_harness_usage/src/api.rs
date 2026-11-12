@@ -13,6 +13,52 @@ pub struct HarnessUsageRequest {
     pub snapshot: HarnessUsageSnapshot,
 }
 
+/// Cumulative Pi token and tool observations.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PiUsageSnapshot {
+    pub coverage: Coverage,
+    pub payload: PiUsagePayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PiUsagePayload {
+    pub attribution: Vec<PiAttributedUsage>,
+    #[serde(rename = "toolCalls", skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<ToolCalls>,
+}
+
+/// Disjoint Pi usage grouped by observed identity and field completeness.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PiAttributedUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<i64>,
+    pub usage: PiUsage,
+}
+
+/// Pi token buckets are disjoint except for the optional reasoning and cache-retention splits.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write1h: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<i64>,
+}
+
 impl HarnessUsageRequest {
     pub fn new(
         execution_id: i64,
@@ -43,6 +89,7 @@ impl HarnessUsageRequest {
 pub enum HarnessUsageSnapshot {
     ClaudeCode(UsageSnapshot<ClaudeUsage>),
     Codex(UsageSnapshot<CodexUsage>),
+    Pi(PiUsageSnapshot),
 }
 
 impl HarnessUsageSnapshot {
@@ -50,6 +97,7 @@ impl HarnessUsageSnapshot {
         let coverage = match self {
             Self::ClaudeCode(snapshot) => &snapshot.coverage,
             Self::Codex(snapshot) => &snapshot.coverage,
+            Self::Pi(snapshot) => &snapshot.coverage,
         };
         coverage.token_status != CoverageStatus::Unavailable
             || coverage.tool_status != CoverageStatus::Unavailable
