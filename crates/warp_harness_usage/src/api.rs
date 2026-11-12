@@ -34,7 +34,7 @@ pub struct PiAttributedUsage {
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxInputTokens", skip_serializing_if = "Option::is_none")]
     pub max_input_tokens: Option<i64>,
     pub usage: PiUsage,
 }

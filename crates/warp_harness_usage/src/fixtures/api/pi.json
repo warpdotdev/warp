@@ -13,7 +13,7 @@
         {
           "provider": "openrouter",
           "model": "vendor/model",
-          "max_input_tokens": 44,
+          "maxInputTokens": 44,
           "usage": {
             "input": 10,
             "output": 2,
