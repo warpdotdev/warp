@@ -1,0 +1,26 @@
+# Audits the workflows and actions with zizmor. Findings show up as
+# annotations; the job doesn't fail on them.
+
+name: zizmor
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run zizmor==1.32.0 --format github .
