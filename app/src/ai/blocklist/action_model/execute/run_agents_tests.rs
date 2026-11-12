@@ -312,6 +312,7 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
         let AIAgentActionType::RunAgents(request) = &mut action.action else {
             panic!("expected run_agents action");
         };
+        request.delegated_github_coauthor_user_uid = Some("delegated-human".to_string());
         request.metadata = [
             ("ticket_id".to_string(), "ENG-42".to_string()),
             ("stage".to_string(), "batch".to_string()),
@@ -340,6 +341,9 @@ fn dispatch_merges_batch_metadata_with_independent_child_overrides() {
         });
         captured.read(&app, |captured, _| {
             assert_eq!(captured.0.len(), 2);
+            assert!(captured.0.iter().all(|request| {
+                request.delegated_github_coauthor_user_uid.as_deref() == Some("delegated-human")
+            }));
             assert_eq!(
                 captured.0[0].metadata,
                 [
@@ -367,6 +371,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
         task_id: TaskId::new("run-agents-task".to_string()),
         requires_result: true,
         action: AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             summary: "Run child agent".to_string(),
             base_prompt: "Help".to_string(),

@@ -100,6 +100,7 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
 
 fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
     SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some(prompt.to_owned()),
         mode: UserQueryMode::Normal,
@@ -124,6 +125,7 @@ fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
 /// local-to-cloud handoff where the agent skips its initial turn.
 fn promptless_cloud_spawn_request() -> SpawnAgentRequest {
     SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,

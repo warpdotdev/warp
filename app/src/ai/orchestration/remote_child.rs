@@ -295,6 +295,7 @@ pub fn prepare_remote_child_launch(
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });
     let spawn_request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: request.delegated_github_coauthor_user_uid.clone(),
         metadata: request.metadata.clone(),
         prompt: Some(request.prompt.clone()),
         mode: UserQueryMode::Normal,

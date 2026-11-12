@@ -592,6 +592,7 @@ fn restored_local_child_subtree_message() {
             .create();
         server_api
             .send_agent_message(SendAgentMessageRequest {
+                delegated_github_coauthor_user_uid: None,
                 to: vec![grandchild_run.to_string()],
                 subject: "continue".into(),
                 body: "use your previous work".into(),
@@ -982,6 +983,7 @@ fn local_child_dispatch_fails_after_window_team_change() {
             terminal_view.update(ctx, |_, ctx| {
                 ctx.emit(TerminalViewEvent::StartAgentConversation(
                     StartAgentRequest {
+                        delegated_github_coauthor_user_uid: None,
                         metadata: Default::default(),
                         id: Default::default(),
                         name: "local-child".to_string(),
