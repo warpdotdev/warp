@@ -216,7 +216,7 @@ fn build_team_total_card(
         .finish();
 
     let cost_text = Text::new_inline(
-        format_usage_cost(summary.total_credits),
+        format_usage_cost(summary.total_credits, summary.total_cost_cents),
         appearance.ui_font_family(),
         24.,
     )

@@ -1010,6 +1010,7 @@ pub enum FeatureFlag {
     /// Resolves skill reference files in a Factory definition's skill folders during cloud runs,
     /// loading the selected skills from other repositories.
     FactorySkillReferences,
+    CreditEquivalentBillingUsage,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1034,6 +1035,7 @@ pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarn
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
 pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::CreditEquivalentBillingUsage,
     FeatureFlag::LogExpensiveFramesInSentry,
     FeatureFlag::ToggleBootstrapBlock,
     FeatureFlag::CreatingSharedSessions,
