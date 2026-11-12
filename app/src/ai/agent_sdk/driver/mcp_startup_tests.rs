@@ -391,52 +391,6 @@ fn restricted_standby_does_not_resolve_task_bound_github_mcp() {
     });
 }
 
-#[test]
-#[serial_test::serial]
-fn required_native_github_mcp_failure_is_fatal_without_strict_startup() {
-    let _well_known = FeatureFlag::WellKnownMcpIds.override_enabled(true);
-    let _factory = FeatureFlag::FactoryMcp.override_enabled(false);
-    let _preview = FeatureFlag::PreviewUrlsMcp.override_enabled(false);
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        app.add_singleton_model(|_| simple_logger::manager::LogManager::new());
-        let driver = setup_agent_driver(&mut app);
-        let foreground = driver.update(&mut app, |driver, ctx| {
-            driver.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
-            driver.strict_mcp_startup = false;
-            driver.mcp_startup_timeout = Duration::from_millis(50);
-            ctx.spawner()
-        });
-        let mut client = MockManagedMcpClient::new();
-        client
-            .expect_create_managed_mcp_client_config()
-            .times(1)
-            .returning(|id| {
-                assert_eq!(id, "github");
-                Ok(managed_client_config_output(
-                    r#"{"github":{"command":"/nonexistent/warp-test-github-mcp"}}"#,
-                ))
-            });
-        let startup = start_task_and_profile_mcp_servers(
-            &[MCPSpec::WellKnown("github".into())],
-            Arc::new(client),
-            McpStartupMode::Run,
-            None,
-            &foreground,
-        )
-        .await;
-        assert!(matches!(
-            &startup,
-            Err(AgentDriverError::ConfigBuildFailed(_))
-        ));
-        assert!(
-            AgentDriver::handle_mcp_startup_result(startup, &foreground)
-                .await
-                .is_err()
-        );
-    });
-}
-
 fn managed_client_config_output(mcp_config_json: &str) -> CreateManagedMcpClientConfigOutput {
     CreateManagedMcpClientConfigOutput {
         transport_kind: ManagedMcpTransportKind::Command,

@@ -20,6 +20,7 @@ use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::client::{GraphQLError, get_request_context};
+use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::mutations::prewarmed_sandbox_config::{
     PrewarmedSandboxConfig, PrewarmedSandboxConfigInput, PrewarmedSandboxConfigResult,
     PrewarmedSandboxConfigVariables, PrewarmedSandboxConfiguration as GraphqlConfiguration,
@@ -459,7 +460,18 @@ impl PrewarmedSandboxClient for ServerApi {
                 (*config).try_into()
             }
             PrewarmedSandboxConfigResult::UserFacingError(error) => {
-                Err(TaskGitCredentialsError::from_user_facing(error).into())
+                let message = "Pre-warmed sandbox configuration is unavailable".to_owned();
+                Err(match error.error {
+                    UserFacingErrorInterface::PlatformError(error) => {
+                        TaskGitCredentialsError::Platform {
+                            message,
+                            detail: None,
+                            info: Box::new(error.info.into()),
+                        }
+                    }
+                    _ => TaskGitCredentialsError::Unstructured { message },
+                }
+                .into())
             }
             PrewarmedSandboxConfigResult::Unknown => {
                 bail!("Unknown pre-warmed sandbox configuration response")

@@ -248,6 +248,24 @@ fn prepare(owner: impl Into<ManagedStoreOwner>) -> Result<PathBuf> {
         valid_config_count(std::env::var_os("GIT_CONFIG_COUNT").as_deref()),
         "Restricted GitHub mode does not allow nonzero GIT_CONFIG_COUNT"
     );
+    for name in [".netrc", "_netrc"] {
+        ensure!(
+            fs::symlink_metadata(home.join(name))
+                .is_err_and(|error| error.kind() == ErrorKind::NotFound),
+            "Restricted GitHub mode does not allow inherited netrc credentials"
+        );
+    }
+    let http_auth = Command::new("git")
+        .args([
+            "config",
+            "--get-regexp",
+            r"^http\..*(extraheader|cookiefile)$",
+        ])
+        .output()?;
+    ensure!(
+        http_auth.status.code() == Some(1),
+        "Restricted GitHub mode does not allow inherited HTTP authentication"
+    );
     let directory = owner_dir(&owner)?;
     ensure!(
         fs::symlink_metadata(&directory).is_err_and(|error| error.kind() == ErrorKind::NotFound),
@@ -414,6 +432,12 @@ async fn fetch(
 }
 
 fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
+    ensure!(
+        response
+            .expires_at
+            .is_none_or(|expiry| expiry > Instant::now()),
+        "Restricted GitHub credential expired before installation"
+    );
     let content = response
         .credentials
         .iter()
@@ -563,7 +587,9 @@ pub(crate) fn is_transient_credential_error(error: &TaskGitCredentialsError) -> 
             info.retryable
                 && matches!(
                     info.code,
-                    PlatformErrorCode::InternalError | PlatformErrorCode::ResourceUnavailable
+                    PlatformErrorCode::InternalError
+                        | PlatformErrorCode::ResourceUnavailable
+                        | PlatformErrorCode::AgentStreamNetworkError
                 )
                 && info
                     .http_status
@@ -600,19 +626,28 @@ pub(crate) fn is_transient_request_error(error: &anyhow::Error) -> bool {
                     }
                     transient = true;
                 }
-                GraphQLError::RequestError(error) => {
+                GraphQLError::RequestError(error) | GraphQLError::ResponseError(error) => {
                     if error
                         .status()
                         .is_some_and(|status| !matches!(status.as_u16(), 408 | 429 | 500..=599))
                     {
                         return false;
                     }
-                    transient |= error.is_timeout() || error.is_connect();
+                    transient |= error.is_timeout() || error.is_connect() || error.is_body();
                 }
-                GraphQLError::ResponseError(_)
-                | GraphQLError::StagingAccessBlocked
-                | GraphQLError::IapChallengeBlocked => return false,
+                GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => {
+                    return false;
+                }
             }
+        }
+        if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
+            if let Some(status) = error.status() {
+                if !matches!(status.as_u16(), 408 | 429 | 500..=599) {
+                    return false;
+                }
+                transient = true;
+            }
+            transient |= error.is_timeout() || error.is_connect() || error.is_body();
         }
         if let Some(error) = cause.downcast_ref::<HttpStatusError>() {
             if !matches!(error.status, 408 | 429 | 500..=599) {
@@ -665,6 +700,20 @@ fn apply_partial_response(
     owner: &ManagedStoreOwner,
     response: RestrictedTaskGitCredentialsOutput,
 ) -> Result<(), TaskGitCredentialsError> {
+    if response.failed_hosts.iter().any(|host| {
+        !matches!(host.as_str(), GITHUB_HOST | "gitlab.com" | "dev.azure.com")
+            || response
+                .credentials
+                .iter()
+                .any(|credential| credential.host == *host)
+    }) {
+        return apply_refresh(
+            owner,
+            Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+                "Restricted credential response has unknown or contradictory failed forges"
+            ))),
+        );
+    }
     let github_failed = response.failed_hosts.iter().any(|host| host == GITHUB_HOST);
     let partial = !response.failed_hosts.is_empty();
     let (github, other): (Vec<_>, Vec<_>) = response

@@ -681,13 +681,10 @@ fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &
     if let (Some(current), Some(previous)) = (
         global_git_identity(),
         recorded_identity_for_host(GITHUB_HOST),
-    ) {
-        if current.0 == previous.0 {
-            run_git_config("user.name", &replacement.0);
-        }
-        if current.1 == previous.1 {
-            run_git_config("user.email", &replacement.1);
-        }
+    ) && current == previous
+    {
+        run_git_config("user.name", &replacement.0);
+        run_git_config("user.email", &replacement.1);
     }
     for (path, host, current, previous) in managed {
         if let (Some(current), Some(previous)) = (current, previous) {
@@ -697,10 +694,8 @@ fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &
                     .find(|credential| credential.host == host)
                     .or_else(|| credentials.first()),
             );
-            if current.0 == previous.0 {
+            if current == previous {
                 run_repository_git_config(path, "user.name", &replacement.0);
-            }
-            if current.1 == previous.1 {
                 run_repository_git_config(path, "user.email", &replacement.1);
             }
         }

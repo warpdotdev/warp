@@ -284,7 +284,10 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         assert!(payload["variables"]["requestContext"].is_object());
         assert_eq!(
             payload["variables"]["input"],
-            serde_json::json!({"sandboxId": "sandbox"})
+            serde_json::json!({
+                "sandboxId": "11111111-2222-3333-4444-555555555555",
+                "githubCredentialContractVersion": 1
+            })
         );
     }));
     let api = authenticated_client_with_http(http_client);
@@ -297,7 +300,7 @@ fn configuration_uses_default_graphql_timeout_and_authentication() {
         .create();
     drop(server);
     assert_eq!(
-        block_on(api.fetch_configuration("sandbox"))
+        block_on(api.fetch_configuration("11111111-2222-3333-4444-555555555555"))
             .unwrap()
             .generation,
         "abc123"
@@ -611,7 +614,7 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
         .match_header("authorization", "Bearer test-access-token")
         .match_body(Matcher::PartialJson(serde_json::json!({
             "variables": {
-                "input": { "sandboxId": "sandbox" }
+                "input": { "sandboxId": "11111111-2222-3333-4444-555555555555" }
             }
         })))
         .with_status(200)
@@ -632,7 +635,10 @@ fn all_endpoints_use_cached_credentials_and_expected_payloads() {
     drop(server);
     block_on(async {
         assert_eq!(
-            api.fetch_configuration("sandbox").await.unwrap().generation,
+            api.fetch_configuration("11111111-2222-3333-4444-555555555555")
+                .await
+                .unwrap()
+                .generation,
             "abc123"
         );
         api.report_status("sandbox", "abc123", PrewarmedSandboxState::Ready)
@@ -755,7 +761,9 @@ fn restricted_configuration_without_tokens_keeps_its_mode() {
 }
 
 #[test]
+#[cfg(not(feature = "skip_login"))]
 fn config_gone_requires_the_structured_lifecycle_marker() {
+    let api = authenticated_client();
     for (code, status, retryable, reason, expected) in [
         (
             "OPERATION_NOT_SUPPORTED",
@@ -793,24 +801,26 @@ fn config_gone_requires_the_structured_lifecycle_marker() {
             false,
         ),
     ] {
-        let response: PrewarmedSandboxConfig = serde_json::from_value(serde_json::json!({
+        let response = serde_json::json!({"data": {
             "prewarmedSandboxConfig": {
                 "__typename": "UserFacingError", "responseContext": {"serverVersion": null},
-                "error": {"__typename": "PlatformError", "message": "unavailable", "detail": null,
+                "error": {"__typename": "PlatformError", "message": "private-server-detail", "detail": "private-server-detail",
                     "info": {"errorMessage": "unavailable", "code": code, "httpStatus": status,
                         "userFacingMessages": [], "detail": null, "retryable": retryable,
                         "isUserError": false, "metadata": [{"key": "reason", "value": reason}],
                         "debug": null, "metricsCategory": "prewarmed", "traceId": null}
                 }
             }
-        }))
-        .unwrap();
-        let PrewarmedSandboxConfigResult::UserFacingError(error) =
-            response.prewarmed_sandbox_config
-        else {
-            panic!("platform error")
-        };
-        let error = anyhow::Error::new(TaskGitCredentialsError::from_user_facing(error));
+        }});
+        let mut server = ChannelState::mock_server();
+        let request = server
+            .mock("POST", "/graphql/v2?op=PrewarmedSandboxConfig")
+            .with_body(response.to_string())
+            .create();
+        drop(server);
+        let error = block_on(api.fetch_configuration("sandbox")).unwrap_err();
         assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
+        assert!(!format!("{error:#}").contains("private-server-detail"));
+        request.assert();
     }
 }

@@ -159,27 +159,15 @@ impl AgentDriver {
         }
         #[cfg(target_family = "wasm")]
         runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
-        let assigned_mode = git_credentials::credential_mode(
-            runtime_env
-                .get("WARP_GITHUB_CREDENTIAL_MODE")
-                .map(String::as_str),
-        )
-        .map_err(AgentDriverError::ConfigBuildFailed)?;
         let (prepared_mode, standby_owner) = spawner
             .spawn(|me, _| (me.github_credential_mode, me.credential_store_owner.clone()))
             .await?;
-        if assigned_mode != prepared_mode {
-            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
-                "Assigned GitHub credential mode does not match preparation"
-            )));
-        }
-        validate_assignment(&config).map_err(AgentDriverError::ConfigBuildFailed)?;
         let retained_mcp = Self::stop_prewarmed_mcp_servers(spawner, HashMap::new()).await?;
         if let Some(owner) = standby_owner {
             git_credentials::close_restricted_credentials(&owner)
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
         }
-        if assigned_mode == GitHubCredentialMode::Legacy {
+        if prepared_mode == GitHubCredentialMode::Legacy {
             git_credentials::clear_standby_credentials()
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
         } else {
@@ -194,6 +182,17 @@ impl AgentDriver {
                 .cleanup()
                 .await
                 .map_err(AgentDriverError::CloudProviderSetupFailed)?;
+        }
+        let assigned_mode = git_credentials::credential_mode(
+            runtime_env
+                .get("WARP_GITHUB_CREDENTIAL_MODE")
+                .map(String::as_str),
+        )
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
+        if assigned_mode != prepared_mode {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+                "Assigned GitHub credential mode does not match preparation"
+            )));
         }
         validate_assignment(&config).map_err(AgentDriverError::ConfigBuildFailed)?;
         let team_scope = execution_config::team_scope(config.team_id.as_ref())

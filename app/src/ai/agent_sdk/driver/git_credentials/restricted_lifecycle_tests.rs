@@ -12,7 +12,7 @@ use crate::ai::mcp::{MCPServer, MCPServerExt as _, TemplatableMCPServerManager, 
 use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::prewarmed_sandbox::{
     PrewarmedSandboxClient, PrewarmedSandboxConfiguration, PrewarmedSandboxControlStream,
-    PrewarmedSandboxState,
+    PrewarmedSandboxPreparation, PrewarmedSandboxState,
 };
 
 #[test]
@@ -188,6 +188,7 @@ struct RenewalClient {
     requests: AtomicUsize,
     cancelled: Arc<AtomicBool>,
     pending: bool,
+    renew: bool,
 }
 
 struct RecordCancellation(Arc<AtomicBool>);
@@ -207,6 +208,31 @@ impl PrewarmedSandboxClient for RenewalClient {
         if self.pending {
             let _cancelled = RecordCancellation(self.cancelled.clone());
             return future::pending().await;
+        }
+        if self.renew {
+            let mut credentials = response().credentials;
+            credentials[0].token = "renewed-standby-token".into();
+            credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(2)).into());
+            return Ok(PrewarmedSandboxConfiguration {
+                sandbox_id: "sandbox".into(),
+                generation: "renewed".into(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                git_credentials: credentials,
+                expires_at: Utc::now() + TimeDelta::hours(3),
+                environment_variables: HashMap::new(),
+                managed_secrets: HashMap::new(),
+                preparation: PrewarmedSandboxPreparation {
+                    harness: "warp".into(),
+                    repositories: Vec::new(),
+                    deferred_repositories: Vec::new(),
+                    setup_commands: Vec::new(),
+                    mcp_servers: serde_json::Map::new(),
+                    skills: Vec::new(),
+                    factory_skill_dirs: Vec::new(),
+                    computer_use_enabled: false,
+                    providers: None,
+                },
+            });
         }
         let mut info = PlatformErrorInfo::new(PlatformErrorCode::OperationNotSupported, false);
         info.http_status = Some(410);
@@ -244,13 +270,18 @@ fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_own
         "lifecycle_tests::actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_owner",
         &[],
         |_| {
-            for (generation, pending) in [("gone", false), ("pending", true)] {
+            for (generation, pending, renew) in [
+                ("gone", false, false),
+                ("pending", true, false),
+                ("renewed", false, true),
+            ] {
                 let owner = ManagedStoreOwner::Standby {
                     sandbox_id: "sandbox".into(),
                     generation: generation.into(),
                 };
                 let directory = prepare(&owner)?;
                 apply_refresh(&owner, Ok(validated_response()?))?;
+                let renewed_after = Instant::now() + Duration::from_secs(7100);
                 with_store(&owner, |store| {
                     store.refresh_at = Some(Instant::now());
                     Ok(())
@@ -260,6 +291,7 @@ fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_own
                     requests: AtomicUsize::new(0),
                     cancelled: Arc::new(AtomicBool::new(false)),
                     pending,
+                    renew,
                 };
                 let clock = StandbyClock::default();
                 block_on(async {
@@ -280,8 +312,20 @@ fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_own
                                 fs::read_to_string(directory.join("credentials"))
                                     .unwrap()
                                     .is_empty(),
-                                !pending
+                                !pending && !renew
                             );
+                            if renew {
+                                assert!(
+                                    fs::read_to_string(directory.join("credentials"))
+                                        .unwrap()
+                                        .contains("renewed-standby-token")
+                                );
+                                assert!(
+                                    with_store(&owner, |store| Ok(store.expires_at.unwrap()))
+                                        .unwrap()
+                                        > renewed_after
+                                );
+                            }
                             drop(renewal);
                         }
                     }

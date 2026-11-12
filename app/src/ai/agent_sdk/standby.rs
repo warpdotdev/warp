@@ -538,6 +538,7 @@ async fn confirm_delivery<'a>(
 }
 
 /// Waits in standby for an assignment, installs it, confirms its delivery, and then runs it.
+#[allow(clippy::too_many_arguments)]
 async fn run_lifecycle<'a, P, R>(
     generation: &str,
     expires_at: DateTime<Utc>,
@@ -735,7 +736,7 @@ async fn prepare(
                     .collect::<Vec<_>>();
                 apply_git_credentials(&credentials)?;
             }
-            Ok(())
+            Ok::<_, AgentDriverError>(())
         })
         .await?;
 
