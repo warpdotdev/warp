@@ -69,16 +69,17 @@ impl LineEditorStatus {
     }
 
     fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
-        let Some(active_session_id) = self.model_event_dispatcher.as_ref(ctx).active_session_id()
-        else {
-            return;
-        };
-
-        let Some(active_session) = self.sessions.as_ref(ctx).get(active_session_id) else {
-            return;
-        };
-
-        let is_active_session_zsh = active_session.shell().shell_type() == ShellType::Zsh;
+        // The shell's first Precmd can arrive before Bootstrapped registers the session.
+        // Returning early dropped that Precmd and deadlocked bash sessions: bash only emits
+        // another Precmd after a command finishes, but commands cannot be written while the
+        // line editor is inactive. Treat a missing/unregistered session as non-zsh — the
+        // correct Precmd reading for every shell except zsh.
+        let is_active_session_zsh = self
+            .model_event_dispatcher
+            .as_ref(ctx)
+            .active_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+            .is_some_and(|session| session.shell().shell_type() == ShellType::Zsh);
         match event {
             ModelEvent::Handler(AnsiHandlerEvent::Precmd) => {
                 if is_active_session_zsh {
@@ -150,3 +151,7 @@ pub enum LineEditorStatusEvent {
 impl Entity for LineEditorStatus {
     type Event = LineEditorStatusEvent;
 }
+
+#[cfg(test)]
+#[path = "line_editor_status_tests.rs"]
+mod tests;
