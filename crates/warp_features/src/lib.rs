@@ -1010,6 +1010,10 @@ pub enum FeatureFlag {
     /// Resolves skill reference files in a Factory definition's skill folders during cloud runs,
     /// loading the selected skills from other repositories.
     FactorySkillReferences,
+
+    /// Reads a third-party harness's sidecar files into the file cache while a cloud run
+    /// prepares its workspace, so the harness launch does not wait on cold storage.
+    HarnessLaunchFileWarmup,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1090,6 +1094,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::HarnessLaunchFileWarmup,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

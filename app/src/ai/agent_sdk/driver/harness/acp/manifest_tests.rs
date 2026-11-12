@@ -183,6 +183,37 @@ fn defaults_say_whether_a_sidecar_without_a_manifest_was_mounted() {
 }
 
 #[test]
+fn launch_file_roots_are_a_sidecars_usr_local() {
+    let root = tempdir().unwrap();
+    let mounts = root.path().join("mnt");
+    let mount_dir = mounts.join("pi-cli-sidecar");
+    write_manifest(&mount_dir.join(MANIFEST_FILE), &[]);
+    write_executable(&mount_dir.join("usr/local/bin").join(PROGRAM));
+
+    let sidecar = discover(Harness::Pi, None, &mounts).unwrap();
+    assert_eq!(sidecar.launch_file_roots(), [mount_dir.join("usr/local")]);
+
+    // A built-in default has no sidecar to read from.
+    let default = default_manifest(Harness::Pi).unwrap();
+    assert!(default.launch_file_roots().is_empty());
+}
+
+#[test]
+fn a_sidecar_may_declare_runtime_error_patterns_without_an_auth_check() {
+    let root = tempdir().unwrap();
+    let path = root.path().join(MANIFEST_FILE);
+    write_manifest(&path, &[]);
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["auth"] = json!({"runtime_error_patterns": ["invalid API key"]});
+    fs::write(&path, manifest.to_string()).unwrap();
+    write_executable(&root.path().join("usr/local/bin").join(PROGRAM));
+
+    let selected = discover(Harness::Pi, Some(root.path()), root.path()).unwrap();
+    assert_eq!(selected.auth_check_command, None);
+    assert_eq!(selected.runtime_error_patterns, ["invalid API key"]);
+}
+
+#[test]
 fn claude_default_lists_the_package_launcher_before_the_npm_bin() {
     let manifest = default_manifest(Harness::Claude).unwrap();
     assert_eq!(manifest.launch.program, "claude-code-acp");
