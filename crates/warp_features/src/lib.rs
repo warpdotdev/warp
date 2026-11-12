@@ -1037,7 +1037,6 @@ pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarn
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
 pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::CwdScopedCloudSkills,
     FeatureFlag::LogExpensiveFramesInSentry,
     FeatureFlag::ToggleBootstrapBlock,
     FeatureFlag::CreatingSharedSessions,
@@ -1096,6 +1095,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
     FeatureFlag::FactorySkillReferences,
+    FeatureFlag::CwdScopedCloudSkills,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
