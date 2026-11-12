@@ -63,6 +63,7 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+preview_proxy = { path = "crates/preview_proxy" }
 regex_dfas = { path = "crates/regex_dfas" }
 remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
@@ -174,6 +175,8 @@ hashbrown = "0.17.1"
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
+hyper-util = "0.1"
+http-body-util = "0.1"
 html5ever = "0.35.0"
 http = "1.1.0"
 humantime = "2.1.0"

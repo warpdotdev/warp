@@ -1282,7 +1282,9 @@ pub struct ListRunPreviewsResponse {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct RunPreview {}
+pub struct RunPreview {
+    pub port: u16,
+}
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
