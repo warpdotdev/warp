@@ -1896,6 +1896,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
+        accepts_partial_refresh: bool,
         use_factory_repositories: bool,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
@@ -3481,13 +3482,14 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
+        accepts_partial_refresh: bool,
         use_factory_repositories: bool,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
         let variables = RestrictedTaskGitCredentialsVariables {
             input: RestrictedTaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
-                accepts_partial_refresh: Some(false),
+                accepts_partial_refresh: Some(accepts_partial_refresh),
                 use_factory_repositories: use_factory_repositories.then_some(true),
                 github_credential_contract_version: Some(1),
             },
