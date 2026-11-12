@@ -13,11 +13,18 @@ pub struct HarnessUsageRequest {
     pub snapshot: HarnessUsageSnapshot,
 }
 
-/// Cumulative Pi token and tool observations.
+/// Cumulative Pi observations with independent provider-cost coverage.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PiUsageSnapshot {
-    pub coverage: Coverage,
+    pub coverage: PiCoverage,
     pub payload: PiUsagePayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PiCoverage {
+    pub token_status: CoverageStatus,
+    pub tool_status: CoverageStatus,
+    pub cost_status: CoverageStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -27,16 +34,24 @@ pub struct PiUsagePayload {
     pub tool_calls: Option<ToolCalls>,
 }
 
-/// Disjoint Pi usage grouped by observed identity and field completeness.
+/// Disjoint Pi usage grouped by observed identity, completeness, and cost provenance.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PiAttributedUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    pub cost_source: PiCostSource,
     #[serde(rename = "maxInputTokens", skip_serializing_if = "Option::is_none")]
     pub max_input_tokens: Option<i64>,
     pub usage: PiUsage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PiCostSource {
+    Provider,
+    Unavailable,
 }
 
 /// Pi token buckets are disjoint except for the optional reasoning and cache-retention splits.
@@ -57,6 +72,14 @@ pub struct PiUsage {
     pub reasoning: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<PiCost>,
+}
+
+/// Provider-reported total in decimal USD.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PiCost {
+    pub total: String,
 }
 
 impl HarnessUsageRequest {
@@ -97,7 +120,11 @@ impl HarnessUsageSnapshot {
         let coverage = match self {
             Self::ClaudeCode(snapshot) => &snapshot.coverage,
             Self::Codex(snapshot) => &snapshot.coverage,
-            Self::Pi(snapshot) => &snapshot.coverage,
+            Self::Pi(snapshot) => {
+                return snapshot.coverage.token_status != CoverageStatus::Unavailable
+                    || snapshot.coverage.tool_status != CoverageStatus::Unavailable
+                    || snapshot.coverage.cost_status != CoverageStatus::Unavailable;
+            }
         };
         coverage.token_status != CoverageStatus::Unavailable
             || coverage.tool_status != CoverageStatus::Unavailable

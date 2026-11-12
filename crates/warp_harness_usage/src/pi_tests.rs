@@ -27,6 +27,68 @@ fn extract(entries: &[Value], incomplete: bool) -> PiUsageSnapshot {
     snapshot
 }
 
+#[test]
+fn missing_usage_or_truncated_capture_leaves_provider_cost_partial() {
+    let billed = assistant("a", json!({"total":0.12,"totalFromProvider":true}));
+    assert_eq!(
+        extract(std::slice::from_ref(&billed), true)
+            .coverage
+            .cost_status,
+        CoverageStatus::Partial
+    );
+    let snapshot = extract(
+        &[
+            billed,
+            json!({"type":"message","id":"b","message":{"role":"assistant","content":[]}}),
+        ],
+        false,
+    );
+    assert_eq!(snapshot.coverage.cost_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+}
+
+#[test]
+fn provider_zero_without_tokens_matches_contract() {
+    let snapshot = extract(
+        &[json!({"type":"message","id":"a","message":{
+            "role":"assistant","provider":"openrouter","model":"vendor/model","content":[],
+            "usage":{"cost":{"input":0.2,"total":0,"totalFromProvider":true}}
+        }})],
+        false,
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Unavailable);
+    assert_eq!(snapshot.coverage.cost_status, CoverageStatus::Known);
+    let request = HarnessUsageRequest::new(
+        7,
+        3,
+        Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
+        HarnessUsageSnapshot::Pi(snapshot),
+    );
+    assert!(request.has_usable_category());
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::from_str::<Value>(include_str!("fixtures/api/pi-provider.json")).unwrap()
+    );
+}
+
+#[test]
+fn invalid_or_catalog_totals_do_not_become_provider_costs() {
+    for cost in [
+        json!({"total":9}),
+        json!({"total":9,"totalFromProvider":false}),
+        json!({"total":9,"totalFromProvider":"true"}),
+        json!({"total":-1,"totalFromProvider":true}),
+        json!({"total":1e13,"totalFromProvider":true}),
+        json!({"total":1e-100,"totalFromProvider":true}),
+        json!({"total":"0.12","totalFromProvider":true}),
+    ] {
+        let snapshot = extract(&[assistant("a", cost)], false);
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+        assert_eq!(snapshot.coverage.cost_status, CoverageStatus::Unavailable);
+        assert!(snapshot.payload.attribution[0].usage.cost.is_none());
+    }
+}
+
 fn assistant(id: &str, cost: Value) -> Value {
     json!({"type":"message", "id":id, "message":{
         "role":"assistant", "provider":"openrouter", "model":"vendor/model",
@@ -37,7 +99,7 @@ fn assistant(id: &str, cost: Value) -> Value {
 }
 
 #[test]
-fn duplicate_entries_count_once_and_dollar_metadata_does_not_affect_tokens() {
+fn duplicate_entries_count_once_and_cost_provenance_stays_disjoint() {
     let billed = assistant("a", json!({"total":0.12,"totalFromProvider":true}));
     let entries = vec![
         billed.clone(),
@@ -48,12 +110,27 @@ fn duplicate_entries_count_once_and_dollar_metadata_does_not_affect_tokens() {
         assistant("e", json!({"total":0,"totalFromProvider":true})),
     ];
     let snapshot = extract(&entries, false);
-    assert_eq!(snapshot.payload.attribution.len(), 1);
+    assert_eq!(snapshot.payload.attribution.len(), 2);
     assert_eq!(snapshot.payload.tool_calls.unwrap().total, 5);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
-    let group = &snapshot.payload.attribution[0];
-    assert_eq!(group.usage.input, Some(50));
+    assert_eq!(snapshot.coverage.cost_status, CoverageStatus::Partial);
+    let group = snapshot
+        .payload
+        .attribution
+        .iter()
+        .find(|group| group.cost_source == PiCostSource::Provider)
+        .unwrap();
+    assert_eq!(group.usage.input, Some(20));
     assert_eq!(group.max_input_tokens, Some(44));
+    assert_eq!(group.usage.cost.as_ref().unwrap().total, "0.12");
+    let unpriced = snapshot
+        .payload
+        .attribution
+        .iter()
+        .find(|group| group.cost_source == PiCostSource::Unavailable)
+        .unwrap();
+    assert_eq!(unpriced.usage.input, Some(30));
+    assert!(unpriced.usage.cost.is_none());
 }
 
 #[test]
@@ -71,6 +148,7 @@ fn accounts_for_summaries_standalone_and_nested_usage_with_partial_capture() {
     );
     assert_eq!(snapshot.payload.attribution.len(), 2);
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(snapshot.coverage.cost_status, CoverageStatus::Unavailable);
     let unattributed = snapshot
         .payload
         .attribution

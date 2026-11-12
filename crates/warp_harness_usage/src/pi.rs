@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::api::{
-    Coverage, HarnessUsageSnapshot, PiAttributedUsage, PiUsage, PiUsagePayload, PiUsageSnapshot,
+    HarnessUsageSnapshot, PiAttributedUsage, PiCost, PiCostSource, PiCoverage, PiUsage,
+    PiUsagePayload, PiUsageSnapshot,
 };
 use crate::claude::classification;
 use crate::counters::Counters;
@@ -23,16 +24,27 @@ const PATHS: [&str; 7] = [
     "/totalTokens",
 ];
 
+fn valid_cost(value: f64) -> bool {
+    value.is_finite()
+        && (0.0..=1e12).contains(&value)
+        && value
+            .to_string()
+            .split_once('.')
+            .is_none_or(|(_, fraction)| fraction.len() <= 48)
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Group {
     provider: Option<String>,
     model: Option<String>,
+    source: PiCostSource,
     token_fields: [bool; 7],
 }
 
 #[derive(Default)]
 struct Totals {
     tokens: Counters<7>,
+    cost: Option<f64>,
     max_input: Option<i64>,
 }
 
@@ -48,6 +60,7 @@ pub fn extract_pi(
         return ExtractionOutcome::Unavailable(findings.diagnostics());
     }
     let mut records: BTreeMap<&str, Option<&Value>> = BTreeMap::new();
+    let mut costs_partial = !diagnostics.root.is_complete();
     for entry in entries {
         if entry["type"] == "session" {
             continue;
@@ -55,9 +68,11 @@ pub fn extract_pi(
         let Some(id) = entry.get("id").and_then(Value::as_str) else {
             findings.token(ReasonCode::InvalidData);
             findings.tools_partial = true;
+            costs_partial = true;
             continue;
         };
         if !identifier(id, &mut findings) {
+            costs_partial = true;
             continue;
         }
         if let Some(previous) = records.get_mut(id) {
@@ -65,6 +80,7 @@ pub fn extract_pi(
                 *previous = None;
                 findings.token(ReasonCode::AmbiguousAccounting);
                 findings.tools_partial = true;
+                costs_partial = true;
             }
         } else if records.len() < MAX_IDENTITIES {
             records.insert(id, Some(entry));
@@ -101,6 +117,7 @@ pub fn extract_pi(
         let Some(usage) = owner.get("usage").filter(|usage| !usage.is_null()) else {
             if assistant || kind == Some("usage") {
                 findings.token(ReasonCode::IncompleteInput);
+                costs_partial = true;
             }
             continue;
         };
@@ -133,9 +150,16 @@ pub fn extract_pi(
                 .is_some_and(|(total, sum)| total != sum)
         {
             findings.token(ReasonCode::InvalidData);
+            costs_partial = true;
             continue;
         }
-        if !tokens.any() {
+        let cost = &usage["cost"];
+        let reported = (cost["totalFromProvider"] == true)
+            .then(|| cost["total"].as_f64())
+            .flatten()
+            .filter(|value| valid_cost(*value));
+        costs_partial |= reported.is_none();
+        if !tokens.any() && reported.is_none() {
             continue;
         }
         let group = Group {
@@ -144,6 +168,11 @@ pub fn extract_pi(
                 owner.get("responseModel").or_else(|| owner.get("model")),
                 &mut findings,
             ),
+            source: if reported.is_some() {
+                PiCostSource::Provider
+            } else {
+                PiCostSource::Unavailable
+            },
             token_fields: tokens.values.map(|value| value.is_some()),
         };
         if !groups.contains_key(&group) && groups.len() >= MAX_ATTRIBUTIONS {
@@ -171,15 +200,25 @@ pub fn extract_pi(
             findings.limit(ReasonCode::ResourceLimit);
         }
         totals.max_input = totals.max_input.max(prompt);
+        if let Some(value) = reported {
+            let next = totals.cost.unwrap_or_default() + value;
+            if valid_cost(next) {
+                totals.cost = Some(next);
+            } else {
+                findings.limit(ReasonCode::ResourceLimit);
+            }
+        }
     }
     let tool_calls = tools.finish(diagnostics.root.is_complete(), &mut findings);
     let tokens_measured = groups.values().any(|totals| totals.tokens.any());
-    if findings.limit_exceeded || (!tokens_measured && tool_calls.is_none()) {
+    let costs_measured = groups.values().any(|totals| totals.cost.is_some());
+    if findings.limit_exceeded || (!tokens_measured && !costs_measured && tool_calls.is_none()) {
         return ExtractionOutcome::Unavailable(findings.diagnostics());
     }
-    let coverage = Coverage {
+    let coverage = PiCoverage {
         token_status: Findings::status(tokens_measured, findings.tokens_partial),
         tool_status: Findings::status(tool_calls.is_some(), findings.tools_partial),
+        cost_status: Findings::status(costs_measured, costs_partial),
     };
     let attribution = groups
         .into_iter()
@@ -196,6 +235,7 @@ pub fn extract_pi(
             PiAttributedUsage {
                 provider: group.provider,
                 model: group.model,
+                cost_source: group.source,
                 max_input_tokens: totals.max_input,
                 usage: PiUsage {
                     input,
@@ -205,6 +245,9 @@ pub fn extract_pi(
                     cache_write1h,
                     reasoning,
                     total_tokens,
+                    cost: totals.cost.map(|value| PiCost {
+                        total: value.to_string(),
+                    }),
                 },
             }
         })
