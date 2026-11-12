@@ -12,6 +12,7 @@ fn serializes_configuration_mutation_without_workload_token_input() {
     let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
         input: PrewarmedSandboxConfigInput {
             sandbox_id: "sandbox".into(),
+            github_credential_contract_version: Some(1),
         },
         request_context: RequestContext {
             client_context: ClientContext { version: None },
@@ -71,6 +72,8 @@ fn serializes_configuration_mutation_without_workload_token_input() {
         "roleArn",
         "environmentVariables",
         "gitCredentials",
+        "githubCredentialMode",
+        "repositoryScope",
         "host",
         "username",
         "token",
@@ -87,7 +90,7 @@ fn serializes_configuration_mutation_without_workload_token_input() {
     let request = serde_json::to_value(operation).unwrap();
     assert_eq!(
         request["variables"]["input"],
-        json!({"sandboxId": "sandbox"})
+        json!({"sandboxId": "sandbox", "githubCredentialContractVersion": 1})
     );
     assert!(request["variables"]["requestContext"].is_object());
 }
@@ -183,6 +186,7 @@ fn rejects_invalid_workload_token_headers() {
         let operation = PrewarmedSandboxConfig::build(PrewarmedSandboxConfigVariables {
             input: PrewarmedSandboxConfigInput {
                 sandbox_id: "sandbox".into(),
+                github_credential_contract_version: Some(1),
             },
             request_context: get_request_context(),
         });

@@ -35,6 +35,26 @@ fn assignment_harness_transport(
 }
 
 impl AgentDriver {
+    pub(crate) async fn report_prewarmed_lifecycle_failure(
+        spawner: &ModelSpawner<Self>,
+        message: String,
+    ) {
+        if let Ok(Some((task_id, client))) = spawner
+            .spawn(|me, ctx| {
+                me.task_id
+                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+            })
+            .await
+        {
+            report_driver_error(
+                task_id,
+                &AgentDriverError::ConfigBuildFailed(anyhow!(message)),
+                &client,
+            )
+            .await;
+        }
+    }
+
     /// Restarts the agent's shell so it inherits the environment resolved for the assignment.
     async fn replace_shell_with_resolved_env(
         spawner: &ModelSpawner<Self>,
@@ -82,6 +102,9 @@ impl AgentDriver {
             })
             .await?;
         AgentDriverRunner::set_ambient_agent_task_id(spawner, Some(task_id)).await?;
+        spawner
+            .spawn(move |me, _| me.task_id = Some(task_id))
+            .await?;
         let result = Self::install_assignment(
             spawner,
             task_id,
@@ -119,17 +142,33 @@ impl AgentDriver {
         }
         #[cfg(target_family = "wasm")]
         runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
-        if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
-            || runtime_env
+        let assigned_mode = git_credentials::credential_mode(
+            runtime_env
                 .get("WARP_GITHUB_CREDENTIAL_MODE")
-                .is_some_and(|mode| mode == "restricted_installation")
-        {
+                .map(String::as_str),
+        )
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
+        let (prepared_mode, standby_owner) = spawner
+            .spawn(|me, _| (me.github_credential_mode, me.credential_store_owner.clone()))
+            .await?;
+        if assigned_mode != prepared_mode {
             return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
-                "Restricted GitHub credentials require a fresh sandbox; prewarmed assignment is not supported"
+                "Assigned GitHub credential mode does not match preparation"
             )));
         }
-        git_credentials::clear_standby_credentials()
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        validate_assignment(&config).map_err(AgentDriverError::ConfigBuildFailed)?;
+        let retained_mcp = Self::stop_prewarmed_mcp_servers(spawner, HashMap::new()).await?;
+        if let Some(owner) = standby_owner {
+            git_credentials::close_restricted_credentials(&owner)
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        }
+        if assigned_mode == GitHubCredentialMode::Legacy {
+            git_credentials::clear_standby_credentials()
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        } else {
+            git_credentials::clear_standby_provider_credentials()
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        }
         let standby_providers = spawner
             .spawn(|me, _| std::mem::take(&mut me.cloud_providers))
             .await?;
@@ -201,211 +240,253 @@ impl AgentDriver {
                     .collect::<Vec<_>>())
             })
             .await??;
-        let credentials = AgentDriverRunner::fetch_task_git_credentials(
-            task_id.to_string(),
-            ai_client.clone(),
-            use_factory_repositories,
-        )
-        .await
-        .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
-        git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-        AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
-        let (first_skill, discovery_dirs) =
-            resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;
-        let harness_transport = assignment_harness_transport(&runtime_env)
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-        let (mut options, mut task, conversation_id, providers) = spawner
-            .spawn(move |me, ctx| {
-                let (options, task, conversation_id, providers) = build_execution_task_and_options(
-                    None,
-                    harness_transport,
-                    config,
-                    RepositoryContract {
-                        supports_deferred_repositories: FeatureFlag::FactoryDeferredRepositories
-                            .is_enabled(),
-                        use_factory_repositories,
-                    },
-                    working_dir,
-                    first_skill,
-                    discovery_dirs,
-                    ctx,
-                )?;
-                let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
-                    anyhow::bail!("Standby resources were not prepared");
-                };
-                anyhow::ensure!(
-                    prepared.harness == options.selected_harness
-                        && prepared.configuration.same_preparation(&options.workspace),
-                    "Assignment workspace does not match prepared resources"
-                );
-                Ok::<_, anyhow::Error>((options, task, conversation_id, providers))
-            })
-            .await?
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
-        if FeatureFlag::OzIdentityFederation.is_enabled() {
-            options.cloud_providers =
-                cloud_provider::load_providers(&providers, Some(&task_id.to_string()))
-                    .map_err(AgentDriverError::CloudProviderSetupFailed)?;
-        }
-        options.team_scope = Some(team_scope);
-        // MCP servers get only the runtime environment, because in a normal run they inherit the
-        // worker environment that it replaces and never the terminal's managed secrets.
-        let mut mcp_environment = runtime_env.clone();
-        let metadata = runtime_env.clone();
-        spawner
-            .spawn(move |me, _| {
-                if let Some(vars) = me.setup_vars.as_mut() {
-                    vars.write_assignment_metadata(&metadata).map_err(|_| {
-                        AgentDriverError::EnvironmentSetupFailed(
-                            "Could not write assignment metadata to .warp.vars".into(),
-                        )
-                    })?;
-                }
-                Ok::<_, AgentDriverError>(())
-            })
-            .await??;
-        // The sandbox's runtime environment is the terminal environment for this assignment, so
-        // the shared resolver layers managed secrets, task variables, and harness variables
-        // underneath it exactly as it does for a normal run.
-        options.environment_variables = runtime_env;
-        let task_secrets = spawner
-            .spawn(move |_, ctx| {
-                ManagedSecretManager::as_ref(ctx).get_task_secrets(task_id.to_string())
-            })
-            .await?
+        if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
+            git_credentials::restricted::install_assignment_credentials(
+                &task_id.to_string(),
+                ai_client,
+                use_factory_repositories,
+                &repositories,
+            )
             .await
-            .map_err(AgentDriverError::SecretsFetchFailed)?;
-        let attachments = if FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-            ai_client.get_task_attachments(task_id.to_string()).await
+            .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
         } else {
-            Ok(Vec::new())
-        };
-        AgentDriverRunner::prepare_execution_task_data(
-            server_api,
-            ai_client,
-            task_id,
-            task_secrets,
-            attachments,
-            &mut options,
-            &mut task,
-        )
-        .await?;
-        // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
-        // instead, before the resume path and the run configuration read the transport.
-        let transport_fallback = super::harness::apply_transport_fallback(
-            &mut task.harness,
-            &mut options.harness_transport,
-        )?;
-        if let Some(reason) = transport_fallback {
-            let harness_name = task.harness.harness().to_string();
-            log::info!(
-                "No ACP adapter for the {harness_name} harness in this sandbox ({reason}); driving it over a PTY"
-            );
-            let _ = spawner
-                .spawn(move |_, ctx| {
-                    use warp_core::telemetry::TelemetryEvent as _;
-                    let event =
-                        super::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
-                            harness: harness_name,
-                            reason: reason.as_str(),
-                        };
-                    crate::send_telemetry_from_app_ctx!(event, ctx);
-                })
-                .await;
+            let credentials = AgentDriverRunner::fetch_task_git_credentials(
+                task_id.to_string(),
+                ai_client.clone(),
+                use_factory_repositories,
+            )
+            .await
+            .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+            git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
         }
-        options.harness_transport_fallback = transport_fallback;
-        if let HarnessKind::ThirdParty(harness) = &task.harness {
-            harness.validate()?;
-        }
-        // A harness whose transport is fixed (Pi) sends no report: the server rejects it.
-        if task.harness.reports_transport() {
-            let transport = options.harness_transport;
-            spawner
-                .spawn(move |_, ctx| {
-                    crate::ai::agent_sdk::transport_report::report_transport_in_background(
-                        &ctx.background_executor(),
-                        ServerApiProvider::as_ref(ctx).get_harness_support_client(),
-                        transport,
-                        transport_fallback.map(super::harness::TransportFallbackReason::as_str),
+        let installation = async {
+            AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
+            let (first_skill, discovery_dirs) =
+                resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events)
+                    .await?;
+            let harness_transport = assignment_harness_transport(&runtime_env)
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+            let (mut options, mut task, conversation_id, providers) = spawner
+                .spawn(move |me, ctx| {
+                    let (options, task, conversation_id, providers) =
+                        build_execution_task_and_options(
+                            None,
+                            harness_transport,
+                            config,
+                            RepositoryContract {
+                                supports_deferred_repositories:
+                                    FeatureFlag::FactoryDeferredRepositories.is_enabled(),
+                                use_factory_repositories,
+                            },
+                            working_dir,
+                            first_skill,
+                            discovery_dirs,
+                            ctx,
+                        )?;
+                    let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
+                        anyhow::bail!("Standby resources were not prepared");
+                    };
+                    anyhow::ensure!(
+                        prepared.harness == options.selected_harness
+                            && prepared.configuration.same_preparation(&options.workspace),
+                        "Assignment workspace does not match prepared resources"
                     );
+                    Ok::<_, anyhow::Error>((options, task, conversation_id, providers))
                 })
-                .await?;
-        }
-        if let Some(conversation_id) = conversation_id {
-            options.resume = setup_events
-                .record_result(
-                    SetupStep::ConversationResumeLoading,
-                    AgentDriverRunner::load_conversation_information(
-                        spawner,
-                        conversation_id,
-                        &task.harness,
-                    ),
-                )
-                .await?;
-        }
-        #[cfg(not(target_family = "wasm"))]
-        if let Some(bedrock) = bedrock {
-            let region = bedrock.region.ok_or_else(|| {
-                AgentDriverError::AwsBedrockCredentialsFailed("Bedrock region is required".into())
-            })?;
-            crate::ai::agent_sdk::configure_bedrock_oidc_credentials(
-                spawner,
+                .await?
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+            if FeatureFlag::OzIdentityFederation.is_enabled() {
+                options.cloud_providers =
+                    cloud_provider::load_providers(&providers, Some(&task_id.to_string()))
+                        .map_err(AgentDriverError::CloudProviderSetupFailed)?;
+            }
+            options.team_scope = Some(team_scope);
+            options.github_credential_mode = assigned_mode;
+            // MCP servers get only the runtime environment, because in a normal run they inherit the
+            // worker environment that it replaces and never the terminal's managed secrets.
+            let mut mcp_environment = runtime_env.clone();
+            let metadata = runtime_env.clone();
+            spawner
+                .spawn(move |me, _| {
+                    if let Some(vars) = me.setup_vars.as_mut() {
+                        vars.write_assignment_metadata(&metadata).map_err(|_| {
+                            AgentDriverError::EnvironmentSetupFailed(
+                                "Could not write assignment metadata to .warp.vars".into(),
+                            )
+                        })?;
+                    }
+                    Ok::<_, AgentDriverError>(())
+                })
+                .await??;
+            // The sandbox's runtime environment is the terminal environment for this assignment, so
+            // the shared resolver layers managed secrets, task variables, and harness variables
+            // underneath it exactly as it does for a normal run.
+            options.environment_variables = runtime_env;
+            let task_secrets = spawner
+                .spawn(move |_, ctx| {
+                    ManagedSecretManager::as_ref(ctx).get_task_secrets(task_id.to_string())
+                })
+                .await?
+                .await
+                .map_err(AgentDriverError::SecretsFetchFailed)?;
+            let attachments = if FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
+                ai_client.get_task_attachments(task_id.to_string()).await
+            } else {
+                Ok(Vec::new())
+            };
+            AgentDriverRunner::prepare_execution_task_data(
+                server_api,
+                ai_client,
+                task_id,
+                task_secrets,
+                attachments,
                 &mut options,
-                bedrock.role_arn,
-                region,
+                &mut task,
             )
             .await?;
-        }
-        #[cfg(target_family = "wasm")]
-        if bedrock.is_some() {
-            return Err(AgentDriverError::InvalidRuntimeState);
-        }
-        let (terminal_inputs, run_config) = split_run_options(options)?;
-        let should_share = terminal_inputs.should_share;
-        let mcp_environment = spawner
-            .spawn(move |me, ctx| {
-                me.apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)?;
-                me.merge_assignment_setup_vars(&mut mcp_environment);
-                me.sandbox_deadline = Some(expires_at.into());
-                Ok::<_, AgentDriverError>(mcp_environment)
-            })
-            .await??;
-        Self::replace_shell_with_resolved_env(spawner).await?;
-        if matches!(task.harness, HarnessKind::Oz) {
-            let mcp_restart =
-                Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
-            Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
-        }
-        spawner
-            .spawn(move |me, ctx| {
-                let scope = me
-                    .team_scope
-                    .as_ref()
-                    .ok_or(AgentDriverError::InvalidRuntimeState)?;
-                me.terminal_driver.update(ctx, |driver, ctx| {
-                    driver.bind_prewarmed_task(
-                        terminal::PrewarmedTaskBinding {
-                            task_id,
-                            working_dir: me.working_dir.clone(),
-                            team_scope: scope,
-                            share_requests,
-                            should_share,
-                            restored_conversation_id: me.restored_conversation_id,
-                        },
-                        ctx,
+            // A run requested over ACP whose sandbox has no ACP adapter is driven over a PTY
+            // instead, before the resume path and the run configuration read the transport.
+            let transport_fallback = super::harness::apply_transport_fallback(
+                &mut task.harness,
+                &mut options.harness_transport,
+            )?;
+            if let Some(reason) = transport_fallback {
+                let harness_name = task.harness.harness().to_string();
+                log::info!(
+                    "No ACP adapter for the {harness_name} harness in this sandbox ({reason}); driving it over a PTY"
+                );
+                let _ = spawner
+                    .spawn(move |_, ctx| {
+                        use warp_core::telemetry::TelemetryEvent as _;
+                        let event =
+                            super::harness::ThirdPartyHarnessTelemetryEvent::TransportFallback {
+                                harness: harness_name,
+                                reason: reason.as_str(),
+                            };
+                        crate::send_telemetry_from_app_ctx!(event, ctx);
+                    })
+                    .await;
+            }
+            options.harness_transport_fallback = transport_fallback;
+            if let HarnessKind::ThirdParty(harness) = &task.harness {
+                harness.validate()?;
+            }
+            // A harness whose transport is fixed (Pi) sends no report: the server rejects it.
+            if task.harness.reports_transport() {
+                let transport = options.harness_transport;
+                spawner
+                    .spawn(move |_, ctx| {
+                        crate::ai::agent_sdk::transport_report::report_transport_in_background(
+                            &ctx.background_executor(),
+                            ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                            transport,
+                            transport_fallback.map(super::harness::TransportFallbackReason::as_str),
+                        );
+                    })
+                    .await?;
+            }
+            if let Some(conversation_id) = conversation_id {
+                options.resume = setup_events
+                    .record_result(
+                        SetupStep::ConversationResumeLoading,
+                        AgentDriverRunner::load_conversation_information(
+                            spawner,
+                            conversation_id,
+                            &task.harness,
+                        ),
                     )
+                    .await?;
+            }
+            #[cfg(not(target_family = "wasm"))]
+            if let Some(bedrock) = bedrock {
+                let region = bedrock.region.ok_or_else(|| {
+                    AgentDriverError::AwsBedrockCredentialsFailed(
+                        "Bedrock region is required".into(),
+                    )
+                })?;
+                crate::ai::agent_sdk::configure_bedrock_oidc_credentials(
+                    spawner,
+                    &mut options,
+                    bedrock.role_arn,
+                    region,
+                )
+                .await?;
+            }
+            #[cfg(target_family = "wasm")]
+            if bedrock.is_some() {
+                return Err(AgentDriverError::InvalidRuntimeState);
+            }
+            let (terminal_inputs, run_config) = split_run_options(options)?;
+            let should_share = terminal_inputs.should_share;
+            let mcp_environment = spawner
+                .spawn(move |me, ctx| {
+                    me.apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)?;
+                    me.merge_assignment_setup_vars(&mut mcp_environment);
+                    me.sandbox_deadline = Some(expires_at.into());
+                    Ok::<_, AgentDriverError>(mcp_environment)
                 })
-            })
-            .await??;
-        spawner
-            .spawn(|me, ctx| {
-                me.terminal_driver
-                    .update(ctx, |driver, _| driver.wait_for_session_shared())
-            })
-            .await?
-            .await?;
-        Ok(task)
+                .await??;
+            Self::replace_shell_with_resolved_env(spawner).await?;
+            if matches!(task.harness, HarnessKind::Oz) {
+                Self::stop_prewarmed_mcp_servers(spawner, mcp_environment).await?;
+                let retained_mcp = retained_mcp
+                    .into_iter()
+                    .filter(|installation| installation.warp_id().is_none())
+                    .collect::<Vec<_>>();
+                let mcp_restart = Self::start_retained_mcp_servers(spawner, retained_mcp).await;
+                Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
+                let managed_client = spawner
+                    .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
+                    .await?;
+                let startup = mcp_startup::start_task_and_profile_mcp_servers(
+                    &task.mcp_specs,
+                    managed_client,
+                    mcp_startup::McpStartupMode::Run,
+                    Some(task_id),
+                    spawner,
+                )
+                .await;
+                Self::handle_mcp_startup_result(startup, spawner).await?;
+            }
+            spawner
+                .spawn(move |me, ctx| {
+                    let scope = me
+                        .team_scope
+                        .as_ref()
+                        .ok_or(AgentDriverError::InvalidRuntimeState)?;
+                    me.terminal_driver.update(ctx, |driver, ctx| {
+                        driver.bind_prewarmed_task(
+                            terminal::PrewarmedTaskBinding {
+                                task_id,
+                                working_dir: me.working_dir.clone(),
+                                team_scope: scope,
+                                share_requests,
+                                should_share,
+                                restored_conversation_id: me.restored_conversation_id,
+                            },
+                            ctx,
+                        )
+                    })
+                })
+                .await??;
+            spawner
+                .spawn(|me, ctx| {
+                    me.terminal_driver
+                        .update(ctx, |driver, _| driver.wait_for_session_shared())
+                })
+                .await?
+                .await?;
+            Ok(task)
+        };
+        if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
+            let owner = ManagedStoreOwner::Task(task_id.to_string());
+            git_credentials::restricted::with_expiry(&owner, installation)
+                .await
+                .map_err(AgentDriverError::ConfigBuildFailed)?
+        } else {
+            installation.await
+        }
     }
 
     fn apply_prewarmed_run_configuration(

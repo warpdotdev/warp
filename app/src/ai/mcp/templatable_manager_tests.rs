@@ -22,7 +22,9 @@ fn prewarmed_mcp_spawn_uses_current_key_without_persisting_it() {
         manager
             .runtime_environment
             .insert("WARP_RUN_ID".into(), "assigned-run".into());
-        manager.apply_runtime_environment(&mut server.transport_type);
+        manager
+            .apply_runtime_environment(&mut server.transport_type)
+            .unwrap();
         let TransportType::CLIServer(server) = &server.transport_type else {
             panic!("stdio server expected");
         };

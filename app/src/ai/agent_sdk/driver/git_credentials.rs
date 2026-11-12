@@ -21,18 +21,18 @@ use anyhow::{Context, Result, bail};
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
 use instant::Instant;
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_isolation_platform::IsolationPlatformError;
 
-use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ai::{
     AIClient, GitCredential, TaskGitCredentialsError, TaskGitCredentialsResponse,
 };
 use crate::util::path::resolve_executable;
 
-mod restricted;
+pub(crate) mod restricted;
 pub(crate) use restricted::{
-    bootstrap_restricted_credentials, close_restricted_credentials, restricted_child_environment,
-    restricted_github_mode, validate_restricted_child_environment,
+    ManagedStoreOwner, bootstrap_restricted_credentials, close_restricted_credentials,
+    credential_mode, restricted_child_environment, validate_restricted_child_environment,
 };
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
@@ -629,6 +629,7 @@ pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result
 
 /// Clears git and GitHub CLI authentication before a standby sandbox changes principals.
 pub(crate) fn clear_standby_credentials() -> Result<()> {
+    clear_standby_provider_credentials()?;
     let home = home_dir()?;
     for path in [
         home.join(".git-credentials"),
@@ -653,25 +654,102 @@ pub(crate) fn configure_assignment_git_credentials(
     repositories: &[(PathBuf, &str)],
 ) -> Result<()> {
     let credentials = unique_credentials_by_host(credentials)?;
-    let managed_repositories = repositories
-        .iter()
-        .filter(|(path, host)| repository_git_identity(path) == recorded_identity_for_host(host))
-        .collect::<Vec<_>>();
-    if global_git_identity() == recorded_identity_for_host(GITHUB_HOST) {
-        configure_git_identity(&credentials);
-    }
-    for (path, host) in managed_repositories {
-        let credential = credentials
-            .iter()
-            .find(|credential| credential.host == *host)
-            .or_else(|| credentials.first());
-        let (name, email) = identity_of(credential);
-        run_repository_git_config(path, "user.name", &name);
-        run_repository_git_config(path, "user.email", &email);
-    }
+    update_assignment_git_identity(&credentials, repositories);
     setup_git_config(&credentials);
     record_host_identities(&credentials);
     write_git_credentials(&credentials)
+}
+
+fn update_assignment_git_identity(credentials: &[GitCredential], repositories: &[(PathBuf, &str)]) {
+    let managed = repositories
+        .iter()
+        .map(|(path, host)| {
+            (
+                path,
+                *host,
+                repository_git_identity(path),
+                recorded_identity_for_host(host),
+            )
+        })
+        .collect::<Vec<_>>();
+    let replacement = identity_of(
+        credentials
+            .iter()
+            .find(|credential| credential.host == GITHUB_HOST)
+            .or_else(|| credentials.first()),
+    );
+    if let (Some(current), Some(previous)) = (
+        global_git_identity(),
+        recorded_identity_for_host(GITHUB_HOST),
+    ) {
+        if current.0 == previous.0 {
+            run_git_config("user.name", &replacement.0);
+        }
+        if current.1 == previous.1 {
+            run_git_config("user.email", &replacement.1);
+        }
+    }
+    for (path, host, current, previous) in managed {
+        if let (Some(current), Some(previous)) = (current, previous) {
+            let replacement = identity_of(
+                credentials
+                    .iter()
+                    .find(|credential| credential.host == host)
+                    .or_else(|| credentials.first()),
+            );
+            if current.0 == previous.0 {
+                run_repository_git_config(path, "user.name", &replacement.0);
+            }
+            if current.1 == previous.1 {
+                run_repository_git_config(path, "user.email", &replacement.1);
+            }
+        }
+    }
+}
+
+pub(crate) fn clear_standby_provider_credentials() -> Result<()> {
+    let hosts = HOST_IDENTITIES
+        .read()
+        .map_err(|_| anyhow::anyhow!("Git identity lock failed"))?
+        .iter()
+        .filter(|identity| identity.host != GITHUB_HOST)
+        .map(|identity| identity.host.clone())
+        .collect::<Vec<_>>();
+    if hosts.is_empty() {
+        return Ok(());
+    }
+    let home = home_dir()?;
+    let path = home.join(".git-credentials");
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)?
+            .lines()
+            .filter(|line| {
+                host_of_credentials_line(line)
+                    .is_none_or(|host| !hosts.iter().any(|managed| managed == host))
+            })
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        write_secret_file(&path, &content)?;
+    }
+    for (host, path) in [
+        (
+            GLAB_HOST,
+            home.join(".config/glab-cli").join(GLAB_CONFIG_FILENAME),
+        ),
+        (
+            AZURE_DEVOPS_HOST,
+            azure_devops_auth_dir(&home).join(AZURE_DEVOPS_TOKEN_FILENAME),
+        ),
+    ] {
+        if hosts.iter().any(|managed| managed == host) {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Run a git config command, logging a warning on failure rather than
@@ -968,8 +1046,9 @@ async fn try_refresh(
     task_id: &str,
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
+    mode: GitHubCredentialMode,
 ) -> Result<(), TaskGitCredentialsError> {
-    if restricted_github_mode().map_err(TaskGitCredentialsError::Request)? {
+    if mode == GitHubCredentialMode::RestrictedInstallation {
         return restricted::refresh_restricted_credentials(
             task_id,
             ai_client,
@@ -1024,29 +1103,51 @@ pub(crate) async fn refresh_loop(
     task_id: String,
     ai_client: Arc<dyn AIClient>,
     use_factory_repositories: bool,
-) {
+    mode: GitHubCredentialMode,
+) -> Result<(), TaskGitCredentialsError> {
+    let owner = ManagedStoreOwner::Task(task_id.clone());
     loop {
-        let interval = if restricted_github_mode().unwrap_or(true) {
+        let interval = if mode == GitHubCredentialMode::RestrictedInstallation {
             restricted::refresh_delay(&task_id, Instant::now())
         } else {
             GIT_CREDENTIALS_REFRESH_INTERVAL
         };
-        warpui::r#async::Timer::after(interval).await;
+        restricted::with_expiry(&owner, warpui::r#async::Timer::after(interval))
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         log::info!("Refreshing git credentials for task {task_id}");
 
-        if with_retry(
-            "Git credentials refresh",
-            || try_refresh(&task_id, &ai_client, use_factory_repositories),
-            is_retryable,
-            |delay| async move {
-                warpui::r#async::Timer::after(delay).await;
-            },
-            |attempts_made| GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempts_made).copied(),
-        )
-        .await
-        .is_err()
-        {
+        let mut failed = false;
+        for attempt in 0..=GIT_CREDENTIALS_REFRESH_BACKOFF.len() {
+            match try_refresh(&task_id, &ai_client, use_factory_repositories, mode).await {
+                Ok(()) => {
+                    failed = false;
+                    break;
+                }
+                Err(error) => {
+                    if restricted::is_fatal_cleanup_error(&error) {
+                        return Err(error);
+                    }
+                    failed = true;
+                    if !is_retryable(&error) {
+                        break;
+                    }
+                    let Some(delay) = GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempt) else {
+                        break;
+                    };
+                    restricted::with_expiry(&owner, warpui::r#async::Timer::after(*delay))
+                        .await
+                        .map_err(TaskGitCredentialsError::Request)?;
+                }
+            }
+        }
+        if failed {
+            if mode == GitHubCredentialMode::RestrictedInstallation {
+                if let Err(error) = restricted::schedule_refresh_retry(&owner, Instant::now()) {
+                    log::error!("Could not schedule restricted GitHub refresh retry: {error:#}");
+                }
+            }
             log::warn!(
                 "Git credentials refresh stopped after a non-retryable error or exhausted \
                  retries; credentials may expire before the next refresh cycle"
