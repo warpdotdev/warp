@@ -1,11 +1,19 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use futures::executor::block_on;
+use futures::future::{self, Either};
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::tests::{response, validated_response, with_home};
 use super::*;
+use crate::ai::agent_sdk::standby::{StandbyClock, renew_standby_credentials};
 use crate::ai::mcp::{MCPServer, MCPServerExt as _, TemplatableMCPServerManager, TransportType};
 use crate::server::server_api::ai::MockAIClient;
+use crate::server::server_api::prewarmed_sandbox::{
+    PrewarmedSandboxClient, PrewarmedSandboxConfiguration, PrewarmedSandboxControlStream,
+    PrewarmedSandboxPreparation, PrewarmedSandboxState,
+};
 
 #[test]
 fn expiry_clears_credentials_while_the_original_operation_remains_pending() -> Result<()> {
@@ -14,14 +22,14 @@ fn expiry_clears_credentials_while_the_original_operation_remains_pending() -> R
         &[],
         |_| {
             let directory = prepare("task")?;
-            let task_id = "task";
-            apply_refresh(task_id, Ok(validated_response()?))?;
-            with_store(task_id, |store| {
+            let owner = ManagedStoreOwner::from("task");
+            apply_refresh(&owner, Ok(validated_response()?))?;
+            with_store(&owner, |store| {
                 store.expires_at = Some(Instant::now() + Duration::from_millis(1));
                 Ok(())
             })?;
             let starts = AtomicUsize::new(0);
-            let result = block_on(with_expiry(task_id, async {
+            let result = block_on(with_expiry(&owner, async {
                 starts.fetch_add(1, Ordering::SeqCst);
                 Timer::after(Duration::from_millis(20)).await;
                 assert_eq!(
@@ -122,32 +130,35 @@ fn failed_clearing_is_fatal_and_does_not_discard_expiry() -> Result<()> {
         &[],
         |_| {
             let directory = prepare("task")?;
-            let task_id = "task";
-            apply_refresh(task_id, Ok(validated_response()?))?;
-            let expiry = with_store(task_id, |store| Ok(store.expires_at))?;
+            let owner = ManagedStoreOwner::from("task");
+            apply_refresh(&owner, Ok(validated_response()?))?;
+            let expiry = with_store(&owner, |store| Ok(store.expires_at))?;
             fs::rename(directory.join("credentials"), directory.join("previous"))?;
             fs::create_dir(directory.join("credentials"))?;
-            let error = clear_restricted_credentials(task_id).unwrap_err();
+            let error = clear_restricted_credentials(&owner).unwrap_err();
             assert!(is_fatal_cleanup_error(&TaskGitCredentialsError::Request(
                 error
             )));
-            assert_eq!(with_store(task_id, |store| Ok(store.expires_at))?, expiry);
-            let failed = apply_refresh(task_id, Ok(validated_response()?)).unwrap_err();
+            assert_eq!(with_store(&owner, |store| Ok(store.expires_at))?, expiry);
+            let failed = apply_refresh(&owner, Ok(validated_response()?)).unwrap_err();
             assert!(is_fatal_cleanup_error(&failed));
-            assert_eq!(with_store(task_id, |store| Ok(store.expires_at))?, expiry);
+            assert_eq!(with_store(&owner, |store| Ok(store.expires_at))?, expiry);
             Ok(())
         },
     )
 }
 
 #[test]
-fn initial_mcp_process_environment_uses_active_task_credentials() -> Result<()> {
+fn initial_mcp_process_environment_uses_active_standby_credentials() -> Result<()> {
     with_home(
-        "lifecycle_tests::initial_mcp_process_environment_uses_active_task_credentials",
+        "lifecycle_tests::initial_mcp_process_environment_uses_active_standby_credentials",
         &[],
         |_| {
-            let task_id = "task";
-            let directory = prepare(task_id)?;
+            let owner = ManagedStoreOwner::Standby {
+                sandbox_id: "sandbox".into(),
+                generation: "generation".into(),
+            };
+            let directory = prepare(&owner)?;
             let mut server = MCPServer::from_user_json(r#"{"local":{"command":"test-mcp","env":{"GH_TOKEN":"configured-test-token","GH_CONFIG_DIR":"/unmanaged","GIT_DIR":"/unmanaged","PATH":"/setup/bin","CUSTOM":"keep"}}}"#)?.pop().unwrap();
             TemplatableMCPServerManager::default()
                 .apply_runtime_environment(&mut server.transport_type)?;
@@ -167,6 +178,168 @@ fn initial_mcp_process_environment_uses_active_task_credentials() -> Result<()> 
             assert!(!environment.contains_key("GIT_DIR"));
             assert_eq!(environment["PATH"], "/setup/bin");
             assert_eq!(environment["CUSTOM"], "keep");
+            Ok(())
+        },
+    )
+}
+
+struct RenewalClient {
+    started: (async_channel::Sender<()>, async_channel::Receiver<()>),
+    requests: AtomicUsize,
+    cancelled: Arc<AtomicBool>,
+    pending: bool,
+    renew: bool,
+}
+
+struct RecordCancellation(Arc<AtomicBool>);
+
+impl Drop for RecordCancellation {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl PrewarmedSandboxClient for RenewalClient {
+    async fn fetch_configuration(&self, sandbox_id: &str) -> Result<PrewarmedSandboxConfiguration> {
+        assert_eq!(sandbox_id, "sandbox");
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        self.started.0.send(()).await?;
+        if self.pending {
+            let _cancelled = RecordCancellation(self.cancelled.clone());
+            return future::pending().await;
+        }
+        if self.renew {
+            let mut credentials = response().credentials;
+            credentials[0].token = "renewed-standby-token".into();
+            credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(2)).into());
+            return Ok(PrewarmedSandboxConfiguration {
+                sandbox_id: "sandbox".into(),
+                generation: "renewed".into(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                git_credentials: credentials,
+                expires_at: Utc::now() + TimeDelta::hours(3),
+                environment_variables: HashMap::new(),
+                managed_secrets: HashMap::new(),
+                preparation: PrewarmedSandboxPreparation {
+                    harness: "warp".into(),
+                    repositories: Vec::new(),
+                    deferred_repositories: Vec::new(),
+                    setup_commands: Vec::new(),
+                    mcp_servers: serde_json::Map::new(),
+                    skills: Vec::new(),
+                    factory_skill_dirs: Vec::new(),
+                    computer_use_enabled: false,
+                    providers: None,
+                },
+            });
+        }
+        let mut info = PlatformErrorInfo::new(PlatformErrorCode::OperationNotSupported, false);
+        info.http_status = Some(410);
+        info.metadata
+            .insert("reason".into(), "prewarmed_sandbox_unavailable".into());
+        Err(TaskGitCredentialsError::Platform {
+            message: "unavailable".into(),
+            detail: None,
+            info: Box::new(info),
+        }
+        .into())
+    }
+
+    async fn report_status(
+        &self,
+        sandbox_id: &str,
+        generation: &str,
+        state: PrewarmedSandboxState,
+    ) -> Result<()> {
+        panic!("unexpected status {sandbox_id} {generation} {state:?}")
+    }
+
+    async fn connect_control_stream(
+        &self,
+        sandbox_id: &str,
+        generation: &str,
+    ) -> Result<PrewarmedSandboxControlStream> {
+        panic!("unexpected control {sandbox_id} {generation}")
+    }
+}
+
+#[test]
+fn actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_owner() -> Result<()> {
+    with_home(
+        "lifecycle_tests::actual_standby_renewal_clears_gone_and_cancels_inflight_fetch_before_task_owner",
+        &[],
+        |_| {
+            for (generation, pending, renew) in [
+                ("gone", false, false),
+                ("pending", true, false),
+                ("renewed", false, true),
+            ] {
+                let owner = ManagedStoreOwner::Standby {
+                    sandbox_id: "sandbox".into(),
+                    generation: generation.into(),
+                };
+                let directory = prepare(&owner)?;
+                apply_refresh(&owner, Ok(validated_response()?))?;
+                let renewed_after = Instant::now() + Duration::from_secs(7100);
+                with_store(&owner, |store| {
+                    store.refresh_at = Some(Instant::now());
+                    Ok(())
+                })?;
+                let client = RenewalClient {
+                    started: async_channel::unbounded(),
+                    requests: AtomicUsize::new(0),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                    pending,
+                    renew,
+                };
+                let clock = StandbyClock::default();
+                block_on(async {
+                    let renewal = renew_standby_credentials(
+                        &client,
+                        &owner,
+                        Utc::now() + TimeDelta::hours(2),
+                        &clock,
+                    )
+                    .boxed();
+                    match future::select(renewal, client.started.1.recv().boxed()).await {
+                        Either::Left((result, _)) => {
+                            panic!("renewal must remain pending: {result:?}")
+                        }
+                        Either::Right((started, renewal)) => {
+                            started.unwrap();
+                            assert_eq!(
+                                fs::read_to_string(directory.join("credentials"))
+                                    .unwrap()
+                                    .is_empty(),
+                                !pending && !renew
+                            );
+                            if renew {
+                                assert!(
+                                    fs::read_to_string(directory.join("credentials"))
+                                        .unwrap()
+                                        .contains("renewed-standby-token")
+                                );
+                                assert!(
+                                    with_store(&owner, |store| Ok(store.expires_at.unwrap()))
+                                        .unwrap()
+                                        > renewed_after
+                                );
+                            }
+                            drop(renewal);
+                        }
+                    }
+                });
+                assert_eq!(client.requests.load(Ordering::SeqCst), 1);
+                assert_eq!(client.cancelled.load(Ordering::SeqCst), pending);
+                close_restricted_credentials(&owner)?;
+                let task = ManagedStoreOwner::Task(format!("task-{generation}"));
+                let task_directory = prepare(&task)?;
+                apply_refresh(&task, Ok(validated_response()?))?;
+                assert!(apply_standby_refresh(&owner, response().credentials).is_err());
+                assert!(!fs::read_to_string(task_directory.join("credentials"))?.is_empty());
+                close_restricted_credentials(&task)?;
+            }
             Ok(())
         },
     )

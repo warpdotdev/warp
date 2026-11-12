@@ -2897,6 +2897,9 @@ enum PlatformErrorCode {
   """Principal lacks permission for the requested operation."""
   NOT_AUTHORIZED
 
+  """The operation is not supported for the current resource state."""
+  OPERATION_NOT_SUPPORTED
+
   """Referenced resource does not exist."""
   RESOURCE_NOT_FOUND
 
@@ -2924,6 +2927,7 @@ type PopulateMerkleTreeCacheOutput implements Response {
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
 input PrewarmedSandboxConfigInput {
+  githubCredentialContractVersion: Int
   sandboxId: ID!
 }
 
@@ -2934,6 +2938,7 @@ type PrewarmedSandboxConfiguration {
   expiresAt: Time!
   fingerprint: String!
   gitCredentials: [TaskGitCredential!]!
+  githubCredentialMode: GitHubCredentialMode!
   managedSecrets: [TaskSecretEntry!]!
   sandboxId: ID!
   spec: PrewarmedSandboxSpec!
