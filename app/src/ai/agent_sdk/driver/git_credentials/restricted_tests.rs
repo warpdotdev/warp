@@ -307,12 +307,12 @@ fn failed_credential_write_does_not_retain_a_long_refresh_deadline() -> Result<(
 }
 
 #[test]
-fn unknown_mode_uses_legacy_credentials() -> Result<()> {
+fn unknown_mode_is_rejected() -> Result<()> {
     with_home(
-        "unknown_mode_uses_legacy_credentials",
+        "unknown_mode_is_rejected",
         &[("WARP_GITHUB_CREDENTIAL_MODE", "future_mode")],
         |_| {
-            assert!(!restricted_github_mode()?);
+            assert!(credential_mode(Some("future_mode")).is_err());
             Ok(())
         },
     )
@@ -324,7 +324,10 @@ fn restricted_mode_uses_restricted_credentials() -> Result<()> {
         "restricted_mode_uses_restricted_credentials",
         &[("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")],
         |_| {
-            assert!(restricted_github_mode()?);
+            assert_eq!(
+                credential_mode(Some("restricted_installation"))?,
+                GitHubCredentialMode::RestrictedInstallation
+            );
             Ok(())
         },
     )
@@ -333,7 +336,7 @@ fn restricted_mode_uses_restricted_credentials() -> Result<()> {
 #[test]
 fn absent_mode_uses_legacy_credentials() -> Result<()> {
     with_home("absent_mode_uses_legacy_credentials", &[], |_| {
-        assert!(!restricted_github_mode()?);
+        assert_eq!(credential_mode(None)?, GitHubCredentialMode::Legacy);
         Ok(())
     })
 }
@@ -434,6 +437,7 @@ fn third_party_run_options_preserve_restricted_github_environment() -> Result<()
                 for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
                     let (_, config) = split_run_options(AgentDriverOptions {
                         working_dir: home.to_path_buf(),
+                        github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
                         task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
                         selected_harness: harness,
                         harness_transport: transport,
@@ -475,6 +479,7 @@ fn third_party_run_options_reject_git_configuration_overrides() -> Result<()> {
         |home| {
             let result = split_run_options(AgentDriverOptions {
                 working_dir: home.to_path_buf(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
                 task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
                 selected_harness: Harness::Claude,
                 environment_variables: HashMap::from([(
@@ -708,6 +713,31 @@ fn child_environment_removes_github_authentication() -> Result<()> {
 }
 
 #[test]
+fn standby_owner_is_distinct_and_late_responses_cannot_replace_task_credentials() -> Result<()> {
+    with_home(
+        "standby_owner_is_distinct_and_late_responses_cannot_replace_task_credentials",
+        &[],
+        |_| {
+            let standby = ManagedStoreOwner::Standby {
+                sandbox_id: "sandbox".into(),
+                generation: "generation".into(),
+            };
+            let standby_dir = prepare(&standby)?;
+            apply_refresh(&standby, Ok(validated_response()?))?;
+            assert!(prepare("task").is_err());
+            close_restricted_credentials(&standby)?;
+            let task_dir = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            assert!(apply_refresh(&standby, Ok(validated_response()?)).is_err());
+            close_restricted_credentials(&standby)?;
+            assert_eq!(fs::read_to_string(standby_dir.join("credentials"))?, "");
+            assert!(!fs::read_to_string(task_dir.join("credentials"))?.is_empty());
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn ambient_helpers_and_credentials_do_not_block_managed_setup() -> Result<()> {
     with_home(
         "ambient_helpers_and_credentials_do_not_block_managed_setup",
@@ -810,7 +840,7 @@ fn transient_failure_keeps_only_unexpired_credentials_without_extending_expiry()
                 with_store("task", |store| Ok(store.expires_at))?,
                 Some(expiry)
             );
-            credential_fetch_failed("task", true, expiry)?;
+            credential_fetch_failed(&ManagedStoreOwner::from("task"), true, expiry)?;
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
             Ok(())
         },
@@ -829,12 +859,12 @@ fn expiry_clears_token_without_changing_the_refresh_schedule() -> Result<()> {
                 "task",
                 Ok(validate_response(response(), now(), received_at)?),
             )?;
-            let task_id = "task";
-            schedule_refresh_retry(task_id, received_at + Duration::from_secs(3590))?;
-            expire_credentials(task_id, received_at + Duration::from_secs(3600))?;
+            let owner = ManagedStoreOwner::from("task");
+            schedule_refresh_retry(&owner, received_at + Duration::from_secs(3590))?;
+            expire_credentials(&owner, received_at + Duration::from_secs(3600))?;
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
             assert_eq!(
-                refresh_delay(task_id, received_at + Duration::from_secs(3600)),
+                refresh_delay(&owner, received_at + Duration::from_secs(3600)),
                 Duration::from_secs(50)
             );
             Ok(())
@@ -855,7 +885,7 @@ fn partial_refresh_keeps_valid_github_when_other_forge_write_fails() -> Result<(
             response
                 .credentials
                 .push(other_forge_credential("gitlab.com"));
-            assert!(apply_partial_response("task", response).is_err());
+            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
             assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
             Ok(())
         },
@@ -875,7 +905,7 @@ fn partial_refresh_clears_failed_github_and_updates_other_forge() -> Result<()> 
                 credentials: vec![other_forge_credential("gitlab.com")],
                 failed_hosts: vec!["github.com".into()],
             };
-            assert!(apply_partial_response("task", response).is_err());
+            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
             assert!(fs::read_to_string(home.join(".git-credentials"))?.contains("gitlab.com"));
             Ok(())
@@ -888,11 +918,44 @@ fn store_guard_closes_credentials_on_early_exit() -> Result<()> {
     with_home("store_guard_closes_credentials_on_early_exit", &[], |_| {
         let directory = prepare("task")?;
         {
-            let _guard = CredentialStoreGuard::new("task".into());
+            let _guard = CredentialStoreGuard::new(ManagedStoreOwner::from("task"));
             apply_refresh("task", Ok(validated_response()?))?;
         }
         assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
         assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
         Ok(())
     })
+}
+
+#[test]
+fn explicit_driver_mode_cannot_be_overridden_by_task_environment() -> Result<()> {
+    with_home(
+        "explicit_driver_mode_cannot_be_overridden_by_task_environment",
+        &[],
+        |home| {
+            let (_, config) = split_run_options(AgentDriverOptions {
+                working_dir: home.into(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                credential_store_owner: Some(ManagedStoreOwner::Standby {
+                    sandbox_id: "sandbox".into(),
+                    generation: "generation".into(),
+                }),
+                environment_variables: HashMap::from([(
+                    "WARP_GITHUB_CREDENTIAL_MODE".into(),
+                    "legacy".into(),
+                )]),
+                ..Default::default()
+            })?;
+            assert_eq!(
+                config.github_credential_mode,
+                GitHubCredentialMode::RestrictedInstallation
+            );
+            assert_eq!(
+                config.resolved_env_vars[OsStr::new("WARP_GITHUB_CREDENTIAL_MODE")],
+                "restricted_installation"
+            );
+            assert!(config.task_id.is_none());
+            Ok(())
+        },
+    )
 }

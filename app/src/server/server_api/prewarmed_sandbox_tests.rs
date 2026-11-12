@@ -696,3 +696,121 @@ fn rejects_requests_without_access_credentials() {
         "{error:#}"
     );
 }
+
+#[test]
+fn restricted_configuration_preserves_mode_scope_expiry_and_identity() {
+    let mut wire: serde_json::Value = serde_json::from_str(CONFIGURATION_JSON).unwrap();
+    let config = &mut wire["data"]["prewarmedSandboxConfig"];
+    config["githubCredentialMode"] = "RESTRICTED_INSTALLATION".into();
+    config["gitCredentials"][0]["username"] = "warp[bot]".into();
+    config["gitCredentials"][0]["email"] = "warp@users.noreply.github.com".into();
+    config["gitCredentials"][0]["expiresAt"] = "2027-01-01T01:00:00Z".into();
+    config["gitCredentials"][0]["repositoryScope"] = "warpdotdev/warp".into();
+    let response: cynic::GraphQlResponse<PrewarmedSandboxConfig> =
+        serde_json::from_value(wire).unwrap();
+    let PrewarmedSandboxConfigResult::PrewarmedSandboxConfiguration(config) =
+        response.data.unwrap().prewarmed_sandbox_config
+    else {
+        panic!("configuration")
+    };
+    let config = PrewarmedSandboxConfiguration::try_from(*config).unwrap();
+    assert_eq!(
+        config.github_credential_mode,
+        GitHubCredentialMode::RestrictedInstallation
+    );
+    assert_eq!(config.sandbox_id, "11111111-2222-3333-4444-555555555555");
+    assert_eq!(
+        config.git_credentials[0].repository_scope.as_deref(),
+        Some("warpdotdev/warp")
+    );
+    assert_eq!(
+        config.git_credentials[0].username.as_deref(),
+        Some("warp[bot]")
+    );
+    assert_eq!(
+        config.git_credentials[0].email.as_deref(),
+        Some("warp@users.noreply.github.com")
+    );
+    assert_eq!(
+        config.git_credentials[0]
+            .expires_at
+            .unwrap()
+            .utc()
+            .to_rfc3339(),
+        "2027-01-01T01:00:00+00:00"
+    );
+}
+
+#[test]
+fn restricted_configuration_without_tokens_keeps_its_mode() {
+    let mut wire = wire_configuration();
+    wire.github_credential_mode = GitHubCredentialMode::RestrictedInstallation;
+    wire.git_credentials.clear();
+    let config = PrewarmedSandboxConfiguration::try_from(wire).unwrap();
+    assert_eq!(
+        config.github_credential_mode,
+        GitHubCredentialMode::RestrictedInstallation
+    );
+    assert!(config.git_credentials.is_empty());
+}
+
+#[test]
+fn config_gone_requires_the_structured_lifecycle_marker() {
+    for (code, status, retryable, reason, expected) in [
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            false,
+            "prewarmed_sandbox_unavailable",
+            true,
+        ),
+        (
+            "NOT_AUTHORIZED",
+            410,
+            false,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            403,
+            false,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            true,
+            "prewarmed_sandbox_unavailable",
+            false,
+        ),
+        (
+            "OPERATION_NOT_SUPPORTED",
+            410,
+            false,
+            "another_reason",
+            false,
+        ),
+    ] {
+        let response: PrewarmedSandboxConfig = serde_json::from_value(serde_json::json!({
+            "prewarmedSandboxConfig": {
+                "__typename": "UserFacingError", "responseContext": {"serverVersion": null},
+                "error": {"__typename": "PlatformError", "message": "unavailable", "detail": null,
+                    "info": {"errorMessage": "unavailable", "code": code, "httpStatus": status,
+                        "userFacingMessages": [], "detail": null, "retryable": retryable,
+                        "isUserError": false, "metadata": [{"key": "reason", "value": reason}],
+                        "debug": null, "metricsCategory": "prewarmed", "traceId": null}
+                }
+            }
+        }))
+        .unwrap();
+        let PrewarmedSandboxConfigResult::UserFacingError(error) =
+            response.prewarmed_sandbox_config
+        else {
+            panic!("platform error")
+        };
+        let error = anyhow::Error::new(TaskGitCredentialsError::from_user_facing(error));
+        assert_eq!(is_prewarmed_sandbox_unavailable(&error), expected);
+    }
+}

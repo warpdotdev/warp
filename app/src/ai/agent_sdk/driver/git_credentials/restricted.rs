@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, TimeDelta, Utc};
 use command::blocking::Command;
 use futures::FutureExt as _;
@@ -17,7 +17,7 @@ use instant::Instant;
 use warp_graphql::ai::PlatformErrorCode;
 use warp_graphql::client::GraphQLError;
 use warp_graphql::queries::task_restricted_git_credentials::{
-    GitHubCredentialMode, RestrictedTaskGitCredentialsOutput,
+    GitHubCredentialMode, RestrictedTaskGitCredential, RestrictedTaskGitCredentialsOutput,
 };
 use warpui::r#async::Timer;
 
@@ -50,17 +50,41 @@ const GIT_OVERRIDE_ENV: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ManagedStoreOwner {
+    Task(String),
+    Standby {
+        sandbox_id: String,
+        generation: String,
+    },
+}
+
+impl From<&str> for ManagedStoreOwner {
+    fn from(task_id: &str) -> Self {
+        Self::Task(task_id.to_owned())
+    }
+}
+
+impl From<&String> for ManagedStoreOwner {
+    fn from(task_id: &String) -> Self {
+        Self::Task(task_id.clone())
+    }
+}
+
+impl From<&ManagedStoreOwner> for ManagedStoreOwner {
+    fn from(owner: &ManagedStoreOwner) -> Self {
+        owner.clone()
+    }
+}
+
 pub(crate) struct CredentialStoreGuard {
-    task_id: String,
+    owner: ManagedStoreOwner,
     armed: bool,
 }
 
 impl CredentialStoreGuard {
-    pub(crate) fn new(task_id: String) -> Self {
-        Self {
-            task_id,
-            armed: true,
-        }
+    pub(crate) fn new(owner: ManagedStoreOwner) -> Self {
+        Self { owner, armed: true }
     }
     fn disarm(&mut self) {
         self.armed = false;
@@ -85,7 +109,7 @@ pub(crate) fn is_fatal_cleanup_error(error: &TaskGitCredentialsError) -> bool {
 impl Drop for CredentialStoreGuard {
     fn drop(&mut self) {
         if self.armed
-            && let Err(error) = close_restricted_credentials(&self.task_id)
+            && let Err(error) = close_restricted_credentials(&self.owner)
         {
             log::error!("Failed to close managed GitHub credentials: {error:#}");
         }
@@ -93,7 +117,7 @@ impl Drop for CredentialStoreGuard {
 }
 
 struct ManagedStore {
-    task_id: String,
+    owner: ManagedStoreOwner,
     directory: PathBuf,
     refresh_at: Option<Instant>,
     expires_at: Option<Instant>,
@@ -107,22 +131,41 @@ struct ValidatedCredentials {
 
 static MANAGED_STORE: Mutex<Option<ManagedStore>> = Mutex::new(None);
 
-pub(crate) fn restricted_github_mode() -> Result<bool> {
-    match std::env::var("WARP_GITHUB_CREDENTIAL_MODE") {
-        Ok(value) => Ok(value == "restricted_installation"),
-        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => Ok(false),
+pub(crate) fn credential_mode(value: Option<&str>) -> Result<GitHubCredentialMode> {
+    match value {
+        None | Some("" | "legacy") => Ok(GitHubCredentialMode::Legacy),
+        Some("restricted_installation") => Ok(GitHubCredentialMode::RestrictedInstallation),
+        Some(_) => bail!("Unsupported GitHub credential mode"),
     }
 }
 
-fn task_dir(task_id: &str) -> Result<PathBuf> {
+fn validate_owner_component(value: &str) -> Result<()> {
     ensure!(
-        !task_id.is_empty()
-            && task_id
+        !value.is_empty()
+            && value
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-        "Invalid task ID for restricted GitHub store",
+        "Invalid restricted GitHub store owner",
     );
-    Ok(home_dir()?.join(".warp").join("github-git").join(task_id))
+    Ok(())
+}
+
+fn owner_dir(owner: &ManagedStoreOwner) -> Result<PathBuf> {
+    let component = match owner {
+        ManagedStoreOwner::Task(task_id) => {
+            validate_owner_component(task_id)?;
+            task_id.clone()
+        }
+        ManagedStoreOwner::Standby {
+            sandbox_id,
+            generation,
+        } => {
+            validate_owner_component(sandbox_id)?;
+            validate_owner_component(generation)?;
+            format!("standby-{sandbox_id}-{generation}")
+        }
+    };
+    Ok(home_dir()?.join(".warp").join("github-git").join(component))
 }
 
 fn private_directory(path: &Path) -> Result<()> {
@@ -171,7 +214,8 @@ fn git_config(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn prepare(task_id: &str) -> Result<PathBuf> {
+fn prepare(owner: impl Into<ManagedStoreOwner>) -> Result<PathBuf> {
+    let owner = owner.into();
     let mut managed = MANAGED_STORE
         .lock()
         .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?;
@@ -204,10 +248,10 @@ fn prepare(task_id: &str) -> Result<PathBuf> {
         valid_config_count(std::env::var_os("GIT_CONFIG_COUNT").as_deref()),
         "Restricted GitHub mode does not allow nonzero GIT_CONFIG_COUNT"
     );
-    let directory = task_dir(task_id)?;
+    let directory = owner_dir(&owner)?;
     ensure!(
         fs::symlink_metadata(&directory).is_err_and(|error| error.kind() == ErrorKind::NotFound),
-        "Managed GitHub task directory already exists: {}",
+        "Managed GitHub owner directory already exists: {}",
         directory.display()
     );
     private_directory(&home.join(".warp"))?;
@@ -216,7 +260,7 @@ fn prepare(task_id: &str) -> Result<PathBuf> {
     private_directory(&directory.join("gh"))?;
     write_store(&directory, "")?;
     *managed = Some(ManagedStore {
-        task_id: task_id.to_owned(),
+        owner,
         directory: directory.clone(),
         refresh_at: None,
         expires_at: None,
@@ -397,20 +441,51 @@ fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()
     write_git_credentials(&other)
 }
 
-fn install(task_id: &str, response: &ValidatedCredentials) -> Result<()> {
-    with_store(task_id, |store| {
+fn install(
+    owner: &ManagedStoreOwner,
+    response: &ValidatedCredentials,
+    set_identity: bool,
+) -> Result<()> {
+    with_store(owner, |store| {
         install_helper(&store.directory, &response.credentials)?;
-        if let Some(github) = response
-            .credentials
-            .iter()
-            .find(|credential| credential.host == GITHUB_HOST)
-        {
-            git_config(&["user.name", github.username.as_deref().unwrap_or_default()])?;
-            git_config(&["user.email", github.email.as_deref().unwrap_or_default()])?;
+        if set_identity {
+            if let Some(github) = response
+                .credentials
+                .iter()
+                .find(|credential| credential.host == GITHUB_HOST)
+            {
+                git_config(&["user.name", github.username.as_deref().unwrap_or_default()])?;
+                git_config(&["user.email", github.email.as_deref().unwrap_or_default()])?;
+            }
+            record_host_identities(&response.credentials);
         }
-        record_host_identities(&response.credentials);
         apply(store, response)
     })
+}
+
+pub(crate) fn prepare_standby_credentials(
+    owner: &ManagedStoreOwner,
+    credentials: Vec<RestrictedTaskGitCredential>,
+) -> Result<()> {
+    ensure!(
+        matches!(owner, ManagedStoreOwner::Standby { .. }),
+        "Standby credentials need a standby owner"
+    );
+    prepare(owner)?;
+    let result = validate_response(
+        RestrictedTaskGitCredentialsOutput {
+            github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+            credentials,
+            failed_hosts: Vec::new(),
+        },
+        Utc::now(),
+        Instant::now(),
+    )
+    .and_then(|response| install(owner, &response, true));
+    if result.is_err() {
+        log_cleanup(owner);
+    }
+    result
 }
 
 pub(crate) async fn bootstrap_restricted_credentials(
@@ -418,8 +493,33 @@ pub(crate) async fn bootstrap_restricted_credentials(
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
-    prepare(task_id).map_err(TaskGitCredentialsError::Request)?;
-    let mut guard = CredentialStoreGuard::new(task_id.to_owned());
+    bootstrap_task(task_id, ai_client, use_factory_repositories, None).await
+}
+
+pub(crate) async fn install_assignment_credentials(
+    task_id: &str,
+    ai_client: &Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+    repositories: &[(PathBuf, &str)],
+) -> Result<(), TaskGitCredentialsError> {
+    bootstrap_task(
+        task_id,
+        ai_client,
+        use_factory_repositories,
+        Some(repositories),
+    )
+    .await
+}
+
+async fn bootstrap_task(
+    task_id: &str,
+    ai_client: &Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+    repositories: Option<&[(PathBuf, &str)]>,
+) -> Result<(), TaskGitCredentialsError> {
+    let owner = ManagedStoreOwner::from(task_id);
+    prepare(&owner).map_err(TaskGitCredentialsError::Request)?;
+    let mut guard = CredentialStoreGuard::new(owner.clone());
     let result = async {
         // Preparation is single-use. Retry only the raw fetch, never validation or installation.
         let response = with_retry(
@@ -434,7 +534,14 @@ pub(crate) async fn bootstrap_restricted_credentials(
         .await?;
         let response = validate_response(response, Utc::now(), Instant::now())
             .map_err(TaskGitCredentialsError::Request)?;
-        install(task_id, &response).map_err(TaskGitCredentialsError::Request)?;
+        if let Some(repositories) = repositories {
+            super::update_assignment_git_identity(&response.credentials, repositories);
+        }
+        install(&owner, &response, repositories.is_none())
+            .map_err(TaskGitCredentialsError::Request)?;
+        if repositories.is_some() {
+            record_host_identities(&response.credentials);
+        }
         Ok(())
     }
     .await;
@@ -442,6 +549,12 @@ pub(crate) async fn bootstrap_restricted_credentials(
         guard.disarm();
     }
     result
+}
+
+fn log_cleanup(owner: &ManagedStoreOwner) {
+    if let Err(error) = close_restricted_credentials(owner) {
+        log::error!("Failed to close restricted GitHub store: {error:#}");
+    }
 }
 
 pub(crate) fn is_transient_credential_error(error: &TaskGitCredentialsError) -> bool {
@@ -516,20 +629,40 @@ pub(crate) async fn refresh_restricted_credentials(
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
+    let owner = ManagedStoreOwner::from(task_id);
     let fetched = with_expiry(
-        task_id,
+        &owner,
         fetch(task_id, ai_client, true, use_factory_repositories),
     )
     .await
     .map_err(TaskGitCredentialsError::Request)?;
     match fetched {
-        Ok(response) => apply_partial_response(task_id, response),
-        Err(error) => apply_refresh(task_id, Err(error)),
+        Ok(response) => apply_partial_response(&owner, response),
+        Err(error) => apply_refresh(&owner, Err(error)),
     }
 }
 
+pub(crate) fn apply_standby_refresh(
+    owner: &ManagedStoreOwner,
+    credentials: Vec<RestrictedTaskGitCredential>,
+) -> Result<(), TaskGitCredentialsError> {
+    apply_refresh(
+        owner,
+        validate_response(
+            RestrictedTaskGitCredentialsOutput {
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                credentials,
+                failed_hosts: Vec::new(),
+            },
+            Utc::now(),
+            Instant::now(),
+        )
+        .map_err(TaskGitCredentialsError::Request),
+    )
+}
+
 fn apply_partial_response(
-    task_id: &str,
+    owner: &ManagedStoreOwner,
     response: RestrictedTaskGitCredentialsOutput,
 ) -> Result<(), TaskGitCredentialsError> {
     let github_failed = response.failed_hosts.iter().any(|host| host == GITHUB_HOST);
@@ -548,7 +681,7 @@ fn apply_partial_response(
         },
     };
     let github_result = apply_refresh(
-        task_id,
+        owner,
         validate_response(github_response, Utc::now(), Instant::now())
             .map_err(TaskGitCredentialsError::Request),
     );
@@ -564,7 +697,7 @@ fn apply_partial_response(
             Instant::now(),
         )?;
         if !validated.credentials.is_empty() {
-            with_store(task_id, |store| {
+            with_store(owner, |store| {
                 store.refresh_at = Some(validated.refresh_at);
                 Ok(())
             })?;
@@ -583,15 +716,16 @@ fn apply_partial_response(
 }
 
 fn apply_refresh(
-    task_id: &str,
+    owner: impl Into<ManagedStoreOwner>,
     fetched: Result<ValidatedCredentials, TaskGitCredentialsError>,
 ) -> Result<(), TaskGitCredentialsError> {
+    let owner = owner.into();
     match fetched {
-        Ok(response) => with_store(task_id, |store| apply(store, &response))
+        Ok(response) => with_store(&owner, |store| apply(store, &response))
             .map_err(TaskGitCredentialsError::Request),
         Err(error) => {
             if let Err(cleanup) = credential_fetch_failed(
-                task_id,
+                &owner,
                 is_transient_credential_error(&error),
                 Instant::now(),
             ) {
@@ -603,8 +737,12 @@ fn apply_refresh(
     }
 }
 
-pub(crate) fn credential_fetch_failed(task_id: &str, transient: bool, now: Instant) -> Result<()> {
-    with_store(task_id, |store| {
+pub(crate) fn credential_fetch_failed(
+    owner: &ManagedStoreOwner,
+    transient: bool,
+    now: Instant,
+) -> Result<()> {
+    with_store(owner, |store| {
         store.refresh_at = Some(now + REFRESH_FALLBACK_INTERVAL);
         if !transient || store.expires_at.is_none_or(|expiry| expiry <= now) {
             clear_store(store)?;
@@ -636,22 +774,22 @@ fn clear_store(store: &mut ManagedStore) -> Result<()> {
 }
 
 #[cfg(test)]
-fn clear_restricted_credentials(task_id: &str) -> Result<()> {
-    with_store(task_id, |store| {
+fn clear_restricted_credentials(owner: impl Into<ManagedStoreOwner>) -> Result<()> {
+    with_store(owner, |store| {
         store.refresh_at = None;
         clear_store(store)
     })
 }
 
-pub(crate) fn schedule_refresh_retry(task_id: &str, now: Instant) -> Result<()> {
-    with_store(task_id, |store| {
+pub(crate) fn schedule_refresh_retry(owner: &ManagedStoreOwner, now: Instant) -> Result<()> {
+    with_store(owner, |store| {
         store.refresh_at = Some(now + REFRESH_FALLBACK_INTERVAL);
         Ok(())
     })
 }
 
-pub(crate) fn refresh_delay(task_id: &str, now: Instant) -> Duration {
-    with_store(task_id, |store| {
+pub(crate) fn refresh_delay(owner: impl Into<ManagedStoreOwner>, now: Instant) -> Duration {
+    with_store(owner, |store| {
         Ok(store
             .refresh_at
             .map(|deadline| deadline.saturating_duration_since(now)))
@@ -661,8 +799,8 @@ pub(crate) fn refresh_delay(task_id: &str, now: Instant) -> Duration {
     .unwrap_or(REFRESH_FALLBACK_INTERVAL)
 }
 
-fn expire_credentials(task_id: &str, now: Instant) -> Result<()> {
-    with_store(task_id, |store| {
+fn expire_credentials(owner: &ManagedStoreOwner, now: Instant) -> Result<()> {
+    with_store(owner, |store| {
         if store.expires_at.is_some_and(|expiry| expiry <= now) {
             clear_store(store)?;
         }
@@ -670,11 +808,14 @@ fn expire_credentials(task_id: &str, now: Instant) -> Result<()> {
     })
 }
 
-pub(crate) async fn with_expiry<T>(task_id: &str, operation: impl Future<Output = T>) -> Result<T> {
+pub(crate) async fn with_expiry<T>(
+    owner: &ManagedStoreOwner,
+    operation: impl Future<Output = T>,
+) -> Result<T> {
     let operation = operation.fuse();
     futures::pin_mut!(operation);
     loop {
-        let expiry = with_store(task_id, |store| Ok(store.expires_at))
+        let expiry = with_store(owner, |store| Ok(store.expires_at))
             .ok()
             .flatten();
         let Some(expiry) = expiry else {
@@ -684,32 +825,34 @@ pub(crate) async fn with_expiry<T>(task_id: &str, operation: impl Future<Output 
         futures::pin_mut!(timer);
         futures::select_biased! {
             _ = timer => {
-                expire_credentials(task_id, Instant::now())?;
+                expire_credentials(owner, Instant::now())?;
             }
             result = operation => return Ok(result),
         }
     }
 }
 
-fn with_store<T>(task_id: &str, action: impl FnOnce(&mut ManagedStore) -> Result<T>) -> Result<T> {
+fn with_store<T>(
+    owner: impl Into<ManagedStoreOwner>,
+    action: impl FnOnce(&mut ManagedStore) -> Result<T>,
+) -> Result<T> {
+    let owner = owner.into();
     let mut managed = MANAGED_STORE
         .lock()
         .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?;
     let managed = managed
         .as_mut()
-        .filter(|managed| managed.task_id == task_id)
-        .context("No active restricted GitHub store for this task")?;
+        .filter(|managed| managed.owner == owner)
+        .context("No active restricted GitHub store for this owner")?;
     action(managed)
 }
 
-pub(crate) fn close_restricted_credentials(task_id: &str) -> Result<()> {
+pub(crate) fn close_restricted_credentials(owner: impl Into<ManagedStoreOwner>) -> Result<()> {
+    let owner = owner.into();
     let mut managed = MANAGED_STORE
         .lock()
         .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?;
-    if let Some(store) = managed
-        .as_mut()
-        .filter(|managed| managed.task_id == task_id)
-    {
+    if let Some(store) = managed.as_mut().filter(|managed| managed.owner == owner) {
         store.refresh_at = None;
         clear_store(store)?;
         *managed = None;
@@ -718,25 +861,28 @@ pub(crate) fn close_restricted_credentials(task_id: &str) -> Result<()> {
 }
 
 pub(crate) fn active_restricted_child_environment() -> Result<HashMap<OsString, OsString>> {
-    let task_id = MANAGED_STORE
+    let owner = MANAGED_STORE
         .lock()
         .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?
         .as_ref()
-        .map(|store| store.task_id.clone());
-    match task_id {
-        Some(task_id) => restricted_child_environment(&task_id),
+        .map(|store| store.owner.clone());
+    match owner {
+        Some(owner) => restricted_child_environment(owner),
         None => Ok(HashMap::new()),
     }
 }
 
-pub(crate) fn restricted_child_environment(task_id: &str) -> Result<HashMap<OsString, OsString>> {
+pub(crate) fn restricted_child_environment(
+    owner: impl Into<ManagedStoreOwner>,
+) -> Result<HashMap<OsString, OsString>> {
+    let owner = owner.into();
     let mut env = AUTH_ENV
         .iter()
         .map(|name| (OsString::from(*name), OsString::new()))
         .collect::<HashMap<_, _>>();
     env.insert(
         "GH_CONFIG_DIR".into(),
-        task_dir(task_id)?.join("gh").into_os_string(),
+        owner_dir(&owner)?.join("gh").into_os_string(),
     );
     env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     env.insert("HOME".into(), home_dir()?.into_os_string());
