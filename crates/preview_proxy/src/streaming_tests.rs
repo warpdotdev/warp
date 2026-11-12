@@ -4,7 +4,6 @@ use super::*;
 
 #[tokio::test]
 async fn downstream_disconnect_closes_upstream_stream() {
-    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -22,15 +21,10 @@ async fn downstream_disconnect_closes_upstream_stream() {
             0
         );
     });
-    let mut proxy = Proxy::bind(
-        DEFAULT_LISTENER_PORT,
-        None,
-        tests::Ports::new(vec![app_port]),
-    )
-    .await
-    .unwrap();
-    let port = proxy.port();
-    let mut downstream = tests::request(port, app_port, "").await;
+    let mut proxy = Proxy::bind(0, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
+    let mut downstream = tests::request(proxy.port(), app_port, "").await;
     assert!(
         tests::headers(&mut downstream)
             .await
@@ -43,21 +37,18 @@ async fn downstream_disconnect_closes_upstream_stream() {
 
 #[tokio::test]
 async fn preserves_response_trailers_and_repeated_headers() {
-    let _port_guard = crate::tests::PROXY_PORT.lock().await;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        tests::headers(&mut stream).await;
+        let request = tests::headers(&mut stream).await;
+        assert!(request.contains("te: trailers\r\n"), "{request}");
+        assert!(request.contains("connection: te\r\n"), "{request}");
         stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: x-checksum\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\n\r\n4\r\ndata\r\n0\r\nx-checksum: value\r\n\r\n").await.unwrap();
     });
-    let mut proxy = Proxy::bind(
-        DEFAULT_LISTENER_PORT,
-        None,
-        tests::Ports::new(vec![app_port]),
-    )
-    .await
-    .unwrap();
+    let mut proxy = Proxy::bind(0, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
         .await
@@ -83,34 +74,48 @@ async fn preserves_response_trailers_and_repeated_headers() {
 }
 
 #[tokio::test]
-async fn forwards_early_response_without_waiting_for_upload_completion() {
-    let _port_guard = crate::tests::PROXY_PORT.lock().await;
+async fn forwards_early_response_and_serves_the_next_request() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let app_port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         tests::headers(&mut stream).await;
+        let mut partial_body = [0];
+        timeout(Duration::from_secs(3), stream.read_exact(&mut partial_body))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&partial_body, b"x");
         stream
             .write_all(
                 b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             )
             .await
             .unwrap();
+        drop(stream);
+        let (mut next, _) = listener.accept().await.unwrap();
+        tests::headers(&mut next).await;
+        next.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
     });
-    let mut proxy = Proxy::bind(
-        DEFAULT_LISTENER_PORT,
-        None,
-        tests::Ports::new(vec![app_port]),
-    )
-    .await
-    .unwrap();
+    let mut proxy = Proxy::bind(0, tests::Ports::new(vec![app_port]))
+        .await
+        .unwrap();
     let port = proxy.port();
     let mut stream = tests::request(port, app_port, "Content-Length: 10485760\r\n").await;
+    stream.write_all(b"x").await.unwrap();
     assert!(
         tests::headers(&mut stream)
             .await
             .starts_with("HTTP/1.1 413")
     );
-    task.await.unwrap();
+    drop(stream);
+    let mut next = tests::request(port, app_port, "Connection: close\r\n").await;
+    assert!(tests::headers(&mut next).await.starts_with("HTTP/1.1 200"));
+    timeout(Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap();
     proxy.shutdown().await;
 }

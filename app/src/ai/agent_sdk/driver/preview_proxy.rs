@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::SystemTime;
 
-use ::preview_proxy::{DEFAULT_LISTENER_PORT, Proxy};
+use ::preview_proxy::Proxy;
 use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 
@@ -15,9 +14,6 @@ pub(super) struct Manager {
 }
 
 fn listener_port(value: &str) -> anyhow::Result<u16> {
-    if value.is_empty() {
-        return Ok(DEFAULT_LISTENER_PORT);
-    }
     anyhow::ensure!(
         value.bytes().all(|byte| byte.is_ascii_digit()),
         "WARP_PREVIEW_PROXY_PORT must be a decimal port from 1 to 65535"
@@ -32,14 +28,21 @@ fn listener_port(value: &str) -> anyhow::Result<u16> {
 impl Manager {
     pub(super) fn start(
         task_id: AmbientAgentTaskId,
+        execution_id: Option<&str>,
         client: Arc<dyn AIClient>,
-        sandbox_deadline: Option<SystemTime>,
     ) -> anyhow::Result<Self> {
-        let port = match std::env::var("WARP_PREVIEW_PROXY_PORT") {
-            Ok(value) => listener_port(&value)?,
-            Err(std::env::VarError::NotPresent) => DEFAULT_LISTENER_PORT,
-            Err(error) => return Err(error).context("Invalid WARP_PREVIEW_PROXY_PORT"),
-        };
+        let execution_id = execution_id
+            .context("Preview proxy requires an execution ID")?
+            .parse::<i64>()
+            .context("Invalid preview proxy execution ID")?;
+        anyhow::ensure!(
+            execution_id > 0,
+            "Preview proxy execution ID must be positive"
+        );
+        let port = listener_port(
+            &std::env::var("WARP_PREVIEW_PROXY_PORT")
+                .context("WARP_PREVIEW_PROXY_PORT must be supplied when the proxy is enabled")?,
+        )?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -50,29 +53,21 @@ impl Manager {
             .name("preview-proxy".into())
             .spawn(move || {
                 runtime.block_on(async move {
-                    let deadline = sandbox_deadline.map(|deadline| {
-                        tokio::time::Instant::now()
-                            + deadline
-                                .duration_since(SystemTime::now())
-                                .unwrap_or_default()
+                    let source = Arc::new(Client {
+                        task_id,
+                        execution_id,
+                        client,
                     });
-                    let source = Arc::new(Client { task_id, client });
-                    let mut proxy = match Proxy::bind(port, deadline, source).await {
+                    let mut proxy = match Proxy::bind(port, source).await {
                         Ok(proxy) => proxy,
-                        Err(_) => {
-                            log::error!("Preview proxy listener failed to bind");
+                        Err(error) => {
+                            log::error!(
+                                "Preview proxy listener failed to bind on port {port}: {error:#}"
+                            );
                             return;
                         }
                     };
-                    tokio::select! {
-                        _ = task_cancel.cancelled() => {},
-                        _ = async {
-                            match deadline {
-                                Some(deadline) => tokio::time::sleep_until(deadline).await,
-                                None => std::future::pending().await,
-                            }
-                        } => {},
-                    }
+                    task_cancel.cancelled().await;
                     proxy.shutdown().await;
                 });
             })
@@ -88,8 +83,10 @@ impl ::preview_proxy::PortSource for Client {
     async fn ports(&self) -> anyhow::Result<Vec<u16>> {
         let response = self.client.list_run_previews(&self.task_id).await?;
         anyhow::ensure!(
-            response.execution_id.is_some_and(|id| id > 0),
-            "preview execution unavailable"
+            response.execution_id == Some(self.execution_id),
+            "Preview execution mismatch: expected {}, received {:?}",
+            self.execution_id,
+            response.execution_id
         );
         Ok(response
             .previews
@@ -110,6 +107,7 @@ impl Drop for Manager {
 
 struct Client {
     task_id: AmbientAgentTaskId,
+    execution_id: i64,
     client: Arc<dyn AIClient>,
 }
 

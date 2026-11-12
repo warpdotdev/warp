@@ -10520,8 +10520,10 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "log",
  "tokio",
  "tokio-util",
+ "tower",
 ]
 
 [[package]]
@@ -14276,7 +14278,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

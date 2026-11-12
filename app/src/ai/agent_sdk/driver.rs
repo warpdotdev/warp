@@ -1612,17 +1612,17 @@ impl AgentDriver {
         self.task_id = task_id;
         self.execution_id = execution_id;
         self.preview_proxy = None;
-        if preview_retention::is_namespace_sandbox(warp_isolation_platform::detect())
+        if FeatureFlag::PreviewUrlsMcp.is_enabled()
             && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
             && let Some(task_id) = task_id
         {
             match preview_proxy::Manager::start(
                 task_id,
+                self.execution_id.as_deref(),
                 ServerApiProvider::as_ref(ctx).get_ai_client(),
-                self.sandbox_deadline,
             ) {
                 Ok(manager) => self.preview_proxy = Some(manager),
-                Err(_) => log::error!("Preview proxy runtime failed to start"),
+                Err(error) => log::error!("Preview proxy runtime failed to start: {error:#}"),
             }
         }
         self.use_factory_repositories = use_factory_repositories;

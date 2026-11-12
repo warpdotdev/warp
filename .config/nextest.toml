@@ -3,13 +3,6 @@
 # if it takes 2x as long as the slow timeout (i.e.: 60s total).
 slow-timeout = { period = "30s", terminate-after = 2 }
 
-[test-groups.preview-proxy]
-max-threads = 1
-
-[[profile.default.overrides]]
-filter = 'package(preview_proxy)'
-test-group = 'preview-proxy'
-
 [[profile.default.overrides]]
 filter = 'package(integration)'
 # Integration tests are heavier-weight than unit tests, so have each one

@@ -7,11 +7,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use http::header::{CONNECTION, HOST, UPGRADE};
+use http::header::{CONNECTION, HOST, TE, UPGRADE};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
+#[cfg(test)]
 use hyper::client::conn::http1 as client;
 use hyper::server::conn::http1 as server;
 use hyper::service::service_fn;
@@ -23,10 +24,16 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-pub const DEFAULT_LISTENER_PORT: u16 = 49152;
+use upstream::UpstreamClient;
+
+mod upstream;
+
+// Preview routing must not expose Warp's per-channel control servers.
+const WARP_RESERVED_PORTS: [u16; 6] = [9277, 9278, 9279, 9280, 9281, 9282];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const PORT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS: usize = 256;
 
 type Body = BoxBody<Bytes, hyper::Error>;
@@ -35,10 +42,17 @@ pub trait PortSource: Send + Sync {
     fn ports(&self) -> impl Future<Output = Result<Vec<u16>>> + Send;
 }
 
+#[derive(Default)]
+struct PortCache {
+    allowed: HashSet<u16>,
+    generation: u64,
+}
+
 struct Routing<S> {
     listener_port: u16,
     source: Arc<S>,
-    allowed: RwLock<HashSet<u16>>,
+    upstream: UpstreamClient,
+    cache: RwLock<PortCache>,
     refreshing: Mutex<()>,
 }
 
@@ -50,27 +64,45 @@ impl<S: PortSource> Routing<S> {
             .ok()?
             .parse::<u16>()
             .ok()?;
-        if port < 1024 || (9277..=9282).contains(&port) || port == self.listener_port {
+        if port < 1024 || WARP_RESERVED_PORTS.contains(&port) || port == self.listener_port {
             return None;
         }
         Some(port)
     }
 
     async fn allows(&self, port: u16) -> bool {
-        if self.allowed.read().await.contains(&port) {
-            return true;
-        }
-        let _refresh = self.refreshing.lock().await;
-        if self.allowed.read().await.contains(&port) {
-            return true;
-        }
-        match timeout(PORT_FETCH_TIMEOUT, self.source.ports()).await {
-            Ok(Ok(ports)) => {
-                let mut allowed = self.allowed.write().await;
-                *allowed = ports.into_iter().collect();
-                allowed.contains(&port)
+        let generation = {
+            let cache = self.cache.read().await;
+            if cache.allowed.contains(&port) {
+                return true;
             }
-            _ => false,
+            cache.generation
+        };
+        let _refresh = self.refreshing.lock().await;
+        {
+            let cache = self.cache.read().await;
+            if cache.generation != generation {
+                return cache.allowed.contains(&port);
+            }
+        }
+        let result = timeout(PORT_FETCH_TIMEOUT, self.source.ports()).await;
+        let mut cache = self.cache.write().await;
+        cache.generation = cache.generation.wrapping_add(1);
+        match result {
+            Ok(Ok(ports)) => {
+                cache.allowed = ports.into_iter().collect();
+                cache.allowed.contains(&port)
+            }
+            Ok(Err(error)) => {
+                log::warn!("Preview proxy allowlist fetch failed for app port {port}: {error:#}");
+                false
+            }
+            Err(error) => {
+                log::warn!(
+                    "Preview proxy allowlist fetch timed out for app port {port}: {error:#}"
+                );
+                false
+            }
         }
     }
 }
@@ -89,26 +121,22 @@ impl Drop for Proxy {
 }
 
 impl Proxy {
-    pub async fn bind(
-        port: u16,
-        deadline: Option<Instant>,
-        source: Arc<impl PortSource + 'static>,
-    ) -> Result<Self> {
-        anyhow::ensure!(port != 0, "Preview listener port must not be zero");
+    pub async fn bind(port: u16, source: Arc<impl PortSource + 'static>) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
             .await
             .context("Failed to bind preview listener")?;
+        let port = listener.local_addr()?.port();
+        let cancel = CancellationToken::new();
         let routing = Arc::new(Routing {
             listener_port: port,
             source,
-            allowed: RwLock::new(HashSet::new()),
+            upstream: upstream::new_client(cancel.clone()),
+            cache: RwLock::new(PortCache::default()),
             refreshing: Mutex::new(()),
         });
-        let cancel = CancellationToken::new();
         let task = tokio::spawn(serve(
             listener,
             routing,
-            deadline,
             cancel.clone(),
             Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         ));
@@ -128,23 +156,27 @@ impl Proxy {
 async fn serve<S: PortSource + 'static>(
     listener: TcpListener,
     routing: Arc<Routing<S>>,
-    deadline: Option<Instant>,
     cancel: CancellationToken,
     capacity: Arc<Semaphore>,
 ) {
     let mut connections = JoinSet::new();
+    let mut accept_after = Instant::now();
     loop {
         tokio::select! {
             biased;
             _ = cancel.cancelled() => break,
-            _ = async {
-                match deadline {
-                    Some(deadline) => tokio::time::sleep_until(deadline).await,
-                    None => std::future::pending().await,
-                }
-            } => break,
-            accepted = listener.accept() => {
-                let Ok((mut stream, _)) = accepted else { break };
+            accepted = async {
+                tokio::time::sleep_until(accept_after).await;
+                listener.accept().await
+            } => {
+                let (mut stream, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        log::warn!("Preview proxy failed to accept connection: {error}");
+                        accept_after = Instant::now() + ACCEPT_RETRY_DELAY;
+                        continue;
+                    }
+                };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
                     let _ = timeout(Duration::from_millis(100), stream.write_all(
                         b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -209,35 +241,28 @@ async fn forward<S: PortSource + 'static>(
         request.headers_mut().insert(UPGRADE, value);
         request
             .headers_mut()
-            .insert(CONNECTION, HeaderValue::from_static("upgrade"));
+            .append(CONNECTION, HeaderValue::from_static("upgrade"));
     }
-    let path = request
-        .uri()
-        .path_and_query()
-        .map_or("/", |path| path.as_str());
-    let Ok(uri) = format!("http://localhost:{app_port}{path}").parse::<Uri>() else {
-        return Ok(empty(StatusCode::BAD_REQUEST));
-    };
-    *request.uri_mut() = uri;
 
     let result = async {
-        let stream = connect(app_port).await?;
-        let (mut sender, connection) = client::handshake(TokioIo::new(stream)).await?;
-        let connection_cancel = cancel.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = connection_cancel.cancelled() => {}
-                _ = connection.with_upgrades() => {}
-            }
-        });
-        let mut response = sender.send_request(request).await?;
+        let path = request
+            .uri()
+            .path_and_query()
+            .map_or("/", |path| path.as_str());
+        // The pooled client keys on authority and sends origin-form on direct connections.
+        *request.uri_mut() = Uri::builder()
+            .scheme("http")
+            .authority(format!("localhost:{app_port}"))
+            .path_and_query(path)
+            .build()?;
+        let mut response = routing.upstream.request(request).await?;
+        let upgrade_header = response.headers_mut().remove(UPGRADE);
+        strip_hop_headers(response.headers_mut());
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
             let Some(downstream) = downstream_upgrade else {
                 bail!("unsolicited upstream upgrade");
             };
             let upstream = hyper::upgrade::on(&mut response);
-            let upgrade_header = response.headers().get(UPGRADE).cloned();
-            strip_hop_headers(response.headers_mut());
             let Some(upgrade_header) = upgrade_header else {
                 bail!("missing upstream upgrade protocol");
             };
@@ -262,14 +287,15 @@ async fn forward<S: PortSource + 'static>(
                     } => {}
                 }
             });
-        } else {
-            strip_hop_headers(response.headers_mut());
         }
         strip_credentials(response.headers_mut());
         Ok::<_, anyhow::Error>(response.map(BodyExt::boxed))
     }
     .await;
-    Ok(result.unwrap_or_else(|_| empty(StatusCode::BAD_GATEWAY)))
+    Ok(result.unwrap_or_else(|error| {
+        log::warn!("Preview proxy upstream request failed for app port {app_port}: {error:#}");
+        empty(StatusCode::BAD_GATEWAY)
+    }))
 }
 
 async fn connect(port: u16) -> Result<TcpStream> {
@@ -286,7 +312,17 @@ async fn connect(port: u16) -> Result<TcpStream> {
 }
 
 fn prepare_headers(headers: &mut HeaderMap, port: u16) {
+    let trailers = headers
+        .get_all(TE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|value| value.trim().eq_ignore_ascii_case("trailers"));
     strip_hop_headers(headers);
+    if trailers {
+        headers.insert(TE, HeaderValue::from_static("trailers"));
+        headers.insert(CONNECTION, HeaderValue::from_static("te"));
+    }
     strip_credentials(headers);
     for name in [
         "x-warp-cloud-agent-id",
@@ -320,20 +356,23 @@ fn strip_credentials(headers: &mut HeaderMap) {
     let cookies = headers
         .get_all(http::header::COOKIE)
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b';'))
         .filter(|cookie| {
-            let name = cookie.split('=').next().unwrap_or_default().trim();
-            name != "__session"
-                && name != "__session_mode"
-                && !name.starts_with("__Host-warp_preview_")
+            let name = cookie
+                .split(|byte| *byte == b'=')
+                .next()
+                .unwrap_or_default()
+                .trim_ascii();
+            name != b"__session"
+                && name != b"__session_mode"
+                && !name.starts_with(b"__Host-warp_preview_")
         })
-        .map(str::trim)
+        .map(|cookie| cookie.trim_ascii())
         .collect::<Vec<_>>()
-        .join("; ");
+        .join(b"; ".as_slice());
     headers.remove(http::header::COOKIE);
     if !cookies.is_empty()
-        && let Ok(value) = HeaderValue::from_str(&cookies)
+        && let Ok(value) = HeaderValue::from_bytes(&cookies)
     {
         headers.insert(http::header::COOKIE, value);
     }
@@ -380,3 +419,7 @@ mod tests;
 #[cfg(test)]
 #[path = "streaming_tests.rs"]
 mod streaming_tests;
+
+#[cfg(test)]
+#[path = "pooling_tests.rs"]
+mod pooling_tests;

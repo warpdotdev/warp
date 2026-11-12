@@ -9,8 +9,10 @@ license.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 http.workspace = true
-http-body-util = "0.1"
+http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+log.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util.workspace = true
+tower.workspace = true
