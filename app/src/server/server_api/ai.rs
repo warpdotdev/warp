@@ -433,6 +433,8 @@ pub struct RunFollowupRequest {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendAgentMessageRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub to: Vec<String>,
     pub subject: String,
     pub body: String,

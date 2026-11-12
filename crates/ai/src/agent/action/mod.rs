@@ -183,6 +183,7 @@ pub enum AIAgentActionType {
         addresses: Vec<String>,
         subject: String,
         message: String,
+        delegated_github_coauthor_user_uid: Option<String>,
     },
     /// Transfer control of a running shell command to the user.
     TransferShellCommandControlToUser {

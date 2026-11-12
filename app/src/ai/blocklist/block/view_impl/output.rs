@@ -862,6 +862,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     addresses,
                                     subject,
                                     message,
+                                    ..
                                 },
                             id,
                             ..

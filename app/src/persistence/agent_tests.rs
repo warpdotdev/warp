@@ -1,6 +1,8 @@
 use chrono::NaiveDate;
 use diesel_migrations::MigrationHarness;
 use prost::Message as _;
+use warp_multi_agent_api::message::messages_received_from_agents::ReceivedMessage;
+use warp_multi_agent_api::run_agents::GitHubCommitAttribution;
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -206,6 +208,62 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
     let echoed_task = api::Task::decode(restored.tasks[0].encode_to_vec().as_slice())
         .expect("persisted task should encode for the next request");
     assert_eq!(echoed_task, task);
+}
+
+#[test]
+fn received_github_attribution_survives_conversation_restore_and_persistence() {
+    let mut task = task_with_user_query("task-credit", "Continue", "Child task");
+    task.messages.push(api::Message {
+        id: "received-messages".to_string(),
+        task_id: task.id.clone(),
+        message: Some(api::message::Message::MessagesReceivedFromAgents(
+            api::message::MessagesReceivedFromAgents {
+                messages: vec![
+                    ReceivedMessage {
+                        message_id: "human-credit".to_string(),
+                        github_commit_attribution: Some(GitHubCommitAttribution {
+                            coauthor_user_uid: "delegated-human".to_string(),
+                        }),
+                        ..Default::default()
+                    },
+                    ReceivedMessage {
+                        message_id: "empty-credit".to_string(),
+                        github_commit_attribution: Some(GitHubCommitAttribution {
+                            coauthor_user_uid: String::new(),
+                        }),
+                        ..Default::default()
+                    },
+                    ReceivedMessage {
+                        message_id: "legacy".to_string(),
+                        ..Default::default()
+                    },
+                ],
+            },
+        )),
+        ..Default::default()
+    });
+    let conversation =
+        AIConversation::new_restored(AIConversationId::new(), vec![task.clone()], None)
+            .expect("received messages should restore");
+    let applied_task = conversation
+        .all_tasks()
+        .next()
+        .and_then(|task| task.source())
+        .expect("restored task should retain its API source");
+    assert_eq!(applied_task, &task);
+
+    let mut conn = test_connection();
+    upsert_agent_conversation(
+        &mut conn,
+        "conv-credit",
+        [applied_task],
+        empty_conversation_data(),
+    )
+    .expect("upsert should succeed");
+    let restored = read_agent_conversation_by_id(&mut conn, "conv-credit")
+        .expect("persistence read should succeed")
+        .expect("conversation should exist");
+    assert_eq!(restored.tasks, vec![task]);
 }
 
 #[test]

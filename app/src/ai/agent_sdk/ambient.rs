@@ -800,6 +800,7 @@ impl AmbientAgentRunner {
 
         let future = async move {
             let request = SendAgentMessageRequest {
+                delegated_github_coauthor_user_uid: None,
                 to: args.to,
                 subject: args.subject,
                 body: args.body,

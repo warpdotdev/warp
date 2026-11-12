@@ -781,6 +781,9 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                     addresses: send_message.addresses,
                     subject: send_message.subject,
                     message: send_message.message,
+                    delegated_github_coauthor_user_uid: send_message
+                        .github_commit_attribution
+                        .map(|attribution| attribution.coauthor_user_uid),
                 })
             }
             api::message::tool_call::Tool::InsertReviewComments(insert_review_comments) => {

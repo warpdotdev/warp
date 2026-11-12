@@ -592,6 +592,7 @@ fn restored_local_child_subtree_message() {
             .create();
         server_api
             .send_agent_message(SendAgentMessageRequest {
+                delegated_github_coauthor_user_uid: None,
                 to: vec![grandchild_run.to_string()],
                 subject: "continue".into(),
                 body: "use your previous work".into(),
