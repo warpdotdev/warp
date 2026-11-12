@@ -149,16 +149,16 @@ async fn with_credential_refreshes<F, T>(
     use_factory_repositories: bool,
     bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
     foreground: &ModelSpawner<AgentDriver>,
-) -> T
+) -> Result<T, AgentDriverError>
 where
-    F: Future<Output = T>,
+    F: Future<Output = Result<T, AgentDriverError>>,
 {
     let git_refresh = async move {
         match git_task_id {
             Some(task_id) => {
                 git_credentials::refresh_loop(task_id, ai_client, use_factory_repositories).await
             }
-            None => future::pending::<()>().await,
+            None => future::pending::<Result<(), TaskGitCredentialsError>>().await,
         }
     }
     .fuse();
@@ -177,7 +177,10 @@ where
     futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
     futures::select! {
         result = run_future => result,
-        _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
+        result = git_refresh => {
+            result.map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+            Err(AgentDriverError::InvalidRuntimeState)
+        },
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
     }
 }
