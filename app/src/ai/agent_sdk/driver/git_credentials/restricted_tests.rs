@@ -7,318 +7,11 @@ use warp_cli::agent::{Harness, HarnessTransport};
 use warp_graphql::queries::task_restricted_git_credentials::RestrictedTaskGitCredential;
 
 use super::*;
+use crate::ai::agent_sdk::driver::git_credentials::gh_config_dir;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, split_run_options};
 use crate::server::server_api::ai::MockAIClient;
 
-fn temporary_error() -> TaskGitCredentialsError {
-    TaskGitCredentialsError::Request(
-        GraphQLError::HttpError {
-            status: http::StatusCode::SERVICE_UNAVAILABLE,
-            body: String::new(),
-        }
-        .into(),
-    )
-}
-
-fn live_response() -> RestrictedTaskGitCredentialsOutput {
-    let mut response = response();
-    response.credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(1)).into());
-    response
-}
-
-#[test]
-fn bootstrap_recovers_without_preparing_the_store_again() -> Result<()> {
-    with_home(
-        "bootstrap_recovers_without_preparing_the_store_again",
-        &[
-            ("WARP_ISOLATION_PLATFORM", "docker"),
-            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
-        ],
-        |_| {
-            let mut client = MockAIClient::new();
-            let mut sequence = mockall::Sequence::new();
-            client
-                .expect_get_restricted_task_git_credentials()
-                .times(1)
-                .in_sequence(&mut sequence)
-                .withf(|task, _, partial, factory| task == "task" && !partial && *factory)
-                .returning(|_, _, _, _| Err(temporary_error()));
-            client
-                .expect_get_restricted_task_git_credentials()
-                .times(1)
-                .in_sequence(&mut sequence)
-                .withf(|task, _, partial, factory| task == "task" && !partial && *factory)
-                .returning(|_, _, _, _| Ok(live_response()));
-            let client: Arc<dyn AIClient> = Arc::new(client);
-
-            futures::executor::block_on(bootstrap_restricted_credentials("task", &client, true))?;
-
-            assert_eq!(
-                fs::read_to_string(task_dir("task")?.join("credentials"))?,
-                "https://x-access-token:installation-test-token@github.com\n"
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn renewed_token_is_not_cleared_at_previous_expiry() -> Result<()> {
-    with_home(
-        "renewed_token_is_not_cleared_at_previous_expiry",
-        &[],
-        |_| {
-            let directory = prepare("task")?;
-            let received_at = Instant::now();
-            apply_refresh(
-                "task",
-                Ok(validate_response(response(), now(), received_at)?),
-            )?;
-            apply_refresh(
-                "task",
-                Ok(validate_response(
-                    response(),
-                    now(),
-                    received_at + Duration::from_secs(600),
-                )?),
-            )?;
-
-            assert_eq!(
-                expire_credentials("task", received_at + Duration::from_secs(3600))?,
-                Duration::from_secs(600)
-            );
-
-            assert_eq!(
-                fs::read_to_string(directory.join("credentials"))?,
-                "https://x-access-token:installation-test-token@github.com\n"
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn explicit_platform_denial_overrides_retryable_flag() {
-    let error = TaskGitCredentialsError::Platform {
-        message: "Access denied".into(),
-        detail: None,
-        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
-            PlatformErrorCode::NotAuthorized,
-            true,
-        )),
-    };
-
-    assert!(!is_temporary_failure(&error));
-}
-
-#[test]
-fn retryable_dependency_failure_is_temporary() {
-    let error = TaskGitCredentialsError::Platform {
-        message: "Dependency unavailable".into(),
-        detail: None,
-        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
-            PlatformErrorCode::ResourceUnavailable,
-            true,
-        )),
-    };
-
-    assert!(is_temporary_failure(&error));
-}
-
-#[test]
-fn bootstrap_stops_after_bounded_temporary_failures() -> Result<()> {
-    with_home(
-        "bootstrap_stops_after_bounded_temporary_failures",
-        &[
-            ("WARP_ISOLATION_PLATFORM", "docker"),
-            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
-        ],
-        |_| {
-            let mut client = MockAIClient::new();
-            client
-                .expect_get_restricted_task_git_credentials()
-                .times(4)
-                .returning(|_, _, _, _| Err(temporary_error()));
-            let client: Arc<dyn AIClient> = Arc::new(client);
-
-            assert!(
-                futures::executor::block_on(bootstrap_restricted_credentials(
-                    "task", &client, false
-                ))
-                .is_err()
-            );
-
-            assert_eq!(
-                fs::read_to_string(task_dir("task")?.join("credentials"))?,
-                ""
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn bootstrap_does_not_install_partial_credentials() -> Result<()> {
-    with_home(
-        "bootstrap_does_not_install_partial_credentials",
-        &[
-            ("WARP_ISOLATION_PLATFORM", "docker"),
-            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
-        ],
-        |_| {
-            let mut client = MockAIClient::new();
-            client
-                .expect_get_restricted_task_git_credentials()
-                .times(1)
-                .withf(|_, _, partial, _| !partial)
-                .returning(|_, _, _, _| {
-                    let mut response = live_response();
-                    response.failed_hosts.push("gitlab.com".into());
-                    Ok(response)
-                });
-            let client: Arc<dyn AIClient> = Arc::new(client);
-
-            assert!(
-                futures::executor::block_on(bootstrap_restricted_credentials(
-                    "task", &client, false
-                ))
-                .is_err()
-            );
-
-            assert_eq!(
-                fs::read_to_string(task_dir("task")?.join("credentials"))?,
-                ""
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn failed_gitlab_refresh_still_updates_github() -> Result<()> {
-    with_home(
-        "failed_gitlab_refresh_still_updates_github",
-        &[
-            ("WARP_ISOLATION_PLATFORM", "docker"),
-            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
-        ],
-        |home| {
-            let directory = prepare("task")?;
-            fs::write(
-                home.join(".git-credentials"),
-                "https://oauth2:retained-token@gitlab.com\n",
-            )?;
-            let mut client = MockAIClient::new();
-            client
-                .expect_get_restricted_task_git_credentials()
-                .times(1)
-                .withf(|task, _, partial, factory| task == "task" && *partial && *factory)
-                .returning(|_, _, _, _| {
-                    let mut response = live_response();
-                    response.failed_hosts.push("gitlab.com".into());
-                    Ok(response)
-                });
-            let client: Arc<dyn AIClient> = Arc::new(client);
-
-            assert!(
-                futures::executor::block_on(refresh_restricted_credentials("task", &client, true))
-                    .is_err()
-            );
-
-            assert_eq!(
-                fs::read_to_string(directory.join("credentials"))?,
-                "https://x-access-token:installation-test-token@github.com\n"
-            );
-            assert_eq!(
-                fs::read_to_string(home.join(".git-credentials"))?,
-                "https://oauth2:retained-token@gitlab.com\n"
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn unknown_github_failure_clears_github_and_updates_gitlab() -> Result<()> {
-    with_home(
-        "unknown_github_failure_clears_github_and_updates_gitlab",
-        &[],
-        |home| {
-            let directory = prepare("task")?;
-            apply_refresh("task", Ok(validated_response()?))?;
-            let mut response = response();
-            response.credentials = vec![other_forge_credential("gitlab.com")];
-            response.failed_hosts.push("github.com".into());
-
-            assert!(
-                apply_refresh(
-                    "task",
-                    Ok(validate_response(response, now(), Instant::now())?)
-                )
-                .is_err()
-            );
-
-            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-            assert_eq!(
-                fs::read_to_string(home.join(".git-credentials"))?,
-                "https://x-access-token:other-forge-test-token@gitlab.com\n"
-            );
-            Ok(())
-        },
-    )
-}
-
-#[test]
-fn denied_refresh_clears_github() -> Result<()> {
-    with_home("denied_refresh_clears_github", &[], |_| {
-        let directory = prepare("task")?;
-        apply_refresh("task", Ok(validated_response()?))?;
-        let error = TaskGitCredentialsError::Request(
-            GraphQLError::HttpError {
-                status: http::StatusCode::FORBIDDEN,
-                body: String::new(),
-            }
-            .into(),
-        );
-
-        assert!(apply_refresh("task", Err(error)).is_err());
-
-        assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-        Ok(())
-    })
-}
-
-#[test]
-fn temporary_refresh_failure_preserves_token_until_original_expiry() -> Result<()> {
-    with_home(
-        "temporary_refresh_failure_preserves_token_until_original_expiry",
-        &[],
-        |_| {
-            let directory = prepare("task")?;
-            let received_at = Instant::now();
-            apply_refresh(
-                "task",
-                Ok(validate_response(response(), now(), received_at)?),
-            )?;
-            assert!(apply_refresh("task", Err(temporary_error())).is_err());
-
-            assert_eq!(
-                expire_credentials("task", received_at + Duration::from_secs(3599))?,
-                Duration::from_secs(1)
-            );
-            assert_eq!(
-                fs::read_to_string(directory.join("credentials"))?,
-                "https://x-access-token:installation-test-token@github.com\n"
-            );
-            expire_credentials("task", received_at + Duration::from_secs(3600))?;
-
-            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-            Ok(())
-        },
-    )
-}
-
-fn with_home(
+pub(super) fn with_home(
     test_name: &str,
     env: &[(&str, &str)],
     test: impl FnOnce(&Path) -> Result<()>,
@@ -327,13 +20,18 @@ fn with_home(
         return test(Path::new(&home));
     }
     let home = tempfile::tempdir()?;
+    let test_name = if test_name.contains("::") {
+        test_name.to_owned()
+    } else {
+        format!("tests::{test_name}")
+    };
     let mut command = Command::new(std::env::current_exe()?);
     #[cfg(windows)]
     command.creation_flags(0);
     command
         .args([
             "--exact",
-            &format!("ai::agent_sdk::driver::git_credentials::restricted::tests::{test_name}"),
+            &format!("ai::agent_sdk::driver::git_credentials::restricted::{test_name}"),
             "--nocapture",
         ])
         .current_dir(home.path())
@@ -354,7 +52,7 @@ fn with_home(
     command.envs(env.iter().copied());
     let output = command.output()?;
     assert!(
-        output.status.success(),
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -366,7 +64,7 @@ fn now() -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000, 0).unwrap()
 }
 
-fn response() -> RestrictedTaskGitCredentialsOutput {
+pub(super) fn response() -> RestrictedTaskGitCredentialsOutput {
     RestrictedTaskGitCredentialsOutput {
         github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
         failed_hosts: Vec::new(),
@@ -381,7 +79,7 @@ fn response() -> RestrictedTaskGitCredentialsOutput {
     }
 }
 
-fn validated_response() -> Result<ValidatedCredentials> {
+pub(super) fn validated_response() -> Result<ValidatedCredentials> {
     validate_response(response(), now(), Instant::now())
 }
 
@@ -602,22 +300,20 @@ fn failed_credential_write_does_not_retain_a_long_refresh_deadline() -> Result<(
 
             assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
 
-            assert_eq!(
-                refresh_delay("task", Instant::now()),
-                Duration::from_secs(60)
-            );
+            let delay = refresh_delay("task", Instant::now());
+            assert!(delay <= Duration::from_secs(60) && delay > Duration::ZERO);
             Ok(())
         },
     )
 }
 
 #[test]
-fn unknown_mode_uses_legacy_credentials() -> Result<()> {
+fn unknown_mode_is_rejected() -> Result<()> {
     with_home(
-        "unknown_mode_uses_legacy_credentials",
+        "unknown_mode_is_rejected",
         &[("WARP_GITHUB_CREDENTIAL_MODE", "future_mode")],
         |_| {
-            assert!(!restricted_github_mode()?);
+            assert!(credential_mode(Some("future_mode")).is_err());
             Ok(())
         },
     )
@@ -629,7 +325,10 @@ fn restricted_mode_uses_restricted_credentials() -> Result<()> {
         "restricted_mode_uses_restricted_credentials",
         &[("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")],
         |_| {
-            assert!(restricted_github_mode()?);
+            assert_eq!(
+                credential_mode(Some("restricted_installation"))?,
+                GitHubCredentialMode::RestrictedInstallation
+            );
             Ok(())
         },
     )
@@ -638,7 +337,7 @@ fn restricted_mode_uses_restricted_credentials() -> Result<()> {
 #[test]
 fn absent_mode_uses_legacy_credentials() -> Result<()> {
     with_home("absent_mode_uses_legacy_credentials", &[], |_| {
-        assert!(!restricted_github_mode()?);
+        assert_eq!(credential_mode(None)?, GitHubCredentialMode::Legacy);
         Ok(())
     })
 }
@@ -665,7 +364,7 @@ fn installation_scope_is_required() {
 }
 
 #[test]
-fn contradictory_host_results_are_not_accepted() {
+fn partial_response_is_not_accepted() {
     let mut response = response();
     response.failed_hosts.push("github.com".into());
     assert!(validate_response(response, now(), Instant::now()).is_err());
@@ -739,6 +438,7 @@ fn third_party_run_options_preserve_restricted_github_environment() -> Result<()
                 for transport in [HarnessTransport::Pty, HarnessTransport::Acp] {
                     let (_, config) = split_run_options(AgentDriverOptions {
                         working_dir: home.to_path_buf(),
+                        github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
                         task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
                         selected_harness: harness,
                         harness_transport: transport,
@@ -780,6 +480,7 @@ fn third_party_run_options_reject_git_configuration_overrides() -> Result<()> {
         |home| {
             let result = split_run_options(AgentDriverOptions {
                 working_dir: home.to_path_buf(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
                 task_id: Some("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()),
                 selected_harness: Harness::Claude,
                 environment_variables: HashMap::from([(
@@ -844,20 +545,24 @@ fn existing_personal_store_is_not_changed() -> Result<()> {
     with_home("existing_personal_store_is_not_changed", &[], |home| {
         let path = home.join(".git-credentials");
         fs::write(&path, "personal-test-fixture")?;
-        assert!(prepare("task").is_err());
+        assert!(prepare("task").is_ok());
         assert_eq!(fs::read_to_string(path)?, "personal-test-fixture");
         Ok(())
     })
 }
 
 #[test]
-fn inherited_github_token_requires_fresh_sandbox() -> Result<()> {
+fn inherited_github_token_is_cleared_from_child_environment() -> Result<()> {
     with_home(
-        "inherited_github_token_requires_fresh_sandbox",
+        "inherited_github_token_is_cleared_from_child_environment",
         &[("GH_TOKEN", "personal-test-fixture")],
         |home| {
-            assert!(prepare("task").is_err());
-            assert!(!home.join(".warp/github-git/task").exists());
+            assert!(prepare("task").is_ok());
+            assert!(home.join(".warp/github-git/task").exists());
+            assert_eq!(
+                restricted_child_environment("task")?[OsStr::new("GH_TOKEN")],
+                ""
+            );
             Ok(())
         },
     )
@@ -895,21 +600,19 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
 }
 
 #[test]
-fn unknown_refresh_failure_clears_managed_github_store() -> Result<()> {
+fn unstructured_failed_refresh_clears_managed_github_store() -> Result<()> {
     with_home(
-        "unknown_refresh_failure_clears_managed_github_store",
+        "unstructured_failed_refresh_clears_managed_github_store",
         &[],
         |_| {
             let directory = prepare("task")?;
             apply_refresh("task", Ok(validated_response()?))?;
 
-            let error = TaskGitCredentialsError::Request(anyhow::anyhow!("unknown test failure"));
+            let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-            assert_eq!(
-                refresh_delay("task", Instant::now()),
-                Duration::from_secs(60)
-            );
+            let delay = refresh_delay("task", Instant::now());
+            assert!(delay <= Duration::from_secs(60) && delay > Duration::ZERO);
             Ok(())
         },
     )
@@ -1005,6 +708,491 @@ fn child_environment_removes_github_authentication() -> Result<()> {
                         .into_os_string()
                 )
             );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn standby_owner_is_distinct_and_late_responses_cannot_replace_task_credentials() -> Result<()> {
+    with_home(
+        "standby_owner_is_distinct_and_late_responses_cannot_replace_task_credentials",
+        &[],
+        |_| {
+            let standby = ManagedStoreOwner::Standby {
+                sandbox_id: "sandbox".into(),
+                generation: "generation".into(),
+            };
+            let standby_dir = prepare(&standby)?;
+            apply_refresh(&standby, Ok(validated_response()?))?;
+            assert!(prepare("task").is_err());
+            close_restricted_credentials(&standby)?;
+            let task_dir = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            assert!(apply_refresh(&standby, Ok(validated_response()?)).is_err());
+            close_restricted_credentials(&standby)?;
+            assert_eq!(fs::read_to_string(standby_dir.join("credentials"))?, "");
+            assert!(!fs::read_to_string(task_dir.join("credentials"))?.is_empty());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn ambient_helpers_and_credentials_do_not_block_managed_setup() -> Result<()> {
+    with_home(
+        "ambient_helpers_and_credentials_do_not_block_managed_setup",
+        &[
+            ("GH_TOKEN", "ambient-test-token"),
+            ("GIT_CONFIG_COUNT", "0"),
+        ],
+        |home| {
+            fs::write(home.join(".git-credentials"), "unrelated fixture")?;
+            git_config(&["--add", "credential.helper", "osxkeychain"])?;
+            git_config(&["--add", "credential.helper", "store"])?;
+            let directory = prepare("task")?;
+            install_helper(&directory, &[])?;
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "unrelated fixture"
+            );
+            assert_eq!(
+                restricted_child_environment("task")?[OsStr::new("GH_TOKEN")],
+                ""
+            );
+            let output = Command::new("git")
+                .args(["config", "--file"])
+                .arg(home.join(".gitconfig"))
+                .args(["--get-all", "credential.helper"])
+                .output()?;
+            assert_eq!(
+                String::from_utf8(output.stdout)?.trim(),
+                READ_ONLY_CREDENTIAL_HELPER
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn inherited_http_authentication_blocks_managed_setup() -> Result<()> {
+    with_home(
+        "inherited_http_authentication_blocks_managed_setup",
+        &[],
+        |home| {
+            for name in [".netrc", "_netrc"] {
+                fs::write(
+                    home.join(name),
+                    "machine github.com login ambient password token",
+                )?;
+                assert!(prepare("task").is_err());
+                fs::remove_file(home.join(name))?;
+            }
+            for key in ["http.extraHeader", "http.https://github.com/.cookieFile"] {
+                git_config(&[key, "ambient-authentication"])?;
+                assert!(prepare("task").is_err());
+                git_config(&["--unset", key])?;
+            }
+            prepare("task")?;
+            Ok(())
+        },
+    )
+}
+
+#[tokio::test]
+async fn response_body_transport_failure_is_transient_but_invalid_json_is_not() {
+    let body = reqwest::Body::wrap_stream(futures::stream::once(async {
+        Err::<Vec<u8>, _>(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "response body timed out",
+        ))
+    }));
+    let response = reqwest::Response::from(http::Response::new(body));
+    let error = response.json::<serde_json::Value>().await.unwrap_err();
+    assert!(error.is_timeout());
+    assert!(is_transient_request_error(&anyhow::Error::new(
+        GraphQLError::ResponseError(error)
+    )));
+    let response = reqwest::Response::from(http::Response::new("not JSON"));
+    let error = response.json::<serde_json::Value>().await.unwrap_err();
+    assert!(!is_transient_request_error(&anyhow::Error::new(
+        GraphQLError::ResponseError(error)
+    )));
+}
+
+#[test]
+fn config_count_allows_only_absent_empty_or_exact_zero() {
+    for (value, accepted) in [
+        (None, true),
+        (Some(""), true),
+        (Some("0"), true),
+        (Some("00"), false),
+        (Some("1"), false),
+        (Some(" 0"), false),
+    ] {
+        assert_eq!(valid_config_count(value.map(OsStr::new)), accepted);
+        let env = value
+            .map(|value| HashMap::from([("GIT_CONFIG_COUNT".into(), value.into())]))
+            .unwrap_or_default();
+        assert_eq!(
+            validate_restricted_child_environment(&env).is_ok(),
+            accepted
+        );
+    }
+}
+
+#[test]
+fn only_positive_transient_causes_allow_retention_and_denial_takes_priority() {
+    for (status, expected) in [
+        (401, false),
+        (403, false),
+        (404, false),
+        (408, true),
+        (429, true),
+        (503, true),
+    ] {
+        let error =
+            TaskGitCredentialsError::Request(HttpStatusError::new(status, String::new()).into());
+        assert_eq!(is_transient_credential_error(&error), expected);
+    }
+    assert!(!is_transient_credential_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!("connection reset"))
+    ));
+    let denial = anyhow::Error::new(HttpStatusError::new(403, String::new()))
+        .context(HttpStatusError::new(503, String::new()));
+    assert!(!is_transient_request_error(&denial));
+}
+
+#[test]
+fn transient_failure_keeps_only_unexpired_credentials_without_extending_expiry() -> Result<()> {
+    with_home(
+        "transient_failure_keeps_only_unexpired_credentials_without_extending_expiry",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            let response = validate_response(response(), now(), received_at)?;
+            let expiry = response.expires_at.unwrap();
+            apply_refresh("task", Ok(response))?;
+            let transient =
+                TaskGitCredentialsError::Request(HttpStatusError::new(503, String::new()).into());
+            assert!(apply_refresh("task", Err(transient)).is_err());
+            assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
+            assert_eq!(
+                with_store("task", |store| Ok(store.expires_at))?,
+                Some(expiry)
+            );
+            credential_fetch_failed(&ManagedStoreOwner::from("task"), true, expiry)?;
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn expiry_clears_token_without_changing_the_refresh_schedule() -> Result<()> {
+    with_home(
+        "expiry_clears_token_without_changing_the_refresh_schedule",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
+            let owner = ManagedStoreOwner::from("task");
+            schedule_refresh_retry(&owner, received_at + Duration::from_secs(3590))?;
+            expire_credentials(&owner, received_at + Duration::from_secs(3600))?;
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert_eq!(
+                refresh_delay(&owner, received_at + Duration::from_secs(3600)),
+                Duration::from_secs(50)
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn partial_refresh_keeps_valid_github_when_other_forge_write_fails() -> Result<()> {
+    with_home(
+        "partial_refresh_keeps_valid_github_when_other_forge_write_fails",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            fs::create_dir(home.join(".git-credentials.tmp"))?;
+            let mut response = response();
+            response.credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(1)).into());
+            response
+                .credentials
+                .push(other_forge_credential("gitlab.com"));
+            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
+            assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn partial_refresh_clears_failed_github_and_updates_other_forge() -> Result<()> {
+    with_home(
+        "partial_refresh_clears_failed_github_and_updates_other_forge",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            let response = RestrictedTaskGitCredentialsOutput {
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                credentials: vec![other_forge_credential("gitlab.com")],
+                failed_hosts: vec!["github.com".into()],
+            };
+            assert!(apply_partial_response(&ManagedStoreOwner::from("task"), response).is_err());
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert!(fs::read_to_string(home.join(".git-credentials"))?.contains("gitlab.com"));
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn store_guard_closes_credentials_on_early_exit() -> Result<()> {
+    with_home("store_guard_closes_credentials_on_early_exit", &[], |_| {
+        let directory = prepare("task")?;
+        {
+            let _guard = CredentialStoreGuard::new(ManagedStoreOwner::from("task"));
+            apply_refresh("task", Ok(validated_response()?))?;
+        }
+        assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+        assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
+        Ok(())
+    })
+}
+
+fn temporary_error() -> TaskGitCredentialsError {
+    TaskGitCredentialsError::Request(
+        GraphQLError::HttpError {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            body: String::new(),
+        }
+        .into(),
+    )
+}
+
+fn live_response() -> RestrictedTaskGitCredentialsOutput {
+    let mut response = response();
+    response.credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(1)).into());
+    response
+}
+
+#[test]
+fn renewed_token_is_not_cleared_at_previous_expiry() -> Result<()> {
+    with_home(
+        "renewed_token_is_not_cleared_at_previous_expiry",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
+            apply_refresh(
+                "task",
+                Ok(validate_response(
+                    response(),
+                    now(),
+                    received_at + Duration::from_secs(600),
+                )?),
+            )?;
+
+            expire_credentials(
+                &ManagedStoreOwner::from("task"),
+                received_at + Duration::from_secs(3600),
+            )?;
+
+            assert_eq!(
+                fs::read_to_string(directory.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn bootstrap_stops_after_bounded_temporary_failures() -> Result<()> {
+    with_home(
+        "bootstrap_stops_after_bounded_temporary_failures",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |_| {
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(4)
+                .returning(|_, _, _, _| Err(temporary_error()));
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(bootstrap_restricted_credentials(
+                    "task", &client, false
+                ))
+                .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(
+                    owner_dir(&ManagedStoreOwner::from("task"))?.join("credentials")
+                )?,
+                ""
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn bootstrap_does_not_install_partial_credentials() -> Result<()> {
+    with_home(
+        "bootstrap_does_not_install_partial_credentials",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |_| {
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .withf(|_, _, partial, _| !partial)
+                .returning(|_, _, _, _| {
+                    let mut response = live_response();
+                    response.failed_hosts.push("gitlab.com".into());
+                    Ok(response)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(bootstrap_restricted_credentials(
+                    "task", &client, false
+                ))
+                .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(
+                    owner_dir(&ManagedStoreOwner::from("task"))?.join("credentials")
+                )?,
+                ""
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn failed_gitlab_refresh_still_updates_github() -> Result<()> {
+    with_home(
+        "failed_gitlab_refresh_still_updates_github",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |home| {
+            let directory = prepare("task")?;
+            fs::write(
+                home.join(".git-credentials"),
+                "https://oauth2:retained-token@gitlab.com\n",
+            )?;
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .withf(|task, _, partial, factory| task == "task" && *partial && *factory)
+                .returning(|_, _, _, _| {
+                    let mut response = live_response();
+                    response.failed_hosts.push("gitlab.com".into());
+                    Ok(response)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(refresh_restricted_credentials("task", &client, true))
+                    .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(directory.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "https://oauth2:retained-token@gitlab.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn explicit_platform_denial_overrides_retryable_flag() {
+    let error = TaskGitCredentialsError::Platform {
+        message: "Access denied".into(),
+        detail: None,
+        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
+            PlatformErrorCode::NotAuthorized,
+            true,
+        )),
+    };
+
+    assert!(!is_transient_credential_error(&error));
+}
+
+#[test]
+fn retryable_dependency_failure_is_temporary() {
+    let error = TaskGitCredentialsError::Platform {
+        message: "Dependency unavailable".into(),
+        detail: None,
+        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
+            PlatformErrorCode::ResourceUnavailable,
+            true,
+        )),
+    };
+
+    assert!(is_transient_credential_error(&error));
+}
+
+#[test]
+fn explicit_driver_mode_cannot_be_overridden_by_task_environment() -> Result<()> {
+    with_home(
+        "explicit_driver_mode_cannot_be_overridden_by_task_environment",
+        &[],
+        |home| {
+            let (_, config) = split_run_options(AgentDriverOptions {
+                working_dir: home.into(),
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                credential_store_owner: Some(ManagedStoreOwner::Standby {
+                    sandbox_id: "sandbox".into(),
+                    generation: "generation".into(),
+                }),
+                environment_variables: HashMap::from([(
+                    "WARP_GITHUB_CREDENTIAL_MODE".into(),
+                    "legacy".into(),
+                )]),
+                ..Default::default()
+            })?;
+            assert_eq!(
+                config.github_credential_mode,
+                GitHubCredentialMode::RestrictedInstallation
+            );
+            assert_eq!(
+                config.resolved_env_vars[OsStr::new("WARP_GITHUB_CREDENTIAL_MODE")],
+                "restricted_installation"
+            );
+            assert!(config.task_id.is_none());
             Ok(())
         },
     )

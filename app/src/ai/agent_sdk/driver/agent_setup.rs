@@ -60,6 +60,7 @@ impl AgentDriver {
             .await?
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
         let prepared_configuration = workspace.clone();
+        Self::replace_prewarmed_mcp_environment(foreground, Default::default()).await?;
         bootstrap_terminal(foreground, setup_events).await?;
         Self::initialize_setup_vars(foreground, false).await?;
         setup_events

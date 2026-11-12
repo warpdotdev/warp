@@ -949,7 +949,15 @@ impl TemplatableMCPServerManager {
             }
         };
 
-        self.apply_runtime_environment(&mut server.transport_type);
+        if let Err(error) = self.apply_runtime_environment(&mut server.transport_type) {
+            log::error!("Could not apply managed MCP authentication environment: {error:#}");
+            self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
+            self.notify_reconnect_waiters(
+                installation_uuid,
+                Err("Managed authentication environment is unavailable".into()),
+            );
+            return;
+        }
         // If we're executing a CLI MCP server, ensure that the environment variables includes
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {

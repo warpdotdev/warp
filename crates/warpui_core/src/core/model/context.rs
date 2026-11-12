@@ -5,14 +5,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures::FutureExt;
-use futures::stream::{AbortHandle, Abortable};
 use thiserror::Error;
 use warp_errors::report_error;
 
 use crate::accessibility::AccessibilityContent;
-use crate::r#async::{
-    BoxFuture, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer, executor,
-};
+use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer, executor};
+use crate::core::spawn::{SpawnCallbacks, downcast_entity, downcast_output, erase_output};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::windowing::WindowManager;
 use crate::{
@@ -25,12 +23,6 @@ use crate::{
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("Model has been dropped")]
 pub struct ModelDropped;
-
-/// Callback that receives the output of a resolved future spawned from a [`ModelContext`].
-type SpawnResolveCallback<T, O> = Box<dyn FnOnce(&mut T, O, &mut ModelContext<T>)>;
-
-/// Callback that runs when a future spawned from a [`ModelContext`] is aborted.
-type SpawnAbortCallback<T> = Box<dyn FnOnce(&mut T, &mut ModelContext<T>)>;
 
 /// Structure that combines model identifiers and a handle to the application
 /// context/application state.
@@ -280,6 +272,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     }
 
     // Only public in crate::core so it can be used by ui/src/core/mod_test.rs.
+    #[cfg(test)]
     pub(in crate::core) fn spawn_local<S, F, U>(
         &mut self,
         future: S,
@@ -406,12 +399,19 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>) -> U,
         U: 'static,
     {
-        self.spawn_abortable_boxed(
-            Box::pin(future),
-            Box::new(|model, output, ctx| {
-                callback(model, output, ctx);
-            }),
-            Box::new(|_, _| {}),
+        self.app.spawn_abortable_erased(
+            erase_output::<S::Output>(Box::pin(future)),
+            SpawnCallbacks::Model {
+                model_id: self.model_id,
+                on_resolve: Box::new(move |model, output, app, model_id| {
+                    callback(
+                        downcast_entity(model),
+                        downcast_output(output),
+                        &mut ModelContext::new(app, model_id),
+                    );
+                }),
+                on_abort: Box::new(|_, _, _| {}),
+            },
         )
     }
 
@@ -445,57 +445,25 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>),
         A: 'static + FnOnce(&mut T, &mut ModelContext<T>),
     {
-        self.spawn_abortable_boxed(Box::pin(future), Box::new(on_resolve), Box::new(on_abort))
-    }
-
-    /// Type-erased body of [`Self::spawn`] and [`Self::spawn_abortable`].
-    ///
-    /// The public entry points box the future and the callbacks immediately, so this body is
-    /// compiled once per output type instead of once per call site.
-    fn spawn_abortable_boxed<O>(
-        &mut self,
-        future: BoxFuture<'static, O>,
-        on_resolve: SpawnResolveCallback<T, O>,
-        on_abort: SpawnAbortCallback<T>,
-    ) -> SpawnedFutureHandle
-    where
-        O: 'static + SpawnableOutput,
-    {
-        let (tx, rx) = futures::channel::oneshot::channel();
-
-        let (abort_handle, abort_registration) = AbortHandle::new_pair();
-        self.app
-            .background_executor()
-            .spawn_boxed(Box::pin(async move {
-                let abortable = Abortable::new(future, abort_registration);
-                let result = abortable.await;
-                if tx.send(result).is_err() {
-                    report_error!("Error sending background task result to main thread");
-                }
-            }))
-            .detach();
-
-        let future = self.spawn_local(rx, |model, rx_result, ctx| {
-            let output = match rx_result {
-                Ok(output) => output,
-                Err(_) => {
-                    report_error!("sender unexpectedly dropped before receiver");
-                    on_abort(model, ctx);
-                    return;
-                }
-            };
-
-            // Call the appropriate callback based on the output of resolving the future. If the
-            // future returned `Ok`, the future was not aborted so we can call `on_resolve`. If
-            // the future returned `Err`--the future was aborted.
-            match output {
-                Ok(output) => on_resolve(model, output, ctx),
-                Err(_) => on_abort(model, ctx),
-            }
-        });
-
-        let future_id = self.app.register_spawned_future(future.boxed());
-        SpawnedFutureHandle::new(abort_handle, future_id)
+        self.app.spawn_abortable_erased(
+            erase_output::<S::Output>(Box::pin(future)),
+            SpawnCallbacks::Model {
+                model_id: self.model_id,
+                on_resolve: Box::new(move |model, output, app, model_id| {
+                    on_resolve(
+                        downcast_entity(model),
+                        downcast_output(output),
+                        &mut ModelContext::new(app, model_id),
+                    );
+                }),
+                on_abort: Box::new(move |model, app, model_id| {
+                    on_abort(
+                        downcast_entity(model),
+                        &mut ModelContext::new(app, model_id),
+                    );
+                }),
+            },
+        )
     }
 
     /// Creates a handle which background tasks can use to spawn work for this model. Spawned tasks
