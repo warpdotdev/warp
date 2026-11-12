@@ -1087,7 +1087,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
-    FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
 ];

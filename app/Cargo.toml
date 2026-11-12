@@ -707,6 +707,7 @@ default = [
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
     "factory_mcp",
+    "preview_urls_mcp",
     "ime_marked_text",
     "ctrl_c_cancels_third_party_harness",
     "shell_widget_handoff",
