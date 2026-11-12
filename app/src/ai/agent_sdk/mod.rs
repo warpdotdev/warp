@@ -15,6 +15,7 @@ use anyhow::Context;
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use driver::agent_setup::configured_skills::{self, merge_skill_dirs};
+use driver::git_credentials::restricted::CredentialStoreGuard;
 pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
@@ -907,6 +908,7 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
+        let credentials = task_id.map(|task_id| CredentialStoreGuard::new(task_id.to_string()));
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
             Self::set_ambient_agent_task_id(&foreground, task_id).await?;
@@ -1116,6 +1118,7 @@ impl AgentDriverRunner {
                         output_format,
                         share_requests,
                         task,
+                        credentials,
                     )
                 })
                 .await??;
@@ -2180,6 +2183,7 @@ impl AgentDriverRunner {
         output_format: OutputFormat,
         share_requests: Option<Vec<ShareRequest>>,
         task: driver::Task,
+        credentials: Option<CredentialStoreGuard>,
     ) -> Result<(), AgentDriverError> {
         maybe_warn_team_api_key(ctx);
         let driver = AgentDriver::create(driver_options, ctx)?;
@@ -2195,7 +2199,10 @@ impl AgentDriverRunner {
                 .in_scope(|| driver.run(task, ctx))
                 .instrument(span);
 
-            ctx.spawn(agent_future, |_, result, ctx| match result {
+            ctx.spawn(async move {
+                let _credentials = credentials;
+                agent_future.await
+            }, |_, result, ctx| match result {
                 Ok(()) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }

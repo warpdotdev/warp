@@ -376,7 +376,46 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
         );
     }
 
-    foreground
+    let required = if matches!(mode, McpStartupMode::Run)
+        && git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
+    {
+        let mut required = ephemeral_installations
+            .iter()
+            .filter(|installation| installation.warp_id() == Some("github"))
+            .map(TemplatableMCPServerInstallation::uuid)
+            .collect::<Vec<_>>();
+        let persistent = existing_uuids
+            .iter()
+            .chain(&profile_allowlist)
+            .copied()
+            .collect::<Vec<_>>();
+        required.extend(
+            foreground
+                .spawn(move |_, ctx| {
+                    let manager = TemplatableMCPServerManager::as_ref(ctx);
+                    persistent
+                        .into_iter()
+                        .filter(|uuid| {
+                            manager
+                                .get_installed_server(uuid)
+                                .is_some_and(|installation| {
+                                    installation.warp_id() == Some("github")
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await?,
+        );
+        if required.is_empty() {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Restricted GitHub mode requires the managed GitHub MCP integration"
+            )));
+        }
+        required
+    } else {
+        Vec::new()
+    };
+    let result = foreground
         .spawn(move |me, ctx| {
             start_mcp_servers_concurrently(
                 me,
@@ -387,7 +426,26 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
             )
         })
         .await?
-        .await
+        .await;
+    if !required.is_empty() {
+        let ready = foreground
+            .spawn(move |_, ctx| {
+                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                required.iter().all(|uuid| {
+                    matches!(
+                        manager.get_server_state(*uuid),
+                        Some(MCPServerState::Running)
+                    )
+                })
+            })
+            .await?;
+        if !ready {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "The required managed GitHub MCP integration did not become ready"
+            )));
+        }
+    }
+    result
 }
 
 /// Uses one readiness subscription for all selected servers so waits cannot cancel each other.

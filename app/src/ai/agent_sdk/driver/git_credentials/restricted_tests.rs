@@ -7,9 +7,10 @@ use warp_cli::agent::{Harness, HarnessTransport};
 use warp_graphql::queries::task_restricted_git_credentials::RestrictedTaskGitCredential;
 
 use super::*;
+use crate::ai::agent_sdk::driver::git_credentials::gh_config_dir;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, split_run_options};
 
-fn with_home(
+pub(super) fn with_home(
     test_name: &str,
     env: &[(&str, &str)],
     test: impl FnOnce(&Path) -> Result<()>,
@@ -18,13 +19,18 @@ fn with_home(
         return test(Path::new(&home));
     }
     let home = tempfile::tempdir()?;
+    let test_name = if test_name.contains("::") {
+        test_name.to_owned()
+    } else {
+        format!("tests::{test_name}")
+    };
     let mut command = Command::new(std::env::current_exe()?);
     #[cfg(windows)]
     command.creation_flags(0);
     command
         .args([
             "--exact",
-            &format!("ai::agent_sdk::driver::git_credentials::restricted::tests::{test_name}"),
+            &format!("ai::agent_sdk::driver::git_credentials::restricted::{test_name}"),
             "--nocapture",
         ])
         .current_dir(home.path())
@@ -45,7 +51,7 @@ fn with_home(
     command.envs(env.iter().copied());
     let output = command.output()?;
     assert!(
-        output.status.success(),
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -57,7 +63,7 @@ fn now() -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000, 0).unwrap()
 }
 
-fn response() -> RestrictedTaskGitCredentialsOutput {
+pub(super) fn response() -> RestrictedTaskGitCredentialsOutput {
     RestrictedTaskGitCredentialsOutput {
         github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
         failed_hosts: Vec::new(),
@@ -72,7 +78,7 @@ fn response() -> RestrictedTaskGitCredentialsOutput {
     }
 }
 
-fn validated_response() -> Result<ValidatedCredentials> {
+pub(super) fn validated_response() -> Result<ValidatedCredentials> {
     validate_response(response(), now(), Instant::now())
 }
 
@@ -293,10 +299,8 @@ fn failed_credential_write_does_not_retain_a_long_refresh_deadline() -> Result<(
 
             assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
 
-            assert_eq!(
-                refresh_delay("task", Instant::now()),
-                Duration::from_secs(60)
-            );
+            let delay = refresh_delay("task", Instant::now());
+            assert!(delay <= Duration::from_secs(60) && delay > Duration::ZERO);
             Ok(())
         },
     )
@@ -535,20 +539,24 @@ fn existing_personal_store_is_not_changed() -> Result<()> {
     with_home("existing_personal_store_is_not_changed", &[], |home| {
         let path = home.join(".git-credentials");
         fs::write(&path, "personal-test-fixture")?;
-        assert!(prepare("task").is_err());
+        assert!(prepare("task").is_ok());
         assert_eq!(fs::read_to_string(path)?, "personal-test-fixture");
         Ok(())
     })
 }
 
 #[test]
-fn inherited_github_token_requires_fresh_sandbox() -> Result<()> {
+fn inherited_github_token_is_cleared_from_child_environment() -> Result<()> {
     with_home(
-        "inherited_github_token_requires_fresh_sandbox",
+        "inherited_github_token_is_cleared_from_child_environment",
         &[("GH_TOKEN", "personal-test-fixture")],
         |home| {
-            assert!(prepare("task").is_err());
-            assert!(!home.join(".warp/github-git/task").exists());
+            assert!(prepare("task").is_ok());
+            assert!(home.join(".warp/github-git/task").exists());
+            assert_eq!(
+                restricted_child_environment("task")?[OsStr::new("GH_TOKEN")],
+                ""
+            );
             Ok(())
         },
     )
@@ -586,9 +594,9 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
 }
 
 #[test]
-fn any_failed_refresh_clears_managed_github_store() -> Result<()> {
+fn unstructured_failed_refresh_clears_managed_github_store() -> Result<()> {
     with_home(
-        "any_failed_refresh_clears_managed_github_store",
+        "unstructured_failed_refresh_clears_managed_github_store",
         &[],
         |_| {
             let directory = prepare("task")?;
@@ -597,10 +605,8 @@ fn any_failed_refresh_clears_managed_github_store() -> Result<()> {
             let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
-            assert_eq!(
-                refresh_delay("task", Instant::now()),
-                Duration::from_secs(60)
-            );
+            let delay = refresh_delay("task", Instant::now());
+            assert!(delay <= Duration::from_secs(60) && delay > Duration::ZERO);
             Ok(())
         },
     )
@@ -699,4 +705,194 @@ fn child_environment_removes_github_authentication() -> Result<()> {
             Ok(())
         },
     )
+}
+
+#[test]
+fn ambient_helpers_and_credentials_do_not_block_managed_setup() -> Result<()> {
+    with_home(
+        "ambient_helpers_and_credentials_do_not_block_managed_setup",
+        &[
+            ("GH_TOKEN", "ambient-test-token"),
+            ("GIT_CONFIG_COUNT", "0"),
+        ],
+        |home| {
+            fs::write(home.join(".netrc"), "unrelated fixture")?;
+            fs::write(home.join(".git-credentials"), "unrelated fixture")?;
+            git_config(&["--add", "credential.helper", "osxkeychain"])?;
+            git_config(&["--add", "credential.helper", "store"])?;
+            let directory = prepare("task")?;
+            install_helper(&directory, &[])?;
+            assert_eq!(
+                fs::read_to_string(home.join(".netrc"))?,
+                "unrelated fixture"
+            );
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "unrelated fixture"
+            );
+            assert_eq!(
+                restricted_child_environment("task")?[OsStr::new("GH_TOKEN")],
+                ""
+            );
+            let output = Command::new("git")
+                .args(["config", "--file"])
+                .arg(home.join(".gitconfig"))
+                .args(["--get-all", "credential.helper"])
+                .output()?;
+            assert_eq!(
+                String::from_utf8(output.stdout)?.trim(),
+                READ_ONLY_CREDENTIAL_HELPER
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn config_count_allows_only_absent_empty_or_exact_zero() {
+    for (value, accepted) in [
+        (None, true),
+        (Some(""), true),
+        (Some("0"), true),
+        (Some("00"), false),
+        (Some("1"), false),
+        (Some(" 0"), false),
+    ] {
+        assert_eq!(valid_config_count(value.map(OsStr::new)), accepted);
+        let env = value
+            .map(|value| HashMap::from([("GIT_CONFIG_COUNT".into(), value.into())]))
+            .unwrap_or_default();
+        assert_eq!(
+            validate_restricted_child_environment(&env).is_ok(),
+            accepted
+        );
+    }
+}
+
+#[test]
+fn only_positive_transient_causes_allow_retention_and_denial_takes_priority() {
+    for (status, expected) in [
+        (401, false),
+        (403, false),
+        (404, false),
+        (408, true),
+        (429, true),
+        (503, true),
+    ] {
+        let error =
+            TaskGitCredentialsError::Request(HttpStatusError::new(status, String::new()).into());
+        assert_eq!(is_transient_credential_error(&error), expected);
+    }
+    assert!(!is_transient_credential_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!("connection reset"))
+    ));
+    let denial = anyhow::Error::new(HttpStatusError::new(403, String::new()))
+        .context(HttpStatusError::new(503, String::new()));
+    assert!(!is_transient_request_error(&denial));
+}
+
+#[test]
+fn transient_failure_keeps_only_unexpired_credentials_without_extending_expiry() -> Result<()> {
+    with_home(
+        "transient_failure_keeps_only_unexpired_credentials_without_extending_expiry",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            let response = validate_response(response(), now(), received_at)?;
+            let expiry = response.expires_at.unwrap();
+            apply_refresh("task", Ok(response))?;
+            let transient =
+                TaskGitCredentialsError::Request(HttpStatusError::new(503, String::new()).into());
+            assert!(apply_refresh("task", Err(transient)).is_err());
+            assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
+            assert_eq!(
+                with_store("task", |store| Ok(store.expires_at))?,
+                Some(expiry)
+            );
+            credential_fetch_failed("task", true, expiry)?;
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn expiry_clears_token_without_changing_the_refresh_schedule() -> Result<()> {
+    with_home(
+        "expiry_clears_token_without_changing_the_refresh_schedule",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
+            let task_id = "task";
+            schedule_refresh_retry(task_id, received_at + Duration::from_secs(3590))?;
+            expire_credentials(task_id, received_at + Duration::from_secs(3600))?;
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert_eq!(
+                refresh_delay(task_id, received_at + Duration::from_secs(3600)),
+                Duration::from_secs(50)
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn partial_refresh_keeps_valid_github_when_other_forge_write_fails() -> Result<()> {
+    with_home(
+        "partial_refresh_keeps_valid_github_when_other_forge_write_fails",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            fs::create_dir(home.join(".git-credentials.tmp"))?;
+            let mut response = response();
+            response.credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(1)).into());
+            response
+                .credentials
+                .push(other_forge_credential("gitlab.com"));
+            assert!(apply_partial_response("task", response).is_err());
+            assert!(!fs::read_to_string(directory.join("credentials"))?.is_empty());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn partial_refresh_clears_failed_github_and_updates_other_forge() -> Result<()> {
+    with_home(
+        "partial_refresh_clears_failed_github_and_updates_other_forge",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            let response = RestrictedTaskGitCredentialsOutput {
+                github_credential_mode: GitHubCredentialMode::RestrictedInstallation,
+                credentials: vec![other_forge_credential("gitlab.com")],
+                failed_hosts: vec!["github.com".into()],
+            };
+            assert!(apply_partial_response("task", response).is_err());
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert!(fs::read_to_string(home.join(".git-credentials"))?.contains("gitlab.com"));
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn store_guard_closes_credentials_on_early_exit() -> Result<()> {
+    with_home("store_guard_closes_credentials_on_early_exit", &[], |_| {
+        let directory = prepare("task")?;
+        {
+            let _guard = CredentialStoreGuard::new("task".into());
+            apply_refresh("task", Ok(validated_response()?))?;
+        }
+        assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+        assert!(apply_refresh("task", Ok(validated_response()?)).is_err());
+        Ok(())
+    })
 }

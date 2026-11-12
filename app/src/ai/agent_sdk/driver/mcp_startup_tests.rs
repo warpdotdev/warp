@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use command::blocking::Command;
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
@@ -28,7 +29,7 @@ use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
-    attach_builtin_mcp_servers,
+    attach_builtin_mcp_servers, start_task_and_profile_mcp_servers,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
@@ -361,6 +362,70 @@ fn resolve_mcp_specs_to_json_preserves_exact_name_collision() {
         assert_eq!(
             resolved[FACTORY_MCP_SERVER_NAME].transport_type,
             explicit_http_server("https://user.example.com/factory").transport_type
+        );
+    });
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
+fn required_native_github_mcp_failure_is_fatal_without_strict_startup() {
+    if std::env::var_os("WARP_TEST_REQUIRED_GITHUB_MCP").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ai::agent_sdk::driver::mcp_startup::tests::required_native_github_mcp_failure_is_fatal_without_strict_startup",
+                "--nocapture",
+            ])
+            .env("WARP_TEST_REQUIRED_GITHUB_MCP", "1")
+            .env("WARP_GITHUB_CREDENTIAL_MODE", "restricted_installation")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let _well_known = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let _factory = FeatureFlag::FactoryMcp.override_enabled(false);
+    let _preview = FeatureFlag::PreviewUrlsMcp.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| simple_logger::manager::LogManager::new());
+        let driver = setup_agent_driver(&mut app);
+        let foreground = driver.update(&mut app, |driver, ctx| {
+            driver.strict_mcp_startup = false;
+            driver.mcp_startup_timeout = Duration::from_millis(50);
+            ctx.spawner()
+        });
+        let mut client = MockManagedMcpClient::new();
+        client
+            .expect_create_managed_mcp_client_config()
+            .times(1)
+            .returning(|id| {
+                assert_eq!(id, "github");
+                Ok(managed_client_config_output(
+                    r#"{"github":{"command":"/nonexistent/warp-test-github-mcp"}}"#,
+                ))
+            });
+        let startup = start_task_and_profile_mcp_servers(
+            &[MCPSpec::WellKnown("github".into())],
+            Arc::new(client),
+            McpStartupMode::Run,
+            None,
+            &foreground,
+        )
+        .await;
+        assert!(matches!(
+            &startup,
+            Err(AgentDriverError::ConfigBuildFailed(_))
+        ));
+        assert!(
+            AgentDriver::handle_mcp_startup_result(startup, &foreground)
+                .await
+                .is_err()
         );
     });
 }

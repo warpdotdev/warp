@@ -23,13 +23,12 @@ use command::blocking::Command as BlockingCommand;
 use instant::Instant;
 use warp_isolation_platform::IsolationPlatformError;
 
-use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ai::{
     AIClient, GitCredential, TaskGitCredentialsError, TaskGitCredentialsResponse,
 };
 use crate::util::path::resolve_executable;
 
-mod restricted;
+pub(crate) mod restricted;
 pub(crate) use restricted::{
     bootstrap_restricted_credentials, close_restricted_credentials, restricted_child_environment,
     restricted_github_mode, validate_restricted_child_environment,
@@ -1014,39 +1013,58 @@ async fn try_refresh(
 /// On transient failure, the refresh is retried up to three times with
 /// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the
 /// ~10-minute buffer before the one-hour token expires. If all retries fail,
-/// a warning is logged and the next refresh is scheduled after the normal
-/// interval.
+/// a warning is logged and restricted credentials retry after one minute.
 ///
-/// This future never resolves — it is designed to be raced with the harness
-/// execution future via `futures::select!` and dropped when the harness
-/// completes.
+/// This future resolves only when managed credentials cannot be cleared. It is raced with the
+/// harness execution future and dropped when the harness completes.
 pub(crate) async fn refresh_loop(
     task_id: String,
     ai_client: Arc<dyn AIClient>,
     use_factory_repositories: bool,
-) {
+) -> Result<(), TaskGitCredentialsError> {
+    let restricted_mode = restricted_github_mode().map_err(TaskGitCredentialsError::Request)?;
     loop {
-        let interval = if restricted_github_mode().unwrap_or(true) {
+        let interval = if restricted_mode {
             restricted::refresh_delay(&task_id, Instant::now())
         } else {
             GIT_CREDENTIALS_REFRESH_INTERVAL
         };
-        warpui::r#async::Timer::after(interval).await;
+        restricted::with_expiry(&task_id, warpui::r#async::Timer::after(interval))
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         log::info!("Refreshing git credentials for task {task_id}");
 
-        if with_retry(
-            "Git credentials refresh",
-            || try_refresh(&task_id, &ai_client, use_factory_repositories),
-            is_retryable,
-            |delay| async move {
-                warpui::r#async::Timer::after(delay).await;
-            },
-            |attempts_made| GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempts_made).copied(),
-        )
-        .await
-        .is_err()
-        {
+        let mut failed = false;
+        for attempt in 0..=GIT_CREDENTIALS_REFRESH_BACKOFF.len() {
+            match try_refresh(&task_id, &ai_client, use_factory_repositories).await {
+                Ok(()) => {
+                    failed = false;
+                    break;
+                }
+                Err(error) => {
+                    if restricted::is_fatal_cleanup_error(&error) {
+                        return Err(error);
+                    }
+                    failed = true;
+                    if !is_retryable(&error) {
+                        break;
+                    }
+                    let Some(delay) = GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempt) else {
+                        break;
+                    };
+                    restricted::with_expiry(&task_id, warpui::r#async::Timer::after(*delay))
+                        .await
+                        .map_err(TaskGitCredentialsError::Request)?;
+                }
+            }
+        }
+        if failed {
+            if restricted_mode
+                && let Err(error) = restricted::schedule_refresh_retry(&task_id, Instant::now())
+            {
+                log::error!("Could not schedule restricted GitHub refresh retry: {error:#}");
+            }
             log::warn!(
                 "Git credentials refresh stopped after a non-retryable error or exhausted \
                  retries; credentials may expire before the next refresh cycle"
