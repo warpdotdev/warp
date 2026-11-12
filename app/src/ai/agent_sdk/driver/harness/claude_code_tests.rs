@@ -947,7 +947,7 @@ fn suffix_uses_worker_injected_env_when_present() {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var(ANTHROPIC_API_KEY_ENV, worker_key) };
     // Even when the resolved map has a different value, the worker env wins.
-    let resolved = HashMap::from([(
+    let mut resolved = HashMap::from([(
         OsString::from("ANTHROPIC_API_KEY"),
         OsString::from(
             "sk-ant-api03-RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR-resolved-val!",
@@ -956,6 +956,22 @@ fn suffix_uses_worker_injected_env_when_present() {
     let suffix = resolve_anthropic_api_key_suffix(&resolved);
     let expected = &worker_key[worker_key.len() - 20..];
     assert_eq!(suffix.as_deref(), Some(expected));
+    resolved.insert("WARP_CLAUDE_BYOE_MODEL".into(), "deployment".into());
+    let resolved_key = resolved
+        .get(OsStr::new(ANTHROPIC_API_KEY_ENV))
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let expected = &resolved_key[resolved_key.len() - 20..];
+    assert_eq!(
+        resolve_anthropic_api_key_suffix(&resolved).as_deref(),
+        Some(expected)
+    );
+    resolved.insert(ANTHROPIC_API_KEY_ENV.into(), "short-endpoint-key".into());
+    assert_eq!(
+        resolve_anthropic_api_key_suffix(&resolved).as_deref(),
+        Some("short-endpoint-key")
+    );
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var(ANTHROPIC_API_KEY_ENV) };
 }

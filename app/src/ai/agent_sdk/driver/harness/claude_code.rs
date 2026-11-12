@@ -901,6 +901,12 @@ struct ClaudeSettings {
 fn resolve_anthropic_api_key_suffix(
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Option<String> {
+    if resolved_env_vars.contains_key(OsStr::new("WARP_CLAUDE_BYOE_MODEL")) {
+        return resolved_env_vars
+            .get(OsStr::new(ANTHROPIC_API_KEY_ENV))
+            .and_then(|value| value.to_str())
+            .map(|key| suffix_of(key).unwrap_or(key).to_owned());
+    }
     // Worker-injected process env wins.
     if let Ok(key) = std::env::var(ANTHROPIC_API_KEY_ENV)
         && !key.is_empty()

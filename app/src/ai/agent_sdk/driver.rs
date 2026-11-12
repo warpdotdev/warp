@@ -106,6 +106,7 @@ pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
 pub(crate) mod cache_setup;
 mod checkpoint_coordinator;
+mod claude_byo;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 #[cfg(feature = "local_fs")]
@@ -840,7 +841,7 @@ fn split_run_options(
         selected_harness,
         harness_transport,
         harness_transport_fallback,
-        third_party_harness_model_config,
+        mut third_party_harness_model_config,
         team_scope,
         bedrock_oidc_credentials,
         snapshot_disabled,
@@ -878,6 +879,12 @@ fn split_run_options(
                 _ => None,
             });
 
+    let byo_env = claude_byo::resolve(
+        selected_harness,
+        &secrets,
+        &mut third_party_harness_model_config,
+    )
+    .map_err(AgentDriverError::ConfigBuildFailed)?;
     let mut env_vars = build_secret_env_vars(&secrets, &environment_variables)?;
     env_vars.extend(
         environment_variables
@@ -902,6 +909,7 @@ fn split_run_options(
         error,
     })?;
     env_vars.extend(harness_env);
+    env_vars.extend(byo_env);
     let credential_store_owner = credential_store_owner
         .or_else(|| task_id.map(|id| ManagedStoreOwner::Task(id.to_string())));
     if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
