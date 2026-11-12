@@ -1,0 +1,31 @@
+{
+  "execution_id": 7,
+  "capture_sequence": 3,
+  "captured_at": "2026-01-01T12:00:00Z",
+  "harness": "PI",
+  "snapshot": {
+    "coverage": {
+      "token_status": "unavailable",
+      "tool_status": "known",
+      "cost_status": "known"
+    },
+    "payload": {
+      "attribution": [
+        {
+          "provider": "openrouter",
+          "model": "vendor/model",
+          "cost_source": "provider",
+          "usage": {
+            "cost": {
+              "total": "0"
+            }
+          }
+        }
+      ],
+      "toolCalls": {
+        "total": 0,
+        "byName": {}
+      }
+    }
+  }
+}

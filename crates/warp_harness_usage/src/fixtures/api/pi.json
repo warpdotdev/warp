@@ -6,7 +6,8 @@
   "snapshot": {
     "coverage": {
       "token_status": "known",
-      "tool_status": "known"
+      "tool_status": "known",
+      "cost_status": "unavailable"
     },
     "payload": {
       "attribution": [
@@ -20,7 +21,8 @@
             "cacheRead": 30,
             "cacheWrite": 4,
             "totalTokens": 46
-          }
+          },
+          "cost_source": "unavailable"
         }
       ],
       "toolCalls": {
