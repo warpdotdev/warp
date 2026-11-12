@@ -492,24 +492,14 @@ impl AgentDriver {
         Self::replace_shell_with_resolved_env(spawner).await?;
         if matches!(task.harness, HarnessKind::Oz) {
             Self::stop_prewarmed_mcp_servers(spawner, mcp_environment).await?;
+            // Managed MCP proxy tokens require the run's start time, so defer their resolution
+            // to normal run startup after the IN_PROGRESS update.
             let retained_mcp = retained_mcp
                 .into_iter()
                 .filter(|installation| installation.warp_id().is_none())
                 .collect::<Vec<_>>();
             let mcp_restart = Self::start_retained_mcp_servers(spawner, retained_mcp).await;
             Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
-            let managed_client = spawner
-                .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
-                .await?;
-            let startup = mcp_startup::start_task_and_profile_mcp_servers(
-                &task.mcp_specs,
-                managed_client,
-                mcp_startup::McpStartupMode::Run,
-                Some(task_id),
-                spawner,
-            )
-            .await;
-            Self::handle_mcp_startup_result(startup, spawner).await?;
         }
         spawner
             .spawn(move |me, ctx| {
