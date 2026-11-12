@@ -15,6 +15,7 @@ use anyhow::Context;
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use driver::agent_setup::configured_skills::{self, merge_skill_dirs};
+use driver::git_credentials::restricted::{CredentialStoreGuard, ManagedStoreOwner};
 pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
@@ -43,6 +44,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::{report_error, report_if_error};
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::execution_config::ExecutionConfiguration;
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
@@ -729,6 +731,8 @@ fn build_execution_task_and_options(
         task_id: Some(task_id),
         execution_id: Some(execution_id.to_owned()),
         use_factory_repositories,
+        github_credential_mode: GitHubCredentialMode::Legacy,
+        credential_store_owner: None,
         experimental: None,
         parent_run_id: config.parent_run_id.map(|id| id.into_inner()),
         should_share: FeatureFlag::AgentSharedSessions.is_enabled(),
@@ -907,6 +911,8 @@ impl AgentDriverRunner {
         // Local CLI-created runs may not have a task yet, so those setup events explicitly no-op.
         let mut task_id: Option<AmbientAgentTaskId> =
             args.task_id.as_deref().and_then(|s| s.parse().ok());
+        let credentials = task_id
+            .map(|task_id| CredentialStoreGuard::new(ManagedStoreOwner::Task(task_id.to_string())));
         // Set up and run the driver, reporting any errors back to the server.
         let result: Result<(), AgentDriverError> = async {
             Self::set_ambient_agent_task_id(&foreground, task_id).await?;
@@ -1116,6 +1122,7 @@ impl AgentDriverRunner {
                         output_format,
                         share_requests,
                         task,
+                        credentials,
                     )
                 })
                 .await??;
@@ -1295,10 +1302,9 @@ impl AgentDriverRunner {
         task_id_str: &str,
         configure_git_credentials_with_github: bool,
         use_factory_repositories: bool,
+        github_credential_mode: GitHubCredentialMode,
     ) -> Result<(), AgentDriverError> {
-        if driver::git_credentials::restricted_github_mode()
-            .map_err(AgentDriverError::ConfigBuildFailed)?
-        {
+        if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
             let ai_client = foreground
                 .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_ai_client())
                 .await?;
@@ -1471,12 +1477,17 @@ impl AgentDriverRunner {
                     std::env::var_os(FACTORY_ID_ENV),
                 )
             });
+        let github_credential_mode = driver::git_credentials::credential_mode(
+            std::env::var("WARP_GITHUB_CREDENTIAL_MODE").ok().as_deref(),
+        )
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
         if let Some(task_id_str) = args.task_id.as_ref() {
             Self::bootstrap_git_credentials_for_task(
                 foreground,
                 task_id_str,
                 args.configure_git_credentials_with_github,
                 use_factory_repositories,
+                github_credential_mode,
             )
             .await?;
         }
@@ -1521,6 +1532,7 @@ impl AgentDriverRunner {
                 })
                 .await?
                 .map_err(AgentDriverError::ConfigBuildFailed)?;
+            options.github_credential_mode = github_credential_mode;
             options.team_scope = agent_driver_team_scope;
             let task_id = options
                 .task_id
@@ -1587,6 +1599,8 @@ impl AgentDriverRunner {
                     task_id,
                     execution_id: args.execution_id.clone(),
                     use_factory_repositories,
+                    github_credential_mode,
+                    credential_store_owner: None,
                     experimental: None,
                     parent_run_id: None,
                     should_share,
@@ -2180,6 +2194,7 @@ impl AgentDriverRunner {
         output_format: OutputFormat,
         share_requests: Option<Vec<ShareRequest>>,
         task: driver::Task,
+        credentials: Option<CredentialStoreGuard>,
     ) -> Result<(), AgentDriverError> {
         maybe_warn_team_api_key(ctx);
         let driver = AgentDriver::create(driver_options, ctx)?;
@@ -2195,7 +2210,10 @@ impl AgentDriverRunner {
                 .in_scope(|| driver.run(task, ctx))
                 .instrument(span);
 
-            ctx.spawn(agent_future, |_, result, ctx| match result {
+            ctx.spawn(async move {
+                let _credentials = credentials;
+                agent_future.await
+            }, |_, result, ctx| match result {
                 Ok(()) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }

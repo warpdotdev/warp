@@ -514,7 +514,8 @@ fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState
         | PlatformErrorCode::IntegrationNotConfigured
         | PlatformErrorCode::InvalidRequest
         | PlatformErrorCode::NotAuthorized
-        | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+        | PlatformErrorCode::ResourceNotFound
+        | PlatformErrorCode::OperationNotSupported => AgentTaskState::Failed,
     }
 }
 

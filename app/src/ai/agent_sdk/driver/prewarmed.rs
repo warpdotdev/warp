@@ -1,6 +1,8 @@
 use clap::ValueEnum as _;
 use warp_cli::skill::SkillSpec;
-use warp_graphql::queries::execution_config::ExecutionConfiguration;
+use warp_graphql::queries::execution_config::{
+    AwsBedrockInferenceClientConfig, ExecutionConfiguration,
+};
 
 use super::*;
 use crate::ai::agent_sdk::driver::agent_setup::configured_skills::resolve_configured_skills;
@@ -8,9 +10,24 @@ use crate::ai::agent_sdk::{
     AgentDriverRunner, FACTORY_ID_ENV, RepositoryContract, build_execution_task_and_options,
     factory_repository_contract,
 };
+use crate::ai::mcp::TemplatableMCPServerInstallation;
+use crate::server::server_api::ServerApi;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
+
+struct AssignmentInstallationContext {
+    team_scope: HeadlessTeamScope,
+    share_requests: Vec<ShareRequest>,
+    bedrock: Option<AwsBedrockInferenceClientConfig>,
+    specs: Vec<SkillSpec>,
+    setup_events: SetupClientEventReporter,
+    server_api: Arc<ServerApi>,
+    working_dir: PathBuf,
+    assigned_mode: GitHubCredentialMode,
+    use_factory_repositories: bool,
+    retained_mcp: Vec<TemplatableMCPServerInstallation>,
+}
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -35,6 +52,26 @@ fn assignment_harness_transport(
 }
 
 impl AgentDriver {
+    pub(crate) async fn report_prewarmed_lifecycle_failure(
+        spawner: &ModelSpawner<Self>,
+        message: String,
+    ) {
+        if let Ok(Some((task_id, client))) = spawner
+            .spawn(|me, ctx| {
+                me.task_id
+                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+            })
+            .await
+        {
+            report_driver_error(
+                task_id,
+                &AgentDriverError::ConfigBuildFailed(anyhow!(message)),
+                &client,
+            )
+            .await;
+        }
+    }
+
     /// Restarts the agent's shell so it inherits the environment resolved for the assignment.
     async fn replace_shell_with_resolved_env(
         spawner: &ModelSpawner<Self>,
@@ -82,6 +119,9 @@ impl AgentDriver {
             })
             .await?;
         AgentDriverRunner::set_ambient_agent_task_id(spawner, Some(task_id)).await?;
+        spawner
+            .spawn(move |me, _| me.task_id = Some(task_id))
+            .await?;
         let result = Self::install_assignment(
             spawner,
             task_id,
@@ -119,17 +159,21 @@ impl AgentDriver {
         }
         #[cfg(target_family = "wasm")]
         runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
-        if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
-            || runtime_env
-                .get("WARP_GITHUB_CREDENTIAL_MODE")
-                .is_some_and(|mode| mode == "restricted_installation")
-        {
-            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
-                "Restricted GitHub credentials require a fresh sandbox; prewarmed assignment is not supported"
-            )));
+        let (prepared_mode, standby_owner) = spawner
+            .spawn(|me, _| (me.github_credential_mode, me.credential_store_owner.clone()))
+            .await?;
+        let retained_mcp = Self::stop_prewarmed_mcp_servers(spawner, HashMap::new()).await?;
+        if let Some(owner) = standby_owner {
+            git_credentials::close_restricted_credentials(&owner)
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
         }
-        git_credentials::clear_standby_credentials()
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        if prepared_mode == GitHubCredentialMode::Legacy {
+            git_credentials::clear_standby_credentials()
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        } else {
+            git_credentials::clear_standby_provider_credentials()
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        }
         let standby_providers = spawner
             .spawn(|me, _| std::mem::take(&mut me.cloud_providers))
             .await?;
@@ -138,6 +182,17 @@ impl AgentDriver {
                 .cleanup()
                 .await
                 .map_err(AgentDriverError::CloudProviderSetupFailed)?;
+        }
+        let assigned_mode = git_credentials::credential_mode(
+            runtime_env
+                .get("WARP_GITHUB_CREDENTIAL_MODE")
+                .map(String::as_str),
+        )
+        .map_err(AgentDriverError::ConfigBuildFailed)?;
+        if assigned_mode != prepared_mode {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+                "Assigned GitHub credential mode does not match preparation"
+            )));
         }
         validate_assignment(&config).map_err(AgentDriverError::ConfigBuildFailed)?;
         let team_scope = execution_config::team_scope(config.team_id.as_ref())
@@ -201,15 +256,77 @@ impl AgentDriver {
                     .collect::<Vec<_>>())
             })
             .await??;
-        let credentials = AgentDriverRunner::fetch_task_git_credentials(
-            task_id.to_string(),
-            ai_client.clone(),
+        if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
+            git_credentials::restricted::install_assignment_credentials(
+                &task_id.to_string(),
+                ai_client,
+                use_factory_repositories,
+                &repositories,
+            )
+            .await
+            .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+        } else {
+            let credentials = AgentDriverRunner::fetch_task_git_credentials(
+                task_id.to_string(),
+                ai_client.clone(),
+                use_factory_repositories,
+            )
+            .await
+            .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+            git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
+                .map_err(AgentDriverError::ConfigBuildFailed)?;
+        }
+        let installation = Self::finish_assignment(
+            spawner,
+            task_id,
+            config,
+            runtime_env,
+            expires_at,
+            ai_client,
+            AssignmentInstallationContext {
+                team_scope,
+                share_requests,
+                bedrock,
+                specs,
+                setup_events,
+                server_api,
+                working_dir,
+                assigned_mode,
+                use_factory_repositories,
+                retained_mcp,
+            },
+        );
+        if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
+            let owner = ManagedStoreOwner::Task(task_id.to_string());
+            git_credentials::restricted::with_expiry(&owner, installation)
+                .await
+                .map_err(AgentDriverError::ConfigBuildFailed)?
+        } else {
+            installation.await
+        }
+    }
+
+    async fn finish_assignment(
+        spawner: &ModelSpawner<Self>,
+        task_id: AmbientAgentTaskId,
+        config: ExecutionConfiguration,
+        runtime_env: HashMap<String, String>,
+        expires_at: DateTime<Utc>,
+        ai_client: &Arc<dyn AIClient>,
+        installation: AssignmentInstallationContext,
+    ) -> Result<Task, AgentDriverError> {
+        let AssignmentInstallationContext {
+            team_scope,
+            share_requests,
+            bedrock,
+            specs,
+            setup_events,
+            server_api,
+            working_dir,
+            assigned_mode,
             use_factory_repositories,
-        )
-        .await
-        .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
-        git_credentials::configure_assignment_git_credentials(&credentials, &repositories)
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
+            retained_mcp,
+        } = installation;
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
         let (first_skill, discovery_dirs) =
             resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;
@@ -249,6 +366,7 @@ impl AgentDriver {
                     .map_err(AgentDriverError::CloudProviderSetupFailed)?;
         }
         options.team_scope = Some(team_scope);
+        options.github_credential_mode = assigned_mode;
         // MCP servers get only the runtime environment, because in a normal run they inherit the
         // worker environment that it replaces and never the terminal's managed secrets.
         let mut mcp_environment = runtime_env.clone();
@@ -373,8 +491,14 @@ impl AgentDriver {
             .await??;
         Self::replace_shell_with_resolved_env(spawner).await?;
         if matches!(task.harness, HarnessKind::Oz) {
-            let mcp_restart =
-                Self::replace_prewarmed_mcp_environment(spawner, mcp_environment).await;
+            Self::stop_prewarmed_mcp_servers(spawner, mcp_environment).await?;
+            // Managed MCP proxy tokens require the run's start time, so defer their resolution
+            // to normal run startup after the IN_PROGRESS update.
+            let retained_mcp = retained_mcp
+                .into_iter()
+                .filter(|installation| installation.warp_id().is_none())
+                .collect::<Vec<_>>();
+            let mcp_restart = Self::start_retained_mcp_servers(spawner, retained_mcp).await;
             Self::handle_mcp_startup_result(mcp_restart, spawner).await?;
         }
         spawner

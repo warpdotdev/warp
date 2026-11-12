@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use futures::future::{AbortHandle, Abortable};
 use futures::{Future, FutureExt};
 use thiserror::Error;
 use warp_errors::report_error;
@@ -17,7 +16,8 @@ use super::handle::{
 use super::{TypedActionView, View};
 use crate::accessibility::AccessibilityContent;
 use crate::r#async::executor::{Background, Foreground};
-use crate::r#async::{BoxFuture, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
+use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
+use crate::core::spawn::{SpawnCallbacks, downcast_entity, downcast_output, erase_output};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::fonts::Cache as FontCache;
 use crate::modals::{AlertDialogWithCallbacks, ModalButton, ViewModalCallback};
@@ -47,12 +47,6 @@ impl<'a, T: View> ViewContext<'a, T> {
         }
     }
 }
-
-/// Callback that receives the output of a resolved future spawned from a [`ViewContext`].
-type SpawnResolveCallback<T, O> = Box<dyn FnOnce(&mut T, O, &mut ViewContext<T>)>;
-
-/// Callback that runs when a future spawned from a [`ViewContext`] is aborted.
-type SpawnAbortCallback<T> = Box<dyn FnOnce(&mut T, &mut ViewContext<T>)>;
 
 /// Structure that combines view identifiers and a handle to the application
 /// context/application state.
@@ -497,56 +491,6 @@ impl<'a, T: Entity> ViewContext<'a, T> {
             .send_desktop_notification(content, view_id, window_id, on_error_callback);
     }
 
-    /// Schedules a future to run on the main thread, invoking a callback on the
-    /// main thread upon completion.
-    ///
-    /// The callback receives the output of the future, if any, in addition to
-    /// mutable references to the spawning view and its context, allowing for
-    /// dirtying of the view (via [`Self::notify()`]) if appropriate.
-    ///
-    /// This is private to [`ViewContext`] because we shouldn't ever need to
-    /// poll a future on the main thread.  Currently, the only use is by
-    /// [`Self::spawn()`] in order to pass the results of the background task to
-    /// a callback executed on the main thread.
-    ///
-    /// TODO(vorporeal): Determine how best to eliminate this function and move
-    ///     the relevant logic into `spawn()`.
-    fn spawn_local<S, F, U>(
-        &mut self,
-        future: S,
-        callback: F,
-    ) -> impl Future<Output = ()> + use<S, F, U, T>
-    where
-        S: 'static + Future,
-        F: 'static + FnOnce(&mut T, S::Output, &mut ViewContext<T>) -> U,
-        U: 'static,
-    {
-        let (tx, rx) = futures::channel::oneshot::channel();
-
-        let task_id = self.app.spawn_local(future);
-
-        self.app.task_callbacks.insert(
-            task_id,
-            TaskCallback::ViewFromFuture {
-                window_id: self.window_id,
-                view_id: self.view_id,
-                callback: Box::new(move |view, output, app, window_id, view_id| {
-                    let view = view.downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
-                    let output = *output.downcast().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
-                    let result =
-                        callback(view, output, &mut ViewContext::new(app, window_id, view_id));
-                    let _ = tx.send(result);
-                }),
-            },
-        );
-
-        async move {
-            if rx.await.is_err() {
-                report_error!("sender unexpectedly dropped before receiver");
-            }
-        }
-    }
-
     /// Schedules a future to run on a background thread, invoking a callback on
     /// the _main_ thread upon completion.
     ///
@@ -570,12 +514,20 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>) -> U,
         U: 'static,
     {
-        self.spawn_abortable_boxed(
-            Box::pin(future),
-            Box::new(|view, output, ctx| {
-                callback(view, output, ctx);
-            }),
-            Box::new(|_, _| {}),
+        self.app.spawn_abortable_erased(
+            erase_output::<S::Output>(Box::pin(future)),
+            SpawnCallbacks::View {
+                window_id: self.window_id,
+                view_id: self.view_id,
+                on_resolve: Box::new(move |view, output, app, window_id, view_id| {
+                    callback(
+                        downcast_entity(view),
+                        downcast_output(output),
+                        &mut ViewContext::new(app, window_id, view_id),
+                    );
+                }),
+                on_abort: Box::new(|_, _, _, _| {}),
+            },
         )
     }
 
@@ -609,56 +561,26 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>),
         A: 'static + FnOnce(&mut T, &mut ViewContext<T>),
     {
-        self.spawn_abortable_boxed(Box::pin(future), Box::new(on_resolve), Box::new(on_abort))
-    }
-
-    /// Type-erased body of [`Self::spawn`] and [`Self::spawn_abortable`].
-    ///
-    /// The public entry points box the future and the callbacks immediately, so this body is
-    /// compiled once per output type instead of once per call site.
-    fn spawn_abortable_boxed<O>(
-        &mut self,
-        future: BoxFuture<'static, O>,
-        on_resolve: SpawnResolveCallback<T, O>,
-        on_abort: SpawnAbortCallback<T>,
-    ) -> SpawnedFutureHandle
-    where
-        O: 'static + SpawnableOutput,
-    {
-        let (tx, rx) = futures::channel::oneshot::channel();
-
-        let (abort_handle, abort_registration) = AbortHandle::new_pair();
-        self.app
-            .background_executor()
-            .spawn_boxed(Box::pin(async move {
-                let abortable = Abortable::new(future, abort_registration);
-                if tx.send(abortable.await).is_err() {
-                    report_error!("Error sending background task result to main thread");
-                }
-            }))
-            .detach();
-
-        let future = self.spawn_local(rx, |view, rx_result, ctx| {
-            let output = match rx_result {
-                Ok(output) => output,
-                Err(_) => {
-                    report_error!("sender unexpectedly dropped before receiver");
-                    on_abort(view, ctx);
-                    return;
-                }
-            };
-
-            // Call the appropriate callback based on the output of resolving the future. If the
-            // future returned `Ok`, the future was not aborted so we can call `on_resolve`. If
-            // the future returned `Err`--the future was aborted.
-            match output {
-                Ok(output) => on_resolve(view, output, ctx),
-                Err(_) => on_abort(view, ctx),
-            }
-        });
-
-        let future_id = self.app.register_spawned_future(future.boxed());
-        SpawnedFutureHandle::new(abort_handle, future_id)
+        self.app.spawn_abortable_erased(
+            erase_output::<S::Output>(Box::pin(future)),
+            SpawnCallbacks::View {
+                window_id: self.window_id,
+                view_id: self.view_id,
+                on_resolve: Box::new(move |view, output, app, window_id, view_id| {
+                    on_resolve(
+                        downcast_entity(view),
+                        downcast_output(output),
+                        &mut ViewContext::new(app, window_id, view_id),
+                    );
+                }),
+                on_abort: Box::new(move |view, app, window_id, view_id| {
+                    on_abort(
+                        downcast_entity(view),
+                        &mut ViewContext::new(app, window_id, view_id),
+                    );
+                }),
+            },
+        )
     }
 
     /// Schedules a stream to be polled on the main thread, invoking callbacks

@@ -50,13 +50,14 @@ pub struct RestrictedTaskGitCredentialsOutput {
     pub github_credential_mode: GitHubCredentialMode,
 }
 
-#[derive(cynic::Enum, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(cynic::Enum, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum GitHubCredentialMode {
+    #[default]
     Legacy,
     RestrictedInstallation,
 }
 
-#[derive(cynic::QueryFragment)]
+#[derive(cynic::QueryFragment, Clone)]
 #[cynic(graphql_type = "TaskGitCredential")]
 pub struct RestrictedTaskGitCredential {
     pub token: String,
