@@ -1092,9 +1092,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::StoredScreenshots,
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
-    FeatureFlag::FactoryDeferredRepositories,
     FeatureFlag::AgentPromptSteering,
-    FeatureFlag::FactorySkillReferences,
     FeatureFlag::CwdScopedCloudSkills,
 ];
 
@@ -1110,6 +1108,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::FactorySkillReferences,
     FeatureFlag::VideoRecording,
     FeatureFlag::WindowsVideoRecording,
     FeatureFlag::ImeMarkedText,

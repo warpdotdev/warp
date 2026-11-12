@@ -150,6 +150,7 @@ mcp.workspace = true
 memchr.workspace = true
 memo-map.workspace = true
 mermaid_to_svg.workspace = true
+non_structural_derive = "0.1.2"
 num-traits.workspace = true
 num_cpus = "1.13.0"
 oauth2.workspace = true
@@ -324,6 +325,7 @@ opentelemetry.workspace = true
 opentelemetry-http.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
+preview_proxy.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
@@ -681,6 +683,7 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
+    "factory_deferred_repositories",
     "oz_handoff",
     "handoff_local_cloud",
     "pending_user_query_indicator",

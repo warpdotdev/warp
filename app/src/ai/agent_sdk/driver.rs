@@ -118,9 +118,11 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
+mod preview_proxy;
 mod preview_retention;
 mod prewarmed;
 mod restored_children;
+mod setup_vars;
 mod skill_references;
 mod snapshot;
 pub(crate) mod terminal;
@@ -920,6 +922,11 @@ fn split_run_options(
         tracing::Span::current().record("is_sandbox", true);
     }
 
+    env_vars.insert(
+        OsString::from("WARP_VARS_FILE"),
+        setup_vars::file_path(&working_dir, &env_vars).into_os_string(),
+    );
+
     let skill_dirs = workspace
         .factory_skill_dirs
         .clone()
@@ -1010,6 +1017,7 @@ pub struct AgentDriver {
     /// without re-deriving precedence.
     resolved_env_vars: Arc<HashMap<OsString, OsString>>,
     _preparation_file: Option<environment_preparation::PreparationFile>,
+    setup_vars: Option<setup_vars::SetupVars>,
     harness_config_dir: Option<TempDir>,
 
     output_format: OutputFormat,
@@ -1017,6 +1025,7 @@ pub struct AgentDriver {
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
     execution_id: Option<String>,
+    preview_proxy: Option<preview_proxy::Manager>,
     use_factory_repositories: bool,
     #[allow(
         dead_code,
@@ -1569,10 +1578,12 @@ impl AgentDriver {
             secrets: Arc::new(HashMap::new()),
             resolved_env_vars: Arc::new(HashMap::new()),
             _preparation_file: None,
+            setup_vars: None,
             harness_config_dir: None,
             output_format: OutputFormat::default(),
             task_id: None,
             execution_id: None,
+            preview_proxy: None,
             use_factory_repositories: false,
             experimental: None,
             team_scope: None,
@@ -1655,6 +1666,20 @@ impl AgentDriver {
         self.secrets = Arc::new(secrets);
         self.task_id = task_id;
         self.execution_id = execution_id;
+        self.preview_proxy = None;
+        if FeatureFlag::PreviewUrlsMcp.is_enabled()
+            && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
+            && let Some(task_id) = task_id
+        {
+            match preview_proxy::Manager::start(
+                task_id,
+                self.execution_id.as_deref(),
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+            ) {
+                Ok(manager) => self.preview_proxy = Some(manager),
+                Err(error) => log::error!("Preview proxy runtime failed to start: {error:#}"),
+            }
+        }
         self.use_factory_repositories = use_factory_repositories;
         self.factory_repository_contract = use_factory_repositories;
         self.experimental = experimental;
@@ -2372,6 +2397,7 @@ impl AgentDriver {
                     )
                 }
                 WorkspaceState::Pending(mut workspace) => {
+                    Self::initialize_setup_vars(&foreground, true).await?;
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
                     // The Factory definition checkout is run-scoped: the dispatch decides
@@ -2429,6 +2455,12 @@ impl AgentDriver {
                             return Err(error);
                         }
                     };
+                    Self::read_setup_vars(
+                        &foreground,
+                        true,
+                        matches!(&task.harness, HarnessKind::Oz),
+                    )
+                    .await?;
                     let harness_working_dir = prepared.harness_working_dir.clone();
                     foreground
                         .spawn(move |me, _| me.harness_working_dir = harness_working_dir)

@@ -61,6 +61,7 @@ impl AgentDriver {
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
         let prepared_configuration = workspace.clone();
         bootstrap_terminal(foreground, setup_events).await?;
+        Self::initialize_setup_vars(foreground, false).await?;
         setup_events
             .record_result(
                 SetupStep::CloudProviderSetup,
@@ -108,6 +109,7 @@ impl AgentDriver {
             snapshot_reporter,
         )
         .await?;
+        Self::read_setup_vars(foreground, false, harness == Harness::Oz).await?;
         let working_dir = prepared.harness_working_dir.clone();
         let repositories = prepared.repositories.clone();
         foreground

@@ -769,6 +769,13 @@ pub(crate) fn harness_env_vars(
                 }
             }
         }
+        (Harness::Codex, HarnessTransport::Acp) => {
+            // The runner already provides isolation; nested bwrap cannot start in its sandbox.
+            env_vars.insert(
+                OsString::from("INITIAL_AGENT_MODE"),
+                OsString::from("agent-full-access"),
+            );
+        }
         (Harness::Pi, _) => {
             let (env_vars, dir) = pi_env_vars()?;
             return Ok((env_vars, Some(dir)));

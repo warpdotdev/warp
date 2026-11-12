@@ -107,6 +107,18 @@ impl AgentDriver {
         expires_at: DateTime<Utc>,
         ai_client: &Arc<dyn AIClient>,
     ) -> Result<Task, AgentDriverError> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            runtime_env = spawner
+                .spawn(move |_, ctx| {
+                    let client = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+                    crate::tracing::assign_run_credentials(&mut runtime_env, client, ctx);
+                    runtime_env
+                })
+                .await?;
+        }
+        #[cfg(target_family = "wasm")]
+        runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
         if git_credentials::restricted_github_mode().map_err(AgentDriverError::ConfigBuildFailed)?
             || runtime_env
                 .get("WARP_GITHUB_CREDENTIAL_MODE")
@@ -239,7 +251,20 @@ impl AgentDriver {
         options.team_scope = Some(team_scope);
         // MCP servers get only the runtime environment, because in a normal run they inherit the
         // worker environment that it replaces and never the terminal's managed secrets.
-        let mcp_environment = runtime_env.clone();
+        let mut mcp_environment = runtime_env.clone();
+        let metadata = runtime_env.clone();
+        spawner
+            .spawn(move |me, _| {
+                if let Some(vars) = me.setup_vars.as_mut() {
+                    vars.write_assignment_metadata(&metadata).map_err(|_| {
+                        AgentDriverError::EnvironmentSetupFailed(
+                            "Could not write assignment metadata to .warp.vars".into(),
+                        )
+                    })?;
+                }
+                Ok::<_, AgentDriverError>(())
+            })
+            .await??;
         // The sandbox's runtime environment is the terminal environment for this assignment, so
         // the shared resolver layers managed secrets, task variables, and harness variables
         // underneath it exactly as it does for a normal run.
@@ -338,11 +363,12 @@ impl AgentDriver {
         }
         let (terminal_inputs, run_config) = split_run_options(options)?;
         let should_share = terminal_inputs.should_share;
-        spawner
+        let mcp_environment = spawner
             .spawn(move |me, ctx| {
                 me.apply_prewarmed_run_configuration(terminal_inputs, run_config, ctx)?;
+                me.merge_assignment_setup_vars(&mut mcp_environment);
                 me.sandbox_deadline = Some(expires_at.into());
-                Ok::<_, AgentDriverError>(())
+                Ok::<_, AgentDriverError>(mcp_environment)
             })
             .await??;
         Self::replace_shell_with_resolved_env(spawner).await?;

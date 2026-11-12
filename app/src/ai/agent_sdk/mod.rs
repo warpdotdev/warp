@@ -2290,7 +2290,6 @@ fn launch_command(
     command: CliCommand,
     global_options: GlobalOptions,
 ) -> anyhow::Result<()> {
-    let parent_span = tracing::Span::current();
     let requires_auth = command_requires_auth(&command);
 
     if !requires_auth {
@@ -2298,24 +2297,38 @@ fn launch_command(
     }
 
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
+    authenticate_then_execute(
+        global_options.api_key.clone(),
+        &format!("You are not logged in - please log in with `{cli_name} login` to continue."),
+        ctx,
+        move |ctx| dispatch_command(ctx, command.clone(), global_options.clone()),
+    )
+}
+
+/// Establishes IAP access and validates credentials before executing a command once.
+pub fn authenticate_then_execute(
+    pending_api_key: Option<String>,
+    login_hint: &str,
+    ctx: &mut AppContext,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
+) -> anyhow::Result<()> {
+    let parent_span = tracing::Span::current();
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-    let Some(authentication) =
-        command_authentication(global_options.api_key.clone(), auth_state.is_logged_in())
+    let Some(authentication) = command_authentication(pending_api_key, auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!(
-            "You are not logged in - please log in with `{cli_name} login` to continue."
-        ));
+        return Err(anyhow::anyhow!("{}", login_hint));
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_dispatch(ctx, command, global_options, authentication, parent_span);
+        authenticate_and_execute(ctx, parent_span, authentication, execute);
         return Ok(());
     }
 
+    let mut execute = Some(execute);
     let mut handled = false;
     let parent_span_for_iap = parent_span.clone();
     ctx.subscribe_to_model(&iap, move |_, event, ctx| {
@@ -2328,16 +2341,18 @@ fn launch_command(
                 if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
             {
                 handled = true;
-                authenticate_and_dispatch(
-                    ctx,
-                    command.clone(),
-                    global_options.clone(),
-                    authentication.clone(),
-                    parent_span.clone(),
-                );
+                if let Some(execute) = execute.take() {
+                    authenticate_and_execute(
+                        ctx,
+                        parent_span.clone(),
+                        authentication.clone(),
+                        execute,
+                    );
+                }
             }
             IapManagerEvent::AccessUnavailable => {
                 handled = true;
+                execute = None;
                 report_fatal_error(
                     anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
                     ctx,
@@ -2352,18 +2367,18 @@ fn launch_command(
     Ok(())
 }
 
-/// Subscribes to auth events, authenticates, and dispatches the command once
+/// Subscribes to auth events, authenticates, and execute the closure once
 /// auth completes. Assumes IAP access (if applicable) is already established.
-fn authenticate_and_dispatch(
+fn authenticate_and_execute(
     ctx: &mut AppContext,
-    command: CliCommand,
-    global_options: GlobalOptions,
-    authentication: CommandAuthentication,
     parent_span: tracing::Span,
+    authentication: CommandAuthentication,
+    execute: impl FnOnce(&mut AppContext) -> anyhow::Result<()> + 'static,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     // Subscribe to auth events and wait for validation before running the command.
+    let mut execute_once = Some(execute);
     let mut dispatched = false;
     ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, ctx| {
         let _guard = parent_span.enter();
@@ -2373,12 +2388,15 @@ fn authenticate_and_dispatch(
         match event {
             AuthManagerEvent::AuthComplete => {
                 dispatched = true;
-                if let Err(err) = dispatch_command(ctx, command.clone(), global_options.clone()) {
+                if let Some(execute) = execute_once.take()
+                    && let Err(err) = execute(ctx)
+                {
                     report_fatal_error(err, ctx);
                 }
             }
             AuthManagerEvent::NeedsReauth => {
                 dispatched = true;
+                execute_once = None;
                 let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
                 let message = if auth_state.is_api_key_authenticated() {
                     "Your API key is invalid. Please provide a valid key via '--api-key' or the WARP_API_KEY environment variable.".to_string()
@@ -2389,6 +2407,7 @@ fn authenticate_and_dispatch(
             }
             AuthManagerEvent::AuthFailed(err) => {
                 dispatched = true;
+                execute_once = None;
                 report_fatal_error(anyhow::anyhow!("Authentication failed: {err:#}"), ctx);
             }
             _ => {}

@@ -8880,6 +8880,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "non_structural_derive"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b314d87ab425583e6aa06ab4766a0858d8c6b66ee82a5132bb0027f7ceb797"
+dependencies = [
+ "non_structural_derive_macro",
+]
+
+[[package]]
+name = "non_structural_derive_macro"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce21b181c774b29e508df75ef537f6f4a9e5bf866edae6ae9dcc63cc9e6c058"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "synstructure",
+]
+
+[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10508,6 +10529,22 @@ dependencies = [
  "parking_lot",
  "pin-project",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "preview_proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "log",
+ "tokio",
+ "tokio-util",
+ "tower",
 ]
 
 [[package]]
@@ -15389,6 +15426,7 @@ dependencies = [
  "mockito",
  "natural_language_detection",
  "nix 0.26.4",
+ "non_structural_derive",
  "notify-debouncer-full",
  "num-traits",
  "num_cpus",
@@ -15415,6 +15453,7 @@ dependencies = [
  "pin-project",
  "plist",
  "pprof",
+ "preview_proxy",
  "prost",
  "prost-build",
  "prost-types",
@@ -16199,6 +16238,7 @@ dependencies = [
  "fs4",
  "futures",
  "futures-lite 1.13.0",
+ "hex",
  "http_client",
  "inquire",
  "instant",
@@ -16211,6 +16251,7 @@ dependencies = [
  "pathfinder_geometry",
  "rangemap",
  "serde_json",
+ "sha2 0.10.9",
  "shell-words",
  "similar",
  "string-offset",
@@ -16237,6 +16278,7 @@ dependencies = [
  "warp_util",
  "warpui",
  "warpui_core",
+ "warpui_extras",
 ]
 
 [[package]]
