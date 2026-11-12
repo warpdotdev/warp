@@ -222,6 +222,7 @@ pub enum AIAgentActionType {
 /// fully-resolved instance only.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsRequest {
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub metadata: HashMap<String, String>,
     pub summary: String,
     pub base_prompt: String,

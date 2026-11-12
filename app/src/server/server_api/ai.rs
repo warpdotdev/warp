@@ -298,6 +298,8 @@ impl TaskStatusUpdate {
 /// JSON payload sent to the public `POST /agent/run` API.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_github_coauthor_user_uid: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
     /// None for skill-only or conversation-only invocations; omitted on the wire.

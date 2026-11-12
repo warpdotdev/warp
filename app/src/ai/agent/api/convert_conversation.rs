@@ -1531,9 +1531,7 @@ pub(crate) fn convert_tool_call_result_to_input(
             // Server results should not create exchanges - return None
             None
         }
-        Some(ToolCallResultType::Cancel(_)) => {
-            // Cancel results indicate the tool call was explicitly cancelled
-            // Look up the original tool call to determine the correct result type
+        Some(ToolCallResultType::Cancel(_) | ToolCallResultType::DeniedByHook(_)) => {
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,

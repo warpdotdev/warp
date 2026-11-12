@@ -146,6 +146,7 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
                         },
                     )]),
                     byok_inference_usage: HashMap::new(),
+                    claude_linked_billing_inference_usage: HashMap::new(),
                     custom_endpoint_inference_usage: HashMap::new(),
                     platform_usage_in_cents: 6.0,
                     platform_usage_duration: Some(prost_types::Duration {

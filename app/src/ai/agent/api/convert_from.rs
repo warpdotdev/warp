@@ -117,6 +117,7 @@ fn convert_run_agents(
     skill_path_origin: &SkillPathOrigin,
 ) -> AIAgentActionType {
     let api::RunAgents {
+        github_commit_attribution,
         metadata,
         summary,
         base_prompt,
@@ -128,6 +129,8 @@ fn convert_run_agents(
         plan_id,
     } = run_agents;
     AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+        delegated_github_coauthor_user_uid: github_commit_attribution
+            .map(|attribution| attribution.coauthor_user_uid),
         metadata,
         summary,
         base_prompt,

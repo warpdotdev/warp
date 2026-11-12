@@ -156,6 +156,9 @@ fn converts_run_agents_metadata_maps() {
         message: Some(api::message::Message::ToolCall(api::message::ToolCall {
             tool_call_id: "run-agents".to_string(),
             tool: Some(api::message::tool_call::Tool::RunAgents(api::RunAgents {
+                github_commit_attribution: Some(api::run_agents::GitHubCommitAttribution {
+                    coauthor_user_uid: "delegated-human".to_string(),
+                }),
                 metadata: metadata.clone(),
                 agent_run_configs: vec![api::run_agents::AgentRunConfig {
                     name: "child".to_string(),
@@ -185,6 +188,10 @@ fn converts_run_agents_metadata_maps() {
         panic!("expected run_agents");
     };
     assert_eq!(request.metadata, metadata);
+    assert_eq!(
+        request.delegated_github_coauthor_user_uid.as_deref(),
+        Some("delegated-human")
+    );
     assert_eq!(request.agent_run_configs[0].metadata, child_metadata);
 }
 

@@ -569,6 +569,7 @@ impl AmbientAgentRunner {
                 None => (None, UserQueryMode::Normal),
             };
             let request = SpawnAgentRequest {
+                delegated_github_coauthor_user_uid: None,
                 metadata: Default::default(),
                 prompt,
                 mode,

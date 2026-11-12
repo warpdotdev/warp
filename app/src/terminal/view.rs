@@ -24135,6 +24135,7 @@ impl TerminalView {
         };
 
         let request = RunAgentsRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             summary: summary.clone(),
             base_prompt: "Shared instructions for every child agent.".to_owned(),
