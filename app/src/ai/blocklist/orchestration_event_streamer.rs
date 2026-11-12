@@ -2824,7 +2824,7 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
-        api::LifecycleEventType::WaitedOn => return None,
+        api::LifecycleEventType::Waiting => return None,
     })
 }
 
@@ -2834,7 +2834,7 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
         .filter_map(|event| {
             let (lifecycle_type, sender_run_id) = if event.kind == AgentRunEventKind::WaitedOn {
                 (
-                    api::LifecycleEventType::WaitedOn,
+                    api::LifecycleEventType::Waiting,
                     event.waited_on_sender(self_run_id)?,
                 )
             } else {
@@ -2876,7 +2876,7 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::WaitedOn
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
-            let event_id = if lifecycle_type == api::LifecycleEventType::WaitedOn {
+            let event_id = if lifecycle_type == api::LifecycleEventType::Waiting {
                 Uuid::new_v5(
                     &Uuid::NAMESPACE_URL,
                     format!("agent-run-event:{}:{}", event.run_id, event.sequence).as_bytes(),

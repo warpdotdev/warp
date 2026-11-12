@@ -24,8 +24,8 @@ fn lifecycle_pending_event(
         api::LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
-        api::LifecycleEventType::WaitedOn => {
-            Some(api::agent_event::lifecycle_event::Detail::WaitedOn(()))
+        api::LifecycleEventType::Waiting => {
+            Some(api::agent_event::lifecycle_event::Detail::Waiting(()))
         }
         api::LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
@@ -75,7 +75,7 @@ fn waited_on_survives_status_coalescing_and_queue_cap() {
     let mut queue = vec![lifecycle_pending_event(
         "wait",
         "waiter",
-        api::LifecycleEventType::WaitedOn,
+        api::LifecycleEventType::Waiting,
         0,
     )];
     let next = lifecycle_pending_event("working", "waiter", api::LifecycleEventType::InProgress, 0);

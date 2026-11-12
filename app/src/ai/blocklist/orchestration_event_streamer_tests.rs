@@ -71,7 +71,7 @@ fn waited_on_notifies_parent_recipient_from_child_sender() {
         panic!("expected lifecycle event");
     };
     assert_eq!(lifecycle.sender_agent_id, "child-run");
-    assert_eq!(lifecycle.detail, Some(Detail::WaitedOn(())));
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn waited_on_notifies_child_recipient_from_parent_sender() {
         panic!("expected lifecycle event");
     };
     assert_eq!(lifecycle.sender_agent_id, "parent-run");
-    assert_eq!(lifecycle.detail, Some(Detail::WaitedOn(())));
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn waited_on_replay_preserves_event_identity() {
 #[test]
 fn waited_on_does_not_change_conversation_status() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::WaitedOn),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
         None
     );
     assert_eq!(AgentRunEventKind::WaitedOn.lifecycle_type(), None);
