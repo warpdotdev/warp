@@ -47,10 +47,9 @@ pub struct SkillManager {
     /// Remote home skills themselves live in the shared file-skill indexes above,
     /// alongside local home and project skills.
     remote_home_directories: HashMap<HostId, LocalOrRemotePath>,
-    /// Enables unscoped cloud listings when cwd-scoped cloud skills are disabled.
+    /// Lists every indexed project skill regardless of the working directory.
     is_cloud_environment: bool,
     cloud_working_dir: Option<LocalOrRemotePath>,
-    pinned_skill_paths: HashSet<LocalOrRemotePath>,
     #[allow(dead_code)]
     skill_watcher: ModelHandle<SkillWatcher>, // Can't remove this or it'll get cleaned up after new()
 }
@@ -84,24 +83,18 @@ impl SkillManager {
             remote_home_directories: HashMap::new(),
             is_cloud_environment: false,
             cloud_working_dir: None,
-            pinned_skill_paths: HashSet::new(),
             skill_watcher,
         }
     }
 
-    /// Selects legacy cloud listing behavior when cwd scoping is disabled.
+    /// Lists every indexed project skill regardless of the working directory.
     pub fn set_cloud_environment(&mut self, value: bool) {
         self.is_cloud_environment = value;
     }
 
-    /// Sets the fallback cwd before a cloud terminal publishes its live directory.
-    pub fn set_cloud_working_dir(&mut self, working_dir: LocalOrRemotePath) {
-        self.cloud_working_dir = Some(working_dir);
-    }
-
-    /// Keeps explicitly selected global skills available independently of cwd.
-    pub fn pin_skill_paths(&mut self, paths: impl IntoIterator<Item = LocalOrRemotePath>) {
-        self.pinned_skill_paths.extend(paths);
+    /// Sets the working directory used for local-origin listings when no live cwd is known.
+    pub fn set_cloud_working_dir(&mut self, working_dir: PathBuf) {
+        self.cloud_working_dir = Some(LocalOrRemotePath::Local(working_dir));
     }
 
     /// Returns skills available for the given working directory.
@@ -126,14 +119,6 @@ impl SkillManager {
         path_origin: &SkillPathOrigin,
         ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
-        let cwd_scoped = FeatureFlag::CwdScopedCloudSkills.is_enabled();
-        let working_directory = if cwd_scoped {
-            working_directory
-                .or(self.cloud_working_dir.as_ref())
-                .filter(|path| path_matches_origin(path, path_origin))
-        } else {
-            working_directory
-        };
         // Collect file-backed skills for one shared deduplication pass. Home skills use
         // the home directory as their dir_path; project skills use their owning directory.
         let mut skill_paths = Vec::new();
@@ -161,7 +146,7 @@ impl SkillManager {
             );
         }
 
-        if self.is_cloud_environment && !cwd_scoped {
+        if self.is_cloud_environment {
             // In cloud environments, all skills in the working directory's location are in scope
             // regardless of cwd.
             for (dir, dir_skill_paths) in &self.directory_skills {
@@ -172,7 +157,9 @@ impl SkillManager {
                     skill_paths.push((dir.clone(), path.clone()));
                 }
             }
-        } else if let Some(working_directory) = working_directory {
+        } else if let Some(working_directory) =
+            working_directory.or_else(|| self.fallback_working_directory(path_origin))
+        {
             let repo_root = repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
                 .get_root_for_path(working_directory);
 
@@ -193,22 +180,10 @@ impl SkillManager {
             }
         }
 
-        if cwd_scoped {
-            for (dir, paths) in &self.directory_skills {
-                if self.is_home_directory(dir) {
-                    continue;
-                }
-                skill_paths.extend(
-                    paths
-                        .iter()
-                        .filter(|path| {
-                            self.pinned_skill_paths.contains(*path)
-                                && path_matches_origin(path, path_origin)
-                        })
-                        .map(|path| (dir.clone(), path.clone())),
-                );
-            }
-        }
+        // A home-tier skill can also be indexed under its own project directory (e.g. a selected
+        // global skill whose repository is an environment repository); list each file once.
+        let mut seen_paths = HashSet::new();
+        skill_paths.retain(|(_, path)| seen_paths.insert(path.clone()));
 
         // Deduplicate skills with identical content installed under the same directory across
         // multiple providers, keeping the skill from the highest-priority provider per
@@ -235,6 +210,18 @@ impl SkillManager {
         }
 
         skills
+    }
+
+    fn fallback_working_directory(
+        &self,
+        path_origin: &SkillPathOrigin,
+    ) -> Option<&LocalOrRemotePath> {
+        match path_origin {
+            SkillPathOrigin::Local => self.cloud_working_dir.as_ref(),
+            SkillPathOrigin::Remote { .. }
+            | SkillPathOrigin::RestoredDisplayOnly
+            | SkillPathOrigin::Unavailable => None,
+        }
     }
 
     /// Returns the currently-known home skill file paths.
@@ -615,18 +602,15 @@ impl SkillManager {
         }
     }
 
-    /// Registers skills loaded from `WARP_SKILL_DIRS` environment variable directories
-    /// as personal (home) tier skills.
+    /// Registers skills at personal (home) precedence so they are in scope for every working
+    /// directory, the same as `~/.agents/skills` and other personal skills.
     ///
-    /// Unlike [`handle_skills_added`], this method does not require each skill's path
-    /// to follow a known provider directory structure. Skills are stored directly
-    /// under the local home directory bucket so they are always in scope—the same
-    /// precedence as `~/.agents/skills` and other personal skills.
-    ///
-    /// Call this after reading skills with [`ai::skills::read_skills_for_skills_dirs`].
-    pub fn add_skills_dirs_skills(&mut self, skills: Vec<ParsedSkill>) {
+    /// Unlike [`handle_skills_added`], this method does not require each skill's path to follow
+    /// a known provider directory structure: the skills are indexed under the local home
+    /// directory bucket wherever their files live.
+    pub fn add_home_tier_skills(&mut self, skills: Vec<ParsedSkill>) {
         let Some(home_dir) = dirs::home_dir() else {
-            log::warn!("WARP_SKILL_DIRS: home directory unavailable; cannot register env skills");
+            log::warn!("Home directory unavailable; cannot register home-tier skills");
             return;
         };
         let home_dir = LocalOrRemotePath::Local(home_dir);
@@ -658,8 +642,10 @@ impl SkillManager {
                     self.remove_skill_by_path(skill_path);
                 }
                 self.directory_skills.remove(dir);
-            } else if path.starts_with(dir) {
-                // Remove all skills under this directory that is a child of the deleted path
+            } else {
+                // Remove every registered skill under the deleted path. Home-tier skills may live
+                // outside their bucket's directory, so this cannot be limited to descendants of
+                // `dir`.
                 for skill_path in skill_paths {
                     if skill_path.starts_with(path) {
                         self.remove_skill_by_path(skill_path);
@@ -711,18 +697,6 @@ impl Entity for SkillManager {
 }
 
 impl SingletonEntity for SkillManager {}
-
-fn path_matches_origin(path: &LocalOrRemotePath, origin: &SkillPathOrigin) -> bool {
-    match (path, origin) {
-        (LocalOrRemotePath::Local(_), SkillPathOrigin::Local) => true,
-        (LocalOrRemotePath::Remote(path), SkillPathOrigin::Remote { host_id }) => {
-            path.host_id == *host_id
-        }
-        (LocalOrRemotePath::Local(_), SkillPathOrigin::Remote { .. })
-        | (LocalOrRemotePath::Remote(_), SkillPathOrigin::Local)
-        | (_, SkillPathOrigin::RestoredDisplayOnly | SkillPathOrigin::Unavailable) => false,
-    }
-}
 
 fn path_matches_reference_location(path: &LocalOrRemotePath, reference: &SkillReference) -> bool {
     match (path, reference) {
