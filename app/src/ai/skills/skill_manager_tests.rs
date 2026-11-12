@@ -174,9 +174,10 @@ fn deleting_home_directory_preserves_skills_registered_outside_it() {
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
         app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
         let handle = app.add_singleton_model(SkillManager::new);
-        let temp = TempDir::new().unwrap();
-        let external_path = LocalOrRemotePath::Local(temp.path().join("selected/SKILL.md"));
-        let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
+        let home = dirs::home_dir().unwrap();
+        let external_path =
+            LocalOrRemotePath::Local(home.parent().unwrap().join("external-selected/SKILL.md"));
+        let home_dir = LocalOrRemotePath::Local(home);
         let home_path = home_dir.join(".agents/skills/personal/SKILL.md");
         let external = ParsedSkill {
             name: "selected".into(),
