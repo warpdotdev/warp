@@ -12,15 +12,19 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, TimeDelta, Utc};
 use command::blocking::Command;
 use instant::Instant;
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::client::GraphQLError;
 use warp_graphql::queries::task_restricted_git_credentials::{
     GitHubCredentialMode, RestrictedTaskGitCredentialsOutput,
 };
 
 use super::{
-    GIT_CREDENTIALS_REFRESH_INTERVAL, GITHUB_HOST, GitCredential, READ_ONLY_CREDENTIAL_HELPER,
-    TaskGitCredentialsError, ensure_workload_token_available, gh_config_dir, home_dir,
-    record_host_identities, unique_credentials_by_host, write_git_credentials,
+    GIT_CREDENTIALS_BOOTSTRAP_BACKOFF, GIT_CREDENTIALS_REFRESH_INTERVAL, GITHUB_HOST,
+    GitCredential, READ_ONLY_CREDENTIAL_HELPER, TaskGitCredentialsError,
+    ensure_workload_token_available, gh_config_dir, home_dir, record_host_identities,
+    unique_credentials_by_host, write_git_credentials,
 };
+use crate::server::retry_strategies::with_retry;
 use crate::server::server_api::ai::AIClient;
 
 const AUTH_ENV: &[&str] = &[
@@ -49,11 +53,54 @@ struct ManagedStore {
     task_id: String,
     directory: PathBuf,
     refresh_at: Option<Instant>,
+    expires_at: Option<Instant>,
+}
+
+fn is_temporary_failure(error: &TaskGitCredentialsError) -> bool {
+    match error {
+        TaskGitCredentialsError::Platform { info, .. } => {
+            info.retryable
+                && !matches!(info.http_status, Some(401 | 403))
+                && matches!(
+                    info.code,
+                    PlatformErrorCode::InternalError
+                        | PlatformErrorCode::ResourceUnavailable
+                        | PlatformErrorCode::AgentStreamNetworkError
+                )
+        }
+        TaskGitCredentialsError::Request(error) => {
+            for cause in error.chain() {
+                if let Some(error) = cause.downcast_ref::<GraphQLError>() {
+                    return match error {
+                        GraphQLError::HttpError { status, .. } => {
+                            matches!(status.as_u16(), 408 | 429 | 500..=599)
+                        }
+                        GraphQLError::RequestError(error) | GraphQLError::ResponseError(error) => {
+                            error.is_timeout() || error.is_connect() || error.is_body()
+                        }
+                        GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => {
+                            false
+                        }
+                    };
+                }
+                if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
+                    return match error.status() {
+                        Some(status) => matches!(status.as_u16(), 408 | 429 | 500..=599),
+                        None => error.is_timeout() || error.is_connect() || error.is_body(),
+                    };
+                }
+            }
+            false
+        }
+        TaskGitCredentialsError::Unstructured { .. } => false,
+    }
 }
 
 struct ValidatedCredentials {
     credentials: Vec<GitCredential>,
     refresh_at: Instant,
+    expires_at: Option<Instant>,
+    failed_hosts: Vec<String>,
 }
 
 static MANAGED_STORE: Mutex<Option<ManagedStore>> = Mutex::new(None);
@@ -182,6 +229,7 @@ fn prepare(task_id: &str) -> Result<PathBuf> {
         task_id: task_id.into(),
         directory: directory.clone(),
         refresh_at: None,
+        expires_at: None,
     });
     Ok(directory)
 }
@@ -237,12 +285,20 @@ fn validate_response(
         "Restricted GitHub credential mode was not returned",
     );
     ensure!(
-        response.failed_hosts.is_empty(),
-        "Restricted credential refresh was incomplete"
+        response
+            .failed_hosts
+            .iter()
+            .all(|host| matches!(host.as_str(), GITHUB_HOST | "gitlab.com" | "dev.azure.com")),
+        "Unexpected failed forge in restricted credential response"
     );
     let mut credentials = Vec::new();
     let mut refresh_interval = GIT_CREDENTIALS_REFRESH_INTERVAL;
+    let mut github_expires_at = None;
     for credential in response.credentials {
+        ensure!(
+            !response.failed_hosts.contains(&credential.host),
+            "Restricted credential response both succeeded and failed for a forge"
+        );
         ensure!(
             matches!(
                 credential.host.as_str(),
@@ -274,6 +330,7 @@ fn validate_response(
             let expires_at = credential
                 .expires_at
                 .context("Missing GitHub credential expiry")?;
+            github_expires_at = Some(received_at + (expires_at.utc() - now).to_std()?);
             let interval = (expires_at.utc() - now - REFRESH_EXPIRY_BUFFER)
                 .to_std()
                 .unwrap_or_default()
@@ -291,12 +348,14 @@ fn validate_response(
         });
     }
     let credentials = unique_credentials_by_host(&credentials)?;
-    if credentials.is_empty() {
+    if credentials.is_empty() || !response.failed_hosts.is_empty() {
         refresh_interval = REFRESH_FALLBACK_INTERVAL;
     }
     Ok(ValidatedCredentials {
         credentials,
         refresh_at: received_at + refresh_interval,
+        expires_at: github_expires_at,
+        failed_hosts: response.failed_hosts,
     })
 }
 
@@ -304,6 +363,7 @@ async fn fetch(
     task_id: &str,
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
+    accepts_partial_refresh: bool,
 ) -> Result<ValidatedCredentials, TaskGitCredentialsError> {
     ensure_workload_token_available()?;
     let token = warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(300)))
@@ -311,13 +371,32 @@ async fn fetch(
         .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
         .token;
     let response = ai_client
-        .get_restricted_task_git_credentials(task_id.to_owned(), token, use_factory_repositories)
+        .get_restricted_task_git_credentials(
+            task_id.to_owned(),
+            token,
+            accepts_partial_refresh,
+            use_factory_repositories,
+        )
         .await?;
-    validate_response(response, Utc::now(), Instant::now())
-        .map_err(TaskGitCredentialsError::Request)
+    if !accepts_partial_refresh && !response.failed_hosts.is_empty() {
+        return Err(TaskGitCredentialsError::Unstructured {
+            message: "Restricted credential bootstrap was incomplete".into(),
+        });
+    }
+    validate_response(response, Utc::now(), Instant::now()).map_err(|error| {
+        TaskGitCredentialsError::Unstructured {
+            message: error.to_string(),
+        }
+    })
 }
 
 fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
+    ensure!(
+        response
+            .expires_at
+            .is_none_or(|expiry| expiry > Instant::now()),
+        "Restricted GitHub credential expired before installation"
+    );
     let content = response
         .credentials
         .iter()
@@ -333,6 +412,7 @@ fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()
         .collect::<Vec<_>>();
     write_git_credentials(&other)?;
     store.refresh_at = Some(response.refresh_at);
+    store.expires_at = response.expires_at;
     Ok(())
 }
 
@@ -343,7 +423,20 @@ pub(crate) async fn bootstrap_restricted_credentials(
 ) -> Result<(), TaskGitCredentialsError> {
     let directory = prepare(task_id).map_err(TaskGitCredentialsError::Request)?;
     let result = async {
-        let response = fetch(task_id, ai_client, use_factory_repositories).await?;
+        let response = with_retry(
+            "Restricted Git credentials bootstrap",
+            || fetch(task_id, ai_client, use_factory_repositories, false),
+            super::is_retryable,
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            |attempts_made| {
+                GIT_CREDENTIALS_BOOTSTRAP_BACKOFF
+                    .get(attempts_made)
+                    .copied()
+            },
+        )
+        .await?;
         install_helper(&directory, &response.credentials)
             .map_err(TaskGitCredentialsError::Request)?;
         if let Some(github) = response
@@ -374,7 +467,7 @@ pub(crate) async fn refresh_restricted_credentials(
 ) -> Result<(), TaskGitCredentialsError> {
     apply_refresh(
         task_id,
-        fetch(task_id, ai_client, use_factory_repositories).await,
+        fetch(task_id, ai_client, use_factory_repositories, true).await,
     )
 }
 
@@ -382,21 +475,72 @@ fn apply_refresh(
     task_id: &str,
     fetched: Result<ValidatedCredentials, TaskGitCredentialsError>,
 ) -> Result<(), TaskGitCredentialsError> {
-    let result = fetched.and_then(|response| {
-        with_store(task_id, |store| apply(store, &response))
-            .map_err(TaskGitCredentialsError::Request)
-    });
-    if result.is_err() {
-        clear_restricted_credentials(task_id).map_err(TaskGitCredentialsError::Request)?;
+    match fetched {
+        Ok(response) => {
+            if let Err(error) = with_store(task_id, |store| apply(store, &response)) {
+                clear_restricted_credentials(task_id).map_err(TaskGitCredentialsError::Request)?;
+                return Err(TaskGitCredentialsError::Request(error));
+            }
+            if !response.failed_hosts.is_empty() {
+                return Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+                    "Restricted credential refresh was incomplete"
+                )));
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if is_temporary_failure(&error) {
+                with_store(task_id, |store| {
+                    store.refresh_at = None;
+                    if store
+                        .expires_at
+                        .is_none_or(|expiry| expiry <= Instant::now())
+                    {
+                        write_store(&store.directory, "")?;
+                        store.expires_at = None;
+                    }
+                    Ok(())
+                })
+                .map_err(TaskGitCredentialsError::Request)?;
+            } else {
+                clear_restricted_credentials(task_id).map_err(TaskGitCredentialsError::Request)?;
+            }
+            Err(error)
+        }
     }
-    result
 }
 
 pub(crate) fn clear_restricted_credentials(task_id: &str) -> Result<()> {
     with_store(task_id, |store| {
         store.refresh_at = None;
-        write_store(&store.directory, "")
+        write_store(&store.directory, "")?;
+        store.expires_at = None;
+        Ok(())
     })
+}
+
+fn expire_credentials(task_id: &str, now: Instant) -> Result<Duration> {
+    with_store(task_id, |store| {
+        if let Some(expiry) = store.expires_at {
+            if expiry > now {
+                return Ok(expiry - now);
+            }
+            write_store(&store.directory, "")?;
+            store.expires_at = None;
+            store.refresh_at = None;
+        }
+        Ok(REFRESH_FALLBACK_INTERVAL)
+    })
+}
+
+pub(super) async fn expiry_loop(task_id: &str) {
+    loop {
+        let delay = expire_credentials(task_id, Instant::now()).unwrap_or_else(|error| {
+            log::warn!("Could not expire restricted GitHub credentials: {error}");
+            REFRESH_FALLBACK_INTERVAL
+        });
+        warpui::r#async::Timer::after(delay.min(REFRESH_FALLBACK_INTERVAL)).await;
+    }
 }
 
 pub(super) fn refresh_delay(task_id: &str, now: Instant) -> Duration {

@@ -1002,25 +1002,27 @@ async fn try_refresh(
     }
 }
 
-/// Refreshes Git credentials before restricted GitHub-only credentials expire, or at the normal
-/// interval for other credential modes.
+/// Periodically refreshes Git credentials, with bounded retries on retryable failures.
 ///
-/// On each iteration:
-/// 1. Issue a short-lived workload token.
-/// 2. Call `taskGitCredentials` to get a fresh token from the server.
-/// 3. Overwrite `~/.git-credentials` and refresh GitHub credentials in the
-///    `gh` `hosts.yml`.
-///
-/// On transient failure, the refresh is retried up to three times with
-/// exponential backoff (1 min, 2 min, 4 min), keeping all retries within the
-/// ~10-minute buffer before the one-hour token expires. If all retries fail,
-/// a warning is logged and the next refresh is scheduled after the normal
-/// interval.
-///
-/// This future never resolves — it is designed to be raced with the harness
-/// execution future via `futures::select!` and dropped when the harness
-/// completes.
+/// Restricted GitHub credentials expire locally even while a refresh request or retry is pending.
+/// This future never resolves.
 pub(crate) async fn refresh_loop(
+    task_id: String,
+    ai_client: Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+) {
+    if restricted_github_mode().unwrap_or(true) {
+        futures::future::join(
+            refresh_loop_inner(task_id.clone(), ai_client, use_factory_repositories),
+            restricted::expiry_loop(&task_id),
+        )
+        .await;
+    } else {
+        refresh_loop_inner(task_id, ai_client, use_factory_repositories).await;
+    }
+}
+
+async fn refresh_loop_inner(
     task_id: String,
     ai_client: Arc<dyn AIClient>,
     use_factory_repositories: bool,

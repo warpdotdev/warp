@@ -8,6 +8,315 @@ use warp_graphql::queries::task_restricted_git_credentials::RestrictedTaskGitCre
 
 use super::*;
 use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions, split_run_options};
+use crate::server::server_api::ai::MockAIClient;
+
+fn temporary_error() -> TaskGitCredentialsError {
+    TaskGitCredentialsError::Request(
+        GraphQLError::HttpError {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            body: String::new(),
+        }
+        .into(),
+    )
+}
+
+fn live_response() -> RestrictedTaskGitCredentialsOutput {
+    let mut response = response();
+    response.credentials[0].expires_at = Some((Utc::now() + TimeDelta::hours(1)).into());
+    response
+}
+
+#[test]
+fn bootstrap_recovers_without_preparing_the_store_again() -> Result<()> {
+    with_home(
+        "bootstrap_recovers_without_preparing_the_store_again",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |_| {
+            let mut client = MockAIClient::new();
+            let mut sequence = mockall::Sequence::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .withf(|task, _, partial, factory| task == "task" && !partial && *factory)
+                .returning(|_, _, _, _| Err(temporary_error()));
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .withf(|task, _, partial, factory| task == "task" && !partial && *factory)
+                .returning(|_, _, _, _| Ok(live_response()));
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            futures::executor::block_on(bootstrap_restricted_credentials("task", &client, true))?;
+
+            assert_eq!(
+                fs::read_to_string(task_dir("task")?.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn renewed_token_is_not_cleared_at_previous_expiry() -> Result<()> {
+    with_home(
+        "renewed_token_is_not_cleared_at_previous_expiry",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
+            apply_refresh(
+                "task",
+                Ok(validate_response(
+                    response(),
+                    now(),
+                    received_at + Duration::from_secs(600),
+                )?),
+            )?;
+
+            assert_eq!(
+                expire_credentials("task", received_at + Duration::from_secs(3600))?,
+                Duration::from_secs(600)
+            );
+
+            assert_eq!(
+                fs::read_to_string(directory.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn explicit_platform_denial_overrides_retryable_flag() {
+    let error = TaskGitCredentialsError::Platform {
+        message: "Access denied".into(),
+        detail: None,
+        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
+            PlatformErrorCode::NotAuthorized,
+            true,
+        )),
+    };
+
+    assert!(!is_temporary_failure(&error));
+}
+
+#[test]
+fn retryable_dependency_failure_is_temporary() {
+    let error = TaskGitCredentialsError::Platform {
+        message: "Dependency unavailable".into(),
+        detail: None,
+        info: Box::new(warp_graphql::platform_error::PlatformErrorInfo::new(
+            PlatformErrorCode::ResourceUnavailable,
+            true,
+        )),
+    };
+
+    assert!(is_temporary_failure(&error));
+}
+
+#[test]
+fn bootstrap_stops_after_bounded_temporary_failures() -> Result<()> {
+    with_home(
+        "bootstrap_stops_after_bounded_temporary_failures",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |_| {
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(4)
+                .returning(|_, _, _, _| Err(temporary_error()));
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(bootstrap_restricted_credentials(
+                    "task", &client, false
+                ))
+                .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(task_dir("task")?.join("credentials"))?,
+                ""
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn bootstrap_does_not_install_partial_credentials() -> Result<()> {
+    with_home(
+        "bootstrap_does_not_install_partial_credentials",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |_| {
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .withf(|_, _, partial, _| !partial)
+                .returning(|_, _, _, _| {
+                    let mut response = live_response();
+                    response.failed_hosts.push("gitlab.com".into());
+                    Ok(response)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(bootstrap_restricted_credentials(
+                    "task", &client, false
+                ))
+                .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(task_dir("task")?.join("credentials"))?,
+                ""
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn failed_gitlab_refresh_still_updates_github() -> Result<()> {
+    with_home(
+        "failed_gitlab_refresh_still_updates_github",
+        &[
+            ("WARP_ISOLATION_PLATFORM", "docker"),
+            ("WARP_WORKLOAD_TOKEN", "test-workload-token"),
+        ],
+        |home| {
+            let directory = prepare("task")?;
+            fs::write(
+                home.join(".git-credentials"),
+                "https://oauth2:retained-token@gitlab.com\n",
+            )?;
+            let mut client = MockAIClient::new();
+            client
+                .expect_get_restricted_task_git_credentials()
+                .times(1)
+                .withf(|task, _, partial, factory| task == "task" && *partial && *factory)
+                .returning(|_, _, _, _| {
+                    let mut response = live_response();
+                    response.failed_hosts.push("gitlab.com".into());
+                    Ok(response)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+
+            assert!(
+                futures::executor::block_on(refresh_restricted_credentials("task", &client, true))
+                    .is_err()
+            );
+
+            assert_eq!(
+                fs::read_to_string(directory.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "https://oauth2:retained-token@gitlab.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn unknown_github_failure_clears_github_and_updates_gitlab() -> Result<()> {
+    with_home(
+        "unknown_github_failure_clears_github_and_updates_gitlab",
+        &[],
+        |home| {
+            let directory = prepare("task")?;
+            apply_refresh("task", Ok(validated_response()?))?;
+            let mut response = response();
+            response.credentials = vec![other_forge_credential("gitlab.com")];
+            response.failed_hosts.push("github.com".into());
+
+            assert!(
+                apply_refresh(
+                    "task",
+                    Ok(validate_response(response, now(), Instant::now())?)
+                )
+                .is_err()
+            );
+
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            assert_eq!(
+                fs::read_to_string(home.join(".git-credentials"))?,
+                "https://x-access-token:other-forge-test-token@gitlab.com\n"
+            );
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn denied_refresh_clears_github() -> Result<()> {
+    with_home("denied_refresh_clears_github", &[], |_| {
+        let directory = prepare("task")?;
+        apply_refresh("task", Ok(validated_response()?))?;
+        let error = TaskGitCredentialsError::Request(
+            GraphQLError::HttpError {
+                status: http::StatusCode::FORBIDDEN,
+                body: String::new(),
+            }
+            .into(),
+        );
+
+        assert!(apply_refresh("task", Err(error)).is_err());
+
+        assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+        Ok(())
+    })
+}
+
+#[test]
+fn temporary_refresh_failure_preserves_token_until_original_expiry() -> Result<()> {
+    with_home(
+        "temporary_refresh_failure_preserves_token_until_original_expiry",
+        &[],
+        |_| {
+            let directory = prepare("task")?;
+            let received_at = Instant::now();
+            apply_refresh(
+                "task",
+                Ok(validate_response(response(), now(), received_at)?),
+            )?;
+            assert!(apply_refresh("task", Err(temporary_error())).is_err());
+
+            assert_eq!(
+                expire_credentials("task", received_at + Duration::from_secs(3599))?,
+                Duration::from_secs(1)
+            );
+            assert_eq!(
+                fs::read_to_string(directory.join("credentials"))?,
+                "https://x-access-token:installation-test-token@github.com\n"
+            );
+            expire_credentials("task", received_at + Duration::from_secs(3600))?;
+
+            assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
+            Ok(())
+        },
+    )
+}
 
 fn with_home(
     test_name: &str,
@@ -356,7 +665,7 @@ fn installation_scope_is_required() {
 }
 
 #[test]
-fn partial_response_is_not_accepted() {
+fn contradictory_host_results_are_not_accepted() {
     let mut response = response();
     response.failed_hosts.push("github.com".into());
     assert!(validate_response(response, now(), Instant::now()).is_err());
@@ -586,15 +895,15 @@ fn restricted_store_does_not_write_gh_credentials() -> Result<()> {
 }
 
 #[test]
-fn any_failed_refresh_clears_managed_github_store() -> Result<()> {
+fn unknown_refresh_failure_clears_managed_github_store() -> Result<()> {
     with_home(
-        "any_failed_refresh_clears_managed_github_store",
+        "unknown_refresh_failure_clears_managed_github_store",
         &[],
         |_| {
             let directory = prepare("task")?;
             apply_refresh("task", Ok(validated_response()?))?;
 
-            let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient test failure"));
+            let error = TaskGitCredentialsError::Request(anyhow::anyhow!("unknown test failure"));
             assert!(apply_refresh("task", Err(error)).is_err());
             assert_eq!(fs::read_to_string(directory.join("credentials"))?, "");
             assert_eq!(
