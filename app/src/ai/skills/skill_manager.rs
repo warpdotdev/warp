@@ -550,9 +550,21 @@ impl SkillManager {
 
     fn handle_skill_watcher_event(
         &mut self,
-        event: SkillWatcherEvent,
+        mut event: SkillWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        if let SkillWatcherEvent::SkillsAdded { skills } = &mut event {
+            // A watcher re-parse must not demote an explicitly selected home-tier skill.
+            for skill in skills {
+                if self
+                    .skills_by_path
+                    .get(&skill.path)
+                    .is_some_and(|existing| existing.scope == SkillScope::Home)
+                {
+                    skill.scope = SkillScope::Home;
+                }
+            }
+        }
         let home_skills_changed = match &event {
             SkillWatcherEvent::SkillsAdded { skills } => {
                 skills.iter().any(|skill| skill.scope == SkillScope::Home)
@@ -578,16 +590,7 @@ impl SkillManager {
     }
 
     pub fn handle_skills_added(&mut self, skills: Vec<ParsedSkill>) {
-        for mut skill in skills {
-            // A home-tier registration can also sit in a watched project directory; a watcher
-            // re-parse must not demote it to project precedence.
-            if self
-                .skills_by_path
-                .get(&skill.path)
-                .is_some_and(|existing| existing.scope == SkillScope::Home)
-            {
-                skill.scope = SkillScope::Home;
-            }
+        for skill in skills {
             match extract_skill_parent_directory(&skill.path) {
                 Ok(parent_dir) => {
                     self.directory_skills
@@ -643,29 +646,20 @@ impl SkillManager {
     }
 
     fn handle_path_deleted(&mut self, path: &LocalOrRemotePath) {
-        // Delete all skills that are affected by this deleted path
-        for (dir, skill_paths) in &self.directory_skills.clone() {
-            if dir.starts_with(path) {
-                // Delete this entire entry and remove all skill_paths under this directory from cache
-                for skill_path in skill_paths {
-                    self.remove_skill_by_path(skill_path);
-                }
-                self.directory_skills.remove(dir);
-            } else {
-                // Remove every registered skill under the deleted path. Home-tier skills may live
-                // outside their bucket's directory, so this cannot be limited to descendants of
-                // `dir`.
-                for skill_path in skill_paths {
-                    if skill_path.starts_with(path) {
-                        self.remove_skill_by_path(skill_path);
-                        self.directory_skills
-                            .entry(dir.clone())
-                            .or_default()
-                            .remove(skill_path);
-                    }
-                }
-            }
+        // Home-tier buckets may contain skills outside the bucket directory.
+        let deleted_skill_paths: Vec<_> = self
+            .skills_by_path
+            .keys()
+            .filter(|skill_path| skill_path.starts_with(path))
+            .cloned()
+            .collect();
+        for skill_path in deleted_skill_paths {
+            self.remove_skill_by_path(&skill_path);
         }
+        self.directory_skills.retain(|_, skill_paths| {
+            skill_paths.retain(|skill_path| !skill_path.starts_with(path));
+            !skill_paths.is_empty()
+        });
     }
 
     /// Adds a skill to the skill manager for testing purposes.
