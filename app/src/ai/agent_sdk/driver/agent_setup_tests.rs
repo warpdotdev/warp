@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
+use ai::skills::{ParsedSkill, SkillProvider};
 use tempfile::TempDir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::App;
 
 use super::super::AgentDriverOptions;
@@ -208,6 +211,65 @@ fn standby_provider_setup_precedes_workspace_preparation() {
             error,
             AgentDriverError::CloudProviderSetupFailed(_)
         ));
+    });
+}
+
+#[test]
+fn environment_skill_setup_uses_harness_working_dir_as_listing_fallback() {
+    assert_environment_skill_listing_fallback(true);
+}
+
+#[test]
+fn environment_skill_setup_without_cwd_scoping_sets_no_listing_fallback() {
+    assert_environment_skill_listing_fallback(false);
+}
+
+fn assert_environment_skill_listing_fallback(cwd_scoped: bool) {
+    App::test((), move |mut app| async move {
+        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
+        initialize_app_for_terminal_view(&mut app);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let harness_dir = working_dir.join("repo");
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
+            driver.harness_working_dir = harness_dir.clone();
+            driver
+        });
+        let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
+        load_environment_skills(&foreground, Vec::new()).await;
+
+        let project_skill = |name: &str, dir: &Path| ParsedSkill {
+            name: name.into(),
+            description: name.into(),
+            content: name.into(),
+            path: LocalOrRemotePath::Local(dir.join(format!(".agents/skills/{name}/SKILL.md"))),
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope: SkillScope::Project,
+        };
+        let names = app.update(|ctx| {
+            SkillManager::handle(ctx).update(ctx, |manager, _| {
+                manager.handle_skills_added(vec![
+                    project_skill("harness", &harness_dir),
+                    project_skill("sibling", &working_dir.join("sibling")),
+                ]);
+            });
+            SkillManager::as_ref(ctx)
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|skill| skill.name)
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            names.contains(&"harness".to_string()),
+            cwd_scoped,
+            "{names:?}"
+        );
+        assert!(!names.contains(&"sibling".to_string()), "{names:?}");
     });
 }
 

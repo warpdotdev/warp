@@ -266,7 +266,8 @@ fn cloud_skill_scope_uses_fallback_cwd_and_home_tier_global_skills() {
     });
 }
 
-/// The same file can be reachable as a project skill and as a home-tier skill; it is listed once.
+/// The same file can be reachable as a project skill and as a home-tier skill; it is listed once
+/// and keeps home scope when the project watcher re-parses it.
 #[test]
 fn get_skills_for_working_directory_lists_a_home_tier_project_skill_once() {
     App::test((), |mut app| async move {
@@ -292,8 +293,9 @@ fn get_skills_for_working_directory_lists_a_home_tier_project_skill_once() {
             manager.handle_skills_added(vec![shared.clone()]);
             manager.add_home_tier_skills(vec![ParsedSkill {
                 scope: SkillScope::Home,
-                ..shared
+                ..shared.clone()
             }]);
+            manager.handle_skills_added(vec![shared]);
         });
 
         let skills = handle.read(&app, |manager, ctx| {
