@@ -19,7 +19,7 @@ use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
     BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
-    aggregate_segments, cost_type_color, format_cost_cents, format_credits,
+    aggregate_segments, cost_type_color, format_credits, format_usage_cost,
     render_breakdown_tooltip, render_section_subheader,
 };
 use crate::ui_components::blended_colors;
@@ -86,7 +86,6 @@ pub struct MemberUsageRow {
     pub subject_uid: Option<String>,
     pub display_name: String,
     pub total_credits: f64,
-    pub total_cost_cents: f64,
     /// Sorted by cost-type then bucket order; entries with no credit or monetary usage dropped.
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
@@ -128,8 +127,7 @@ impl MemberUsageRow {
                 _ => false,
             })
             .collect_vec();
-        let (segments, total_credits, total_cost_cents) =
-            aggregate_segments(viewer_entries.iter().copied());
+        let (segments, total_credits, _) = aggregate_segments(viewer_entries.iter().copied());
 
         Self {
             subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -137,7 +135,6 @@ impl MemberUsageRow {
             subject_uid: viewer_uid.map(str::to_string),
             display_name: viewer_display_name,
             total_credits,
-            total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
@@ -169,7 +166,6 @@ impl MemberUsageRow {
             subject_uid: viewer_uid,
             display_name: viewer_display_name,
             total_credits: used,
-            total_cost_cents: 0.0,
             segments,
             bar_max_credits: used.max(1.0),
             is_current_team_member: true,
@@ -183,7 +179,7 @@ impl MemberUsageRow {
         let team_entries = entries
             .iter()
             .filter(|e| e.subject_type == AiCreditsUsageAndCostSubjectType::Team);
-        let (segments, total_credits, total_cost_cents) = aggregate_segments(team_entries);
+        let (segments, total_credits, _) = aggregate_segments(team_entries);
 
         Self {
             subject_type: AiCreditsUsageAndCostSubjectType::Team,
@@ -191,7 +187,6 @@ impl MemberUsageRow {
             subject_uid: None,
             display_name: "Other members".to_string(),
             total_credits,
-            total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1.0),
             is_current_team_member: true,
@@ -255,11 +250,10 @@ impl MemberUsageRow {
             );
             seen_keys.insert(key.clone());
 
-            let (segments, total_credits, total_cost_cents) =
-                match unmatched_usage_by_subject.remove(&key) {
-                    Some(group) => aggregate_segments(group.entries.iter()),
-                    None => (Vec::new(), 0.0, 0.0),
-                };
+            let (segments, total_credits, _) = match unmatched_usage_by_subject.remove(&key) {
+                Some(group) => aggregate_segments(group.entries.iter()),
+                None => (Vec::new(), 0.0, 0.0),
+            };
 
             rows.push(Self {
                 subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -267,7 +261,6 @@ impl MemberUsageRow {
                 subject_uid: Some(member.uid.as_str().to_string()),
                 display_name: member.email.clone(),
                 total_credits,
-                total_cost_cents,
                 segments,
                 bar_max_credits: 0.0,
                 is_current_team_member: true,
@@ -288,15 +281,13 @@ impl MemberUsageRow {
                 .and_then(|e| e.subject_uid.clone());
             let is_current_team_member =
                 subject_usage.subject_type != AiCreditsUsageAndCostSubjectType::User;
-            let (segments, total_credits, total_cost_cents) =
-                aggregate_segments(subject_usage.entries.iter());
+            let (segments, total_credits, _) = aggregate_segments(subject_usage.entries.iter());
             rows.push(Self {
                 subject_type: subject_usage.subject_type,
                 subject_key: key,
                 subject_uid,
                 display_name: subject_usage.display_name,
                 total_credits,
-                total_cost_cents,
                 segments,
                 bar_max_credits: 0.0,
                 is_current_team_member,
@@ -447,12 +438,7 @@ fn render_stacked_bar(
 
 /// Per-cost-type tooltip breakdown with a "Total usage" footer.
 fn render_usage_tooltip_content(row: &MemberUsageRow, appearance: &Appearance) -> Box<dyn Element> {
-    render_breakdown_tooltip(
-        &row.segments,
-        row.total_credits,
-        row.total_cost_cents,
-        appearance,
-    )
+    render_breakdown_tooltip(&row.segments, row.total_credits, appearance)
 }
 
 /// Small text-only tooltip surfaced on hover of the service-account info
@@ -601,7 +587,7 @@ fn render_row_card(
     .with_color(main)
     .finish();
     let cost_text = Text::new_inline(
-        format_cost_cents(row.total_cost_cents),
+        format_usage_cost(row.total_credits),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

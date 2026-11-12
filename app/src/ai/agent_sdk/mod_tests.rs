@@ -652,6 +652,8 @@ pub(crate) fn agent_driver_options() -> AgentDriverOptions {
         task_id: None,
         execution_id: None,
         use_factory_repositories: false,
+        github_credential_mode: Default::default(),
+        credential_store_owner: None,
         experimental: None,
         parent_run_id: None,
         should_share: false,

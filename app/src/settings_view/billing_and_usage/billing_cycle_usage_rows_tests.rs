@@ -38,7 +38,6 @@ fn per_member_rows_sort_by_fractional_usage_without_rounding() {
     assert_eq!(rows[0].subject_uid.as_deref(), Some(OTHER_UID));
     assert_eq!(rows[0].total_credits, 0.3);
     assert_eq!(rows[1].total_credits, 0.2);
-    assert_eq!(rows[1].total_cost_cents, 0.1);
 }
 
 #[test]
@@ -60,7 +59,6 @@ fn member_rows_preserve_fractional_cost_without_credits() {
     );
 
     assert_eq!(rows[0].total_credits, 0.0);
-    assert_eq!(rows[0].total_cost_cents, 1.2);
     assert_eq!(rows[0].segments.len(), 1);
     assert_eq!(rows[0].segments[0].cost_cents, 1.2);
 }
@@ -112,7 +110,6 @@ fn build_own_usage_row_drops_team_subject_entries() {
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10.0);
-    assert_eq!(row.total_cost_cents, 5.0);
 }
 
 #[test]
@@ -140,7 +137,6 @@ fn build_own_usage_row_drops_other_users_entries() {
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10.0);
-    assert_eq!(row.total_cost_cents, 0.0);
 }
 
 #[test]

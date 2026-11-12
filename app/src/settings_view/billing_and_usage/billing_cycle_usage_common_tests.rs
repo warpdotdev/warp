@@ -1,6 +1,7 @@
 use super::{
     BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
-    format_cost_cents, format_credits, has_non_viewer_data, legend_cost_types, members_for_team,
+    format_cost_cents, format_credits, format_usage_cost, has_non_viewer_data, legend_cost_types,
+    members_for_team,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -33,6 +34,23 @@ fn entry(
         cost_cents: f64::from(cost_cents),
         attributed_team_uid: None,
     }
+}
+
+#[test]
+fn included_and_paid_usage_are_valued_from_exact_credits() {
+    let mut included = viewer_user_entry();
+    included.credits_used = 120.4;
+    let mut paid = included.clone();
+    paid.cost_type = AiCreditsUsageAndCostType::Payg;
+    paid.credits_used = 5.25;
+    paid.cost_cents = 50.;
+
+    let (segments, credits, cents) = aggregate_segments([&included, &paid]);
+
+    assert_eq!(format_usage_cost(segments[0].credits), "$2.17");
+    assert_eq!(format_usage_cost(segments[1].credits), "$0.09");
+    assert_eq!(format_usage_cost(credits), "$2.26");
+    assert_eq!(cents, 50.);
 }
 
 #[test]
