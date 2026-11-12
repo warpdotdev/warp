@@ -164,6 +164,56 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
     });
 }
 
+#[test]
+fn deleting_home_directory_preserves_skills_registered_outside_it() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let temp = TempDir::new().unwrap();
+        let external_path = LocalOrRemotePath::Local(temp.path().join("selected/SKILL.md"));
+        let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
+        let home_path = home_dir.join(".agents/skills/personal/SKILL.md");
+        let external = ParsedSkill {
+            name: "selected".into(),
+            description: "selected".into(),
+            content: "selected".into(),
+            path: external_path.clone(),
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope: SkillScope::Home,
+        };
+        handle.update(&mut app, |manager, _| {
+            manager.add_home_tier_skills(vec![
+                external,
+                ParsedSkill {
+                    name: "personal".into(),
+                    description: "personal".into(),
+                    content: "personal".into(),
+                    path: home_path.clone(),
+                    line_range: None,
+                    provider: SkillProvider::Agents,
+                    scope: SkillScope::Home,
+                },
+            ]);
+            manager.handle_path_deleted(&home_dir);
+        });
+        handle.read(&app, |manager, ctx| {
+            assert!(manager.skill_by_path(&home_path).is_none());
+            assert!(manager.skill_paths_by_name("personal").is_empty());
+            assert!(manager.skill_by_path(&external_path).is_some());
+            assert_eq!(manager.skill_paths_by_name("selected"), vec![external_path]);
+            let skills = manager.get_skills_for_working_directory(None, ctx);
+            assert_eq!(skills.len(), 1);
+            assert_eq!(skills[0].name, "selected");
+        });
+    });
+}
+
 /// Cloud runs scope project skills with the same ancestor rule as local sessions, falling back to
 /// the harness working directory until a live cwd exists; selected global skills ride the home
 /// tier so they stay listed from every cwd without widening the project scope.
@@ -289,13 +339,18 @@ fn get_skills_for_working_directory_lists_a_home_tier_project_skill_once() {
             provider: SkillProvider::Agents,
             scope: SkillScope::Project,
         };
-        handle.update(&mut app, |manager, _| {
+        handle.update(&mut app, |manager, ctx| {
             manager.handle_skills_added(vec![shared.clone()]);
             manager.add_home_tier_skills(vec![ParsedSkill {
                 scope: SkillScope::Home,
                 ..shared.clone()
             }]);
-            manager.handle_skills_added(vec![shared]);
+            manager.handle_skill_watcher_event(
+                SkillWatcherEvent::SkillsAdded {
+                    skills: vec![shared.clone()],
+                },
+                ctx,
+            );
         });
 
         let skills = handle.read(&app, |manager, ctx| {
@@ -304,6 +359,16 @@ fn get_skills_for_working_directory_lists_a_home_tier_project_skill_once() {
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "shared");
         assert_eq!(skills[0].scope, SkillScope::Home);
+
+        handle.update(&mut app, |manager, _| {
+            manager.handle_skills_added(vec![shared.clone()]);
+        });
+        handle.read(&app, |manager, _| {
+            assert_eq!(
+                manager.skill_by_path(&shared.path).unwrap().scope,
+                SkillScope::Project
+            );
+        });
     });
 }
 
