@@ -164,10 +164,12 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
     });
 }
 
+/// Cloud runs scope project skills with the same ancestor rule as local sessions, falling back to
+/// the harness working directory until a live cwd exists; selected global skills ride the home
+/// tier so they stay listed from every cwd without widening the project scope.
 #[test]
-fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
+fn cloud_skill_scope_uses_fallback_cwd_and_home_tier_global_skills() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
         app.add_singleton_model(DirectoryWatcher::new);
         app.add_singleton_model(AISettings::new_with_defaults);
         app.add_singleton_model(|_| DetectedRepositories::default());
@@ -176,37 +178,41 @@ fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
         app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
         let handle = app.add_singleton_model(SkillManager::new);
         let temp = TempDir::new().unwrap();
-        let workspace = LocalOrRemotePath::Local(dunce::canonicalize(temp.path()).unwrap());
+        let workspace_dir = dunce::canonicalize(temp.path()).unwrap();
+        let workspace = LocalOrRemotePath::Local(workspace_dir.clone());
         let repo = workspace.join("repo");
         let nested = repo.join("nested");
-        let pinned = workspace.join("global/.agents/skills/selected/SKILL.md");
         let nested_path = nested.join(".agents/skills/nested/SKILL.md");
-        let remote_host = HostId::new("remote-host".into());
-        let remote = make_remote_skill(&remote_host, "remote-pinned");
+        let selected_path = workspace.join("global/.agents/skills/selected/SKILL.md");
+        let skill = |name: &str, path: LocalOrRemotePath, scope| ParsedSkill {
+            name: name.into(),
+            description: name.into(),
+            content: name.into(),
+            path,
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope,
+        };
         handle.update(&mut app, |manager, _| {
-            manager.set_cloud_environment(true);
-            manager.set_cloud_working_dir(repo.clone());
-            for (name, path) in [
-                ("root", repo.join(".agents/skills/root/SKILL.md")),
-                ("nested", nested_path.clone()),
-                ("selected", pinned.clone()),
-                (
+            manager.set_cloud_working_dir(workspace_dir.join("repo"));
+            manager.handle_skills_added(vec![
+                skill(
+                    "root",
+                    repo.join(".agents/skills/root/SKILL.md"),
+                    SkillScope::Project,
+                ),
+                skill("nested", nested_path.clone(), SkillScope::Project),
+                skill(
                     "unselected",
                     workspace.join("global/.agents/skills/unselected/SKILL.md"),
+                    SkillScope::Project,
                 ),
-            ] {
-                manager.handle_skills_added(vec![ParsedSkill {
-                    name: name.into(),
-                    description: name.into(),
-                    content: name.into(),
-                    path,
-                    line_range: None,
-                    provider: SkillProvider::Agents,
-                    scope: SkillScope::Project,
-                }]);
-            }
-            manager.pin_skill_paths([pinned.clone(), remote.path.clone()]);
-            manager.handle_skills_added(vec![remote]);
+            ]);
+            manager.add_home_tier_skills(vec![skill(
+                "selected",
+                selected_path.clone(),
+                SkillScope::Home,
+            )]);
         });
 
         for (cwd, expected) in [
@@ -222,39 +228,80 @@ fn cloud_skill_scope_uses_fallback_and_keeps_only_selected_global_skills() {
                     .collect::<Vec<_>>()
             });
             names.sort();
-            assert_eq!(names, expected);
+            assert_eq!(names, expected, "cwd: {cwd:?}");
         }
         handle.read(&app, |manager, ctx| {
+            // Unlisted skills stay readable through the full index.
             assert!(
                 manager
                     .active_skill_by_reference(&SkillReference::Path(nested_path), ctx)
                     .is_some()
             );
-            let remote_skills = manager.get_skills_for_working_directory_with_origin(
-                None,
-                &SkillPathOrigin::Remote {
-                    host_id: remote_host,
+            // Neither the local fallback cwd nor local home-tier skills leak into other origins.
+            for origin in [
+                SkillPathOrigin::Remote {
+                    host_id: HostId::new("remote-host".into()),
                 },
-                ctx,
-            );
-            assert_eq!(remote_skills.len(), 1);
-            assert_eq!(remote_skills[0].name, "remote-pinned");
+                SkillPathOrigin::Unavailable,
+            ] {
+                assert!(
+                    manager
+                        .get_skills_for_working_directory_with_origin(None, &origin, ctx)
+                        .is_empty(),
+                    "origin: {origin:?}"
+                );
+            }
+        });
+        handle.update(&mut app, |manager, _| {
+            manager.handle_path_deleted(&selected_path);
+        });
+        handle.read(&app, |manager, ctx| {
+            assert!(manager.skill_by_path(&selected_path).is_none());
             assert!(
                 manager
-                    .get_skills_for_working_directory_with_origin(
-                        None,
-                        &SkillPathOrigin::Unavailable,
-                        ctx
-                    )
+                    .get_skills_for_working_directory(Some(&workspace), ctx)
                     .is_empty()
             );
         });
-        handle.update(&mut app, |manager, _| manager.handle_path_deleted(&pinned));
-        assert!(handle.read(&app, |manager, ctx| {
-            manager
-                .get_skills_for_working_directory(Some(&workspace), ctx)
-                .is_empty()
-        }));
+    });
+}
+
+/// The same file can be reachable as a project skill and as a home-tier skill; it is listed once.
+#[test]
+fn get_skills_for_working_directory_lists_a_home_tier_project_skill_once() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let temp = TempDir::new().unwrap();
+        let repo = LocalOrRemotePath::Local(dunce::canonicalize(temp.path()).unwrap());
+        let shared = ParsedSkill {
+            name: "shared".into(),
+            description: "shared".into(),
+            content: "shared".into(),
+            path: repo.join(".agents/skills/shared/SKILL.md"),
+            line_range: None,
+            provider: SkillProvider::Agents,
+            scope: SkillScope::Project,
+        };
+        handle.update(&mut app, |manager, _| {
+            manager.handle_skills_added(vec![shared.clone()]);
+            manager.add_home_tier_skills(vec![ParsedSkill {
+                scope: SkillScope::Home,
+                ..shared
+            }]);
+        });
+
+        let skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(Some(&repo), ctx)
+        });
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "shared");
+        assert_eq!(skills[0].scope, SkillScope::Home);
     });
 }
 

@@ -65,7 +65,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -1435,8 +1435,19 @@ fn split_loading_env_loads_all_global_loads_subset() {
 /// global skill is present, and no skill is registered more than once.
 #[test]
 fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
+    load_overlap_repo_as_env_and_global(false);
+}
+
+/// With cwd scoping, the overlapping repository's skills follow the cwd while the selected
+/// global skill stays listed from everywhere, still without duplicates.
+#[test]
+fn overlap_repo_in_env_and_global_scopes_repo_skills_and_keeps_selection() {
+    load_overlap_repo_as_env_and_global(true);
+}
+
+fn load_overlap_repo_as_env_and_global(cwd_scoped: bool) {
     App::test((), |mut app| async move {
-        let legacy_override = FeatureFlag::CwdScopedCloudSkills.override_enabled(false);
+        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
         initialize_app_for_terminal_view(&mut app);
 
         let temp = TempDir::new().unwrap();
@@ -1515,45 +1526,40 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
         });
         done_rx.await.expect("loading task should complete");
 
-        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
-            manager
-                .get_skills_for_working_directory(None, ctx)
-                .into_iter()
-                .map(|s| s.name.clone())
-                .collect::<Vec<_>>()
-        });
+        // The test harness watches the developer's real home directory; keep only the skills
+        // this test wrote.
+        let test_root = LocalOrRemotePath::Local(working_dir.clone());
+        let skills_for = |cwd: Option<&LocalOrRemotePath>| {
+            let mut skills = SkillManager::handle(&app).read(&app, |manager, ctx| {
+                manager.get_skills_for_working_directory(cwd, ctx)
+            });
+            skills.retain(|skill| match &skill.reference {
+                SkillReference::Path(path) => path.starts_with(&test_root),
+                SkillReference::BundledSkillId(_) => false,
+            });
+            skills.sort_by(|a, b| a.name.cmp(&b.name));
+            skills
+        };
+        fn names(skills: &[SkillDescriptor]) -> Vec<&str> {
+            skills.iter().map(|skill| skill.name.as_str()).collect()
+        }
 
-        // All three skills from the repo are present (env loading wins).
-        assert!(
-            skill_names.contains(&"deploy".to_string()),
-            "'deploy' should be loaded; got: {skill_names:?}"
-        );
-        assert!(
-            skill_names.contains(&"lint".to_string()),
-            "'lint' should be loaded; got: {skill_names:?}"
-        );
-        assert!(
-            skill_names.contains(&"test-cmd".to_string()),
-            "'test-cmd' should be loaded; got: {skill_names:?}"
-        );
+        if cwd_scoped {
+            // Without a live cwd the harness root stands in; the repository is a child of it, so
+            // only the home-tier global selection is listed.
+            let at_root = skills_for(None);
+            assert_eq!(names(&at_root), ["deploy"]);
+            assert_eq!(at_root[0].scope, SkillScope::Home);
 
-        // No skill is duplicated.
-        let deploy_count = skill_names.iter().filter(|n| *n == "deploy").count();
-        assert_eq!(
-            deploy_count, 1,
-            "'deploy' should appear exactly once; got: {skill_names:?}"
-        );
-
-        drop(legacy_override);
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(true);
-        let scoped_names = SkillManager::handle(&app).read(&app, |manager, ctx| {
-            manager
-                .get_skills_for_working_directory(None, ctx)
-                .into_iter()
-                .map(|skill| skill.name)
-                .collect::<Vec<_>>()
-        });
-        assert_eq!(scoped_names, ["deploy"]);
+            // Inside the repository the same file is reachable as a project skill and as the
+            // selection; it is listed once.
+            let in_repo = skills_for(Some(&LocalOrRemotePath::Local(shared_repo.clone())));
+            assert_eq!(names(&in_repo), ["deploy", "lint", "test-cmd"]);
+        } else {
+            // All three skills from the repo are present regardless of cwd, and the overlapping
+            // selection does not duplicate `deploy`.
+            assert_eq!(names(&skills_for(None)), ["deploy", "lint", "test-cmd"]);
+        }
     });
 }
 

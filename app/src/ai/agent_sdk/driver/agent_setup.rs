@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use ai::skills::{
-    SKILL_PROVIDER_DEFINITIONS, parse_bundled_skill, read_skills_for_skills_dirs,
+    SKILL_PROVIDER_DEFINITIONS, SkillScope, parse_bundled_skill, read_skills_for_skills_dirs,
     resolve_skills_dirs,
 };
 use futures::future::join_all;
@@ -335,17 +335,21 @@ pub(crate) async fn clone_global_skill_repos(
 /// It's assumed that `prepare_environment` registers all cloned repositories
 /// with the `DetectedRepositories` model, so that we can scan for skills
 /// here.
+///
+/// With `CwdScopedCloudSkills` enabled, listings use the ordinary ancestor-directory scoping
+/// and the harness working directory stands in for the cwd until the terminal publishes one;
+/// otherwise every environment skill is listed regardless of cwd.
 pub(crate) async fn load_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repos: Vec<SourceRepo>,
 ) {
     if let Err(err) = foreground
         .spawn(|me, ctx| {
-            SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.set_cloud_working_dir(LocalOrRemotePath::Local(
-                    me.harness_working_dir.clone(),
-                ));
-            });
+            if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.set_cloud_working_dir(me.harness_working_dir.clone());
+                });
+            }
         })
         .await
     {
@@ -459,7 +463,9 @@ pub(crate) async fn load_environment_skills(
                 log::info!("No environment skills found");
             }
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.set_cloud_environment(true);
+                if !FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+                    manager.set_cloud_environment(true);
+                }
                 manager.handle_skills_added(skills);
             });
         })
@@ -471,6 +477,10 @@ pub(crate) async fn load_environment_skills(
 }
 
 /// Load explicitly requested global skills by reading directly from disk.
+///
+/// Global skill repositories are unregistered sibling clones, so their skills are never cwd
+/// ancestors. With `CwdScopedCloudSkills` enabled they are registered at home precedence so the
+/// selection stays listed from every cwd; otherwise they rely on the unscoped cloud listing.
 pub(crate) async fn load_global_skills(
     foreground: &ModelSpawner<AgentDriver>,
     specs: Vec<SkillSpec>,
@@ -510,7 +520,7 @@ pub(crate) async fn load_global_skills(
         })
         .await;
 
-    let skills = match load_result {
+    let mut skills = match load_result {
         Ok(skills) => skills,
         Err(err) => {
             log::warn!("Failed to load global skills: {err}");
@@ -527,9 +537,15 @@ pub(crate) async fn load_global_skills(
     let add_result = foreground
         .spawn(move |_, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.set_cloud_environment(true);
-                manager.pin_skill_paths(skills.iter().map(|skill| skill.path.clone()));
-                manager.handle_skills_added(skills);
+                if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+                    for skill in &mut skills {
+                        skill.scope = SkillScope::Home;
+                    }
+                    manager.add_home_tier_skills(skills);
+                } else {
+                    manager.set_cloud_environment(true);
+                    manager.handle_skills_added(skills);
+                }
             });
         })
         .await;
@@ -576,7 +592,7 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
                 log::info!("WARP_SKILL_DIRS: loaded {} skill(s)", skills.len());
             }
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.add_skills_dirs_skills(skills);
+                manager.add_home_tier_skills(skills);
             });
         })
         .await;
@@ -603,7 +619,7 @@ pub(crate) async fn load_factory_deferred_repositories_skill(
     if let Err(error) = foreground
         .spawn(move |_, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                manager.add_skills_dirs_skills(vec![skill]);
+                manager.add_home_tier_skills(vec![skill]);
             });
         })
         .await
