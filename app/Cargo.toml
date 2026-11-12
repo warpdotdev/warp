@@ -325,6 +325,7 @@ opentelemetry.workspace = true
 opentelemetry-http.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
+preview_proxy.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true

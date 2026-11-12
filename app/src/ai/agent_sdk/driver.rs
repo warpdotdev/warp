@@ -119,6 +119,7 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
+mod preview_proxy;
 mod preview_retention;
 mod prewarmed;
 mod restored_children;
@@ -1049,6 +1050,7 @@ pub struct AgentDriver {
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
     execution_id: Option<String>,
+    preview_proxy: Option<preview_proxy::Manager>,
     use_factory_repositories: bool,
     github_credential_mode: GitHubCredentialMode,
     credential_store_owner: Option<ManagedStoreOwner>,
@@ -1608,6 +1610,7 @@ impl AgentDriver {
             output_format: OutputFormat::default(),
             task_id: None,
             execution_id: None,
+            preview_proxy: None,
             use_factory_repositories: false,
             github_credential_mode: GitHubCredentialMode::Legacy,
             credential_store_owner: None,
@@ -1694,6 +1697,20 @@ impl AgentDriver {
         self.secrets = Arc::new(secrets);
         self.task_id = task_id;
         self.execution_id = execution_id;
+        self.preview_proxy = None;
+        if FeatureFlag::PreviewUrlsMcp.is_enabled()
+            && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
+            && let Some(task_id) = task_id
+        {
+            match preview_proxy::Manager::start(
+                task_id,
+                self.execution_id.as_deref(),
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+            ) {
+                Ok(manager) => self.preview_proxy = Some(manager),
+                Err(error) => log::error!("Preview proxy runtime failed to start: {error:#}"),
+            }
+        }
         self.use_factory_repositories = use_factory_repositories;
         self.github_credential_mode = github_credential_mode;
         self.credential_store_owner = credential_store_owner;
