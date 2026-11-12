@@ -17,8 +17,8 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 use super::protocol::RequestId;
 use super::server_model::ConnectionId;
 use crate::code_review::diff_state::{
-    BackendOrigin, DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
-    GitDiffWithBaseContent, LocalDiffStateModel,
+    BackendOrigin, DiffMetadata, DiffMode, DiffSnapshot, DiffState, DiffStateModelEvent,
+    FileDiffAndContent, GitDiffWithBaseContent, LocalDiffStateModel,
 };
 
 // ── Key type ────────────────────────────────────────────────────────
@@ -306,10 +306,20 @@ impl RemoteDiffStateManager {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
-            DiffStateModelEvent::NewDiffsComputed { diffs, .. } => {
+            DiffStateModelEvent::NewDiffsComputed { snapshot, .. } => {
                 let Some((state, metadata)) = self.read_state_and_metadata(key, ctx) else {
                     log::warn!("NewDiffsComputed for absent model key={key:?}");
                     return;
+                };
+
+                // The wire snapshot carries `state` separately; here we only
+                // need the diff payload, which is present iff the snapshot is
+                // `Loaded`.
+                let diffs = match snapshot {
+                    DiffSnapshot::Loaded(diffs) => Some(diffs.clone()),
+                    DiffSnapshot::NotInRepository
+                    | DiffSnapshot::Error(_)
+                    | DiffSnapshot::Loading => None,
                 };
 
                 let pending = self.drain_pending_responses(key);
@@ -331,7 +341,7 @@ impl RemoteDiffStateManager {
                     mode: key.mode.clone(),
                     state,
                     metadata,
-                    diffs: diffs.clone(),
+                    diffs,
                     subscribers,
                 });
             }
