@@ -598,6 +598,9 @@ fn lifecycle_event_detail_from_type(
         LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
+        LifecycleEventType::WaitedOn => {
+            Some(api::agent_event::lifecycle_event::Detail::WaitedOn(()))
+        }
         LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
         }
@@ -645,6 +648,9 @@ pub(super) fn lifecycle_event_type_from_proto(
     match lifecycle_event.detail.as_ref() {
         Some(api::agent_event::lifecycle_event::Detail::InProgress(_)) => {
             api::LifecycleEventType::InProgress
+        }
+        Some(api::agent_event::lifecycle_event::Detail::WaitedOn(_)) => {
+            api::LifecycleEventType::WaitedOn
         }
         Some(api::agent_event::lifecycle_event::Detail::Succeeded(_)) => {
             api::LifecycleEventType::Succeeded

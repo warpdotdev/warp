@@ -470,6 +470,16 @@ pub struct AgentRunEvent {
     pub sequence: i64,
 }
 
+impl AgentRunEvent {
+    /// Returns the waiter for a notification owned by the recipient's run.
+    pub fn waited_on_sender(&self, recipient_run_id: &str) -> Option<&str> {
+        if self.kind != AgentRunEventKind::WaitedOn || self.run_id != recipient_run_id {
+            return None;
+        }
+        self.ref_id.as_deref().filter(|run_id| !run_id.is_empty())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentRunEventKind {
     InProgress,
@@ -491,6 +501,7 @@ pub enum AgentRunEventKind {
     NewMessage,
     ChildAgentStarted,
     RunSessionLinked,
+    WaitedOn,
     LegacyStarted,
     LegacyIdle,
     LegacyRestarted,
@@ -508,9 +519,11 @@ impl AgentRunEventKind {
             Self::Errored { .. } => Some(LifecycleEventType::Errored),
             Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
             Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
-            Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
-                None
-            }
+            Self::NewMessage
+            | Self::ChildAgentStarted
+            | Self::RunSessionLinked
+            | Self::WaitedOn
+            | Self::Unknown => None,
         }
     }
 }
@@ -542,6 +555,8 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             ChildAgentStarted,
             #[serde(rename = "run_session_linked")]
             RunSessionLinked,
+            #[serde(rename = "run_waited_on")]
+            WaitedOn,
             #[serde(rename = "run_started")]
             LegacyStarted,
             #[serde(rename = "run_idle")]
@@ -612,6 +627,7 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             WireEventType::NewMessage => Self::NewMessage,
             WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
             WireEventType::RunSessionLinked => Self::RunSessionLinked,
+            WireEventType::WaitedOn => Self::WaitedOn,
             WireEventType::LegacyStarted => Self::LegacyStarted,
             WireEventType::LegacyIdle => Self::LegacyIdle,
             WireEventType::LegacyRestarted => Self::LegacyRestarted,
@@ -662,6 +678,7 @@ impl serde::Serialize for AgentRunEventKind {
             Self::NewMessage => "new_message",
             Self::ChildAgentStarted => "child_agent_started",
             Self::RunSessionLinked => "run_session_linked",
+            Self::WaitedOn => "run_waited_on",
             Self::LegacyStarted => "run_started",
             Self::LegacyIdle => "run_idle",
             Self::LegacyRestarted => "run_restarted",

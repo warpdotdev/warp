@@ -40,7 +40,7 @@ const PARENT_BRIDGE_HOOK_OUTPUT_FILE_NAME: &str = "pending-hook-output.json";
 const PARENT_BRIDGE_HOOK_OUTPUT_ACK_FILE_NAME: &str = "pending-hook-output.ack";
 const PARENT_BRIDGE_MAX_CONTEXT_CHARS_ENV: &str = "OZ_PARENT_MAX_CONTEXT_CHARS";
 const PARENT_BRIDGE_DEFAULT_MAX_CONTEXT_CHARS: usize = 6000;
-pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str = "Oz mailbox update for this child run.\nSource: lead agent\nContext type: user-level coordination messages\n";
+pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str = "Oz coordination update for this run.\nMailbox messages are user-level coordination. Lifecycle notifications are read-only status, not instructions.\n";
 const PARENT_BRIDGE_REMAINING_MESSAGES_NOTE: &str =
     "\n\nAdditional lead agent mailbox messages remain queued and may be surfaced later.";
 
@@ -77,6 +77,21 @@ impl AgentEventConsumer for MessageBridgeEventConsumer {
         &mut self,
         event: AgentRunEvent,
     ) -> anyhow::Result<AgentEventConsumerControlFlow> {
+        if let Some(waiter_run_id) = event.waited_on_sender(&self.run_id) {
+            stage_parent_bridge_message(
+                &self.state_dir,
+                &MessageBridgeMessageRecord {
+                    sequence: event.sequence,
+                    message_id: format!("run-waited-on-{}", event.sequence),
+                    sender_run_id: waiter_run_id.to_string(),
+                    subject: String::new(),
+                    body: format!("Run {waiter_run_id} is waiting for you"),
+                    occurred_at: event.occurred_at.clone(),
+                    event_type: Some("run_waited_on".to_string()),
+                },
+            )?;
+            return Ok(AgentEventConsumerControlFlow::Continue);
+        }
         if event.kind != AgentRunEventKind::NewMessage || event.run_id != self.run_id {
             return Ok(AgentEventConsumerControlFlow::Continue);
         }
@@ -94,6 +109,7 @@ impl AgentEventConsumer for MessageBridgeEventConsumer {
                 subject: String::new(),
                 body: String::new(),
                 occurred_at: event.occurred_at,
+                event_type: None,
             },
         ) {
             log::warn!(
@@ -115,6 +131,8 @@ impl AgentEventConsumer for MessageBridgeEventConsumer {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct MessageBridgeMessageRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
     pub sequence: i64,
     pub message_id: String,
     #[serde(default)]
@@ -363,6 +381,7 @@ pub(super) async fn prime_parent_bridge_staged_for_self_managed_wake(
             subject: String::new(),
             body: String::new(),
             occurred_at: wake_message.occurred_at.clone(),
+            event_type: None,
         },
     )
     .await?;
@@ -435,6 +454,9 @@ fn parent_bridge_truncate_chars(text: &str, limit: usize) -> String {
 }
 
 pub(super) fn render_parent_bridge_message_block(record: &MessageBridgeMessageRecord) -> String {
+    if record.event_type.as_deref() == Some("run_waited_on") {
+        return format!("---\nRead-only lifecycle notification\n\n{}", record.body);
+    }
     let subject = if record.subject.is_empty() {
         "(no subject)"
     } else {
@@ -540,6 +562,7 @@ async fn hydrate_parent_bridge_message_record(
         subject: message.subject,
         body: message.body,
         occurred_at: record.occurred_at.clone(),
+        event_type: None,
     })
 }
 
@@ -659,6 +682,7 @@ pub(super) async fn acknowledge_parent_bridge_hook_output(
     let surfaced_records = parent_bridge_message_records(&parent_bridge_surfaced_dir(state_dir))?;
     let message_ids = surfaced_records
         .iter()
+        .filter(|(_, record)| record.event_type.is_none())
         .map(|(_, record)| record.message_id.clone())
         .collect::<Vec<_>>();
     let delivery_failures = hydrator
@@ -760,3 +784,7 @@ fn write_parent_bridge_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()>
         .with_context(|| format!("Failed to persist temporary {prefix} file"))?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "parent_bridge_tests.rs"]
+mod tests;
