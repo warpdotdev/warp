@@ -11,7 +11,7 @@ use warpui::fonts::{Properties, Weight};
 
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
     BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
-    aggregate_segments, cost_type_color, format_cost_cents, format_credits,
+    aggregate_segments, cost_type_color, format_cost_cents, format_credits, format_usage_cost,
     render_breakdown_tooltip, render_section_subheader,
 };
 use crate::ui_components::blended_colors;
@@ -216,7 +216,7 @@ fn build_team_total_card(
         .finish();
 
     let cost_text = Text::new_inline(
-        format_cost_cents(summary.total_cost_cents),
+        format_usage_cost(summary.total_credits),
         appearance.ui_font_family(),
         24.,
     )
@@ -303,12 +303,7 @@ fn render_team_total_card(
 
         if state.is_hovered() {
             stack.add_positioned_overlay_child(
-                render_breakdown_tooltip(
-                    &summary.segments,
-                    summary.total_credits,
-                    summary.total_cost_cents,
-                    appearance,
-                ),
+                render_breakdown_tooltip(&summary.segments, summary.total_credits, appearance),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., -TOOLTIP_GAP),
                     ParentOffsetBounds::WindowByPosition,
