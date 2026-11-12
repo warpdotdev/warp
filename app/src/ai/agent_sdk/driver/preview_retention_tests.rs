@@ -7,8 +7,14 @@ use futures::executor::block_on;
 use futures::poll;
 use serde_json::json;
 
-use super::super::IdleTimeoutSender;
+use super::super::{
+    CLIAgentSessionStatus, HarnessIdleAction, IdleTimeoutSender, SDKConversationOutputStatus,
+    SetupFailureRetention, harness_idle_action_for_conversation_status,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+};
 use super::*;
+use crate::ai::agent::RenderableAIError;
+use crate::ai::agent::conversation::ConversationStatus;
 
 fn response(preview_count: usize) -> ListRunPreviewsResponse {
     serde_json::from_value(json!({
@@ -223,6 +229,57 @@ fn preview_retention_none_zero_and_automatic_recovery_bypass_check() {
     ));
     sender.end_run_after(Duration::ZERO, 6);
     assert_eq!(block_on(rx).unwrap(), 6);
+}
+
+#[test]
+fn runtime_failure_policies_bypass_preview_retention() {
+    let completion_idle = Some(Duration::from_secs(900));
+    let error = SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    };
+    let harness_idle = match harness_idle_action_for_conversation_status(
+        &ConversationStatus::Error,
+        completion_idle,
+        false,
+    ) {
+        HarnessIdleAction::Exit { window, .. } => window,
+        HarnessIdleAction::CancelIdle | HarnessIdleAction::Ignore => {
+            panic!("runtime harness error must exit")
+        }
+    };
+    for idle in [
+        idle_window_for_terminal_status(&error, completion_idle),
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Failed {
+                error_type: None,
+                message: None,
+            },
+            completion_idle,
+        ),
+        harness_idle,
+    ] {
+        let (tx, mut rx) = oneshot::channel();
+        let mut sender = IdleTimeoutSender::new(tx);
+        sender.preview_retention = Some(retention(
+            || panic!("runtime failure must bypass previews"),
+            |_| unreachable!(),
+        ));
+        sender.complete_with_optional_idle(idle, ());
+        assert_eq!(rx.try_recv().unwrap(), Some(()));
+    }
+}
+
+#[test]
+fn setup_failure_retention_does_not_wait_for_previews() {
+    let (tx, rx) = oneshot::channel();
+    let mut sender = IdleTimeoutSender::new(tx);
+    sender.wait = Arc::new(NoIdleWait);
+    sender.preview_retention = Some(retention(
+        || panic!("setup inspection expiry must bypass previews"),
+        |_| unreachable!(),
+    ));
+    let _retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
+    block_on(rx).unwrap();
 }
 
 struct NoIdleWait;

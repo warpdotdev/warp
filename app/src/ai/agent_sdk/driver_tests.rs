@@ -24,7 +24,6 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
-use warp_graphql::ai::AgentTaskState;
 use warp_graphql::platform_error::PlatformErrorMessageFormat;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_multi_agent_api::response_event;
@@ -33,12 +32,12 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
-    HarnessIdleAction, IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, HarnessIdleAction,
+    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, PluginInstallError,
-    SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
-    debug_turn_task_state, harness_idle_action_for_conversation_status,
+    SDKConversationOutputStatus, SetupFailureRetention, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars, harness_idle_action_for_conversation_status,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
@@ -63,6 +62,7 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
+use crate::terminal::cli_agent_sessions::BlockedSource;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -247,155 +247,94 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     assert_eq!(rx.try_recv().unwrap(), None);
 }
 
-// ── DebugWindowController tests ───────────────────────────────────────────────────
+// ── Setup inspection retention tests ──────────────────────────────────────────────
 
 #[test]
-fn debug_window_controller_pin_blocks_refresh_and_finish_rearms() {
-    let (tx, mut rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-    let turn_id = AIConversationId::new();
+fn setup_failure_retention_stays_open_and_refreshes_before_agent_start() {
+    let (tx, mut rx) = oneshot::channel();
+    let (wait, _release) = manual_idle_wait();
+    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+    let retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
 
-    // A short window so an unpinned controller would fire almost immediately.
-    controller.refresh_idle((), Duration::from_millis(30));
-    assert!(
-        controller.pin_for_turn(turn_id),
-        "first pin must be accepted"
-    );
-
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        None,
-        "a pinned debug turn must not let the idle window expire, however long it runs"
-    );
-
-    assert!(
-        controller.finish_turn(turn_id, (), Duration::from_millis(30)),
-        "finishing a tracked turn must report a real transition"
-    );
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        Some(()),
-        "finishing the last active turn must re-arm the full idle window"
-    );
+    assert_eq!(rx.try_recv().unwrap(), None);
+    assert_eq!(retention.refresh(), Some(Duration::from_secs(900)));
+    assert_eq!(rx.try_recv().unwrap(), None);
 }
 
 #[test]
-fn debug_window_controller_duplicate_pin_is_idempotent() {
-    let (tx, _rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-    let turn_id = AIConversationId::new();
+fn setup_failure_retention_expires_without_agent_start() {
+    let (tx, mut rx) = oneshot::channel();
+    let (wait, release) = manual_idle_wait();
+    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+    let _retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
 
-    assert!(
-        controller.pin_for_turn(turn_id),
-        "first pin is a real transition"
-    );
-    assert!(
-        !controller.pin_for_turn(turn_id),
-        "a duplicate pin for the same turn id must be a no-op"
-    );
+    assert_eq!(rx.try_recv().unwrap(), None);
+    release.send(()).unwrap();
+    block_on(async {
+        assert_eventually!(
+            rx.try_recv().unwrap() == Some(()),
+            "setup inspection did not end when its deadline elapsed"
+        );
+    });
 }
 
 #[test]
-fn debug_window_controller_overlapping_turns_stay_pinned_until_the_last_turn_finishes() {
-    let (tx, _rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-    let first_turn = AIConversationId::new();
-    let second_turn = AIConversationId::new();
+fn setup_failure_retention_ends_at_agent_start_and_cannot_refresh_again() {
+    let (tx, mut rx) = oneshot::channel();
+    let (wait, _release) = manual_idle_wait();
+    let sender = IdleTimeoutSender::new(tx).with_wait(wait);
+    let retention = SetupFailureRetention::new(sender, Duration::from_secs(900));
+    let viewer = retention.clone();
 
-    assert!(controller.pin_for_turn(first_turn));
-    assert!(controller.pin_for_turn(second_turn));
-    assert!(controller.finish_turn(first_turn, (), Duration::from_secs(60)));
-    assert!(controller.is_pinned());
-    assert!(controller.finish_turn(second_turn, (), Duration::from_secs(60)));
-    assert!(!controller.is_pinned());
-}
-
-#[test]
-fn debug_turn_task_state_maps_timeline_states() {
-    let blocked = ConversationStatus::Blocked {
-        blocked_action: "approval".to_string(),
-    };
-    let cases = [
-        (
-            ConversationStatus::InProgress,
-            Some(AgentTaskState::InProgress),
-        ),
-        (ConversationStatus::Success, Some(AgentTaskState::Succeeded)),
-        (ConversationStatus::Error, Some(AgentTaskState::Error)),
-        (
-            ConversationStatus::Cancelled,
-            Some(AgentTaskState::Cancelled),
-        ),
-        (blocked, Some(AgentTaskState::Blocked)),
-        (ConversationStatus::TransientError, None),
-        (ConversationStatus::WaitingForEvents, None),
-    ];
-
-    for (status, expected) in cases {
-        assert_eq!(debug_turn_task_state(&status), expected);
-    }
-}
-#[test]
-fn debug_window_controller_duplicate_finish_is_idempotent() {
-    let (tx, mut rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-    let turn_id = AIConversationId::new();
-
-    controller.pin_for_turn(turn_id);
-    assert!(controller.finish_turn(turn_id, (), Duration::from_millis(30)));
-    assert!(
-        !controller.finish_turn(turn_id, (), Duration::from_millis(30)),
-        "a duplicate terminal event for the same turn id must be a no-op"
-    );
-
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        Some(()),
-        "the single real finish must still re-arm exactly one full window"
-    );
-}
-
-#[test]
-fn debug_window_controller_finish_of_unknown_turn_is_a_no_op() {
-    let (tx, mut rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-
-    controller.refresh_idle((), Duration::from_millis(30));
-    assert!(
-        !controller.finish_turn(AIConversationId::new(), (), Duration::from_millis(30)),
-        "finishing a turn id that was never pinned must be a no-op"
-    );
-
-    // The unrelated finish_turn call must not have disturbed the already-armed window.
-    std::thread::sleep(Duration::from_millis(80));
+    retention.agent_started();
     assert_eq!(rx.try_recv().unwrap(), Some(()));
+    assert_eq!(viewer.refresh(), None);
+    retention.agent_started();
 }
 
 #[test]
-fn debug_window_controller_refresh_is_inert_while_pinned() {
-    // Both refresh entry points — the viewer-input keystroke path and the general re-arm path —
-    // must be no-ops while a debug turn is pinning the window, for the same reason: neither may
-    // move a deadline that finish_turn is about to race by re-arming the full interval anyway.
-    let (tx, _rx) = oneshot::channel::<()>();
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
-
-    controller.refresh_idle((), Duration::from_secs(60));
-    controller.pin_for_turn(AIConversationId::new());
-    assert_eq!(
-        controller.refresh_from_last_armed(),
-        None,
-        "a viewer-input refresh must not move the deadline while a debug turn is pinning it"
-    );
-
-    let controller = DebugWindowController::new(IdleTimeoutSender::new(oneshot::channel::<()>().0));
-    controller.pin_for_turn(AIConversationId::new());
-    assert!(
-        !controller.refresh_idle((), Duration::from_millis(30)),
-        "refreshing while pinned must not arm a deadline that finish_turn would then race"
-    );
+fn setup_failure_retention_subscription_ends_on_first_agent_turn() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx)
+        });
+        let id = BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            let id = history.start_new_conversation(terminal_id, false, false, false, ctx);
+            history.update_conversation_status(terminal_id, id, ConversationStatus::Error, ctx);
+            id
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let (wait, _release) = manual_idle_wait();
+        let retention = SetupFailureRetention::new(
+            IdleTimeoutSender::new(tx).with_wait(wait),
+            Duration::from_secs(900),
+        );
+        let viewer = retention.clone();
+        driver.update(&mut app, |driver, ctx| {
+            driver.arm_setup_failure_debug_window(retention, ctx);
+        });
+        assert_eq!(rx.try_recv().unwrap(), None);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.update_conversation_status(
+                terminal_id,
+                id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+        assert_eq!(rx.try_recv().unwrap(), Some(()));
+        assert_eq!(viewer.refresh(), None);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.update_conversation_status(terminal_id, id, ConversationStatus::Error, ctx);
+        });
+        assert_eq!(viewer.refresh(), None);
+    });
 }
 
 #[test]
@@ -444,58 +383,107 @@ fn error_status() -> SDKConversationOutputStatus {
 }
 
 #[test]
-fn terminal_error_defers_by_idle_on_fail() {
-    // The agent process is the shared-session sharer, so a failed run must be able to outlive
-    // its own failure for the session to stay attachable while the sandbox is retained.
-    let window =
-        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
-
-    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
-}
-
-#[test]
-fn terminal_error_exits_immediately_without_idle_on_fail() {
-    let window =
-        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
-
-    assert_eq!(
-        window, None,
-        "--idle-on-complete must not act as a fallback for a terminal error"
-    );
+fn terminal_error_exits_immediately() {
+    for idle_on_complete in [None, Some(Duration::from_secs(45 * 60))] {
+        assert_eq!(
+            idle_window_for_terminal_status(&error_status(), idle_on_complete),
+            None
+        );
+    }
 }
 
 #[test]
 fn non_error_completion_defers_by_idle_on_complete() {
-    // The failure window must not leak into the success/blocked/cancelled lifecycle.
     let cases = [
-        ("success", SDKConversationOutputStatus::Success),
-        (
-            "blocked",
-            SDKConversationOutputStatus::Blocked {
-                blocked_action: "approve".to_string(),
-            },
-        ),
-        (
-            "cancelled",
-            SDKConversationOutputStatus::Cancelled {
-                reason: CancellationReason::ManuallyCancelled,
-            },
-        ),
+        SDKConversationOutputStatus::Success,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "approve".to_string(),
+        },
+        SDKConversationOutputStatus::Cancelled {
+            reason: CancellationReason::ManuallyCancelled,
+        },
     ];
-
-    for (label, status) in cases {
-        let window = idle_window_for_terminal_status(
-            &status,
-            Some(Duration::from_secs(45 * 60)),
-            Some(Duration::from_secs(15 * 60)),
-        );
-
+    for status in cases {
         assert_eq!(
-            window,
+            idle_window_for_terminal_status(&status, Some(Duration::from_secs(45 * 60))),
             Some(Duration::from_secs(45 * 60)),
-            "unexpected window for {label}"
         );
     }
+}
+
+#[test]
+fn runtime_error_exits_despite_configured_setup_retention_and_queued_followups() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_id = terminal.id();
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let (id, _stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let temp = TempDir::new().unwrap();
+        let driver = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal, ctx);
+            let mut driver =
+                AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+            driver.idle_on_complete = Some(Duration::from_secs(600));
+            driver.idle_on_fail = Some(Duration::from_secs(900));
+            driver.run_conversation_id = Some(id);
+            driver.skip_initial_turn = true;
+            driver
+        });
+        let mut completion = driver.update(&mut app, |driver, ctx| {
+            driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "pending before failure".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history
+                .conversation_mut(&id)
+                .unwrap()
+                .update_status_with_error(
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::InternalWarpError),
+                    terminal_id,
+                    ctx,
+                );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "arrived after failure".into(),
+                    ParticipantId::new(),
+                    vec![],
+                    None,
+                ),
+                ctx,
+            );
+        });
+        assert_eventually!(
+            matches!(
+                completion.try_recv(),
+                Ok(Some(SDKConversationOutputStatus::Error { .. }))
+            ),
+            "a queued follow-up suppressed runtime failure exit"
+        );
+    });
 }
 
 #[test]
@@ -605,97 +593,65 @@ fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
 }
 
 #[test]
-fn failed_cli_harness_session_defers_by_idle_on_fail() {
-    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
-    // uses; a failed CLI session is the same "process is the session sharer" situation.
-    let idle_on_complete = Some(Duration::from_secs(45 * 60));
-    let idle_on_fail = Some(Duration::from_secs(15 * 60));
-
+fn failed_cli_harness_session_exits_immediately() {
     let failed = CLIAgentSessionStatus::Failed {
         error_type: None,
         message: Some("boom".to_string()),
     };
     assert_eq!(
-        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
-        idle_on_fail
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
-        None,
-        "--idle-on-complete must not act as a fallback for a failed CLI session"
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::Success,
-            idle_on_complete,
-            idle_on_fail
-        ),
-        idle_on_complete
-    );
-    assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::InProgress,
-            idle_on_complete,
-            idle_on_fail
-        ),
+        idle_window_for_cli_session_status(&failed, Some(Duration::from_secs(2700))),
         None
     );
+    for status in [
+        CLIAgentSessionStatus::Success,
+        CLIAgentSessionStatus::Cancelled,
+        CLIAgentSessionStatus::Blocked {
+            message: Some("approval".to_string()),
+            source: BlockedSource::PermissionRequest,
+        },
+    ] {
+        assert_eq!(
+            idle_window_for_cli_session_status(&status, Some(Duration::from_secs(2700))),
+            Some(Duration::from_secs(2700))
+        );
+    }
     assert_eq!(
-        idle_window_for_cli_session_status(
-            &CLIAgentSessionStatus::Cancelled,
-            idle_on_complete,
-            idle_on_fail
-        ),
-        idle_on_complete,
-        "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
+        idle_window_for_cli_session_status(&CLIAgentSessionStatus::InProgress, None),
+        None
     );
 }
 
 #[test]
 fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
-    let idle_on_complete = Some(Duration::from_secs(45 * 60));
-    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+    let idle = Some(Duration::from_secs(2700));
     let action = |status: &ConversationStatus| {
-        harness_idle_action_for_conversation_status(status, idle_on_complete, idle_on_fail, false)
+        harness_idle_action_for_conversation_status(status, idle, false)
     };
-
     assert_eq!(
         action(&ConversationStatus::InProgress),
         HarnessIdleAction::CancelIdle
     );
-    assert_eq!(
-        action(&ConversationStatus::Success),
-        HarnessIdleAction::Exit {
-            window: idle_on_complete,
-            failed: false,
-        }
-    );
-    assert_eq!(
-        action(&ConversationStatus::Cancelled),
-        HarnessIdleAction::Exit {
-            window: idle_on_complete,
-            failed: false,
-        }
-    );
+    for status in [
+        ConversationStatus::Success,
+        ConversationStatus::Cancelled,
+        ConversationStatus::Blocked {
+            blocked_action: "approval".to_string(),
+        },
+    ] {
+        assert_eq!(
+            action(&status),
+            HarnessIdleAction::Exit {
+                window: idle,
+                failed: false
+            }
+        );
+    }
     assert_eq!(
         action(&ConversationStatus::Error),
         HarnessIdleAction::Exit {
-            window: idle_on_fail,
-            failed: true,
-        }
-    );
-    assert_eq!(
-        harness_idle_action_for_conversation_status(
-            &ConversationStatus::Error,
-            idle_on_complete,
-            None,
-            false
-        ),
-        HarnessIdleAction::Exit {
             window: None,
-            failed: true,
-        },
-        "--idle-on-complete must not act as a fallback for a failed turn"
+            failed: true
+        }
     );
     assert_eq!(
         action(&ConversationStatus::WaitingForEvents),
@@ -708,42 +664,23 @@ fn native_conversation_status_drives_the_harness_exit_like_a_cli_session() {
 }
 
 #[test]
-fn a_settling_harness_turn_defers_the_exit_but_not_the_idle_cancel() {
-    // A steer finishes the cancelled turn's stream (Success or Cancelled) moments before the
-    // follow-up's turn begins; with no idle window that status would end the run underneath
-    // the follow-up.
-    let settling = |status: &ConversationStatus| {
-        harness_idle_action_for_conversation_status(status, None, None, true)
-    };
+fn a_settling_harness_turn_defers_nonerror_exit_but_not_runtime_failure() {
+    for status in [ConversationStatus::Success, ConversationStatus::Cancelled] {
+        assert_eq!(
+            harness_idle_action_for_conversation_status(&status, None, true),
+            HarnessIdleAction::Ignore
+        );
+    }
     assert_eq!(
-        settling(&ConversationStatus::Success),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::Cancelled),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::Error),
-        HarnessIdleAction::Ignore
-    );
-    assert_eq!(
-        settling(&ConversationStatus::InProgress),
-        HarnessIdleAction::CancelIdle,
-        "the follow-up's turn must still cancel a pending idle exit"
-    );
-    assert_eq!(
-        harness_idle_action_for_conversation_status(
-            &ConversationStatus::Cancelled,
-            None,
-            None,
-            false
-        ),
+        harness_idle_action_for_conversation_status(&ConversationStatus::Error, None, true),
         HarnessIdleAction::Exit {
             window: None,
-            failed: false,
-        },
-        "once the harness is no longer settling, a cancelled turn ends the run as before"
+            failed: true
+        }
+    );
+    assert_eq!(
+        harness_idle_action_for_conversation_status(&ConversationStatus::InProgress, None, true),
+        HarnessIdleAction::CancelIdle
     );
 }
 
