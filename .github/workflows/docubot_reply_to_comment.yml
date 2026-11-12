@@ -45,7 +45,7 @@ jobs:
       && github.actor != 'github-actions[bot]'
     runs-on: namespace-profile-ubuntu-20-04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
         with:
           # Check out the appropriate branch based on trigger type
           # TODO: do this in sdk?
@@ -60,7 +60,7 @@ jobs:
               )
             }}
       - name: Call Docubot
-        uses: ./.github/actions/docubot
+        uses: $/.github/actions/docubot
         with:
           prompt: ${{ github.event.comment.body || inputs.prompt}}
           warp_api_key: ${{ secrets.WARP_DEV_API_KEY }}

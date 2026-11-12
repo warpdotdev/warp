@@ -77,11 +77,11 @@ jobs:
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@v6.0.3
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -121,7 +121,7 @@ jobs:
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@v3.0.2
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
@@ -132,7 +132,7 @@ jobs:
 
       - name: Create Sentry release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
-        uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528 # v3.7.0
+        uses: getsentry/action-release@v3.7.0
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           SENTRY_ORG: warpdotdev
@@ -156,9 +156,9 @@ jobs:
           - arch: x86_64
             dmg_name_suffix: x86_64
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -172,14 +172,14 @@ jobs:
 
       # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version: stable
           cache: false
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -205,7 +205,7 @@ jobs:
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
       - name: Archive ${{ matrix.arch }} macOS settings schema
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: settings-schema-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -218,7 +218,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -236,7 +236,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -270,7 +270,7 @@ jobs:
             ${{ steps.bundle_app.outputs.frameworks_dir }}
 
       - name: Archive ${{ matrix.arch }} build artifacts for universal build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -285,9 +285,9 @@ jobs:
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -297,20 +297,20 @@ jobs:
 
       # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version: stable
           cache: false
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download aarch64 build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: macos-aarch64-${{ steps.get-config.outputs.channel }}
 
@@ -319,7 +319,7 @@ jobs:
         shell: bash
 
       - name: Download x86_64 build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: macos-x86_64-${{ steps.get-config.outputs.channel }}
 
@@ -328,13 +328,13 @@ jobs:
         shell: bash
 
       - name: Download canonical aarch64 macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
 
       - name: Download x86_64 macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-macos-x86_64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos-x86_64
@@ -413,7 +413,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -421,7 +421,7 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -434,7 +434,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -452,9 +452,9 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -468,7 +468,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -512,7 +512,7 @@ jobs:
         shell: bash
 
       - name: Archive ${{ matrix.arch }} CLI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -535,9 +535,9 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -547,13 +547,13 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -562,7 +562,7 @@ jobs:
         shell: bash
 
       - name: Download canonical macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
@@ -594,7 +594,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -602,7 +602,7 @@ jobs:
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/macos/${{ matrix.arch }}
@@ -612,7 +612,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -646,9 +646,9 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -662,7 +662,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -706,7 +706,7 @@ jobs:
         shell: bash
 
       - name: Archive ${{ matrix.arch }} TUI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -729,9 +729,9 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: macos
           is_self_hosted: false
@@ -741,13 +741,13 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} TUI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -756,7 +756,7 @@ jobs:
         shell: bash
 
       - name: Download canonical macOS settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
@@ -815,7 +815,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -823,7 +823,7 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/macos/${{ matrix.arch }}
@@ -833,7 +833,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -853,9 +853,9 @@ jobs:
           - arch: aarch64
             runner: namespace-profile-ubuntu-20-04-arm
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -875,7 +875,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -917,7 +917,7 @@ jobs:
           DEBUG_EXECUTABLE_PATH: ${{ steps.build_tui.outputs.debug_executable_path }}
 
       - name: Archive ${{ matrix.arch }} TUI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -940,9 +940,9 @@ jobs:
           - arch: aarch64
             runner: namespace-profile-ubuntu-20-04-arm
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -962,13 +962,13 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download ${{ matrix.arch }} TUI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -977,7 +977,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
@@ -1029,7 +1029,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -1037,7 +1037,7 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/linux/${{ matrix.arch }}
@@ -1047,7 +1047,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
@@ -1064,9 +1064,9 @@ jobs:
       # easier and less error-prone than trying to install it).
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -1086,12 +1086,12 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
@@ -1152,14 +1152,14 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Archive canonical Linux settings schema
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           retention-days: 1
           path: ${{ steps.bundle_app.outputs.settings_schema_path }}
 
       - name: Bundle Arch Linux package
-        uses: ./.github/actions/bundle_arch_package
+        uses: $/.github/actions/bundle_arch_package
         with:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1200,7 +1200,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -1216,7 +1216,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1228,9 +1228,9 @@ jobs:
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -1250,7 +1250,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -1294,7 +1294,7 @@ jobs:
           DEBUG_EXECUTABLE_PATH: ${{ steps.build_cli.outputs.debug_executable_path }}
 
       - name: Archive Linux CLI build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -1309,9 +1309,9 @@ jobs:
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -1331,12 +1331,12 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
@@ -1383,7 +1383,7 @@ jobs:
         shell: bash
 
       - name: Download Linux CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
 
@@ -1392,7 +1392,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
@@ -1414,7 +1414,7 @@ jobs:
           tar czf oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz oz-${{ steps.get-config.outputs.channel }} -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources
 
       - name: Bundle Arch Linux CLI package
-        uses: ./.github/actions/bundle_arch_package
+        uses: $/.github/actions/bundle_arch_package
         with:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1456,7 +1456,7 @@ jobs:
 
       - name: Upload CLI packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -1479,7 +1479,7 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/x86_64
@@ -1489,7 +1489,7 @@ jobs:
 
       - name: Upload CLI packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1508,9 +1508,9 @@ jobs:
       # easier and less error-prone than trying to install it).
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -1541,12 +1541,12 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
@@ -1587,7 +1587,7 @@ jobs:
           SETTINGS_SCHEMA_PATH: ${{ steps.build_app.outputs.settings_schema_path }}
 
       - name: Archive build files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1600,9 +1600,9 @@ jobs:
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: linux
           is_self_hosted: false
@@ -1622,12 +1622,12 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
@@ -1668,7 +1668,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_cli.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1684,24 +1684,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout sources
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@v6.0.3
         with:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download canonical Linux settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
@@ -1777,7 +1777,7 @@ jobs:
         shell: bash
 
       - name: Download app build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
 
@@ -1804,7 +1804,7 @@ jobs:
           SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Bundle Arch Linux app package
-        uses: ./.github/actions/bundle_arch_package
+        uses: $/.github/actions/bundle_arch_package
         with:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1823,7 +1823,7 @@ jobs:
       # Bundle the CLI packages
 
       - name: Download CLI build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
 
@@ -1849,7 +1849,7 @@ jobs:
           tar czf oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz oz-${{ steps.get-config.outputs.channel }} -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources
 
       - name: Bundle Arch Linux CLI package
-        uses: ./.github/actions/bundle_arch_package
+        uses: $/.github/actions/bundle_arch_package
         with:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1902,7 +1902,7 @@ jobs:
 
       - name: Upload app packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           parent: false
@@ -1915,7 +1915,7 @@ jobs:
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
       - name: Upload CLI packages to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
@@ -1930,7 +1930,7 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/aarch64
@@ -1940,7 +1940,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-linux-arm64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1954,9 +1954,9 @@ jobs:
     if: ${{ inputs.build_web != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: wasm
           is_self_hosted: false
@@ -1965,7 +1965,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -2014,7 +2014,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -2022,7 +2022,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -2040,7 +2040,7 @@ jobs:
 
       - name: Upload assets to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.assets_dir }}
           parent: false
@@ -2059,7 +2059,7 @@ jobs:
 
       - name: Upload web bundle as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -2079,9 +2079,9 @@ jobs:
           - arch: arm64
             runner: windows-arm-latest-large
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: tui-${{ matrix.arch }}
@@ -2092,7 +2092,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -2124,7 +2124,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_tui.outputs.pdb_file_path }}
 
       - name: Archive Windows TUI binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2155,9 +2155,9 @@ jobs:
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: tui-${{ matrix.arch }}
@@ -2168,13 +2168,13 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download Windows TUI binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -2183,7 +2183,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2202,7 +2202,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign Warp Agent CLI and PTY executables
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        uses: azure/artifact-signing-action@v2.0.0
         with:
           azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
           azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -2247,7 +2247,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -2255,7 +2255,7 @@ jobs:
 
       - name: Upload TUI installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_tui.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/${{ matrix.release_arch }}
@@ -2277,7 +2277,7 @@ jobs:
           RELEASE_ARCH: ${{ matrix.release_arch }}
 
       - name: Upload Windows TUI installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-windows-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2303,9 +2303,9 @@ jobs:
           # - arch: arm64
           #   runner: windows-arm-latest-large
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: cli-${{ matrix.arch }}
@@ -2316,7 +2316,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -2348,7 +2348,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_cli.outputs.pdb_file_path }}
 
       - name: Archive Windows CLI binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2385,9 +2385,9 @@ jobs:
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: cli-${{ matrix.arch }}
@@ -2398,13 +2398,13 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download Windows CLI binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
 
@@ -2413,7 +2413,7 @@ jobs:
         shell: bash
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2427,7 +2427,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign the oz CLI executable and sidecar DLLs with Azure Trusted Signing
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        uses: azure/artifact-signing-action@v2.0.0
         with:
           azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
           azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -2500,7 +2500,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -2508,7 +2508,7 @@ jobs:
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.package_cli.outputs.package_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/windows/${{ matrix.release_arch }}
@@ -2531,7 +2531,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-windows-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2569,9 +2569,9 @@ jobs:
           - arch: arm64
             runner: windows-arm-latest-large
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: ${{ matrix.arch }}
@@ -2582,7 +2582,7 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
@@ -2609,14 +2609,14 @@ jobs:
 
       - name: Archive canonical Windows settings schema
         if: ${{ matrix.arch == 'x64' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           retention-days: 1
           path: ${{ runner.temp }}\settings_schema.json
 
       - name: Archive Windows binary build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2643,9 +2643,9 @@ jobs:
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@v6.0.3
 
-      - uses: ./.github/actions/prepare_environment
+      - uses: $/.github/actions/prepare_environment
         with:
           target_os: windows
           cache_key: ${{ matrix.arch }}
@@ -2656,19 +2656,19 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Download Windows binary build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: .
 
       - name: Download canonical Windows settings schema
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-windows
@@ -2682,7 +2682,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign the executables with Azure Trusted Signing
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        uses: azure/artifact-signing-action@v2.0.0
         with:
           azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
           azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -2764,7 +2764,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
@@ -2772,7 +2772,7 @@ jobs:
 
       - name: Upload installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -2785,7 +2785,7 @@ jobs:
 
       - name: Upload installer as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
@@ -2907,7 +2907,7 @@ jobs:
     if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
     steps:
       - name: Send Slack notification if unsuccessful
-        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        uses: slackapi/slack-github-action@v4.0.0
         if: ${{ needs.collect_results.outputs.failed != '' }}
         with:
           # Fail the step when Slack rejects the message.
@@ -2928,7 +2928,7 @@ jobs:
       - prepare_release
       - collect_results
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@v6.0.3
         name: Checkout sources
         with:
           # Fetch history for all tags and branches so we can compare revisions
@@ -2937,14 +2937,14 @@ jobs:
 
       - name: Get channel configuration
         id: get-config
-        uses: ./.github/actions/get_channel_config/
+        uses: $/.github/actions/get_channel_config/
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
       - name: Mint internal release-changelog token
         id: github_app_auth
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        uses: octo-sts/action@v1.1.1
         with:
           scope: warpdotdev/warp-internal
           identity: release-changelog
@@ -2952,7 +2952,7 @@ jobs:
       - name: Mint public release-changelog token (stable only)
         if: inputs.channel == 'stable'
         id: public_github_app_auth
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        uses: octo-sts/action@v1.1.1
         with:
           scope: warpdotdev/warp
           identity: release-changelog
@@ -2966,7 +2966,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.public_github_app_auth.outputs.token }}
           INTERNAL_GH_TOKEN: ${{ steps.github_app_auth.outputs.token }}
-        uses: warpdotdev/oz-agent-action@ccb5247d8faee3d0a4b70b8a776727c8f52e2355 # main
+        uses: warpdotdev/oz-agent-action@v1.0.36
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
@@ -2985,7 +2985,7 @@ jobs:
       - name: Upload raw Markdown changelog artifact (stable only)
         if: inputs.channel == 'stable'
         id: upload_changelog_draft_markdown
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: changelog-draft-markdown
           path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
@@ -3076,7 +3076,7 @@ jobs:
 
       - name: Post to a Slack channel
         id: slack
-        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        uses: slackapi/slack-github-action@v4.0.0
         if: ${{ steps.build_slack_payload.outputs.has_content == 'true' }}
         # Continue on with the rest of the workflow, even if we fail to send the
         # changelog info to Slack.  (We still want to stick the changelog JSON
@@ -3116,13 +3116,13 @@ jobs:
           cat changelog.json
         shell: bash
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: projects/643991131484/locations/global/workloadIdentityPools/github-actions/providers/warp-terraform
           service_account: github-actions@astral-field-294621.iam.gserviceaccount.com
 
       - name: Upload changelog.json to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        uses: google-github-actions/upload-cloud-storage@v3.0.0
         with:
           path: changelog.json
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
