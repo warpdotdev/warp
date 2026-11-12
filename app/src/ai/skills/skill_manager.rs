@@ -578,7 +578,16 @@ impl SkillManager {
     }
 
     pub fn handle_skills_added(&mut self, skills: Vec<ParsedSkill>) {
-        for skill in skills {
+        for mut skill in skills {
+            // A home-tier registration can also sit in a watched project directory; a watcher
+            // re-parse must not demote it to project precedence.
+            if self
+                .skills_by_path
+                .get(&skill.path)
+                .is_some_and(|existing| existing.scope == SkillScope::Home)
+            {
+                skill.scope = SkillScope::Home;
+            }
             match extract_skill_parent_directory(&skill.path) {
                 Ok(parent_dir) => {
                     self.directory_skills
