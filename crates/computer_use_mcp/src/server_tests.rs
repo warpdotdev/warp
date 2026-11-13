@@ -91,6 +91,59 @@ async fn recording_tools_are_listed_when_recording_is_enabled() {
     assert!(names.contains(&"stop_recording".to_owned()));
 }
 
+/// Transcript viewers outside this repository title tool calls from these names, so renaming
+/// a tool or an argument means updating `tool_contract.json` and those viewers together.
+#[tokio::test]
+async fn tools_match_the_published_contract() {
+    let config = ComputerUseMcpConfig {
+        recording: Some(RecordingDestination::Directory(std::env::temp_dir())),
+        ..test_config()
+    };
+    let client = connect_with_config(config, &FakeActorLog::default()).await;
+    let sorted_strings = |value: Option<&Value>, read: fn(&Value) -> Vec<String>| {
+        let mut strings = value.map(read).unwrap_or_default();
+        strings.sort();
+        strings
+    };
+    let tools: serde_json::Map<String, Value> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tool| {
+            let arguments = sorted_strings(tool.input_schema.get("properties"), |properties| {
+                properties
+                    .as_object()
+                    .map(|properties| properties.keys().cloned().collect())
+                    .unwrap_or_default()
+            });
+            let required = sorted_strings(tool.input_schema.get("required"), |required| {
+                required
+                    .as_array()
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            (
+                tool.name.to_string(),
+                json!({ "arguments": arguments, "required": required }),
+            )
+        })
+        .collect();
+    let server = client
+        .peer_info()
+        .and_then(|info| info.server_info.clone())
+        .expect("server info")
+        .name;
+    let contract: Value = serde_json::from_str(include_str!("../tool_contract.json")).unwrap();
+    assert_eq!(json!({ "server": server, "tools": tools }), contract);
+}
+
 #[tokio::test]
 async fn click_requires_coordinates() {
     let client = connect(&FakeActorLog::default()).await;

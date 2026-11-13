@@ -13,12 +13,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::ComputerUseMcpConfig;
 use crate::actions::ToolRequest;
 use crate::coords::Point;
 use crate::session::{ActorFactory, Session, SessionCommand, ToolOutput};
-
-const SERVER_NAME: &str = "warp-computer-use";
+use crate::{ComputerUseMcpConfig, SERVER_NAME};
 
 const INSTRUCTIONS: &str = "Controls this computer's mouse, keyboard, and screen. Take a \
     screenshot first: every x/y coordinate is measured in pixels of the most recent full \

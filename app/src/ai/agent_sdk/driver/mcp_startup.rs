@@ -1583,6 +1583,10 @@ fn attach_computer_use_mcp(servers: &mut ResolvedMCPServers, server: JSONMCPServ
         Entry::Vacant(entry) => {
             log::info!("Attaching the built-in computer use MCP server to this agent run");
             entry.insert(server);
+            servers.installation_ids.insert(
+                builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
+                builtin::COMPUTER_USE_MCP_INSTALLATION_UUID,
+            );
             servers.harness_settings.insert(
                 builtin::COMPUTER_USE_MCP_SERVER_NAME.to_owned(),
                 HarnessMcpSettings {
