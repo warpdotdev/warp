@@ -50,6 +50,15 @@ fn test_agent_dropdown_is_searchable() {
                 ctx,
             );
         });
+        view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("1"));
+            assert_eq!(
+                modal.agent_dropdown.as_ref(ctx).selected_item_label(),
+                Some("Default Service Account".to_string())
+            );
+            assert!(!modal.is_create_disabled(ApiKeyType::Personal, ctx));
+            assert!(!modal.is_create_disabled(ApiKeyType::Agent, ctx));
+        });
 
         // Only the 3 available agents are listed, and all are visible with no filter.
         let total = view.read(&app, |modal, ctx| modal.agent_dropdown.as_ref(ctx).len());
@@ -75,6 +84,14 @@ fn test_agent_dropdown_is_searchable() {
                 .visible_items_len_for_test(ctx)
         });
         assert_eq!(filtered, 1, "query should match only \"Ben's Agent\"");
+        view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("2"));
+            assert_eq!(
+                modal.agent_dropdown.as_ref(ctx).selected_item_label(),
+                Some("Ben's Agent".to_string())
+            );
+            assert!(!modal.is_create_disabled(ApiKeyType::Agent, ctx));
+        });
 
         // A non-matching query yields no matches.
         view.update(&mut app, |modal, ctx| {
@@ -89,6 +106,9 @@ fn test_agent_dropdown_is_searchable() {
                 .visible_items_len_for_test(ctx)
         });
         assert_eq!(none, 0);
+        view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("2"));
+        });
 
         // Clearing the query restores the full list.
         view.update(&mut app, |modal, ctx| {
@@ -134,6 +154,9 @@ fn default_agent_selection_is_restored_after_modal_reset() {
         });
 
         view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("2"));
+            assert!(!modal.is_create_disabled(ApiKeyType::Personal, ctx));
+            assert!(!modal.is_create_disabled(ApiKeyType::Agent, ctx));
             assert_eq!(
                 modal.agent_dropdown.as_ref(ctx).selected_item_label(),
                 Some("Ben's Agent".to_string())
@@ -142,6 +165,16 @@ fn default_agent_selection_is_restored_after_modal_reset() {
 
         view.update(&mut app, |modal, ctx| {
             modal.on_close(ctx);
+        });
+
+        view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx), None);
+            assert_eq!(modal.agent_dropdown.as_ref(ctx).selected_item_label(), None);
+            assert!(modal.is_create_disabled(ApiKeyType::Agent, ctx));
+            assert!(!modal.is_create_disabled(ApiKeyType::Personal, ctx));
+        });
+
+        view.update(&mut app, |modal, ctx| {
             modal.set_agents_for_test(
                 vec![
                     agent("1", "Default Service Account", true),
@@ -152,12 +185,48 @@ fn default_agent_selection_is_restored_after_modal_reset() {
         });
 
         view.read(&app, |modal, ctx| {
-            assert_eq!(modal.selected_agent_uid.as_deref(), Some("1"));
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("1"));
             assert_eq!(
                 modal.agent_dropdown.as_ref(ctx).selected_item_label(),
                 Some("Default Service Account".to_string())
             );
-            assert!(!modal.is_create_disabled(ApiKeyType::Agent));
+            assert!(!modal.is_create_disabled(ApiKeyType::Agent, ctx));
+        });
+    })
+}
+
+#[test]
+fn empty_and_loading_agent_states_disable_only_agent_key_creation() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SyncedInputState::mock());
+        app.add_singleton_model(|_| VimRegisters::new());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, CreateApiKeyModal::new);
+
+        view.update(&mut app, |modal, ctx| {
+            modal.set_agents_for_test(Vec::new(), ctx);
+        });
+
+        view.read(&app, |modal, ctx| {
+            assert!(modal.is_create_disabled(ApiKeyType::Agent, ctx));
+            assert!(!modal.is_create_disabled(ApiKeyType::Personal, ctx));
+        });
+
+        view.update(&mut app, |modal, ctx| {
+            modal.set_agents_for_test(vec![agent("1", "Default Service Account", true)], ctx);
+            modal.is_loading_agents = true;
+        });
+
+        view.read(&app, |modal, ctx| {
+            assert_eq!(modal.selected_agent_uid(ctx).as_deref(), Some("1"));
+            assert!(modal.is_create_disabled(ApiKeyType::Agent, ctx));
+            assert!(!modal.is_create_disabled(ApiKeyType::Personal, ctx));
         });
     })
 }
