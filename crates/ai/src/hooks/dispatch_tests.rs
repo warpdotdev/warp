@@ -52,7 +52,7 @@ fn snapshot(bindings: Vec<ActiveBinding>) -> Arc<RegistrySnapshot> {
     Arc::new(RegistrySnapshot {
         revision: 7,
         bindings,
-        diagnostics: Vec::new(),
+        ..Default::default()
     })
 }
 

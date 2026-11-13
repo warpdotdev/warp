@@ -76,6 +76,12 @@ impl AppExecutionMode {
         matches!(self.mode, ExecutionMode::Tui)
     }
 
+    /// Whether Warp is running as the remote server daemon, which serves SSH sessions on a
+    /// remote host and runs no agent of its own.
+    pub fn is_remote_server_daemon(&self) -> bool {
+        matches!(self.mode, ExecutionMode::RemoteServerDaemon)
+    }
+
     /// Whether Active AI features are allowed in this execution mode.
     ///
     /// Active AI should only run in interactive clients, where there's a user
@@ -153,6 +159,12 @@ impl AppExecutionMode {
     /// on a user machine.
     pub fn is_sandboxed(&self) -> bool {
         self.is_sandboxed
+    }
+
+    /// Marks a test app as sandboxed, or not, after it was built.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_sandboxed_for_test(&mut self, is_sandboxed: bool) {
+        self.is_sandboxed = is_sandboxed;
     }
 }
 
