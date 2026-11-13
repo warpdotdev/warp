@@ -10,7 +10,7 @@ use crate::hooks::adapters::cursor::test_support::{
     FULL_CONFIG, INVALID_MATCHER, completed_shell, event_fixture, fixture_envelope, json, outcome,
     shell_action, tool_pre, tool_result,
 };
-use crate::hooks::dispatch::HookDispatcher;
+use crate::hooks::dispatch::{DispatchPolicy, HookDispatcher};
 use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
 use crate::hooks::registry::{BindingScope, RegistrySnapshot};
 use crate::hooks::runner::ProcessExit;
@@ -166,8 +166,12 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
         None,
     ));
 
-    let outcome =
-        block_on(dispatcher.dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false))));
+    let outcome = block_on(dispatcher.dispatch(
+        envelope,
+        snapshot,
+        DispatchPolicy::default(),
+        Arc::new(AtomicBool::new(false)),
+    ));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(outcome.effects.unsupported.len(), 1);
 
