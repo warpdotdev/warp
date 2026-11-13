@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2855,6 +2855,191 @@ fn test_view_subscribe_then_unsubscribe_to_model_inside_callback_drops_new_subsc
                 vec!["old"],
                 "The new subscription should be removed when subscribe-then-unsubscribe happens in a callback."
             );
+        });
+    });
+}
+
+#[test]
+fn dropped_subscribers_are_removed_from_live_source_maps() {
+    struct EmitterModel;
+
+    impl Entity for EmitterModel {
+        type Event = usize;
+    }
+
+    struct SubscriberModel;
+
+    impl Entity for SubscriberModel {
+        type Event = ();
+    }
+
+    #[derive(Default)]
+    struct SubscriberView {
+        events: Vec<usize>,
+    }
+
+    impl Entity for SubscriberView {
+        type Event = ();
+    }
+
+    impl super::View for SubscriberView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "SubscriberView"
+        }
+    }
+
+    impl TypedActionView for SubscriberView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let emitter = app.add_model(|_| EmitterModel);
+        let emitter_id = emitter.id();
+
+        let (window_id, live) =
+            app.add_window(WindowStyle::NotStealFocus, |_| SubscriberView::default());
+        live.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&emitter, |view, _, event, _| {
+                view.events.push(*event);
+            });
+        });
+
+        for _ in 0..20 {
+            let model_sub = app.add_model(|_| SubscriberModel);
+            model_sub.update(&mut app, |_, ctx| {
+                ctx.subscribe_to_model(&emitter, |_, _, _, _| {});
+                ctx.observe(&emitter, |_, _, _| {});
+            });
+
+            let view_sub = app.add_view(window_id, |_| SubscriberView::default());
+            view_sub.update(&mut app, |_, ctx| {
+                ctx.subscribe_to_model(&emitter, |_, _, _, _| {});
+                ctx.observe(&emitter, |_, _, _| {});
+            });
+        }
+
+        app.update(|_| {});
+
+        app.update(|ctx| {
+            let subs = ctx.subscriptions.get(&emitter_id).map_or(0, |v| v.len());
+            let obs = ctx.observations.get(&emitter_id).map_or(0, |v| v.len());
+            assert_eq!(
+                subs, 1,
+                "dropped subscribers' subscription records leaked under the live emitter"
+            );
+            assert_eq!(
+                obs, 0,
+                "dropped subscribers' observation records leaked under the live emitter"
+            );
+        });
+
+        emitter.update(&mut app, |_, ctx| ctx.emit(1));
+        live.read(&app, |view, _| {
+            assert_eq!(view.events, vec![1]);
+        });
+    });
+}
+
+#[test]
+fn dropped_view_subscriptions_are_removed_when_drop_happens_during_another_emit() {
+    struct SilentEmitter;
+
+    impl Entity for SilentEmitter {
+        type Event = usize;
+    }
+
+    struct NoisyEmitter;
+
+    impl Entity for NoisyEmitter {
+        type Event = ();
+    }
+
+    struct DropperModel;
+
+    impl Entity for DropperModel {
+        type Event = ();
+    }
+
+    #[derive(Default)]
+    struct SubscriberView {
+        events: Vec<usize>,
+    }
+
+    impl Entity for SubscriberView {
+        type Event = ();
+    }
+
+    impl super::View for SubscriberView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "SubscriberView"
+        }
+    }
+
+    impl TypedActionView for SubscriberView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let silent = app.add_model(|_| SilentEmitter);
+        let silent_id = silent.id();
+        let noisy = app.add_model(|_| NoisyEmitter);
+
+        let (window_id, live) =
+            app.add_window(WindowStyle::NotStealFocus, |_| SubscriberView::default());
+        live.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&silent, |view, _, event, _| {
+                view.events.push(*event);
+            });
+        });
+
+        let to_drop = Rc::new(RefCell::new(None));
+        let noisy_calls = Rc::new(Cell::new(0));
+
+        let dropper = app.add_model(|_| DropperModel);
+        dropper.update(&mut app, |_, ctx| {
+            let to_drop = to_drop.clone();
+            ctx.subscribe_to_model(&noisy, move |_, _, _, _| {
+                to_drop.borrow_mut().take();
+            });
+        });
+
+        let view_sub = app.add_view(window_id, |_| SubscriberView::default());
+        view_sub.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&silent, |_, _, _, _| {});
+            let noisy_calls = noisy_calls.clone();
+            ctx.subscribe_to_model(&noisy, move |_, _, _, _| {
+                noisy_calls.set(noisy_calls.get() + 1);
+            });
+        });
+        *to_drop.borrow_mut() = Some(view_sub);
+
+        noisy.update(&mut app, |_, ctx| ctx.emit(()));
+
+        assert_eq!(
+            noisy_calls.get(),
+            1,
+            "dropped view's callback should still run for the current event"
+        );
+
+        app.update(|ctx| {
+            let subs = ctx.subscriptions.get(&silent_id).map_or(0, |v| v.len());
+            assert_eq!(
+                subs, 1,
+                "dropped view's records on a non-emitting source should be swept after another emit"
+            );
+        });
+
+        silent.update(&mut app, |_, ctx| ctx.emit(7));
+        live.read(&app, |view, _| {
+            assert_eq!(view.events, vec![7]);
         });
     });
 }
