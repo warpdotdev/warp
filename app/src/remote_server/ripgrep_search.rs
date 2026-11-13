@@ -56,13 +56,27 @@ pub(super) async fn run_search(
         params.ignore_case,
         params.multiline,
     )?;
+    Ok(collect_search_events(stream, params.match_cap).await)
+}
+
+async fn collect_search_events(
+    stream: impl futures::Stream<Item = warp_ripgrep::search::SearchEvent>,
+    match_cap: usize,
+) -> RipgrepSearchSuccess {
     futures::pin_mut!(stream);
 
     let mut matches = Vec::new();
     let mut response_bytes: usize = 0;
     let mut capped = false;
-    while let Some(m) = stream.next().await {
-        if matches.len() >= params.match_cap {
+    while let Some(event) = stream.next().await {
+        let m = match event {
+            warp_ripgrep::search::SearchEvent::Match(m) => m,
+            warp_ripgrep::search::SearchEvent::LimitReached => {
+                capped = true;
+                continue;
+            }
+        };
+        if matches.len() >= match_cap {
             capped = true;
             break;
         }
@@ -85,7 +99,7 @@ pub(super) async fn run_search(
         matches.push(m);
     }
 
-    Ok(RipgrepSearchSuccess { matches, capped })
+    RipgrepSearchSuccess { matches, capped }
 }
 
 pub(super) fn error_response(message: String) -> RipgrepSearchResponse {
