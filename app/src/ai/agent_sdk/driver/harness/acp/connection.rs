@@ -4,15 +4,17 @@
 //! agent→client requests are handed to a task that answers them through the installed handler,
 //! and notifications are queued for the owner to consume. Because the read loop pushes a
 //! notification before it reads the next line, every notification that precedes a response on
-//! the wire is queued by the time that response resolves. Agent requests never hold up the
-//! loop: a `session/request_permission` the handler is still deciding does not delay the
+//! the wire is queued by the time that response resolves. Notifications carry the same
+//! [`Arrival`] sequence responses do, so [`AcpConnection::request_discarding_replay`] drops
+//! exactly the ones that preceded its answer. Agent requests never hold up the loop: a
+//! `session/request_permission` the handler is still deciding does not delay the
 //! `session/update`s or the prompt response behind it, and the owner can answer it itself
 //! through [`AcpConnection::respond_pending`] or
 //! [`AcpConnection::cancel_pending_permission_requests`].
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot;
@@ -64,6 +66,48 @@ pub(super) type AgentRequestHandler =
 pub(super) struct InboundNotification {
     pub method: String,
     pub params: Value,
+    arrival: Arrival,
+}
+
+/// The agent's notifications in wire order, without those discarded as a replay.
+pub(super) struct Notifications {
+    queue: async_channel::Receiver<InboundNotification>,
+    /// The latest [`Arrival`] whose notifications are discarded instead of delivered. Raised by
+    /// [`AcpConnection::request_discarding_replay`]; zero, which precedes every arrival, until
+    /// then.
+    discard_through: Arc<AtomicU64>,
+}
+
+impl Notifications {
+    /// The next notification, waiting for one to arrive. Fails once the agent has closed its
+    /// side and nothing is left to deliver.
+    pub(super) async fn recv(&self) -> Result<InboundNotification, async_channel::RecvError> {
+        loop {
+            let notification = self.queue.recv().await?;
+            if self.delivers(&notification) {
+                return Ok(notification);
+            }
+        }
+    }
+
+    /// The next notification already queued, if any.
+    pub(super) fn try_recv(&self) -> Result<InboundNotification, async_channel::TryRecvError> {
+        loop {
+            let notification = self.queue.try_recv()?;
+            if self.delivers(&notification) {
+                return Ok(notification);
+            }
+        }
+    }
+
+    /// Whether the agent has closed its side.
+    pub(super) fn is_closed(&self) -> bool {
+        self.queue.is_closed()
+    }
+
+    fn delivers(&self, notification: &InboundNotification) -> bool {
+        notification.arrival.0 > self.discard_through.load(Ordering::Acquire)
+    }
 }
 
 /// The JSON-RPC id of an agent→client request. Agents may use numbers or strings; the
@@ -103,9 +147,9 @@ type BoxedWriter = Pin<Box<dyn AsyncWrite + Send>>;
 /// agent.
 type SharedWriter = Arc<AsyncMutex<Option<BufWriter<BoxedWriter>>>>;
 
-/// Where a response stood among the messages the agent wrote: of two answers, the one with the
-/// lower arrival was written first. Their futures resolve in no particular order, so this is
-/// what a caller compares when the order matters.
+/// Where a response or notification stood among the messages the agent wrote: of two, the one
+/// with the lower arrival was written first. Response futures resolve in no particular order,
+/// so this is what a caller compares when the order matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Arrival(u64);
 
@@ -118,19 +162,21 @@ pub(super) struct AcpConnection {
     writer: SharedWriter,
     pending: PendingRequests,
     inbound: InboundRequests,
+    /// Shared with the connection's [`Notifications`].
+    discard_through: Arc<AtomicU64>,
     next_request_id: AtomicI64,
     _reader_task: BackgroundTask,
 }
 
 impl AcpConnection {
     /// Starts reading agent messages from `reader` and writing ours to `writer`. Notifications
-    /// are delivered on the returned receiver in wire order.
+    /// are delivered on the returned stream.
     pub(super) fn new<R, W>(
         reader: R,
         writer: W,
         handler: AgentRequestHandler,
         executor: &Arc<Background>,
-    ) -> (Self, async_channel::Receiver<InboundNotification>)
+    ) -> (Self, Notifications)
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + 'static,
@@ -140,6 +186,7 @@ impl AcpConnection {
         ))));
         let pending: PendingRequests = Arc::new(AsyncMutex::new(HashMap::new()));
         let inbound: InboundRequests = Arc::default();
+        let discard_through = Arc::new(AtomicU64::new(0));
         let (notification_tx, notification_rx) = async_channel::unbounded();
 
         let reader_task = executor.spawn(read_loop(
@@ -156,10 +203,14 @@ impl AcpConnection {
                 writer,
                 pending,
                 inbound,
+                discard_through: discard_through.clone(),
                 next_request_id: AtomicI64::new(1),
                 _reader_task: reader_task,
             },
-            notification_rx,
+            Notifications {
+                queue: notification_rx,
+                discard_through,
+            },
         )
     }
 
@@ -175,6 +226,21 @@ impl AcpConnection {
         params: P,
     ) -> Result<R> {
         self.send_request(method, params).await?.await
+    }
+
+    /// Like [`Self::request`], for a request the agent answers only after replaying history as
+    /// notifications. Whether the answer is a result or an error, every notification the agent
+    /// wrote before it is discarded instead of delivered, and every one after it is kept. The
+    /// owner must not be consuming notifications while the request is in flight, or it would
+    /// take the replay before it is discarded.
+    pub(super) async fn request_discarding_replay<P: Serialize, R: DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: P,
+    ) -> Result<R> {
+        let (arrival, response) = self.send_sequenced_request(method, params).await?.await;
+        self.discard_through.fetch_max(arrival.0, Ordering::AcqRel);
+        response
     }
 
     /// Flushes a request and returns a future for its response, deserialized as `R`.
@@ -463,7 +529,11 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
             (None, Some(method)) => {
                 if notifications
-                    .send(InboundNotification { method, params })
+                    .send(InboundNotification {
+                        method,
+                        params,
+                        arrival: Arrival(arrivals),
+                    })
                     .await
                     .is_err()
                 {
