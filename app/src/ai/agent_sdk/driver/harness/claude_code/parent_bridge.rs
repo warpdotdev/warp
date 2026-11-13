@@ -77,8 +77,7 @@ impl AgentEventConsumer for MessageBridgeEventConsumer {
         &mut self,
         event: AgentRunEvent,
     ) -> anyhow::Result<AgentEventConsumerControlFlow> {
-        if event.is_waiting_for(&self.run_id) {
-            let waiter_run_id = &event.run_id;
+        if let Some(waiter_run_id) = event.waited_on_by(&self.run_id) {
             stage_parent_bridge_message(
                 &self.state_dir,
                 &MessageBridgeMessageRecord {

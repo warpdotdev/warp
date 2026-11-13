@@ -460,12 +460,12 @@ pub struct AgentMessageHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "WireAgentRunEvent", into = "WireAgentRunEvent")]
 pub struct AgentRunEvent {
+    #[serde(flatten)]
     pub kind: AgentRunEventKind,
-    /// The run whose lifecycle changed, or the inbox owner for mailbox events.
+    /// The run this event belongs to, including the notified run for `WaitedOn`.
     pub run_id: String,
-    /// For waiting notifications, the run being waited for.
+    /// Event-specific payload, defined by `kind`; never a subscription or routing key.
     pub ref_id: Option<String>,
     pub execution_id: Option<String>,
     pub occurred_at: String,
@@ -473,58 +473,11 @@ pub struct AgentRunEvent {
 }
 
 impl AgentRunEvent {
-    pub fn is_waiting_for(&self, recipient_run_id: &str) -> bool {
-        self.kind == AgentRunEventKind::Waiting
-            && !self.run_id.is_empty()
-            && self.ref_id.as_deref() == Some(recipient_run_id)
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct WireAgentRunEvent {
-    #[serde(flatten)]
-    kind: AgentRunEventKind,
-    run_id: String,
-    ref_id: Option<String>,
-    execution_id: Option<String>,
-    occurred_at: String,
-    sequence: i64,
-}
-
-impl From<WireAgentRunEvent> for AgentRunEvent {
-    fn from(wire: WireAgentRunEvent) -> Self {
-        // The durable waited-on record belongs to the recipient's inbox, not the waiter.
-        let (run_id, ref_id) = if wire.kind == AgentRunEventKind::Waiting {
-            (wire.ref_id.unwrap_or_default(), Some(wire.run_id))
-        } else {
-            (wire.run_id, wire.ref_id)
-        };
-        Self {
-            kind: wire.kind,
-            run_id,
-            ref_id,
-            execution_id: wire.execution_id,
-            occurred_at: wire.occurred_at,
-            sequence: wire.sequence,
+    pub fn waited_on_by(&self, recipient_run_id: &str) -> Option<&str> {
+        if self.kind != AgentRunEventKind::WaitedOn || self.run_id != recipient_run_id {
+            return None;
         }
-    }
-}
-
-impl From<AgentRunEvent> for WireAgentRunEvent {
-    fn from(event: AgentRunEvent) -> Self {
-        let (run_id, ref_id) = if event.kind == AgentRunEventKind::Waiting {
-            (event.ref_id.unwrap_or_default(), Some(event.run_id))
-        } else {
-            (event.run_id, event.ref_id)
-        };
-        Self {
-            kind: event.kind,
-            run_id,
-            ref_id,
-            execution_id: event.execution_id,
-            occurred_at: event.occurred_at,
-            sequence: event.sequence,
-        }
+        self.ref_id.as_deref().filter(|waiter| !waiter.is_empty())
     }
 }
 
@@ -546,10 +499,14 @@ pub enum AgentRunEventKind {
     Cancelled {
         reason: Option<String>,
     },
+    /// A message arrived for this run; `ref_id` is the message ID.
     NewMessage,
+    /// This run started a child; `ref_id` is the child run ID.
     ChildAgentStarted,
+    /// This run linked a session; `ref_id` is the session UUID.
     RunSessionLinked,
-    Waiting,
+    /// The event's run is being waited on; `ref_id` identifies the waiter.
+    WaitedOn,
     LegacyStarted,
     LegacyIdle,
     LegacyRestarted,
@@ -567,7 +524,7 @@ impl AgentRunEventKind {
             Self::Errored { .. } => Some(LifecycleEventType::Errored),
             Self::Blocked { .. } => Some(LifecycleEventType::Blocked),
             Self::Cancelled { .. } => Some(LifecycleEventType::Cancelled),
-            Self::Waiting => Some(LifecycleEventType::Waiting),
+            Self::WaitedOn => Some(LifecycleEventType::Waiting),
             Self::NewMessage | Self::ChildAgentStarted | Self::RunSessionLinked | Self::Unknown => {
                 None
             }
@@ -674,7 +631,7 @@ impl<'de> serde::Deserialize<'de> for AgentRunEventKind {
             WireEventType::NewMessage => Self::NewMessage,
             WireEventType::ChildAgentStarted => Self::ChildAgentStarted,
             WireEventType::RunSessionLinked => Self::RunSessionLinked,
-            WireEventType::WaitedOn => Self::Waiting,
+            WireEventType::WaitedOn => Self::WaitedOn,
             WireEventType::LegacyStarted => Self::LegacyStarted,
             WireEventType::LegacyIdle => Self::LegacyIdle,
             WireEventType::LegacyRestarted => Self::LegacyRestarted,
@@ -725,7 +682,7 @@ impl serde::Serialize for AgentRunEventKind {
             Self::NewMessage => "new_message",
             Self::ChildAgentStarted => "child_agent_started",
             Self::RunSessionLinked => "run_session_linked",
-            Self::Waiting => "run_waited_on",
+            Self::WaitedOn => "run_waited_on",
             Self::LegacyStarted => "run_started",
             Self::LegacyIdle => "run_idle",
             Self::LegacyRestarted => "run_restarted",

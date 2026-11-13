@@ -1129,10 +1129,7 @@ struct MessageWatchEvent {
 }
 
 fn waited_on_watch_event(event: &AgentRunEvent, run_id: &str) -> Option<MessageWatchEvent> {
-    if !event.is_waiting_for(run_id) {
-        return None;
-    }
-    let waiter_run_id = &event.run_id;
+    let waiter_run_id = event.waited_on_by(run_id)?;
     Some(MessageWatchEvent {
         event_type: Some("run_waited_on"),
         sequence: event.sequence,

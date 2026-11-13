@@ -3,7 +3,7 @@ use serde_json::json;
 use super::{AgentRunEvent, AgentRunEventKind};
 
 #[test]
-fn waiting_lifecycle_uses_waiter_identity_without_changing_the_inbox_wire_contract() {
+fn waited_on_preserves_recipient_and_waiter_identities() {
     let wire = json!({
         "event_type": "run_waited_on",
         "run_id": "recipient",
@@ -13,9 +13,9 @@ fn waiting_lifecycle_uses_waiter_identity_without_changing_the_inbox_wire_contra
         "sequence": 42
     });
     let event: AgentRunEvent = serde_json::from_value(wire.clone()).unwrap();
-    assert_eq!(event.kind, AgentRunEventKind::Waiting);
-    assert_eq!(event.run_id, "waiter");
-    assert_eq!(event.ref_id.as_deref(), Some("recipient"));
+    assert_eq!(event.kind, AgentRunEventKind::WaitedOn);
+    assert_eq!(event.run_id, "recipient");
+    assert_eq!(event.ref_id.as_deref(), Some("waiter"));
     assert_eq!(serde_json::to_value(event).unwrap(), wire);
 }
 

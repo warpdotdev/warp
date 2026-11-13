@@ -60,7 +60,14 @@ fn sse_backoff_escalates_then_caps() {
 
 #[test]
 fn waited_on_notifies_parent_recipient_from_child_sender() {
-    let event = make_seq_event("run_waited_on", "parent-run", Some("child-run"), 42);
+    let event = AgentRunEvent {
+        kind: AgentRunEventKind::WaitedOn,
+        run_id: "parent-run".into(),
+        ref_id: Some("child-run".into()),
+        execution_id: None,
+        occurred_at: "2026-01-01T00:00:00Z".into(),
+        sequence: 42,
+    };
     assert_eq!(
         classify_family_event(&event, "parent-run"),
         FamilyEvent::ParentSelf(event.clone())
@@ -139,7 +146,7 @@ fn waited_on_does_not_change_conversation_status() {
         None
     );
     assert_eq!(
-        AgentRunEventKind::Waiting.lifecycle_type(),
+        AgentRunEventKind::WaitedOn.lifecycle_type(),
         Some(api::LifecycleEventType::Waiting)
     );
 }

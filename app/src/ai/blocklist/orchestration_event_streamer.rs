@@ -389,8 +389,8 @@ enum FamilyEvent {
 /// become [`FamilyEvent::ParentSelf`]; everything else is
 /// [`FamilyEvent::Opaque`].
 fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEvent {
-    if event.kind == AgentRunEventKind::Waiting {
-        return if event.is_waiting_for(self_run_id) {
+    if event.kind == AgentRunEventKind::WaitedOn {
+        return if event.waited_on_by(self_run_id).is_some() {
             FamilyEvent::ParentSelf(event.clone())
         } else {
             FamilyEvent::Opaque
@@ -2836,13 +2836,15 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
     events
         .iter()
         .filter_map(|event| {
-            if event.kind == AgentRunEventKind::Waiting {
-                if !event.is_waiting_for(self_run_id) {
+            // Protocol senders identify the actor, whereas run events belong to the notified run.
+            let sender_run_id = if event.kind == AgentRunEventKind::WaitedOn {
+                event.waited_on_by(self_run_id)?
+            } else {
+                if event.run_id == self_run_id {
                     return None;
                 }
-            } else if event.run_id == self_run_id {
-                return None;
-            }
+                &event.run_id
+            };
             let lifecycle_type = event.kind.lifecycle_type()?;
             let timestamp = parse_occurred_at(&event.occurred_at);
             let detail = match &event.kind {
@@ -2874,7 +2876,7 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::NewMessage
                 | AgentRunEventKind::ChildAgentStarted
                 | AgentRunEventKind::RunSessionLinked
-                | AgentRunEventKind::Waiting
+                | AgentRunEventKind::WaitedOn
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
             let event_id = if lifecycle_type == api::LifecycleEventType::Waiting {
@@ -2888,7 +2890,7 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
             };
             Some(build_lifecycle_event(
                 event_id,
-                event.run_id.clone(),
+                sender_run_id.to_string(),
                 lifecycle_type,
                 timestamp,
                 &detail,

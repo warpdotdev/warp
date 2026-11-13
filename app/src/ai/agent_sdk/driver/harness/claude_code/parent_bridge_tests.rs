@@ -76,7 +76,7 @@ fn waited_on_is_surfaced_read_only_without_mailbox_reads_or_acknowledgments() {
 }
 
 #[test]
-fn waited_on_for_another_run_or_without_sender_is_not_staged() {
+fn waited_on_for_another_run_or_without_waiter_is_not_staged() {
     let server_api = ServerApiProvider::new_for_test().get();
     futures::executor::block_on(async move {
         let state = tempfile::tempdir().unwrap();
@@ -86,7 +86,7 @@ fn waited_on_for_another_run_or_without_sender_is_not_staged() {
             server_api,
         };
         consumer
-            .on_event(waited_on_event("other-run", Some("waiter")))
+            .on_event(waited_on_event("other-run", Some("self-run")))
             .await
             .unwrap();
         consumer
