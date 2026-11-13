@@ -14,16 +14,18 @@ pub(crate) mod test_utils;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
+use std::collections::HashMap;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
     CommandExecutionPosture, DispatchPolicy, HookDispatcher, HookEnvelope, HookMessenger,
-    HookRegistry, HookRunner, HookSurface, RegistrySnapshot, RunMetadata,
+    HookRegistry, HookRunner, HookSurface, HookTurnId, RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_fs")]
 use ai::hooks::{HookConfigWatcher, StaticTrustPolicy, watch_matrix};
@@ -39,8 +41,12 @@ use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
+use self::prompt::PendingPrompts;
+use self::session::SessionStarts;
 use self::stream::StreamObserverState;
 use self::strict_policy::StrictHookPolicy;
+use self::tool_result::ShellCompletions;
+use self::turn::TurnStops;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
@@ -93,6 +99,12 @@ pub struct HookRuntime {
     headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
+    /// The turn each conversation is in, allocated when a prompt starts a turn.
+    turn_ids: HashMap<AIConversationId, HookTurnId>,
+    session_starts: SessionStarts,
+    turn_stops: TurnStops,
+    pending_prompts: PendingPrompts,
+    shell_completions: ShellCompletions,
     #[cfg(feature = "local_fs")]
     config_watcher: Option<ModelHandle<HookConfigWatcher>>,
     #[cfg(test)]
@@ -117,6 +129,11 @@ impl HookRuntime {
             headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
+            turn_ids: HashMap::new(),
+            session_starts: SessionStarts::default(),
+            turn_stops: TurnStops::default(),
+            pending_prompts: PendingPrompts::default(),
+            shell_completions: ShellCompletions::default(),
             #[cfg(feature = "local_fs")]
             config_watcher: None,
             #[cfg(test)]
@@ -126,23 +143,92 @@ impl HookRuntime {
 
     /// The run starts when its first request goes out, which is when the first exchange is
     /// appended to a conversation. That is the latest moment before any tool can run, and it
-    /// comes after a command-line run has applied its profile.
+    /// comes after a command-line run has applied its profile. The same subscription drops a
+    /// conversation's state once the conversation is gone.
     fn subscribe_to_run_start(ctx: &mut ModelContext<Self>) {
         if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
             return;
         }
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
-            |me, _, event, ctx| {
-                if let BlocklistAIHistoryEvent::AppendedExchange {
+            |me, _, event, ctx| match event {
+                BlocklistAIHistoryEvent::AppendedExchange {
                     terminal_surface_id,
                     ..
-                } = event
-                {
-                    me.pin_for_run(Some(*terminal_surface_id), ctx);
+                } => me.pin_for_run(Some(*terminal_surface_id), ctx),
+                BlocklistAIHistoryEvent::RemoveConversation {
+                    conversation_id, ..
                 }
+                | BlocklistAIHistoryEvent::DeletedConversation {
+                    conversation_id, ..
+                } => me.forget_conversation(*conversation_id),
+                BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface {
+                    cleared_conversation_ids,
+                    ..
+                } => {
+                    for conversation_id in cleared_conversation_ids {
+                        me.forget_cleared_conversation(*conversation_id);
+                    }
+                }
+                BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+                | BlocklistAIHistoryEvent::UpgradedTask { .. }
+                | BlocklistAIHistoryEvent::ReassignedExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+                | BlocklistAIHistoryEvent::SplitConversation { .. }
+                | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+                | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces {
+                    ..
+                }
+                | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+                | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+                | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
             },
         );
+    }
+
+    /// Drops everything remembered about a conversation that no longer exists. A dispatch still
+    /// running for it is told to stop.
+    fn forget_conversation(&mut self, conversation_id: AIConversationId) {
+        self.forget_cleared_conversation(conversation_id);
+        self.turn_stops.forget(conversation_id);
+    }
+
+    /// Drops what is remembered about a conversation its surface cleared. The conversation still
+    /// exists, so a turn whose success is held keeps its hold: the surface's cancellation settles
+    /// it when the conversation was the active one, and otherwise the hooks' answer does.
+    fn forget_cleared_conversation(&mut self, conversation_id: AIConversationId) {
+        self.turn_ids.remove(&conversation_id);
+        self.session_starts.forget(conversation_id);
+        self.pending_prompts.forget(conversation_id);
+        self.shell_completions.forget(conversation_id);
+    }
+
+    /// The turn `conversation_id` is in, once a prompt has started one.
+    pub fn turn_id_for(&self, conversation_id: AIConversationId) -> Option<HookTurnId> {
+        self.turn_ids.get(&conversation_id).copied()
+    }
+
+    /// Starts a new turn for `conversation_id` and returns its id.
+    fn start_turn(&mut self, conversation_id: AIConversationId) -> HookTurnId {
+        let turn_id = HookTurnId::new();
+        self.turn_ids.insert(conversation_id, turn_id);
+        turn_id
+    }
+
+    /// The variables `conversation_id`'s `session.start` hooks asked to set, once they have run.
+    pub fn session_env_for(&self, conversation_id: AIConversationId) -> Vec<(String, String)> {
+        self.session_starts.env_for(conversation_id)
     }
 
     #[cfg(feature = "local_fs")]
@@ -430,6 +516,24 @@ fn posture_for_setting(setting: ActionPermission) -> CommandExecutionPosture {
         }
         ActionPermission::Unknown => CommandExecutionPosture::Unknown,
     }
+}
+
+/// The longest timeout among the bindings in `snapshot` that would run for `envelope`, which is
+/// how long a boundary that waits for its hooks waits. `None` when no binding would run.
+fn longest_matching_timeout(
+    snapshot: &RegistrySnapshot,
+    envelope: &HookEnvelope,
+) -> Option<Duration> {
+    snapshot
+        .bindings_for(
+            envelope.boundary(),
+            envelope.cwd.as_deref(),
+            envelope.execution_host,
+        )
+        .into_iter()
+        .filter(|active| active.adapter.matches(&active.binding, envelope))
+        .map(|active| active.binding.timeout)
+        .max()
 }
 
 // Driver checks. Unknown conversations fail every check.
