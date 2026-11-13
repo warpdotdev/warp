@@ -1,4 +1,5 @@
 use warp_core::features::FeatureFlag;
+use warpui::{App, SingletonEntity};
 
 use super::{
     BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
@@ -7,10 +8,15 @@ use super::{
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
+use crate::settings::UsageDisplayUnit;
+use crate::test_util::billing_unit::{set_charge_unit, set_usage_display_unit};
+use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
+    AiCreditsUsageSource, BillingCycleUsageEntry, ChargeUnit, WorkspaceMember,
+    WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -39,34 +45,50 @@ fn entry(
 }
 
 #[test]
-fn included_and_paid_usage_are_valued_from_exact_credits() {
+fn cents_billed_usage_uses_credit_equivalent_despite_credits_display_preference() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        set_charge_unit(&mut app, ChargeUnit::Cents);
+        set_usage_display_unit(&mut app, UsageDisplayUnit::Credits);
+
+        let mut included = viewer_user_entry();
+        included.credits_used = 120.4;
+        let mut paid = included.clone();
+        paid.cost_type = AiCreditsUsageAndCostType::Payg;
+        paid.credits_used = 5.25;
+        paid.cost_cents = 50.;
+
+        let (segments, credits, cents) = aggregate_segments([&included, &paid]);
+
+        app.read(|ctx| {
+            let charge_unit = UserWorkspaces::as_ref(ctx).charge_unit();
+            assert_eq!(
+                format_usage_cost(segments[0].credits, segments[0].cost_cents, charge_unit),
+                "$2.17"
+            );
+            assert_eq!(
+                format_usage_cost(segments[1].credits, segments[1].cost_cents, charge_unit),
+                "$0.09"
+            );
+            assert_eq!(format_usage_cost(credits, cents, charge_unit), "$2.26");
+            assert_eq!(cents, 50.);
+        });
+    });
+}
+
+#[test]
+fn credit_billed_usage_shows_charged_cost_when_credit_equivalent_flag_is_enabled() {
     let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
-    let mut included = viewer_user_entry();
-    included.credits_used = 120.4;
-    let mut paid = included.clone();
-    paid.cost_type = AiCreditsUsageAndCostType::Payg;
-    paid.credits_used = 5.25;
-    paid.cost_cents = 50.;
-
-    let (segments, credits, cents) = aggregate_segments([&included, &paid]);
-
-    assert_eq!(
-        format_usage_cost(segments[0].credits, segments[0].cost_cents),
-        "$2.17"
-    );
-    assert_eq!(
-        format_usage_cost(segments[1].credits, segments[1].cost_cents),
-        "$0.09"
-    );
-    assert_eq!(format_usage_cost(credits, cents), "$2.26");
-    assert_eq!(cents, 50.);
+    assert_eq!(format_usage_cost(125.65, 50., ChargeUnit::Credits), "$0.50");
 }
 
 #[test]
 fn usage_dollars_show_charged_cost_when_credit_equivalent_flag_is_disabled() {
     let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(false);
-    assert_eq!(format_usage_cost(120.4, 0.), "$0.00");
-    assert_eq!(format_usage_cost(125.65, 50.), "$0.50");
+    assert_eq!(format_usage_cost(120.4, 0., ChargeUnit::Cents), "$0.00");
+    assert_eq!(format_usage_cost(125.65, 50., ChargeUnit::Cents), "$0.50");
 }
 
 #[test]
