@@ -919,7 +919,9 @@ mod floors {
     use warpui::{App, SingletonEntity};
 
     use super::*;
-    use crate::ai::blocklist::hooks::testing::{HookTestApp, hook_test_app, set_working_directory};
+    use crate::ai::blocklist::hooks::test_utils::{
+        HookTestApp, hook_test_app, set_working_directory,
+    };
     use crate::workspaces::user_workspaces::UserWorkspaces;
 
     /// A project whose hook file is loaded into the registry under its root, with the session's
