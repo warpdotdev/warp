@@ -3,9 +3,9 @@ use warp_graphql::billing::CustomUsageAmounts;
 use super::parse_usage_dollars;
 
 const POLICY: CustomUsageAmounts = CustomUsageAmounts {
-    minimum_cents: 1_000,
-    maximum_cents: 1_000_000,
-    step_cents: 100,
+    min_usage_cents: 1_000,
+    max_usage_cents: 1_000_000,
+    step_usage_cents: 100,
 };
 
 #[test]

@@ -64,10 +64,10 @@ pub fn parse_usage_dollars(text: &str, policy: CustomUsageAmounts) -> Option<i32
         return None;
     }
     let cents = text.parse::<i32>().ok()?.checked_mul(100)?;
-    (policy.step_cents > 0
-        && cents >= policy.minimum_cents
-        && cents <= policy.maximum_cents
-        && cents % policy.step_cents == 0)
+    (policy.step_usage_cents > 0
+        && cents >= policy.min_usage_cents
+        && cents <= policy.max_usage_cents
+        && cents % policy.step_usage_cents == 0)
         .then_some(cents)
 }
 
@@ -378,8 +378,8 @@ impl View for CustomUsageControls {
             || {
                 format!(
                     "Enter whole USD from ${} through ${}.",
-                    policy.minimum_cents / 100,
-                    policy.maximum_cents / 100
+                    policy.min_usage_cents / 100,
+                    policy.max_usage_cents / 100
                 )
             },
             |cents| {

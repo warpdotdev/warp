@@ -17,10 +17,9 @@ enum TaskGitCredentialProvider {
 }
 
 type CustomUsageAmounts {
-  minimumCents: Int!
-  maximumCents: Int!
-  stepCents: Int!
-
+  minUsageCents: Int!
+  maxUsageCents: Int!
+  stepUsageCents: Int!
 }
 
 """

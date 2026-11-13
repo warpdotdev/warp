@@ -14,9 +14,9 @@ pub struct BillingMetadata {
 
 #[derive(cynic::QueryFragment, Debug, Clone, Copy, serde::Serialize)]
 pub struct CustomUsageAmounts {
-    pub minimum_cents: i32,
-    pub maximum_cents: i32,
-    pub step_cents: i32,
+    pub min_usage_cents: i32,
+    pub max_usage_cents: i32,
+    pub step_usage_cents: i32,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
