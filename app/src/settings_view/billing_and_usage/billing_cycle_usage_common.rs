@@ -22,7 +22,7 @@ use crate::ui_components::blended_colors;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry, WorkspaceMember,
+    BillingCycleUsageEntry, ChargeUnit, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -272,9 +272,11 @@ pub fn format_cost_cents(cents: f64) -> String {
     }
 }
 
-pub fn format_usage_cost(credits: f64, cost_cents: f64, is_enterprise_plan: bool) -> String {
+pub fn format_usage_cost(credits: f64, cost_cents: f64, charge_unit: ChargeUnit) -> String {
     format_cost_cents(
-        if FeatureFlag::CreditEquivalentBillingUsage.is_enabled() && !is_enterprise_plan {
+        if FeatureFlag::CreditEquivalentBillingUsage.is_enabled()
+            && charge_unit == ChargeUnit::Cents
+        {
             credits * CENTS_PER_CREDIT
         } else {
             cost_cents
@@ -296,7 +298,7 @@ pub fn render_section_subheader(label: &str, appearance: &Appearance) -> Box<dyn
 pub fn render_breakdown_tooltip(
     segments: &[BarSegment],
     total_credits: f64,
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -325,7 +327,7 @@ pub fn render_breakdown_tooltip(
             label,
             (
                 line.credits,
-                format_usage_cost(line.credits, line.cost_cents, is_enterprise_plan),
+                format_usage_cost(line.credits, line.cost_cents, charge_unit),
             ),
             sub,
             main,
@@ -350,7 +352,7 @@ pub fn render_breakdown_tooltip(
             format_usage_cost(
                 total_credits,
                 segments.iter().map(|segment| segment.cost_cents).sum(),
-                is_enterprise_plan,
+                charge_unit,
             ),
         ),
         main,

@@ -299,7 +299,7 @@ impl BillingCycleUsageSectionView {
     ) -> Box<dyn Element> {
         let is_admin = self.viewer_is_team_admin(app);
         let visibility = workspace.resolve_usage_visibility(is_admin);
-        let is_enterprise_plan = workspace.billing_metadata.is_enterprise_plan();
+        let charge_unit = UserWorkspaces::as_ref(app).charge_unit();
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
@@ -319,7 +319,7 @@ impl BillingCycleUsageSectionView {
             Container::new(render_team_totals_block(
                 &entries,
                 &visibility,
-                is_enterprise_plan,
+                charge_unit,
                 &self.row_mouse_states,
                 appearance,
             ))
@@ -337,7 +337,7 @@ impl BillingCycleUsageSectionView {
                 &entries,
                 &visibility,
                 source_filter,
-                is_enterprise_plan,
+                charge_unit,
                 &self.row_mouse_states,
                 appearance,
                 app,
@@ -366,7 +366,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(
             Container::new(render_own_usage_with_workspace_row(
                 &entries,
-                workspace.billing_metadata.is_enterprise_plan(),
+                UserWorkspaces::as_ref(app).charge_unit(),
                 &self.row_mouse_states,
                 appearance,
                 app,

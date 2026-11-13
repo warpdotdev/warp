@@ -24,10 +24,11 @@ use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    WorkspaceMember,
+    AiCreditsUsageSource, BillingCycleUsageEntry, ChargeUnit, UsageVisibility,
+    UsageVisibilityGranularity, WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -439,15 +440,10 @@ fn render_stacked_bar(
 /// Per-cost-type tooltip breakdown with a "Total usage" footer.
 fn render_usage_tooltip_content(
     row: &MemberUsageRow,
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    render_breakdown_tooltip(
-        &row.segments,
-        row.total_credits,
-        is_enterprise_plan,
-        appearance,
-    )
+    render_breakdown_tooltip(&row.segments, row.total_credits, charge_unit, appearance)
 }
 
 /// Small text-only tooltip surfaced on hover of the service-account info
@@ -478,7 +474,7 @@ fn render_service_account_info_tooltip(appearance: &Appearance) -> Box<dyn Eleme
 fn render_row_card(
     row: &MemberUsageRow,
     team_max_credits: f64,
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -600,7 +596,7 @@ fn render_row_card(
         format_usage_cost(
             row.total_credits,
             row.segments.iter().map(|segment| segment.cost_cents).sum(),
-            is_enterprise_plan,
+            charge_unit,
         ),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
@@ -685,20 +681,14 @@ fn render_row_card(
 fn render_member_row(
     row: &MemberUsageRow,
     team_max_credits: f64,
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     tooltip_mouse_state: MouseStateHandle,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     // No segments => no tooltip needed.
     if row.segments.is_empty() {
-        return render_row_card(
-            row,
-            team_max_credits,
-            is_enterprise_plan,
-            mouse_states,
-            appearance,
-        );
+        return render_row_card(row, team_max_credits, charge_unit, mouse_states, appearance);
     }
 
     // Pull nested hover states up so the breakdown tooltip is suppressed
@@ -717,7 +707,7 @@ fn render_member_row(
         stack.add_child(render_row_card(
             row,
             team_max_credits,
-            is_enterprise_plan,
+            charge_unit,
             mouse_states,
             appearance,
         ));
@@ -731,7 +721,7 @@ fn render_member_row(
 
         if state.is_hovered() && !info_hovered && !disabled_hovered {
             stack.add_positioned_overlay_child(
-                render_usage_tooltip_content(row, is_enterprise_plan, appearance),
+                render_usage_tooltip_content(row, charge_unit, appearance),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., -TOOLTIP_GAP),
                     ParentOffsetBounds::WindowByPosition,
@@ -807,7 +797,7 @@ fn render_source_filter_toggle(
 
 pub fn render_own_usage_with_workspace_row(
     entries: &[BillingCycleUsageEntry],
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     ctx: &AppContext,
@@ -821,7 +811,7 @@ pub fn render_own_usage_with_workspace_row(
     );
     render_member_row_list(
         std::slice::from_ref(&row),
-        is_enterprise_plan,
+        charge_unit,
         mouse_states,
         appearance,
     )
@@ -839,7 +829,12 @@ pub fn render_own_usage_solo_row(
         display_name,
         model.requests_used() as f64,
     );
-    render_member_row_list(std::slice::from_ref(&row), false, mouse_states, appearance)
+    render_member_row_list(
+        std::slice::from_ref(&row),
+        UserWorkspaces::as_ref(ctx).charge_unit(),
+        mouse_states,
+        appearance,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -848,7 +843,7 @@ pub fn render_rows(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
     ctx: &AppContext,
@@ -871,7 +866,7 @@ pub fn render_rows(
     }
     column.add_child(render_member_row_list(
         &rows,
-        is_enterprise_plan,
+        charge_unit,
         mouse_states,
         appearance,
     ));
@@ -912,7 +907,7 @@ fn render_member_header(
 
 fn render_member_row_list(
     rows: &[MemberUsageRow],
-    is_enterprise_plan: bool,
+    charge_unit: ChargeUnit,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -924,7 +919,7 @@ fn render_member_row_list(
         column.add_child(render_member_row(
             row,
             row.bar_max_credits,
-            is_enterprise_plan,
+            charge_unit,
             tooltip_state,
             mouse_states,
             appearance,
