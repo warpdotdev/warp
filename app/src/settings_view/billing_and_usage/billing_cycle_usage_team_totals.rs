@@ -203,6 +203,7 @@ fn render_card_pill_bar(
 ///   [pill stacked bar]
 fn build_team_total_card(
     summary: &TeamTotalCardSummary,
+    is_enterprise_plan: bool,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -216,7 +217,11 @@ fn build_team_total_card(
         .finish();
 
     let cost_text = Text::new_inline(
-        format_usage_cost(summary.total_credits, summary.total_cost_cents),
+        format_usage_cost(
+            summary.total_credits,
+            summary.total_cost_cents,
+            is_enterprise_plan,
+        ),
         appearance.ui_font_family(),
         24.,
     )
@@ -290,20 +295,30 @@ fn build_team_total_card(
 
 fn render_team_total_card(
     summary: &TeamTotalCardSummary,
+    is_enterprise_plan: bool,
     tooltip_mouse_state: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     if summary.segments.is_empty() {
-        return build_team_total_card(summary, appearance);
+        return build_team_total_card(summary, is_enterprise_plan, appearance);
     }
 
     Hoverable::new(tooltip_mouse_state, move |state| {
         let mut stack = Stack::new();
-        stack.add_child(build_team_total_card(summary, appearance));
+        stack.add_child(build_team_total_card(
+            summary,
+            is_enterprise_plan,
+            appearance,
+        ));
 
         if state.is_hovered() {
             stack.add_positioned_overlay_child(
-                render_breakdown_tooltip(&summary.segments, summary.total_credits, appearance),
+                render_breakdown_tooltip(
+                    &summary.segments,
+                    summary.total_credits,
+                    is_enterprise_plan,
+                    appearance,
+                ),
                 OffsetPositioning::offset_from_parent(
                     vec2f(0., -TOOLTIP_GAP),
                     ParentOffsetBounds::WindowByPosition,
@@ -322,6 +337,7 @@ fn render_team_total_card(
 fn render_team_totals_section(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
+    is_enterprise_plan: bool,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -335,7 +351,7 @@ fn render_team_totals_section(
         row.add_child(
             Expanded::new(
                 1.,
-                render_team_total_card(summary, tooltip_state, appearance),
+                render_team_total_card(summary, is_enterprise_plan, tooltip_state, appearance),
             )
             .finish(),
         );
@@ -347,6 +363,7 @@ fn render_team_totals_section(
 pub fn render_team_totals_block(
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
+    is_enterprise_plan: bool,
     mouse_states: &BillingUsageMouseStates,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -359,6 +376,7 @@ pub fn render_team_totals_block(
     column.add_child(render_team_totals_section(
         entries,
         visibility,
+        is_enterprise_plan,
         mouse_states,
         appearance,
     ));

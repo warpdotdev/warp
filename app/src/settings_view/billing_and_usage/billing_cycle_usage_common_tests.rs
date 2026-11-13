@@ -39,7 +39,7 @@ fn entry(
 }
 
 #[test]
-fn included_and_paid_usage_are_valued_from_exact_credits() {
+fn non_enterprise_included_and_paid_usage_are_valued_from_exact_credits() {
     let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
     let mut included = viewer_user_entry();
     included.credits_used = 120.4;
@@ -51,22 +51,28 @@ fn included_and_paid_usage_are_valued_from_exact_credits() {
     let (segments, credits, cents) = aggregate_segments([&included, &paid]);
 
     assert_eq!(
-        format_usage_cost(segments[0].credits, segments[0].cost_cents),
+        format_usage_cost(segments[0].credits, segments[0].cost_cents, false),
         "$2.17"
     );
     assert_eq!(
-        format_usage_cost(segments[1].credits, segments[1].cost_cents),
+        format_usage_cost(segments[1].credits, segments[1].cost_cents, false),
         "$0.09"
     );
-    assert_eq!(format_usage_cost(credits, cents), "$2.26");
+    assert_eq!(format_usage_cost(credits, cents, false), "$2.26");
     assert_eq!(cents, 50.);
+}
+
+#[test]
+fn enterprise_usage_shows_charged_cost_when_credit_equivalent_flag_is_enabled() {
+    let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(true);
+    assert_eq!(format_usage_cost(125.65, 50., true), "$0.50");
 }
 
 #[test]
 fn usage_dollars_show_charged_cost_when_credit_equivalent_flag_is_disabled() {
     let _flag = FeatureFlag::CreditEquivalentBillingUsage.override_enabled(false);
-    assert_eq!(format_usage_cost(120.4, 0.), "$0.00");
-    assert_eq!(format_usage_cost(125.65, 50.), "$0.50");
+    assert_eq!(format_usage_cost(120.4, 0., false), "$0.00");
+    assert_eq!(format_usage_cost(125.65, 50., false), "$0.50");
 }
 
 #[test]
