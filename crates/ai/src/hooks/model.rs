@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::LLMId;
-use crate::agent::action::{AIAgentActionType, FileEdit};
+use crate::agent::action::AIAgentActionType;
 use crate::agent::action_result::AIAgentActionResultType;
 
 /// Version of the JSON contract hooks see on stdin and write on stdout.
@@ -375,18 +375,15 @@ pub enum HookPayload {
     },
     ToolPre {
         action: AIAgentActionType,
-        tool_name: CanonicalToolName,
     },
     ToolResult {
         action: AIAgentActionType,
-        tool_name: CanonicalToolName,
         result: AIAgentActionResultType,
         /// How long the tool ran, when the caller measured it.
         duration: Option<Duration>,
     },
     ToolFailure {
         action: AIAgentActionType,
-        tool_name: CanonicalToolName,
         result: AIAgentActionResultType,
         /// Present when the failure is a cancellation rather than an error result.
         cancellation_reason: Option<String>,
@@ -422,87 +419,18 @@ impl HookPayload {
         }
     }
 
-    /// The canonical tool name for tool boundaries.
-    pub fn tool_name(&self) -> Option<&CanonicalToolName> {
+    /// The action for tool boundaries. Adapters derive their vendor's tool name from it.
+    pub fn action(&self) -> Option<&AIAgentActionType> {
         match self {
-            Self::ToolPre { tool_name, .. }
-            | Self::ToolResult { tool_name, .. }
-            | Self::ToolFailure { tool_name, .. } => Some(tool_name),
+            Self::ToolPre { action }
+            | Self::ToolResult { action, .. }
+            | Self::ToolFailure { action, .. } => Some(action),
             Self::SessionStart { .. }
             | Self::PromptSubmit { .. }
             | Self::TurnStop { .. }
             | Self::ResponseComplete { .. }
             | Self::ReasoningComplete { .. } => None,
         }
-    }
-}
-
-/// The tool name hooks match on and see in their input. Cursor's names are used where a Warp
-/// action maps onto one of Cursor's tools; Warp-only tools get Warp-specific names.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CanonicalToolName(String);
-
-impl CanonicalToolName {
-    pub fn for_action(action: &AIAgentActionType) -> Self {
-        let name = match action {
-            AIAgentActionType::RequestCommandOutput { .. } => "Shell".to_owned(),
-            AIAgentActionType::ReadFiles(_) => "Read".to_owned(),
-            AIAgentActionType::RequestFileEdits { file_edits, .. } => {
-                let all_deletes = !file_edits.is_empty()
-                    && file_edits
-                        .iter()
-                        .all(|edit| matches!(edit, FileEdit::Delete { .. }));
-                if all_deletes {
-                    "Delete".to_owned()
-                } else {
-                    "Write".to_owned()
-                }
-            }
-            AIAgentActionType::Grep { .. } => "Grep".to_owned(),
-            AIAgentActionType::RunAgents(_) => "Task".to_owned(),
-            AIAgentActionType::CallMCPTool { name, .. } => format!("MCP:{name}"),
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
-                "Glob".to_owned()
-            }
-            AIAgentActionType::SearchCodebase(_) => "SearchCodebase".to_owned(),
-            AIAgentActionType::ReadMCPResource { name, .. } => format!("MCPResource:{name}"),
-            AIAgentActionType::WriteToLongRunningShellCommand { .. } => "ShellWrite".to_owned(),
-            AIAgentActionType::ReadShellCommandOutput { .. } => "ShellRead".to_owned(),
-            AIAgentActionType::TransferShellCommandControlToUser { .. } => {
-                "ShellHandoff".to_owned()
-            }
-            AIAgentActionType::ReadSkill(_) => "ReadSkill".to_owned(),
-            AIAgentActionType::UseComputer(_) => "UseComputer".to_owned(),
-            AIAgentActionType::RequestComputerUse(_) => "RequestComputerUse".to_owned(),
-            AIAgentActionType::StartRecording { .. } => "StartRecording".to_owned(),
-            AIAgentActionType::StopRecording { .. } => "StopRecording".to_owned(),
-            AIAgentActionType::ReadDocuments(_) => "ReadDocuments".to_owned(),
-            AIAgentActionType::EditDocuments(_) => "EditDocuments".to_owned(),
-            AIAgentActionType::CreateDocuments(_) => "CreateDocuments".to_owned(),
-            AIAgentActionType::AskUserQuestion { .. } => "AskUserQuestion".to_owned(),
-            AIAgentActionType::SendMessageToAgent { .. } => "SendMessageToAgent".to_owned(),
-            AIAgentActionType::FetchConversation { .. } => "FetchConversation".to_owned(),
-            AIAgentActionType::WaitForEvents { .. } => "WaitForEvents".to_owned(),
-            AIAgentActionType::UploadArtifact(_) => "UploadArtifact".to_owned(),
-            AIAgentActionType::SuggestNewConversation { .. } => "SuggestNewConversation".to_owned(),
-            AIAgentActionType::SuggestPrompt(_) => "SuggestPrompt".to_owned(),
-            AIAgentActionType::InitProject => "InitProject".to_owned(),
-            AIAgentActionType::OpenCodeReview => "OpenCodeReview".to_owned(),
-            AIAgentActionType::InsertCodeReviewComments { .. } => {
-                "InsertCodeReviewComments".to_owned()
-            }
-        };
-        Self(name)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for CanonicalToolName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
     }
 }
 

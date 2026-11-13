@@ -7,9 +7,7 @@ use futures::executor::block_on;
 
 use super::*;
 use crate::agent::action::AIAgentActionType;
-use crate::hooks::model::{
-    CanonicalToolName, HookBoundary, HookPayload, HookSourceKind, HookVerdict,
-};
+use crate::hooks::model::{HookBoundary, HookPayload, HookSourceKind, HookVerdict};
 use crate::hooks::notices::HookNoticeKind;
 use crate::hooks::registry::BindingScope;
 use crate::hooks::test_util::{
@@ -27,11 +25,7 @@ fn shell_envelope() -> HookEnvelope {
         rationale: None,
         citations: Vec::new(),
     };
-    let tool_name = CanonicalToolName::for_action(&action);
-    test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action, tool_name },
-    )
+    test_envelope(AIConversationId::new(), HookPayload::ToolPre { action })
 }
 
 struct Harness {

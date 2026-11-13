@@ -5,7 +5,7 @@ use warpui::App;
 
 use super::*;
 use crate::ai::agent::CancellationReason;
-use crate::ai::blocklist::hooks::testing::{
+use crate::ai::blocklist::hooks::test_utils::{
     add_child_conversation, hook_test_app, install_test_hooks, shell_action,
 };
 use crate::features::FeatureFlag;
@@ -37,13 +37,11 @@ fn tool_pre_envelope_carries_the_action_and_common_fields() {
         assert!(envelope.roots.is_empty());
         let HookPayload::ToolPre {
             action: payload_action,
-            tool_name,
         } = &envelope.payload
         else {
             panic!("expected a tool.pre payload");
         };
         assert_eq!(payload_action, &action.action);
-        assert_eq!(tool_name.as_str(), "Shell");
     });
 }
 
