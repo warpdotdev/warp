@@ -126,7 +126,20 @@ pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
     conversation_id: &ServerConversationToken,
     client: Arc<dyn HarnessSupportClient>,
 ) -> Result<E, AgentDriverError> {
-    let bytes = client.fetch_transcript().await.map_err(|err| {
+    let bytes = fetch_transcript_bytes(harness_label, conversation_id, client).await?;
+    serde_json::from_slice(&bytes).map_err(|err| {
+        AgentDriverError::ConversationLoadFailed(format!(
+            "Failed to deserialize {harness_label} transcript for {conversation_id}: {err:#}"
+        ))
+    })
+}
+
+async fn fetch_transcript_bytes(
+    harness_label: &str,
+    conversation_id: &ServerConversationToken,
+    client: Arc<dyn HarnessSupportClient>,
+) -> Result<bytes::Bytes, AgentDriverError> {
+    client.fetch_transcript().await.map_err(|err| {
         // A 404 from the server maps to "no stored transcript" so the CLI can tell
         // the user the prior run never saved state.
         let message = format!("{err:#}").to_lowercase();
@@ -138,11 +151,6 @@ pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
         } else {
             AgentDriverError::ConversationLoadFailed(format!("{err:#}"))
         }
-    })?;
-    serde_json::from_slice(&bytes).map_err(|err| {
-        AgentDriverError::ConversationLoadFailed(format!(
-            "Failed to deserialize {harness_label} transcript for {conversation_id}: {err:#}"
-        ))
     })
 }
 

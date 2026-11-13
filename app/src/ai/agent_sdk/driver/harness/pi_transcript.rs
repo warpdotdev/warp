@@ -1,10 +1,82 @@
 use std::fs::{self, File};
-use std::io::{BufRead as _, BufReader, Read as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use serde_json::Value;
+use anyhow::{Context as _, Result, ensure};
+use chrono::Utc;
+use serde_json::{Value, json};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
+
+pub(super) fn rehydrate_pi_transcript(transcript: &[u8], root: &Path, cwd: &Path) -> Result<Uuid> {
+    let header: Value = serde_json::from_slice(
+        transcript
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default(),
+    )
+    .context("Failed to parse Pi session header")?;
+    ensure!(header["type"] == "session", "Missing Pi session header");
+    let native_id = header["id"]
+        .as_str()
+        .context("Missing Pi session id")?
+        .parse::<Uuid>()
+        .context("Invalid Pi session id")?;
+    ensure!(
+        header["cwd"]
+            .as_str()
+            .is_some_and(|path| Path::new(path) == cwd),
+        "Pi session working directory does not match the run"
+    );
+
+    let map_path = session_map_path().context("Could not locate pi-acp session map")?;
+    let mut map: Value = match fs::read(&map_path) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).context("Failed to parse pi-acp session map")?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            json!({"version": 1, "sessions": {}})
+        }
+        Err(error) => return Err(error).context("Failed to read pi-acp session map"),
+    };
+    ensure!(
+        map["version"] == 1 && map["sessions"].is_object(),
+        "Unsupported pi-acp session map"
+    );
+
+    let sessions = root.join("sessions");
+    fs::create_dir_all(&sessions).context("Failed to create Pi session directory")?;
+    let mut file = NamedTempFile::new_in(&sessions)?;
+    file.write_all(transcript)?;
+    if !transcript.ends_with(b"\n") {
+        file.write_all(b"\n")?;
+    }
+    let path = sessions.join(format!("{native_id}.jsonl"));
+    file.persist(&path).map_err(|error| error.error)?;
+    let path = path.canonicalize()?;
+
+    // The native transcript does not retain pi-acp's independently generated session id.
+    let session_id = Uuid::new_v4();
+    map["sessions"][session_id.to_string()] = json!({
+        "sessionId": session_id,
+        "cwd": cwd,
+        "sessionFile": path,
+        "updatedAt": Utc::now().to_rfc3339(),
+    });
+    let map_dir = map_path
+        .parent()
+        .context("Invalid pi-acp session map path")?;
+    fs::create_dir_all(map_dir)?;
+    let mut file = NamedTempFile::new_in(map_dir)?;
+    serde_json::to_writer(&mut file, &map)?;
+    file.flush()?;
+    file.persist(map_path).map_err(|error| error.error)?;
+    Ok(session_id)
+}
+
+fn session_map_path() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".pi/pi-acp/session-map.json"))
+}
 
 pub(super) fn find_session_file(root: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
     let session_dir = root.join("sessions");
@@ -39,7 +111,7 @@ pub(super) fn find_session_file(root: &Path, cwd: &Path, session_id: Uuid) -> Op
 
 fn mapped_session_file(session_dir: &Path, cwd: &Path, session_id: Uuid) -> Option<PathBuf> {
     // pi-acp keeps its map under HOME even when Pi's session directory is overridden.
-    let map_path = dirs::home_dir()?.join(".pi/pi-acp/session-map.json");
+    let map_path = session_map_path()?;
     let map: Value = serde_json::from_slice(&fs::read(map_path).ok()?).ok()?;
     if map["version"] != 1 {
         return None;
@@ -73,3 +145,7 @@ fn session_header(path: &Path, cwd: &Path) -> Option<Uuid> {
         .as_str()
         .and_then(|id| Uuid::parse_str(id).ok())
 }
+
+#[cfg(test)]
+#[path = "pi_transcript_tests.rs"]
+mod tests;

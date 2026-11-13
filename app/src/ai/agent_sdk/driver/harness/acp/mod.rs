@@ -74,8 +74,8 @@ use self::protocol::{
     WriteTextFileParams,
 };
 use self::resume::{
-    PendingRehydration, PhaseClock, ReopenMethod, SessionOrigin, open_session, plan_session,
-    restorable_transcript,
+    PendingRehydration, PhaseClock, ReopenMethod, ResumeMiss, SessionOrigin, open_session,
+    plan_session, restorable_transcript,
 };
 use self::turn_driver::{
     EXIT_CANCEL_DEADLINE, STEER_CANCEL_DEADLINE, STEER_SETTLE_DEADLINE, TurnCancellation,
@@ -847,19 +847,22 @@ impl HarnessRunner for AcpHarnessRunner {
         // waits for it only once the agent has said it can reopen a session. Returning early
         // drops it, which aborts it.
         let rehydration = restored.as_ref().map(|restored| {
-            restorable_transcript(
+            let kind = restorable_transcript(
                 CliTranscriptKind::for_harness(self.harness),
                 self.cli_session.is_some(),
-            )
-            .map(|kind| {
-                PendingRehydration::spawn(
-                    &background,
-                    kind,
-                    restored.server_id.clone(),
-                    self.client.clone(),
-                    self.harness_working_dir.clone(),
-                )
-            })
+            )?;
+            let cli = self
+                .cli_session
+                .as_ref()
+                .ok_or(ResumeMiss::TranscriptRootUnresolved(kind))?;
+            Ok(PendingRehydration::spawn(
+                &background,
+                kind,
+                restored.server_id.clone(),
+                self.client.clone(),
+                self.harness_working_dir.clone(),
+                cli.root.clone(),
+            ))
         });
 
         let programs = self
