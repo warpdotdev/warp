@@ -257,7 +257,7 @@ async fn input_is_logged_while_recording() {
     let recorded: Vec<_> = log.batches().iter().map(|batch| batch.recorded).collect();
     // The screenshot isn't input, so only the key press and the click are recorded.
     assert_eq!(recorded, [false, true, true]);
-    let actions = session.active_recording().unwrap().actions();
+    let actions = session.active_recording().unwrap().action_log.entries();
     let [entry] = actions else {
         panic!("only the successful key press should be logged, got {actions:?}");
     };

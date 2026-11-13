@@ -1,15 +1,15 @@
 //! Per-connection computer-use state shared across tool calls.
 
 use computer_use::{
-    Action, ActionResult, Actor, Options, Recorder, RecordingConfig, Screenshot, TargetedAction,
-    is_meaningful_action_group, overlay_labels_for,
+    Action, ActionResult, Actor, Options, Recorder, RecordingConfig, RecordingFinalizeReason,
+    Screenshot, TargetedAction, is_meaningful_action_group, overlay_labels_for,
 };
 use serde_json::{Value, json};
 
 use crate::actions::{self, ActionPlan, Capture, PlanContext, ToolRequest};
 use crate::coords::ScreenGeometry;
 use crate::keys::KeyPlatform;
-use crate::recording::{self, ActiveRecording, StopReason};
+use crate::recording::{self, ActiveRecording};
 use crate::{ComputerUseMcpConfig, ToolError};
 
 pub(crate) type ActorFactory = Box<dyn Fn() -> Box<dyn Actor> + Send + Sync>;
@@ -139,7 +139,11 @@ impl Session {
             .recording
             .as_ref()
             .filter(|_| is_meaningful_action_group(&targeted))
-            .map(|recording| recording.begin_group(overlay_labels_for(&targeted, &plan.summary)))
+            .map(|recording| {
+                recording
+                    .action_log
+                    .begin_group(overlay_labels_for(&targeted, &plan.summary))
+            })
             .unzip();
         let options = Options {
             screenshot_params,
@@ -150,8 +154,8 @@ impl Session {
         let result = actor.perform_actions(&targeted, options).await;
         if let (Some(group), Some(recording)) = (recorded_group, self.recording.as_mut()) {
             match &result {
-                Ok(_) => recording.commit_group(group),
-                Err(_) => recording.discard_group(),
+                Ok(_) => recording.action_log.commit_group(group),
+                Err(_) => recording.action_log.discard_group(group),
             }
         }
         match result {
@@ -278,7 +282,8 @@ impl Session {
             drop(recording);
             json!({ "status": "discarded" })
         } else {
-            self.finish(recording, StopReason::Requested).await?
+            self.finish(recording, RecordingFinalizeReason::StoppedByAgent)
+                .await?
         };
         Ok(ToolOutput {
             text: summary.to_string(),
@@ -289,13 +294,16 @@ impl Session {
     /// Stops and publishes the recording in progress, if any, for when the session ends.
     pub async fn finish_recording(&mut self) -> Option<Result<Value, ToolError>> {
         let recording = self.recording.take()?;
-        Some(self.finish(recording, StopReason::SessionEnded).await)
+        Some(
+            self.finish(recording, RecordingFinalizeReason::RunEnded)
+                .await,
+        )
     }
 
     async fn finish(
         &self,
         recording: ActiveRecording,
-        reason: StopReason,
+        reason: RecordingFinalizeReason,
     ) -> Result<Value, ToolError> {
         let destination = self
             .config

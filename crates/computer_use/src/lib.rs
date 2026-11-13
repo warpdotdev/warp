@@ -9,12 +9,14 @@ mod imp;
 mod mock;
 mod noop;
 mod overlay;
+mod recording_action_log;
 #[cfg(any(macos, linux, windows))]
 mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod recording_paths;
 #[cfg(any(linux, windows))]
 mod recording_post_process;
+mod recording_prepare;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 #[cfg(any(macos, linux, windows))]
@@ -35,6 +37,8 @@ pub use overlay::{
     ActionLogEntry, PointerEvent, PointerEventKind, is_meaningful_action_group, overlay_labels_for,
 };
 pub use pathfinder_geometry::vector::Vector2I;
+pub use recording_action_log::{ActionGroup, RecordingActionLog};
+pub use recording_prepare::{PreparedRecording, prepare_recording};
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
 use thiserror::Error;
@@ -572,6 +576,52 @@ pub struct RecordingOutput {
 pub enum RecordingCompletionStatus {
     Completed,
     StoppedEarly,
+}
+
+/// Why a recording was finalized.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingFinalizeReason {
+    StoppedByAgent,
+    RunEnded,
+    LimitReached,
+    FfmpegExited,
+    RunCancelled,
+    FinalizationDropped,
+}
+
+impl RecordingFinalizeReason {
+    /// Stable, machine-readable key identifying why finalization ran, used by
+    /// the `Recording.Stopped` telemetry event. Distinct from
+    /// [`RecordingFinalizeReason::termination_reason`], which is human-readable prose.
+    pub fn telemetry_key(self) -> &'static str {
+        match self {
+            Self::StoppedByAgent => "agent_stopped",
+            Self::RunEnded => "run_ended",
+            Self::LimitReached => "limit_reached",
+            Self::FfmpegExited => "encoding_failed",
+            Self::RunCancelled => "run_cancelled",
+            Self::FinalizationDropped => "finalization_dropped",
+        }
+    }
+
+    /// Explains to the agent why the recording stopped.
+    pub fn termination_reason(self, completion_status: RecordingCompletionStatus) -> &'static str {
+        match self {
+            Self::StoppedByAgent => match completion_status {
+                RecordingCompletionStatus::Completed => "Stopped by agent",
+                RecordingCompletionStatus::StoppedEarly => {
+                    "Recording stopped before the agent requested it"
+                }
+            },
+            Self::RunEnded => {
+                "Finalized because the agent run ended without stopping the recording"
+            }
+            Self::LimitReached => "Stopped at the configured duration or size limit",
+            Self::FfmpegExited => "Capture process exited before the recording was stopped",
+            Self::RunCancelled => "Recording was interrupted when the conversation was cancelled",
+            Self::FinalizationDropped => "Recording finalization ended without producing a result",
+        }
+    }
 }
 
 #[cfg(test)]

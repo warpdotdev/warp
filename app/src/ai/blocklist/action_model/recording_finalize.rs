@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
@@ -97,28 +97,6 @@ async fn upload_recording_thumbnail(
     Ok(())
 }
 
-async fn validated_recording_for_upload(
-    raw_path: &Path,
-    processed_path: Option<PathBuf>,
-) -> Result<(PathBuf, Duration, Option<PathBuf>), computer_use::RecordingError> {
-    if let Some(processed_path) = processed_path {
-        match computer_use::finalized_video_duration(&processed_path).await {
-            Ok(duration) => {
-                return Ok((processed_path.clone(), duration, Some(processed_path)));
-            }
-            Err(error) => {
-                log::warn!(
-                    "Recording cut/overlay output validation failed; uploading original: {error}"
-                );
-                let _ = std::fs::remove_file(processed_path);
-            }
-        }
-    }
-
-    let duration = computer_use::finalized_video_duration(raw_path).await?;
-    Ok((raw_path.to_path_buf(), duration, None))
-}
-
 /// Stops capture, uploads the finalized file, and produces the result retained
 /// by the controller for all current and future callers.
 async fn finalize_recording(
@@ -141,7 +119,7 @@ async fn finalize_recording(
             _ => StopRecordingResult::Cancelled,
         };
     }
-    if recording.actions.is_empty() {
+    if recording.action_log.entries().is_empty() {
         drop(recording);
         return StopRecordingResult::Error(
             "Recording contained no committed actions; no video artifact was published."
@@ -150,7 +128,7 @@ async fn finalize_recording(
     }
     let ActiveRecording {
         handle,
-        actions,
+        action_log,
         frame_rate,
         ..
     } = recording;
@@ -160,45 +138,22 @@ async fn finalize_recording(
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
-    let local_path = output.path.clone();
-
     // Apply the post-stop smart cut (keep real action windows at 1x, drop
     // blocked/thinking gaps) and burn the remapped overlay pills into the video
     // before upload. Best-effort: on any failure the original 1x capture is
-    // uploaded unannotated (a no-cut video beats no video). The cut/overlay
-    // file, when produced, is a sibling of the mp4.
-    let processed_path = match computer_use::post_process_recording(
-        &local_path,
-        &actions,
-        (output.width, output.height),
-        output.duration,
-        frame_rate,
-    )
-    .await
-    {
-        Ok(path) if path != local_path => Some(path),
-        Ok(_) => None,
-        Err(error) => {
-            log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
-            None
-        }
-    };
-    let (upload_path, duration, overlay_path) =
-        match validated_recording_for_upload(&local_path, processed_path).await {
-            Ok(validated) => validated,
-            Err(error) => {
-                let _ = std::fs::remove_file(&local_path);
-                let _ = std::fs::remove_file(local_path.with_extension("log"));
-                return StopRecordingResult::Error(error.to_string());
-            }
+    // uploaded unannotated (a no-cut video beats no video).
+    let prepared =
+        match computer_use::prepare_recording(&output, action_log.entries(), frame_rate).await {
+            Ok(prepared) => prepared,
+            Err(error) => return StopRecordingResult::Error(error.to_string()),
         };
 
-    // Keep a handle on the finalized video path for thumbnail extraction before
-    // it is moved into the upload request; the thumbnail reads this file with
-    // ffmpeg after the video upload resolves.
-    let thumbnail_source_path = upload_path.clone();
+    // Keep a handle on the finalized video path for thumbnail extraction and
+    // cleanup before it is moved into the upload request; the thumbnail reads
+    // this file with ffmpeg after the video upload resolves.
+    let upload_path = prepared.path.clone();
     let request = FileArtifactUploadRequest {
-        path: upload_path,
+        path: prepared.path,
         run_id: None,
         conversation_id: server_conversation_token.clone(),
         title: recording.summary.clone(),
@@ -218,7 +173,7 @@ async fn finalize_recording(
     // so any error is logged and dropped.
     if let Ok(upload) = &upload_result
         && let Err(error) = upload_recording_thumbnail(
-            &thumbnail_source_path,
+            &upload_path,
             &upload.artifact.artifact_uid,
             &uploader,
             server_conversation_token.clone(),
@@ -229,21 +184,21 @@ async fn finalize_recording(
     }
     // Local files are ephemeral regardless of upload outcome. Retrying failed
     // uploads or retaining their files requires a separate persistence policy.
-    let _ = std::fs::remove_file(&local_path);
-    let _ = std::fs::remove_file(local_path.with_extension("log"));
-    if let Some(overlay_path) = overlay_path.as_ref() {
-        let _ = std::fs::remove_file(overlay_path);
+    for path in std::iter::once(&upload_path).chain(&prepared.intermediates) {
+        let _ = std::fs::remove_file(path);
     }
 
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
             artifact_uid: upload.artifact.artifact_uid,
-            duration,
+            duration: prepared.duration,
             width_px: output.width as i32,
             height_px: output.height as i32,
             size_bytes: upload.size_bytes,
             completion_status: output.completion_status,
-            termination_reason: reason.termination_reason(output.completion_status),
+            termination_reason: reason
+                .termination_reason(output.completion_status)
+                .to_owned(),
         }),
         Err(error) => StopRecordingResult::Error(format_upload_error(&error)),
     }

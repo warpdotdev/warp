@@ -141,3 +141,21 @@ async fn start_reports_unsupported_when_ffmpeg_absent() {
         other => panic!("expected RecordingError::Environment, got {other:?}"),
     }
 }
+
+#[test]
+fn termination_reasons_explain_why_the_recording_stopped() {
+    assert_eq!(
+        RecordingFinalizeReason::StoppedByAgent
+            .termination_reason(RecordingCompletionStatus::Completed),
+        "Stopped by agent"
+    );
+    assert_eq!(
+        RecordingFinalizeReason::StoppedByAgent
+            .termination_reason(RecordingCompletionStatus::StoppedEarly),
+        "Recording stopped before the agent requested it"
+    );
+    assert_eq!(
+        RecordingFinalizeReason::RunEnded.termination_reason(RecordingCompletionStatus::Completed),
+        "Finalized because the agent run ended without stopping the recording"
+    );
+}
