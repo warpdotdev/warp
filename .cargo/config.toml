@@ -21,5 +21,15 @@ rustflags = ["-C", "symbol-mangling-version=v0"]
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-args=-Wl,-headerpad_max_install_names"]
 
+# The vendored musl-cross-make toolchain used to cross-compile Linux musl
+# binaries (see script/linux/configure_musl_toolchain) does not enable a GNU
+# build-id note by default, unlike distro-patched linkers. Force one so every
+# Linux binary we ship -- notably the remote-server-daemon/CLI, which is the
+# one built with that toolchain -- carries a build-id that jemalloc_pprof heap
+# profiles (see app/src/profiling.rs) can use to join against debug info
+# offline.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-args=-Wl,--build-id=sha1"]
+
 [target.'cfg(target_family = "wasm")']
 rustflags = ["--cfg=web_sys_unstable_apis"]
