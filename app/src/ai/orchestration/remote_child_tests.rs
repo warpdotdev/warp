@@ -16,7 +16,7 @@ use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::blocklist::hooks::HookRuntime;
 use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
-use crate::ai::blocklist::hooks::testing::{TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::test_utils::{TestHooks, install_test_hooks};
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;

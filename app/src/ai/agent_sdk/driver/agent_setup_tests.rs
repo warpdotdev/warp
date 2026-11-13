@@ -20,7 +20,7 @@ use super::super::environment::WorkspaceConfiguration;
 use super::super::terminal::TerminalDriver;
 use super::*;
 use crate::ai::blocklist::hooks::HookRuntime;
-use crate::ai::blocklist::hooks::testing::install_test_hooks;
+use crate::ai::blocklist::hooks::test_utils::install_test_hooks;
 use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;

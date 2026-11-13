@@ -57,7 +57,7 @@ use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::hooks::testing::{self, TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::test_utils::{self, TestHooks, install_test_hooks};
 use crate::ai::blocklist::hooks::{HeadlessAskBehavior, HookRuntime, RunSurface};
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
@@ -1939,7 +1939,7 @@ fn execute_run_does_not_fire_session_start() {
 fn a_scripted_ask_in_a_fail_run_run_ends_the_run_with_the_hook_reason() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let harness = testing::controller_harness(&mut app);
+        let harness = test_utils::controller_harness(&mut app);
         let binding = test_binding(
             test_source_id("policy"),
             HookBoundary::ToolPre,
@@ -1986,39 +1986,42 @@ fn a_scripted_ask_in_a_fail_run_run_ends_the_run_with_the_hook_reason() {
             driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
         });
 
-        let task_id = testing::root_task_id(&app, conversation_id);
+        let task_id = test_utils::root_task_id(&app, conversation_id);
         stream.update(&mut app, |stream, ctx| {
-            stream.emit_response_event_for_test(testing::stream_init_event(), ctx);
+            stream.emit_response_event_for_test(test_utils::stream_init_event(), ctx);
             stream.emit_response_event_for_test(
-                testing::create_task_with_messages(
+                test_utils::create_task_with_messages(
                     &task_id,
-                    vec![testing::shell_tool_call_message(&task_id, "rm -rf build")],
+                    vec![test_utils::shell_tool_call_message(
+                        &task_id,
+                        "rm -rf build",
+                    )],
                 ),
                 ctx,
             );
-            stream.emit_response_event_for_test(testing::done_event(), ctx);
+            stream.emit_response_event_for_test(test_utils::done_event(), ctx);
             stream.emit_after_stream_finished_for_test(ctx);
         });
 
         // The hook runs on the background executor and the action is retried when it answers,
-        // which can take longer than `testing::settle` waits on a loaded machine.
+        // which can take longer than `test_utils::settle` waits on a loaded machine.
         for _ in 0..200 {
-            if testing::conversation_status(&app, conversation_id)
+            if test_utils::conversation_status(&app, conversation_id)
                 == Some(ConversationStatus::Error)
             {
                 break;
             }
-            testing::let_background_work_settle(&mut app).await;
+            test_utils::let_background_work_settle(&mut app).await;
         }
-        testing::let_background_work_settle(&mut app).await;
+        test_utils::let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.runner.invocation_count(), 1);
         assert_eq!(
-            testing::exchange_count(&app, conversation_id),
+            test_utils::exchange_count(&app, conversation_id),
             1,
             "no request goes out after the hook ended the run"
         );
         assert_eq!(
-            testing::conversation_status(&app, conversation_id),
+            test_utils::conversation_status(&app, conversation_id),
             Some(ConversationStatus::Error)
         );
         let SDKConversationOutputStatus::Error { error } = run_exit_rx.await.unwrap() else {
@@ -2066,7 +2069,7 @@ fn a_repository_found_after_the_run_pins_is_reported_in_the_run_output() {
         });
         detection.await;
 
-        testing::settle(&mut app, |_| {
+        test_utils::settle(&mut app, |_| {
             hooks
                 .messenger
                 .diagnostics()
