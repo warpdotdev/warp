@@ -34,7 +34,8 @@ use warpui::r#async::executor::Background;
 
 use super::super::claude_transcript::{ClaudeTranscriptEnvelope, rehydrate_claude_transcript};
 use super::super::codex_transcript::{CodexTranscriptEnvelope, rehydrate_codex_transcript};
-use super::super::fetch_transcript_envelope;
+use super::super::pi_transcript::rehydrate_pi_transcript;
+use super::super::{fetch_transcript_bytes, fetch_transcript_envelope};
 use super::cli_transcript::CliTranscriptKind;
 use super::connection::{AcpConnection, RpcError};
 use super::protocol::{
@@ -173,7 +174,7 @@ pub(super) fn restorable_transcript(
     root_resolved: bool,
 ) -> Result<CliTranscriptKind, ResumeMiss> {
     match kind {
-        None | Some(CliTranscriptKind::Pi) => Err(ResumeMiss::Unsupported),
+        None => Err(ResumeMiss::Unsupported),
         Some(kind) if !root_resolved => Err(ResumeMiss::TranscriptRootUnresolved(kind)),
         Some(kind) => Ok(kind),
     }
@@ -196,6 +197,7 @@ pub(super) async fn rehydrate_cli_session(
     conversation_id: &ServerConversationToken,
     client: Arc<dyn HarnessSupportClient>,
     cwd: &Path,
+    root: &Path,
 ) -> Result<String, RehydrateError> {
     let cwd = cwd.to_path_buf();
     let written = match kind {
@@ -220,7 +222,16 @@ pub(super) async fn rehydrate_cli_session(
             })
             .await
         }
-        CliTranscriptKind::Pi => return Err(RehydrateError::Missed(ResumeMiss::Unsupported)),
+        CliTranscriptKind::Pi => {
+            let transcript = fetch_transcript_bytes("pi", conversation_id, client)
+                .await
+                .map_err(fetch_failure)?;
+            let root = root.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                rehydrate_pi_transcript(&transcript, &root, &cwd).map(|id| id.to_string())
+            })
+            .await
+        }
     };
     match written {
         Ok(Ok(session_id)) => Ok(session_id),
@@ -256,11 +267,12 @@ impl PendingRehydration {
         conversation_id: ServerConversationToken,
         client: Arc<dyn HarnessSupportClient>,
         cwd: PathBuf,
+        root: PathBuf,
     ) -> Self {
         let (result_tx, result) = oneshot::channel();
         let (task, abort) = background.spawn_abortable(async move {
-            let _ =
-                result_tx.send(rehydrate_cli_session(kind, &conversation_id, client, &cwd).await);
+            let _ = result_tx
+                .send(rehydrate_cli_session(kind, &conversation_id, client, &cwd, &root).await);
         });
         task.detach();
         Self { result, abort }

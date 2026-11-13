@@ -104,14 +104,14 @@ fn error_chain(error: &AgentDriverError) -> String {
 }
 
 #[test]
-fn only_claude_and_codex_transcripts_with_a_located_root_are_restorable() {
+fn harness_transcripts_with_a_located_root_are_restorable() {
     assert_eq!(
         restorable_transcript(None, true),
         Err(ResumeMiss::Unsupported)
     );
     assert_eq!(
         restorable_transcript(Some(CliTranscriptKind::Pi), true),
-        Err(ResumeMiss::Unsupported)
+        Ok(CliTranscriptKind::Pi)
     );
     assert_eq!(
         restorable_transcript(Some(CliTranscriptKind::Claude), false),
@@ -135,19 +135,48 @@ fn an_unresolved_transcript_root_names_the_startup_warning() {
 }
 
 #[tokio::test]
-async fn pi_transcripts_are_not_restored() {
-    // No expectations: fetching the transcript would panic.
-    let client = Arc::new(MockHarnessSupportClient::new());
-    let result = rehydrate_cli_session(
+#[serial_test::serial]
+async fn a_pi_transcript_is_loaded_from_the_run_directory() {
+    let home = TempDir::new().unwrap();
+    let _home = EnvVarGuard::set(
+        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+        home.path(),
+    );
+    let root = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let transcript = format!(
+        "{}\n",
+        json!({"type": "session", "version": 3, "id": Uuid::new_v4(), "cwd": cwd.path()})
+    );
+    let bytes = bytes::Bytes::from(transcript.clone());
+    let client = client_answering(move || Ok(bytes.clone()));
+
+    let session_id = rehydrate_cli_session(
         CliTranscriptKind::Pi,
         &conversation_id(),
         client,
-        Path::new("/w"),
+        cwd.path(),
+        root.path(),
     )
-    .await;
-    assert!(
-        matches!(result, Err(RehydrateError::Missed(ResumeMiss::Unsupported))),
-        "unexpected result: {result:?}"
+    .await
+    .unwrap();
+    let id = Uuid::parse_str(&session_id).unwrap();
+    let path = CliTranscriptKind::Pi
+        .locate(root.path(), cwd.path(), id)
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), transcript);
+    let (pending, result_tx, _abort) = pending_rehydration();
+    result_tx.send(Ok(session_id.clone())).unwrap();
+    let (resume, load) = LOAD_ONLY;
+    let plan = plan_session(Some(Ok(pending)), &capabilities(resume, load))
+        .await
+        .unwrap();
+    assert_eq!(
+        plan,
+        SessionPlan::Reopen {
+            method: ReopenMethod::Load,
+            session_id
+        }
     );
 }
 
@@ -160,6 +189,7 @@ async fn a_missing_transcript_is_a_miss() {
         &conversation_id(),
         client,
         Path::new("/w"),
+        Path::new("/unused"),
     )
     .await;
 
@@ -183,6 +213,7 @@ async fn a_transcript_that_cannot_be_downloaded_fails_the_run() {
             &conversation_id(),
             client,
             Path::new("/w"),
+            Path::new("/unused"),
         )
         .await;
 
@@ -211,6 +242,7 @@ async fn a_claude_session_saved_under_another_directory_fails_the_run() {
         &conversation_id(),
         client,
         Path::new("/different/cwd"),
+        config_dir.path(),
     )
     .await;
 
@@ -236,6 +268,7 @@ async fn a_claude_session_is_written_back_where_the_cli_resumes_it() {
         &conversation_id(),
         client,
         cwd.path(),
+        config_dir.path(),
     )
     .await;
 
