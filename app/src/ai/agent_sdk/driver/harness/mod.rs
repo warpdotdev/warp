@@ -52,6 +52,7 @@ pub(crate) mod exit_escalation;
 mod gemini;
 mod harness_persistence;
 mod json_utils;
+pub(crate) mod launch_warmup;
 mod pi;
 mod pi_transcript;
 mod pi_usage;
@@ -221,6 +222,12 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// harness that is not driven over ACP, which never falls back.
     fn acp_adapter(&self) -> Option<AcpAdapter> {
         None
+    }
+
+    /// Directories holding the files this harness loads when it launches, for reading ahead of
+    /// the launch. Empty when they are not known.
+    fn launch_file_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     /// Whether the harness runs as an interactive CLI agent in the terminal whose progress is

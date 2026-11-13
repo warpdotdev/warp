@@ -45,6 +45,7 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
 };
+use crate::ai::agent_sdk::driver::harness::launch_warmup::LaunchFileWarmup;
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
@@ -2430,6 +2431,12 @@ impl AgentDriver {
                     )
                 }
                 WorkspaceState::Pending(mut workspace) => {
+                    let launch_file_warmup = match &task.harness {
+                        HarnessKind::ThirdParty(harness) => {
+                            LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
+                        }
+                        HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
+                    };
                     Self::initialize_setup_vars(&foreground, true).await?;
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
@@ -2488,6 +2495,11 @@ impl AgentDriver {
                             return Err(error);
                         }
                     };
+                    // The harness launch is next, and an unfinished warm-up would compete with
+                    // it for the same storage.
+                    if let Some(warmup) = &launch_file_warmup {
+                        warmup.stop();
+                    }
                     Self::read_setup_vars(
                         &foreground,
                         true,

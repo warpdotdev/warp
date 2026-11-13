@@ -366,6 +366,9 @@ pub(crate) enum SetupStep {
     SkillsDirsLoading,
     SkillReferenceResolution,
     ConversationResumeLoading,
+    /// Reading a third-party harness's launch files into the file cache, in the background
+    /// while the workspace is prepared.
+    HarnessLaunchFileWarmup,
     ThirdPartyHarnessPreparation,
     /// Launching the harness through command startup and ACP runner initialization, including
     /// conversation binding and first-turn setup for ACP harnesses.
@@ -419,7 +422,8 @@ impl SetupStep {
             | Self::InitialGlobalMcpReadiness
             | Self::EnvironmentSkillLoading
             | Self::GlobalSkillLoading
-            | Self::SkillsDirsLoading => SetupScope::Agent,
+            | Self::SkillsDirsLoading
+            | Self::HarnessLaunchFileWarmup => SetupScope::Agent,
             // Task metadata and attachments are run-scoped, and this step reaches secrets and
             // git credentials through task-keyed APIs even though the server resolves both
             // from agent-scoped inputs. `AgentCredentialsFetch` is the pre-warmed equivalent.
@@ -526,6 +530,9 @@ impl SetupStep {
             }
             Self::ConversationResumeLoading => {
                 span_and_name!("setup_conversation_resume_loading")
+            }
+            Self::HarnessLaunchFileWarmup => {
+                span_and_name!("setup_harness_launch_file_warmup")
             }
             Self::ThirdPartyHarnessPreparation => {
                 span_and_name!("setup_third_party_harness_preparation")

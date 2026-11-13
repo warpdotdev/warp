@@ -124,6 +124,14 @@ const MAA_FORMAT: &str = "maa";
 /// refused resume), each counted from the phase's start.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// [`ThirdPartyHarness::launch_file_roots`] for the sidecar mounted for `harness`, for callers
+/// that run before the harness itself is built. Empty when no sidecar manifest is present.
+pub(crate) fn sidecar_launch_file_roots(harness: Harness) -> Vec<PathBuf> {
+    manifest::resolve(harness)
+        .map(|manifest| manifest.launch_file_roots())
+        .unwrap_or_default()
+}
+
 /// A third-party harness driven over ACP with manifest-defined launch and setup metadata.
 pub(super) struct AcpHarness {
     harness: Harness,
@@ -317,6 +325,10 @@ impl ThirdPartyHarness for AcpHarness {
                 TransportFallbackReason::NoSidecar
             },
         ))
+    }
+
+    fn launch_file_roots(&self) -> Vec<PathBuf> {
+        self.manifest.launch_file_roots()
     }
 
     fn auth_check_command(&self) -> Option<String> {
