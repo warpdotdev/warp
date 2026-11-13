@@ -27,6 +27,7 @@ use session_sharing_protocol::common::ProfileData;
 #[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
+use warp_multi_agent_api::external_message::Platform;
 use warp_multi_agent_api::query_author::Principal;
 use warp_multi_agent_api::user_query_origin::Variant;
 use warp_multi_agent_api::{AgentType, IdentityResolution};
@@ -187,6 +188,11 @@ impl BaseUserQuery {
             Some(Variant::WarpClient(_) | Variant::PublicApi(_) | Variant::ExternalPlatform(_)) => {
                 author_uid
             }
+            Some(Variant::Automation(automation))
+                if self.is_human_slack_automation_message(&automation.matched_event_kind) =>
+            {
+                author_uid
+            }
             Some(
                 Variant::ParentAgent(_)
                 | Variant::Schedule(_)
@@ -207,6 +213,29 @@ impl BaseUserQuery {
              [/Query identity]\n\n\
              {prompt}"
         )
+    }
+
+    fn is_human_slack_automation_message(&self, matched_event_kind: &str) -> bool {
+        let Some(source) = self.0.source_message.as_ref() else {
+            return false;
+        };
+        let Some(Platform::Slack(slack)) = source.platform.as_ref() else {
+            return false;
+        };
+        slack.reaction.is_empty()
+            && source
+                .sender
+                .as_ref()
+                .is_some_and(|sender| !sender.id.is_empty())
+            && !self.resolved_author_uid().is_empty()
+            && matches!(
+                matched_event_kind,
+                "slack/app_mention"
+                    | "slack/message_dm"
+                    | "slack/message_im"
+                    | "slack/message_mpim"
+                    | "slack/message_posted"
+            )
     }
 
     fn resolved_author_uid(&self) -> &str {
