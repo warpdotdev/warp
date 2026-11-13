@@ -9,7 +9,6 @@
 //! reading the transcript under the ACP session id, which stops at the restart.
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -22,7 +21,7 @@ use super::super::pi::PI_CODING_AGENT_DIR_ENV;
 use super::super::pi_transcript::find_session_file as find_pi_session_file;
 use super::super::transcript_persistence::{CapturedTranscript, UploadedTranscriptUsage};
 use super::super::usage_reporting::CaptureIdentity;
-use super::super::{claude_code, codex};
+use super::super::{claude_usage, codex_usage, pi_usage};
 
 /// The CLI transcript format an ACP harness produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,16 +91,14 @@ impl CliTranscriptKind {
     ) -> Result<CapturedTranscript> {
         match self {
             Self::Codex => {
-                codex::capture_transcript_with_usage(session_id, path, is_final, identity)
+                codex_usage::capture_transcript_with_usage(session_id, path, is_final, identity)
             }
-            Self::Claude => claude_code::capture_transcript_with_usage(
+            Self::Claude => claude_usage::capture_transcript_with_usage(
                 session_id, cwd, root, None, is_final, identity,
             ),
-            Self::Pi => Ok(CapturedTranscript {
-                transcript_body: fs::read(path)?,
-                usage_request: None,
-                needs_retry: false,
-            }),
+            Self::Pi => {
+                pi_usage::capture_transcript_with_usage(session_id, path, is_final, identity)
+            }
         }
     }
 
