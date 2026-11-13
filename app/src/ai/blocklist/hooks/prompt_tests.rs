@@ -5,7 +5,7 @@ use warpui::{App, SingletonEntity};
 use super::*;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, settle};
+use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle};
 use crate::features::FeatureFlag;
 
 #[test]

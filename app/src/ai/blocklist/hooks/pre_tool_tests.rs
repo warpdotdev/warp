@@ -5,7 +5,7 @@ use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::hooks::testing::{HookTestApp, hook_test_app, shell_action};
+use crate::ai::blocklist::hooks::test_utils::{HookTestApp, hook_test_app, shell_action};
 use crate::features::FeatureFlag;
 
 fn install_shell_deny(harness: &HookTestApp, app: &mut App, reason: &str) {

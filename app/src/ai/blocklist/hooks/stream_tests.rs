@@ -7,7 +7,7 @@ use warp_multi_agent_api::message::{AgentOutput, AgentReasoning, ToolCall};
 use warpui::App;
 
 use super::*;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, settle};
+use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle};
 use crate::features::FeatureFlag;
 
 fn stream_id() -> ResponseStreamId {

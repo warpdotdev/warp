@@ -247,7 +247,7 @@ mod hooks {
     use crate::ai::agent::{AIAgentAction, AIAgentActionResult, AIAgentActionResultType};
     use crate::ai::blocklist::RecordingController;
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
-    use crate::ai::blocklist::hooks::testing::{
+    use crate::ai::blocklist::hooks::test_utils::{
         HookTestApp, hook_test_app, init_project_action, let_background_work_settle, settle,
         shell_action,
     };

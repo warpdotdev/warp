@@ -1098,7 +1098,7 @@ mod hooks {
     use crate::ai::agent::AIAgentInput;
     use crate::ai::agent::conversation::AIConversationId;
     use crate::ai::blocklist::BlocklistAIHistoryModel;
-    use crate::ai::blocklist::hooks::testing::{
+    use crate::ai::blocklist::hooks::test_utils::{
         TestHooks, install_test_hooks, let_background_work_settle, settle,
     };
     use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
