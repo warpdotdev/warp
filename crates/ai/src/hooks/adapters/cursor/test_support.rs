@@ -14,7 +14,7 @@ use crate::LLMId;
 use crate::agent::action::AIAgentActionType;
 use crate::agent::action_result::{AIAgentActionResultType, RequestCommandOutputResult};
 use crate::hooks::adapters::DeclaredBinding;
-use crate::hooks::model::{CanonicalToolName, HookEnvelope, HookPayload};
+use crate::hooks::model::{HookEnvelope, HookPayload};
 use crate::hooks::runner::{HookProcessOutcome, ProcessExit};
 use crate::hooks::test_util::{test_envelope, test_source_id};
 
@@ -108,8 +108,7 @@ pub(super) fn mcp_action(name: &str, input: serde_json::Value) -> AIAgentActionT
 }
 
 pub(super) fn tool_pre(action: AIAgentActionType) -> HookPayload {
-    let tool_name = CanonicalToolName::for_action(&action);
-    HookPayload::ToolPre { action, tool_name }
+    HookPayload::ToolPre { action }
 }
 
 pub(super) fn tool_result(
@@ -117,10 +116,8 @@ pub(super) fn tool_result(
     result: AIAgentActionResultType,
     duration: Option<Duration>,
 ) -> HookPayload {
-    let tool_name = CanonicalToolName::for_action(&action);
     HookPayload::ToolResult {
         action,
-        tool_name,
         result,
         duration,
     }
@@ -131,10 +128,8 @@ pub(super) fn tool_failure(
     result: AIAgentActionResultType,
     cancellation_reason: Option<&str>,
 ) -> HookPayload {
-    let tool_name = CanonicalToolName::for_action(&action);
     HookPayload::ToolFailure {
         action,
-        tool_name,
         result,
         cancellation_reason: cancellation_reason.map(str::to_owned),
         duration: None,

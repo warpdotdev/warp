@@ -75,7 +75,8 @@ impl CursorEvent {
 /// shared `MatcherTarget` so the adapter can distinguish variants that report the same target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MatchedValue {
-    /// The canonical tool name (`Shell`, `Read`, `MCP:<tool>`, and Warp's own names).
+    /// The adapter's tool name for the action (`Shell`, `Read`, `MCP:<tool>`, and Warp's own
+    /// names).
     ToolName,
     /// The model's full shell command.
     CommandText,

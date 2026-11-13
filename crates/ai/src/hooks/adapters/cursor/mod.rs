@@ -12,6 +12,7 @@ mod matcher;
 mod sources;
 #[cfg(test)]
 mod test_support;
+mod tool_names;
 
 use self::config::{ParsedDefinition, parse_cursor_document, parse_cursor_file};
 use self::events::CursorEvent;
