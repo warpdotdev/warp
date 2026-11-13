@@ -34,9 +34,8 @@ use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::adapter_for;
 use crate::hooks::dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher};
 use crate::hooks::model::{
-    CanonicalToolName, DiagnosticSeverity, HookBoundary, HookEnvelope, HookExecutionHost,
-    HookFormat, HookPayload, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface,
-    HookVerdict, PromptProvenance,
+    DiagnosticSeverity, HookBoundary, HookEnvelope, HookExecutionHost, HookFormat, HookPayload,
+    HookSourceId, HookSourceKind, HookSourceLocation, HookSurface, HookVerdict, PromptProvenance,
 };
 use crate::hooks::registry::{HookRegistry, SourceUpdate};
 use crate::hooks::runner::ProcessExit;
@@ -228,11 +227,7 @@ fn shell_action(command: &str) -> AIAgentActionType {
 /// A `tool.pre` envelope for a shell command run at `cwd` inside the project at `root`.
 fn shell_envelope(command: &str, cwd: &Path, root: Option<&Path>) -> HookEnvelope {
     let action = shell_action(command);
-    let tool_name = CanonicalToolName::for_action(&action);
-    let mut envelope = test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action, tool_name },
-    );
+    let mut envelope = test_envelope(AIConversationId::new(), HookPayload::ToolPre { action });
     envelope.cwd = Some(cwd.to_path_buf());
     envelope.roots = root.map(Path::to_path_buf).into_iter().collect();
     envelope.action_id = Some(AIAgentActionId::from("call_1".to_owned()));

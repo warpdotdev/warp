@@ -43,7 +43,7 @@ use warpui::{
 };
 use watcher::BulkFilesystemWatcherEvent;
 
-use super::testing::{
+use super::test_utils::{
     ControllerHarness, HookTestApp, action_model, controller_harness, conversation_status,
     create_task_with_messages, done_event, exchange_count, finish_turn_with_text, hook_test_app,
     init_project_action, let_background_work_settle, record_statuses, root_task_id, shell_action,
@@ -1081,7 +1081,7 @@ printf '%s\n' "$input" >> "$PWD/audit.log""#;
                 ctx,
             );
             stream.emit_response_event_for_test(
-                super::testing::add_messages_event(
+                super::test_utils::add_messages_event(
                     &task_id,
                     vec![
                         reasoning_message(&task_id, "Thinking it over."),
