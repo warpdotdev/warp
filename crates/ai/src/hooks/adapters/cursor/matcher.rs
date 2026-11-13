@@ -1,9 +1,12 @@
 //! Cursor's matcher rule: a regex searched, unanchored and case-sensitive, against a value that
 //! depends on the event. `""`, `"*"`, and a missing matcher match everything.
 
+use std::borrow::Cow;
+
 use super::events::{CursorEventSpec, MatchedValue};
 use super::facets::{finished_shell_command, mcp_tool_call, pending_shell_command};
 use super::sources::SourceCache;
+use super::tool_names::tool_name;
 use crate::hooks::adapters::DeclaredBinding;
 use crate::hooks::model::HookEnvelope;
 
@@ -32,7 +35,7 @@ pub(super) fn binding_matches(
         Some(pattern) if matches_everything(pattern) => true,
         Some(pattern) => sources
             .regex(&binding.id.source, pattern)
-            .is_some_and(|regex| regex.is_match(value)),
+            .is_some_and(|regex| regex.is_match(&value)),
     }
 }
 
@@ -41,16 +44,17 @@ pub(super) fn binding_matches(
 pub(super) fn matched_value<'a>(
     spec: &CursorEventSpec,
     envelope: &'a HookEnvelope,
-) -> Option<&'a str> {
+) -> Option<Cow<'a, str>> {
     let payload = &envelope.payload;
     match spec.matched_value {
-        MatchedValue::ToolName => payload.tool_name().map(|tool_name| tool_name.as_str()),
+        MatchedValue::ToolName => payload.action().map(tool_name),
         MatchedValue::CommandText => pending_shell_command(payload)
-            .or_else(|| finished_shell_command(payload).map(|finished| finished.command)),
-        MatchedValue::McpToolName => mcp_tool_call(payload).map(|call| call.name),
+            .or_else(|| finished_shell_command(payload).map(|finished| finished.command))
+            .map(Cow::Borrowed),
+        MatchedValue::McpToolName => mcp_tool_call(payload).map(|call| Cow::Borrowed(call.name)),
         MatchedValue::SubagentType => None,
-        MatchedValue::Literal(literal) => Some(literal),
-        MatchedValue::Everything => Some(""),
+        MatchedValue::Literal(literal) => Some(Cow::Borrowed(literal)),
+        MatchedValue::Everything => Some(Cow::Borrowed("")),
     }
 }
 

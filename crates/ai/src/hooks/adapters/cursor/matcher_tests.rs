@@ -87,7 +87,7 @@ fn a_matcher_is_an_unanchored_case_sensitive_regex() {
 }
 
 #[test]
-fn pre_tool_use_matches_the_canonical_tool_name() {
+fn pre_tool_use_matches_the_tool_name() {
     let event = CursorEvent::PreToolUse;
     let cases: Vec<(&str, AIAgentActionType)> = vec![
         ("Shell", shell_action("ls")),
@@ -173,7 +173,7 @@ fn pre_tool_use_matches_the_canonical_tool_name() {
 }
 
 #[test]
-fn post_tool_events_match_the_canonical_tool_name_too() {
+fn post_tool_events_match_the_tool_name_too() {
     let result = tool_result(shell_action("ls"), completed_shell("ls", "", 0), None);
     assert!(matches(
         CursorEvent::PostToolUse,
@@ -353,7 +353,8 @@ fn events_without_a_matcher_target_match_every_occurrence() {
             &fixture_envelope(HookPayload::SessionStart {
                 is_background_agent: true,
             })
-        ),
+        )
+        .as_deref(),
         Some("")
     );
 }

@@ -18,6 +18,7 @@ use self::tool_input::tool_input;
 use self::tool_output::result_view;
 use super::events::{CursorEvent, CursorEventSpec};
 use super::facets::{McpCallOutcome, finished_shell_command, mcp_tool_call, pending_shell_command};
+use super::tool_names::tool_name;
 use crate::agent::action_result::{
     AIAgentActionResultType, RequestCommandOutputResult, RunAgentsResult,
 };
@@ -135,10 +136,10 @@ fn encode_session_start(envelope: &HookEnvelope, input: &mut Map<String, Value>)
 }
 
 fn encode_pre_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
-    let HookPayload::ToolPre { action, tool_name } = &envelope.payload else {
+    let HookPayload::ToolPre { action } = &envelope.payload else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name.as_str()));
+    input.insert("tool_name".to_owned(), json!(tool_name(action)));
     input.insert("tool_input".to_owned(), tool_input(action, envelope));
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
@@ -147,14 +148,13 @@ fn encode_pre_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) 
 fn encode_post_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::ToolResult {
         action,
-        tool_name,
         result,
         duration,
     } = &envelope.payload
     else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name.as_str()));
+    input.insert("tool_name".to_owned(), json!(tool_name(action)));
     input.insert("tool_input".to_owned(), tool_input(action, envelope));
     input.insert(
         "tool_output".to_owned(),
@@ -168,7 +168,6 @@ fn encode_post_tool_use(envelope: &HookEnvelope, input: &mut Map<String, Value>)
 fn encode_post_tool_use_failure(envelope: &HookEnvelope, input: &mut Map<String, Value>) {
     let HookPayload::ToolFailure {
         action,
-        tool_name,
         result,
         cancellation_reason,
         duration,
@@ -176,7 +175,7 @@ fn encode_post_tool_use_failure(envelope: &HookEnvelope, input: &mut Map<String,
     else {
         return;
     };
-    input.insert("tool_name".to_owned(), json!(tool_name.as_str()));
+    input.insert("tool_name".to_owned(), json!(tool_name(action)));
     input.insert("tool_input".to_owned(), tool_input(action, envelope));
     insert_tool_use_id(envelope, input);
     insert_cwd(envelope, input);
