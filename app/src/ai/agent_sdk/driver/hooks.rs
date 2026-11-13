@@ -539,5 +539,25 @@ pub(crate) fn write_diagnostic<W: Write>(
 }
 
 #[cfg(test)]
+impl AgentDriver {
+    /// Loads `options`' hook sources and starts the run with no initial turn, keeping whatever
+    /// messenger is already installed on `HookRuntime`.
+    pub(crate) fn start_run_with_hooks_for_test(
+        &mut self,
+        options: HookRunOptions,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<
+        futures::channel::oneshot::Receiver<super::SDKConversationOutputStatus>,
+        AgentDriverError,
+    > {
+        self.hook_options = options;
+        self.skip_initial_turn = true;
+        self.idle_on_complete = None;
+        self.load_hook_sources_for_run(ctx)?;
+        Ok(self.execute_run(super::AgentRunPrompt::Local(String::new()), ctx))
+    }
+}
+
+#[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod tests;
