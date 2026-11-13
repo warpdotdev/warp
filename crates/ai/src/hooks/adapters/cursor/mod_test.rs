@@ -7,7 +7,7 @@ use super::*;
 use crate::LLMId;
 use crate::agent::action::ReadFilesRequest;
 use crate::hooks::adapters::adapter_for;
-use crate::hooks::model::{CanonicalToolName, HookTurnId, TurnStopStatus};
+use crate::hooks::model::{HookTurnId, TurnStopStatus};
 use crate::hooks::test_util::{test_envelope, test_source_id};
 
 fn shell_action(command: &str) -> AIAgentActionType {
@@ -24,11 +24,7 @@ fn shell_action(command: &str) -> AIAgentActionType {
 
 fn shell_envelope(command: &str) -> HookEnvelope {
     let action = shell_action(command);
-    let tool_name = CanonicalToolName::for_action(&action);
-    test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action, tool_name },
-    )
+    test_envelope(AIConversationId::new(), HookPayload::ToolPre { action })
 }
 
 fn parsed(text: &str) -> ParsedHookConfig {
@@ -143,13 +139,9 @@ fn only_shell_commands_match() {
     let read = AIAgentActionType::ReadFiles(ReadFilesRequest {
         locations: Vec::new(),
     });
-    let tool_name = CanonicalToolName::for_action(&read);
     let read_envelope = test_envelope(
         AIConversationId::new(),
-        HookPayload::ToolPre {
-            action: read,
-            tool_name,
-        },
+        HookPayload::ToolPre { action: read },
     );
     assert!(!adapter.matches(binding, &read_envelope));
 

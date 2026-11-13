@@ -22,8 +22,7 @@ use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::HookConfigError;
 use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
 use crate::hooks::model::{
-    CanonicalToolName, HookBoundary, HookEnvelope, HookFormat, HookPayload, HookSourceKind,
-    HookVerdict,
+    HookBoundary, HookEnvelope, HookFormat, HookPayload, HookSourceKind, HookVerdict,
 };
 use crate::hooks::registry::HookRegistry;
 use crate::hooks::runner::ProcessExit;
@@ -99,11 +98,7 @@ fn shell_envelope(command: &str, cwd: &Path) -> HookEnvelope {
         rationale: None,
         citations: Vec::new(),
     };
-    let tool_name = CanonicalToolName::for_action(&action);
-    let mut envelope = test_envelope(
-        AIConversationId::new(),
-        HookPayload::ToolPre { action, tool_name },
-    );
+    let mut envelope = test_envelope(AIConversationId::new(), HookPayload::ToolPre { action });
     envelope.cwd = Some(cwd.to_path_buf());
     envelope.action_id = Some(AIAgentActionId::from("call_1".to_owned()));
     envelope
