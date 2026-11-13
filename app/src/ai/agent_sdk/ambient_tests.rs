@@ -35,6 +35,33 @@ use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
 
+#[test]
+fn message_watch_serializes_waited_on_as_notification_from_waiter() {
+    let event: AgentRunEvent = serde_json::from_value(serde_json::json!({
+        "event_type": "run_waited_on",
+        "run_id": "root-run",
+        "ref_id": "child-run",
+        "execution_id": null,
+        "occurred_at": "2026-11-12T00:00:00Z",
+        "sequence": 42
+    }))
+    .unwrap();
+    let record = waited_on_watch_event(&event, "root-run").unwrap();
+    assert_eq!(
+        serde_json::to_value(record).unwrap(),
+        serde_json::json!({
+            "event_type": "run_waited_on",
+            "sequence": 42,
+            "message_id": "run-waited-on-42",
+            "sender_run_id": "child-run",
+            "subject": "",
+            "body": "Run child-run is waiting for you",
+            "occurred_at": "2026-11-12T00:00:00Z"
+        })
+    );
+    assert!(waited_on_watch_event(&event, "other-run").is_none());
+}
+
 /// A `ListTasksArgs` whose fields are all at their defaults.
 fn empty_args() -> ListTasksArgs {
     ListTasksArgs {

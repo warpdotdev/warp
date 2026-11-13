@@ -1118,12 +1118,27 @@ struct MessageDeliveredResult<'a> {
 
 #[derive(Serialize)]
 struct MessageWatchEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_type: Option<&'static str>,
     sequence: i64,
     message_id: String,
     sender_run_id: String,
     subject: String,
     body: String,
     occurred_at: String,
+}
+
+fn waited_on_watch_event(event: &AgentRunEvent, run_id: &str) -> Option<MessageWatchEvent> {
+    let waiter_run_id = event.waited_on_by(run_id)?;
+    Some(MessageWatchEvent {
+        event_type: Some("run_waited_on"),
+        sequence: event.sequence,
+        message_id: format!("run-waited-on-{}", event.sequence),
+        sender_run_id: waiter_run_id.to_string(),
+        subject: String::new(),
+        body: format!("Run {waiter_run_id} is waiting for you"),
+        occurred_at: event.occurred_at.clone(),
+    })
 }
 
 fn format_optional_timestamp(timestamp: Option<&str>) -> &str {
@@ -1306,6 +1321,11 @@ async fn watch_messages_forever(
                         continue;
                     }
 
+                    if let Some(record) = waited_on_watch_event(&event, &run_id) {
+                        write_stream_record(&record)?;
+                        last_seen_sequence = event.sequence;
+                        continue;
+                    }
                     if event.kind != AgentRunEventKind::NewMessage || event.run_id != run_id {
                         last_seen_sequence = event.sequence;
                         continue;
@@ -1342,6 +1362,7 @@ async fn watch_messages_forever(
                     };
 
                     let record = MessageWatchEvent {
+                        event_type: None,
                         sequence: event.sequence,
                         message_id: message.message_id,
                         sender_run_id: message.sender_run_id,

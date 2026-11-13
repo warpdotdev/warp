@@ -59,6 +59,99 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
+fn waited_on_notifies_parent_recipient_from_child_sender() {
+    let event = AgentRunEvent {
+        kind: AgentRunEventKind::WaitedOn,
+        run_id: "parent-run".into(),
+        ref_id: Some("child-run".into()),
+        execution_id: None,
+        occurred_at: "2026-01-01T00:00:00Z".into(),
+        sequence: 42,
+    };
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::ParentSelf(event.clone())
+    );
+    let result = convert_lifecycle_events(&[event], "parent-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    assert_eq!(lifecycle.sender_agent_id, "child-run");
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
+}
+
+#[test]
+fn waited_on_notifies_child_recipient_from_parent_sender() {
+    let event = make_seq_event("run_waited_on", "child-run", Some("parent-run"), 43);
+    let result = convert_lifecycle_events(&[event], "child-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    assert_eq!(lifecycle.sender_agent_id, "parent-run");
+    assert_eq!(lifecycle.detail, Some(Detail::Waiting(())));
+}
+
+#[test]
+fn waited_on_does_not_leak_from_child_stream_to_parent() {
+    let event = make_seq_event("run_waited_on", "child-run", Some("parent-run"), 43);
+    assert_eq!(
+        classify_family_event(&event, "parent-run"),
+        FamilyEvent::Opaque
+    );
+    assert!(convert_lifecycle_events(&[event], "parent-run").is_empty());
+}
+
+#[test]
+fn waited_on_without_waiter_is_not_actionable() {
+    let event = make_run_event("run_waited_on", "self-run", None);
+    assert_eq!(
+        classify_family_event(&event, "self-run"),
+        FamilyEvent::Opaque
+    );
+    assert!(convert_lifecycle_events(&[event], "self-run").is_empty());
+    let empty = make_run_event("run_waited_on", "self-run", Some(""));
+    assert!(convert_lifecycle_events(&[empty], "self-run").is_empty());
+}
+
+#[test]
+fn waited_on_replay_preserves_event_identity() {
+    let events = [make_seq_event(
+        "run_waited_on",
+        "self-run",
+        Some("waiter"),
+        42,
+    )];
+    assert_eq!(
+        convert_lifecycle_events(&events, "self-run"),
+        convert_lifecycle_events(&events, "self-run")
+    );
+    let distinct = [make_seq_event(
+        "run_waited_on",
+        "self-run",
+        Some("waiter"),
+        43,
+    )];
+    assert_ne!(
+        convert_lifecycle_events(&events, "self-run")[0].event_id,
+        convert_lifecycle_events(&distinct, "self-run")[0].event_id
+    );
+}
+
+#[test]
+fn waited_on_does_not_change_conversation_status() {
+    assert_eq!(
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
+        None
+    );
+    assert_eq!(
+        AgentRunEventKind::WaitedOn.lifecycle_type(),
+        Some(api::LifecycleEventType::Waiting)
+    );
+}
+
+#[test]
 fn restored_local_child_observer_seed_generation() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -726,14 +819,14 @@ fn threshold_exceeded_at_and_above_limit() {
 }
 
 fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> AgentRunEvent {
-    AgentRunEvent {
-        kind: serde_json::from_value(serde_json::json!({"event_type": event_type})).unwrap(),
-        run_id: run_id.to_string(),
-        ref_id: ref_id.map(|s| s.to_string()),
-        execution_id: None,
-        occurred_at: "2026-01-01T00:00:00Z".to_string(),
-        sequence: 1,
-    }
+    serde_json::from_value(serde_json::json!({
+        "event_type": event_type,
+        "run_id": run_id,
+        "ref_id": ref_id,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1
+    }))
+    .unwrap()
 }
 
 fn make_seq_event(
@@ -2012,7 +2105,7 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
 #[test]
 fn lifecycle_event_type_in_progress_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::InProgress).unwrap(),
         ConversationStatus::InProgress
     );
 }
@@ -2020,7 +2113,7 @@ fn lifecycle_event_type_in_progress_maps_to_in_progress() {
 #[test]
 fn lifecycle_event_type_succeeded_maps_to_success() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Succeeded).unwrap(),
         ConversationStatus::Success
     );
 }
@@ -2028,7 +2121,7 @@ fn lifecycle_event_type_succeeded_maps_to_success() {
 #[test]
 fn lifecycle_event_type_failed_maps_to_error() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Failed).unwrap(),
         ConversationStatus::Error
     );
 }
@@ -2036,7 +2129,7 @@ fn lifecycle_event_type_failed_maps_to_error() {
 #[test]
 fn lifecycle_event_type_errored_maps_to_error() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Errored).unwrap(),
         ConversationStatus::Error
     );
 }
@@ -2044,7 +2137,7 @@ fn lifecycle_event_type_errored_maps_to_error() {
 #[test]
 fn lifecycle_event_type_cancelled_maps_to_cancelled() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Cancelled).unwrap(),
         ConversationStatus::Cancelled
     );
 }
@@ -2055,7 +2148,7 @@ fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
     // `blocked_action`. The wire event does not currently carry a
     // `blocked_action` payload.
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Blocked).unwrap(),
         ConversationStatus::Blocked {
             blocked_action: String::new(),
         }
@@ -2066,7 +2159,7 @@ fn lifecycle_event_type_blocked_maps_to_blocked_with_empty_action() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Started).unwrap(),
         ConversationStatus::InProgress
     );
 }
@@ -2075,7 +2168,7 @@ fn lifecycle_event_type_legacy_started_maps_to_in_progress() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Restarted).unwrap(),
         ConversationStatus::InProgress
     );
 }
@@ -2084,7 +2177,7 @@ fn lifecycle_event_type_legacy_restarted_maps_to_in_progress() {
 #[allow(deprecated)]
 fn lifecycle_event_type_legacy_idle_maps_to_success() {
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Idle).unwrap(),
         ConversationStatus::Success
     );
 }
@@ -2096,7 +2189,8 @@ fn unknown_lifecycle_maps_to_error() {
     // matching that keeps the pill bar in a defined state for any future
     // wire-level variant the client doesn't recognize.
     assert_eq!(
-        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified),
+        conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Unspecified)
+            .unwrap(),
         ConversationStatus::Error
     );
 }

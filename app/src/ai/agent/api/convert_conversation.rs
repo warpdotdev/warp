@@ -1527,7 +1527,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
-        Some(ToolCallResultType::Server(_)) => {
+        Some(ToolCallResultType::Server(_) | ToolCallResultType::DeniedByHook(_)) => {
             // Server results should not create exchanges - return None
             None
         }

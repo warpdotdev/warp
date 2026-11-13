@@ -389,6 +389,13 @@ enum FamilyEvent {
 /// become [`FamilyEvent::ParentSelf`]; everything else is
 /// [`FamilyEvent::Opaque`].
 fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEvent {
+    if event.kind == AgentRunEventKind::WaitedOn {
+        return if event.waited_on_by(self_run_id).is_some() {
+            FamilyEvent::ParentSelf(event.clone())
+        } else {
+            FamilyEvent::Opaque
+        };
+    }
     let is_self = event.run_id == self_run_id;
     match (is_self, &event.kind) {
         (true, AgentRunEventKind::ChildAgentStarted) => match event.ref_id.as_deref() {
@@ -2642,10 +2649,13 @@ impl OrchestrationEventStreamer {
             let Some(lifecycle_type) = event.kind.lifecycle_type() else {
                 continue;
             };
+            let Some(status) = conversation_status_from_lifecycle_event_type(lifecycle_type) else {
+                continue;
+            };
             ctx.emit(OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
                 owner_conversation_id: conversation_id,
                 run_id: event.run_id.clone(),
-                status: conversation_status_from_lifecycle_event_type(lifecycle_type),
+                status,
             });
         }
 
@@ -2789,11 +2799,12 @@ fn parse_occurred_at(s: &str) -> prost_types::Timestamp {
 ///
 /// `Blocked` is mapped with an empty `blocked_action`: the wire event does
 /// not currently carry a `blocked_action` payload, matching the REST path.
+/// Notifications that do not represent a status transition return `None`.
 #[allow(deprecated)]
 pub(super) fn conversation_status_from_lifecycle_event_type(
     event_type: api::LifecycleEventType,
-) -> ConversationStatus {
-    match event_type {
+) -> Option<ConversationStatus> {
+    Some(match event_type {
         // Working states. Legacy `Started` and `Restarted` collapse to
         // `InProgress`, matching `convert_lifecycle_events` above and the
         // viewer's `AmbientAgentTaskState::{Queued,Pending,Claimed,InProgress}`
@@ -2817,14 +2828,23 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
         api::LifecycleEventType::Unspecified => ConversationStatus::Error,
-    }
+        api::LifecycleEventType::Waiting => return None,
+    })
 }
 
 fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<api::AgentEvent> {
     events
         .iter()
-        .filter(|e| e.run_id != self_run_id)
         .filter_map(|event| {
+            // Protocol senders identify the actor, whereas run events belong to the notified run.
+            let sender_run_id = if event.kind == AgentRunEventKind::WaitedOn {
+                event.waited_on_by(self_run_id)?
+            } else {
+                if event.run_id == self_run_id {
+                    return None;
+                }
+                &event.run_id
+            };
             let lifecycle_type = event.kind.lifecycle_type()?;
             let timestamp = parse_occurred_at(&event.occurred_at);
             let detail = match &event.kind {
@@ -2856,12 +2876,21 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::NewMessage
                 | AgentRunEventKind::ChildAgentStarted
                 | AgentRunEventKind::RunSessionLinked
+                | AgentRunEventKind::WaitedOn
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
-            let event_id = Uuid::new_v4().to_string();
+            let event_id = if lifecycle_type == api::LifecycleEventType::Waiting {
+                Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("agent-run-event:{self_run_id}:{}", event.sequence).as_bytes(),
+                )
+                .to_string()
+            } else {
+                Uuid::new_v4().to_string()
+            };
             Some(build_lifecycle_event(
                 event_id,
-                event.run_id.clone(),
+                sender_run_id.to_string(),
                 lifecycle_type,
                 timestamp,
                 &detail,
