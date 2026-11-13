@@ -1001,6 +1001,9 @@ pub enum FeatureFlag {
     /// Warp-managed object storage.
     StoredScreenshots,
 
+    /// Runs user-configured agent hooks at fixed points in Warp's agent loop.
+    AgentHooks,
+
     /// Lets cloud agent environment checkouts build repositories from bare git
     /// mirrors kept in the persistent build cache instead of cloning each one
     /// from the remote. Disabling it restores direct, network-only checkouts.

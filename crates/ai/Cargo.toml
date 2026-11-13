@@ -12,6 +12,7 @@ test-util = []
 crash_reporting = ["dep:sentry"]
 
 [dependencies]
+ai_types.workspace = true
 async-channel.workspace = true
 async-trait.workspace = true
 bincode.workspace = true

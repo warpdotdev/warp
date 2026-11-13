@@ -1317,6 +1317,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     )
                 }
             },
+            AIAgentActionResultType::DeniedByHook { reason } => {
+                write!(f, "\n_Denied by an agent hook: {reason}_")
+            }
             AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                 WriteToLongRunningShellCommandResult::CommandFinished { output, .. } => {
                     write!(f, "\n```\n{output}\n```")
