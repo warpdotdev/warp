@@ -554,16 +554,7 @@ impl SkillManager {
         ctx: &mut ModelContext<Self>,
     ) {
         if let SkillWatcherEvent::SkillsAdded { skills } = &mut event {
-            // A watcher re-parse must not demote an explicitly selected home-tier skill.
-            for skill in skills {
-                if self
-                    .skills_by_path
-                    .get(&skill.path)
-                    .is_some_and(|existing| existing.scope == SkillScope::Home)
-                {
-                    skill.scope = SkillScope::Home;
-                }
-            }
+            self.preserve_home_tier_scope(skills);
         }
         let home_skills_changed = match &event {
             SkillWatcherEvent::SkillsAdded { skills } => {
@@ -587,6 +578,19 @@ impl SkillManager {
         ctx.emit(SkillManagerEvent::SkillsChanged {
             home_skills_changed,
         });
+    }
+
+    /// Keeps home scope on re-parsed skills already registered at the home tier.
+    fn preserve_home_tier_scope(&self, skills: &mut [ParsedSkill]) {
+        for skill in skills {
+            if self
+                .skills_by_path
+                .get(&skill.path)
+                .is_some_and(|existing| existing.scope == SkillScope::Home)
+            {
+                skill.scope = SkillScope::Home;
+            }
+        }
     }
 
     pub fn handle_skills_added(&mut self, skills: Vec<ParsedSkill>) {
