@@ -3,7 +3,7 @@ use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::{App, Element, SingletonEntity, TypedActionView, View};
 
-use super::testing::hook_test_app;
+use super::test_utils::hook_test_app;
 use super::*;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::task::TaskId;

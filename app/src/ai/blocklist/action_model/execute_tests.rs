@@ -692,7 +692,7 @@ mod hooks {
         use super::{build_executor, reason_of, try_execute};
         use crate::ai::agent::task::TaskId;
         use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
-        use crate::ai::blocklist::hooks::testing::{HookTestApp, hook_test_app};
+        use crate::ai::blocklist::hooks::test_utils::{HookTestApp, hook_test_app};
         use crate::ai::blocklist::{BlocklistAIHistoryModel, RequestInput, ResponseStreamId};
         use crate::ai::execution_profiles::ActionPermission;
         use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
