@@ -103,7 +103,7 @@ fn finished_results_stay_in_original_action_order() {
 
 mod hooks {
     use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
-    use ai::agent::action_result::{RequestCommandOutputResult, RunAgentsResult};
+    use ai::agent::action_result::RequestCommandOutputResult;
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
     use ai::hooks::{DeclaredBinding, HookBoundary, HookPayload};
     use warpui::App;
@@ -372,9 +372,9 @@ mod hooks {
             });
             assert_eq!(
                 result.map(|result| result.result.clone()),
-                Some(AIAgentActionResultType::RunAgents(
-                    RunAgentsResult::Cancelled
-                ))
+                Some(AIAgentActionResultType::DeniedByHook {
+                    reason: "not that plan".to_owned(),
+                })
             );
         });
     }
