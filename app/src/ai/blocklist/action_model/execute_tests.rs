@@ -685,7 +685,7 @@ mod hooks {
         use super::super::super::{NotExecutedReason, TryExecuteResult};
         use super::{build_executor, reason_of, shapes, try_execute};
         use crate::ai::blocklist::hooks::HookRuntime;
-        use crate::ai::blocklist::hooks::testing::{hook_test_app, settle, shell_action};
+        use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle, shell_action};
         use crate::features::FeatureFlag;
 
         #[test]
