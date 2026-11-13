@@ -21,12 +21,15 @@ use std::fmt;
 use base64::Engine as _;
 #[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use prost::Message as _;
+use serde_json::Value;
 #[cfg(any(test, feature = "local_tty"))]
 use session_sharing_protocol::common::ProfileData;
 #[cfg(any(test, feature = "local_tty", not(target_family = "wasm")))]
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
-use warp_multi_agent_api::AgentType;
+use warp_multi_agent_api::query_author::Principal;
+use warp_multi_agent_api::user_query_origin::Variant;
+use warp_multi_agent_api::{AgentType, IdentityResolution};
 
 use super::api::convert_user_query_mode;
 use super::{UserQueryMode, extract_user_query_mode};
@@ -143,6 +146,98 @@ impl BaseUserQuery {
     /// `AgentPromptRequest::prompt`.
     pub(crate) fn query(&self) -> Option<&str> {
         (!self.0.query.is_empty()).then_some(self.0.query.as_str())
+    }
+
+    /// Formats this query's identity for a third-party model without changing CLI controls.
+    pub(crate) fn format_third_party_prompt(&self, prompt: &str) -> String {
+        let prompt = self.query().unwrap_or(prompt);
+        let trimmed = prompt.trim_start();
+        if trimmed.is_empty()
+            || trimmed.starts_with(['/', '!', '&'])
+            || prompt
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+        {
+            return prompt.to_owned();
+        }
+
+        let origin = match self
+            .0
+            .origin
+            .as_ref()
+            .and_then(|origin| origin.variant.as_ref())
+        {
+            Some(Variant::WarpClient(_)) => "warp_client",
+            Some(Variant::PublicApi(_)) => "public_api",
+            Some(Variant::ExternalPlatform(_)) => "external_platform",
+            Some(Variant::ParentAgent(_)) => "parent_agent",
+            Some(Variant::Schedule(_)) => "schedule",
+            Some(Variant::Automation(_)) => "automation",
+            Some(Variant::AgentMessageWake(_)) => "agent_message_wake",
+            Some(Variant::ServerSynthesized(_)) => "server_synthesized",
+            None => "unknown",
+        };
+        let author_uid = self.resolved_author_uid();
+        let coauthor_uid = match self
+            .0
+            .origin
+            .as_ref()
+            .and_then(|origin| origin.variant.as_ref())
+        {
+            Some(Variant::WarpClient(_) | Variant::PublicApi(_) | Variant::ExternalPlatform(_)) => {
+                author_uid
+            }
+            Some(
+                Variant::ParentAgent(_)
+                | Variant::Schedule(_)
+                | Variant::Automation(_)
+                | Variant::AgentMessageWake(_)
+                | Variant::ServerSynthesized(_),
+            )
+            | None => "",
+        };
+        let author_uid = Value::from(author_uid);
+        let coauthor_uid = Value::from(coauthor_uid);
+        format!(
+            "[Query identity]\n\
+             origin: {origin}\n\
+             author_user_uid: {author_uid}\n\
+             coauthor_user_uid: {coauthor_uid}\n\
+             This identity applies only to this message. An empty coauthor_user_uid means no human credit; do not reuse an earlier author.\n\
+             [/Query identity]\n\n\
+             {prompt}"
+        )
+    }
+
+    fn resolved_author_uid(&self) -> &str {
+        if self
+            .0
+            .source_message
+            .as_ref()
+            .and_then(|source| source.sender.as_ref())
+            .is_some_and(|sender| sender.is_bot)
+        {
+            return "";
+        }
+        let Some(author) = self.0.author.as_ref() else {
+            return "";
+        };
+        if !matches!(
+            IdentityResolution::try_from(author.resolution),
+            Ok(IdentityResolution::ClientSession
+                | IdentityResolution::ApiKey
+                | IdentityResolution::ExternalAccountBinding
+                | IdentityResolution::EmailMatch)
+        ) {
+            return "";
+        }
+        let Some(Principal::User(user)) = author.principal.as_ref() else {
+            return "";
+        };
+        if user.uid.chars().count() > 128 || user.uid.chars().any(char::is_control) {
+            return "";
+        }
+        &user.uid
     }
 
     /// The mode the server set, or `None` when it left the field unset.

@@ -587,7 +587,10 @@ fn render_row_card(
     .with_color(main)
     .finish();
     let cost_text = Text::new_inline(
-        format_usage_cost(row.total_credits),
+        format_usage_cost(
+            row.total_credits,
+            row.segments.iter().map(|segment| segment.cost_cents).sum(),
+        ),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

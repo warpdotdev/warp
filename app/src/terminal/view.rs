@@ -3165,7 +3165,7 @@ impl TerminalView {
             SyncInputType::RanCommand => {
                 if terminal_input_state == TerminalInputState::InputEditor {
                     self.input.update(ctx, |input, ctx| {
-                        input.run_command_in_synced_terminal_input(ctx);
+                        input.submit_current_input(ctx);
                     });
                 }
             }

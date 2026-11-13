@@ -138,12 +138,12 @@ impl BlocklistAIController {
                 self.terminal_surface_id,
                 attachments.len(),
             );
-            let relayed = ExternalHarnessPrompt {
-                text: prompt.to_owned(),
-                attachments: attachments.to_vec(),
-                participant_id: participant_id.clone(),
-                base: base.cloned(),
-            };
+            let relayed = ExternalHarnessPrompt::new(
+                prompt.to_owned(),
+                attachments.to_vec(),
+                participant_id.clone(),
+                base.cloned(),
+            );
             if sink.try_send(relayed).is_err() {
                 report_error!(
                     "Dropped a shared-session prompt because the external harness is no longer accepting prompts",

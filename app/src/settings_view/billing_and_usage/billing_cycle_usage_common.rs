@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::Element;
 use warpui::elements::{
@@ -271,8 +272,12 @@ pub fn format_cost_cents(cents: f64) -> String {
     }
 }
 
-pub fn format_usage_cost(credits: f64) -> String {
-    format_cost_cents(credits * CENTS_PER_CREDIT)
+pub fn format_usage_cost(credits: f64, cost_cents: f64) -> String {
+    format_cost_cents(if FeatureFlag::CreditEquivalentBillingUsage.is_enabled() {
+        credits * CENTS_PER_CREDIT
+    } else {
+        cost_cents
+    })
 }
 
 /// Section subheader (e.g. "Team totals", "Member usage"). One step below
@@ -315,7 +320,7 @@ pub fn render_breakdown_tooltip(
         column.add_child(render_tooltip_row(
             Some(cost_type_color(&line.cost_type)),
             label,
-            line.credits,
+            (line.credits, line.cost_cents),
             sub,
             main,
             font_family,
@@ -334,7 +339,10 @@ pub fn render_breakdown_tooltip(
     column.add_child(render_tooltip_row(
         /* no swatch on the total row */ None,
         "Total usage".to_string(),
-        total_credits,
+        (
+            total_credits,
+            segments.iter().map(|segment| segment.cost_cents).sum(),
+        ),
         main,
         main,
         font_family,
@@ -363,7 +371,7 @@ pub fn render_breakdown_tooltip(
 fn render_tooltip_row(
     swatch_color: Option<ColorU>,
     label: String,
-    credits: f64,
+    (credits, cost_cents): (f64, f64),
     label_color: ColorU,
     value_color: ColorU,
     font_family: warpui::fonts::FamilyId,
@@ -402,7 +410,7 @@ fn render_tooltip_row(
         .with_color(value_color)
         .with_style(style)
         .finish();
-    let cost_text = Text::new_inline(format_usage_cost(credits), font_family, 12.)
+    let cost_text = Text::new_inline(format_usage_cost(credits, cost_cents), font_family, 12.)
         .with_color(value_color)
         .with_style(style)
         .finish();
