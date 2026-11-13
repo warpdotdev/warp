@@ -38,6 +38,11 @@ pub enum FileLoadError {
     DoesNotExist,
     #[error("IO error when loading file.")]
     IOError(#[from] io::Error),
+    #[error("File exceeds the {limit_bytes}-byte load limit")]
+    TooLarge {
+        size_estimate: Option<u64>,
+        limit_bytes: u64,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
