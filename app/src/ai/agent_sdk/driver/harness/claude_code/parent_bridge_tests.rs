@@ -3,14 +3,14 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::MockAIClient;
 
 fn waited_on_event(run_id: &str, waiter: Option<&str>) -> AgentRunEvent {
-    AgentRunEvent {
-        kind: AgentRunEventKind::WaitedOn,
-        run_id: run_id.to_string(),
-        ref_id: waiter.map(str::to_string),
-        execution_id: None,
-        occurred_at: "2026-11-12T00:00:00Z".to_string(),
-        sequence: 42,
-    }
+    serde_json::from_value(serde_json::json!({
+        "event_type": "run_waited_on",
+        "run_id": run_id,
+        "ref_id": waiter,
+        "occurred_at": "2026-11-12T00:00:00Z",
+        "sequence": 42
+    }))
+    .unwrap()
 }
 
 #[test]

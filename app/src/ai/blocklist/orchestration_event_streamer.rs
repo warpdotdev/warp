@@ -389,6 +389,13 @@ enum FamilyEvent {
 /// become [`FamilyEvent::ParentSelf`]; everything else is
 /// [`FamilyEvent::Opaque`].
 fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEvent {
+    if event.kind == AgentRunEventKind::Waiting {
+        return if event.is_waiting_for(self_run_id) {
+            FamilyEvent::ParentSelf(event.clone())
+        } else {
+            FamilyEvent::Opaque
+        };
+    }
     let is_self = event.run_id == self_run_id;
     match (is_self, &event.kind) {
         (true, AgentRunEventKind::ChildAgentStarted) => match event.ref_id.as_deref() {
@@ -416,9 +423,6 @@ fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEven
             None => FamilyEvent::Opaque,
         },
         (true, AgentRunEventKind::NewMessage) => FamilyEvent::ParentSelf(event.clone()),
-        (true, AgentRunEventKind::WaitedOn) if event.waited_on_sender(self_run_id).is_some() => {
-            FamilyEvent::ParentSelf(event.clone())
-        }
         (true, event_type) => {
             // The parent's own lifecycle events are ParentSelf; unrecognised
             // self events advance the cursor only.
@@ -2832,17 +2836,14 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
     events
         .iter()
         .filter_map(|event| {
-            let (lifecycle_type, sender_run_id) = if event.kind == AgentRunEventKind::WaitedOn {
-                (
-                    api::LifecycleEventType::Waiting,
-                    event.waited_on_sender(self_run_id)?,
-                )
-            } else {
-                if event.run_id == self_run_id {
+            if event.kind == AgentRunEventKind::Waiting {
+                if !event.is_waiting_for(self_run_id) {
                     return None;
                 }
-                (event.kind.lifecycle_type()?, event.run_id.as_str())
-            };
+            } else if event.run_id == self_run_id {
+                return None;
+            }
+            let lifecycle_type = event.kind.lifecycle_type()?;
             let timestamp = parse_occurred_at(&event.occurred_at);
             let detail = match &event.kind {
                 AgentRunEventKind::Failed {
@@ -2873,13 +2874,13 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
                 | AgentRunEventKind::NewMessage
                 | AgentRunEventKind::ChildAgentStarted
                 | AgentRunEventKind::RunSessionLinked
-                | AgentRunEventKind::WaitedOn
+                | AgentRunEventKind::Waiting
                 | AgentRunEventKind::Unknown => LifecycleEventDetailPayload::default(),
             };
             let event_id = if lifecycle_type == api::LifecycleEventType::Waiting {
                 Uuid::new_v5(
                     &Uuid::NAMESPACE_URL,
-                    format!("agent-run-event:{}:{}", event.run_id, event.sequence).as_bytes(),
+                    format!("agent-run-event:{self_run_id}:{}", event.sequence).as_bytes(),
                 )
                 .to_string()
             } else {
@@ -2887,7 +2888,7 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
             };
             Some(build_lifecycle_event(
                 event_id,
-                sender_run_id.to_string(),
+                event.run_id.clone(),
                 lifecycle_type,
                 timestamp,
                 &detail,

@@ -138,7 +138,10 @@ fn waited_on_does_not_change_conversation_status() {
         conversation_status_from_lifecycle_event_type(api::LifecycleEventType::Waiting),
         None
     );
-    assert_eq!(AgentRunEventKind::WaitedOn.lifecycle_type(), None);
+    assert_eq!(
+        AgentRunEventKind::Waiting.lifecycle_type(),
+        Some(api::LifecycleEventType::Waiting)
+    );
 }
 
 #[test]
@@ -809,14 +812,14 @@ fn threshold_exceeded_at_and_above_limit() {
 }
 
 fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> AgentRunEvent {
-    AgentRunEvent {
-        kind: serde_json::from_value(serde_json::json!({"event_type": event_type})).unwrap(),
-        run_id: run_id.to_string(),
-        ref_id: ref_id.map(|s| s.to_string()),
-        execution_id: None,
-        occurred_at: "2026-01-01T00:00:00Z".to_string(),
-        sequence: 1,
-    }
+    serde_json::from_value(serde_json::json!({
+        "event_type": event_type,
+        "run_id": run_id,
+        "ref_id": ref_id,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 1
+    }))
+    .unwrap()
 }
 
 fn make_seq_event(
