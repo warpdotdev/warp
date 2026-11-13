@@ -74,7 +74,7 @@ use self::protocol::{
     WriteTextFileParams,
 };
 use self::resume::{
-    PendingRehydration, PhaseClock, SessionOrigin, open_session, plan_session,
+    PendingRehydration, PhaseClock, ReopenMethod, SessionOrigin, open_session, plan_session,
     restorable_transcript,
 };
 use self::turn_driver::{
@@ -120,8 +120,8 @@ use crate::terminal::CLIAgent;
 const MAA_FORMAT: &str = "maa";
 
 /// Bound on each phase of the handshake: the agent connecting back through the bridge and
-/// answering `initialize`, then opening its session (resuming one, or starting a new one after a
-/// refused resume), each counted from the phase's start.
+/// answering `initialize`, then opening its session (reopening one, or starting a new one after
+/// a refused reopening), each counted from the phase's start.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// [`ThirdPartyHarness::launch_file_roots`] for the sidecar mounted for `harness`, for callers
@@ -163,7 +163,7 @@ impl AcpHarness {
         origin: &SessionOrigin,
     ) -> String {
         let system_prompt_in_turn = match (self.harness, origin) {
-            (_, SessionOrigin::Resumed) => None,
+            (_, SessionOrigin::Resumed(ReopenMethod::Resume | ReopenMethod::Load)) => None,
             (Harness::Claude | Harness::Oz | Harness::OpenCode | Harness::Unknown, _) => {
                 system_prompt
             }
@@ -395,7 +395,7 @@ impl ThirdPartyHarness for AcpHarness {
             system_prompt,
             resumption_prompt,
             context,
-            &SessionOrigin::Resumed,
+            &SessionOrigin::Resumed(ReopenMethod::Resume),
         );
         let attachments = AttachmentResolver::new(
             server_api.clone(),
@@ -487,7 +487,7 @@ struct RestoredConversation {
 enum HandshakeError {
     /// The agent, or the connection to it, failed a handshake request.
     Protocol(anyhow::Error),
-    /// The restored conversation's transcript could not be put back for the agent to resume.
+    /// The restored conversation's transcript could not be put back for the agent to reopen.
     Rehydration(AgentDriverError),
     /// The phase named here outran the handshake budget.
     TimedOut(&'static str),
@@ -538,7 +538,7 @@ pub(crate) struct AcpHarnessRunner {
     opening_base: Option<BaseUserQuery>,
     /// The full text sent to the agent, including server-composed context.
     prompt_text: String,
-    /// `prompt_text` for a run that resumed its agent session, without what the session's
+    /// `prompt_text` for a run that reopened its agent session, without what the session's
     /// transcript already holds.
     resumed_prompt_text: String,
     /// Task attachments downloaded before the run started. They are shaped for the agent only
@@ -843,9 +843,9 @@ impl HarnessRunner for AcpHarnessRunner {
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
 
         // A run that continues a restored conversation puts the CLI's session back on disk so
-        // the handshake can resume it. The download runs while the agent launches; the handshake
-        // waits for it only once the agent has said it can resume. Returning early drops it,
-        // which aborts it.
+        // the handshake can reopen it. The download runs while the agent launches; the handshake
+        // waits for it only once the agent has said it can reopen a session. Returning early
+        // drops it, which aborts it.
         let rehydration = restored.as_ref().map(|restored| {
             restorable_transcript(
                 CliTranscriptKind::for_harness(self.harness),
@@ -967,11 +967,12 @@ impl HarnessRunner for AcpHarnessRunner {
             let steering_supported = initialize.supports_steering();
             log::info!(
                 "ACP agent initialized: protocol v{} agent={agent_description} auth_methods={} \
-                 load_session={} prompt_capabilities={:?} steering={steering_supported} \
-                 other_capabilities={extra_capabilities:?}",
+                 load_session={} resume_session={} prompt_capabilities={:?} \
+                 steering={steering_supported} other_capabilities={extra_capabilities:?}",
                 initialize.protocol_version,
                 initialize.auth_methods.len(),
                 capabilities.load_session,
+                capabilities.session_capabilities.supports_resume(),
                 capabilities.prompt_capabilities,
             );
             self.attachments
@@ -981,8 +982,7 @@ impl HarnessRunner for AcpHarnessRunner {
                 .record_result_with_outcome(
                     SetupStep::AcpSessionOpen,
                     async {
-                        let plan =
-                            plan_session(rehydration, &capabilities.session_capabilities).await?;
+                        let plan = plan_session(rehydration, capabilities).await?;
                         open_session(
                             &connection,
                             plan,
@@ -1025,8 +1025,9 @@ impl HarnessRunner for AcpHarnessRunner {
         }
         .fuse();
         pin_mut!(handshake);
-        // Each phase gets the full budget; a timed-out `session/resume` cannot be taken back, so
-        // it ends the run rather than falling back to a new session on the same connection.
+        // Each phase gets the full budget; a timed-out `session/resume` or `session/load` cannot
+        // be taken back, so it ends the run rather than falling back to a new session on the same
+        // connection.
         let deadline = clock.expire(HANDSHAKE_TIMEOUT).fuse();
         pin_mut!(deadline);
         let session_id = select! {
@@ -1044,9 +1045,14 @@ impl HarnessRunner for AcpHarnessRunner {
         };
         match &origin {
             SessionOrigin::New => log::info!("ACP session {session_id} created"),
-            SessionOrigin::Resumed => log::info!("ACP session {session_id} resumed"),
+            SessionOrigin::Resumed(ReopenMethod::Resume) => {
+                log::info!("ACP session {session_id} resumed")
+            }
+            SessionOrigin::Resumed(ReopenMethod::Load) => log::info!(
+                "ACP session {session_id} loaded; the history the agent replayed was discarded"
+            ),
             SessionOrigin::ResumeMissed(miss) => log::warn!(
-                "Could not resume the restored conversation's ACP session ({miss}); continuing \
+                "Could not reopen the restored conversation's ACP session ({miss}); continuing \
                  in new session {session_id} without its earlier turns"
             ),
         }
@@ -1137,7 +1143,9 @@ impl HarnessRunner for AcpHarnessRunner {
             session_id,
             suppressed_startup_message,
             prompt_text: match &origin {
-                SessionOrigin::Resumed => self.resumed_prompt_text.clone(),
+                SessionOrigin::Resumed(ReopenMethod::Resume | ReopenMethod::Load) => {
+                    self.resumed_prompt_text.clone()
+                }
                 SessionOrigin::New | SessionOrigin::ResumeMissed(_) => self.prompt_text.clone(),
             },
             initial_attachments: self.initial_attachments.clone(),

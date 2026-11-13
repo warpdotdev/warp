@@ -34,7 +34,7 @@ use warpui::r#async::Timer;
 
 use super::super::SavePoint;
 use super::attachments::AttachmentResolver;
-use super::connection::{AcpConnection, Arrival, InboundNotification, RpcError};
+use super::connection::{AcpConnection, Arrival, InboundNotification, Notifications, RpcError};
 use super::mapping::{AcpTurnMapper, TurnEvent};
 use super::protocol::{
     self, CancelParams, ContentBlock, PromptParams, PromptResponse, SessionUpdate,
@@ -394,7 +394,7 @@ async fn recv_or_pending<T>(
 /// opened, as the MAA server does for its own tool round trips.
 pub(super) struct TurnDriver {
     pub connection: Arc<AcpConnection>,
-    pub notifications: async_channel::Receiver<InboundNotification>,
+    pub notifications: Notifications,
     /// Follow-up prompts injected into the conversation (e.g. by shared-session viewers).
     /// `None` once the controller has unbound the conversation.
     pub follow_ups: Option<async_channel::Receiver<ExternalHarnessPrompt>>,

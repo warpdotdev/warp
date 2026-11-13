@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use warpui::r#async::executor::Background;
 
-use super::{AcpConnection, AgentRequestHandler, InboundNotification, RpcError};
+use super::{AcpConnection, AgentRequestHandler, Notifications, RpcError};
 
 /// One direction of an in-memory pipe.
 fn pipe() -> (PipeWriter, PipeReader) {
@@ -192,11 +192,7 @@ impl FakeAgent {
 
 pub(in super::super) fn connect(
     handler: AgentRequestHandler,
-) -> (
-    AcpConnection,
-    async_channel::Receiver<InboundNotification>,
-    FakeAgent,
-) {
+) -> (AcpConnection, Notifications, FakeAgent) {
     let (client_writer, agent_reader) = pipe();
     let (agent_writer, client_reader) = pipe();
     let executor = Arc::new(Background::new(1, |_| "acp-connection-test".to_string()));
@@ -299,6 +295,107 @@ fn notifications_preceding_a_response_are_queued_before_it_resolves() {
         assert_eq!(first.method, "session/update");
         assert_eq!(first.params["n"], 1);
         assert_eq!(second.params["n"], 2);
+        assert!(notifications.try_recv().is_err());
+    });
+}
+
+fn update(n: u64) -> Value {
+    json!({"jsonrpc": "2.0", "method": "session/update", "params": {"n": n}})
+}
+
+#[test]
+fn a_replaying_request_discards_exactly_the_notifications_before_its_answer() {
+    for answer in [
+        json!({"result": {"loaded": true}}),
+        json!({"error": {"code": -32603, "message": "replay failed"}}),
+    ] {
+        let (connection, notifications, mut agent) = connect(rejecting_handler());
+        block_on(async {
+            // Queued before the request is even sent; it still precedes the answer.
+            agent.send(update(1)).await;
+            agent.read_barrier().await;
+
+            let request =
+                connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+            let succeeds = answer.get("result").is_some();
+            let agent = async {
+                let message = agent.next_message().await;
+                agent.send(update(2)).await;
+                agent.send(update(3)).await;
+                let mut response = json!({"jsonrpc": "2.0", "id": message["id"]});
+                response
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(answer.as_object().unwrap().clone());
+                agent.send(response).await;
+                // On the wire before the client has seen the answer.
+                agent.send(update(4)).await;
+                agent.send(update(5)).await;
+                agent.read_barrier().await;
+            };
+            let (response, ()) = join!(request, agent);
+            if succeeds {
+                assert_eq!(response.unwrap(), json!({"loaded": true}));
+            } else {
+                let error = response.unwrap_err();
+                assert_eq!(error.downcast_ref::<RpcError>().unwrap().code, -32603);
+            }
+
+            assert_eq!(notifications.try_recv().unwrap().params["n"], 4);
+            assert_eq!(notifications.recv().await.unwrap().params["n"], 5);
+            assert!(notifications.try_recv().is_err());
+            assert!(!notifications.is_closed());
+        });
+    }
+}
+
+#[test]
+fn a_replaying_request_the_agent_abandons_discards_the_replay_it_began() {
+    let (connection, notifications, agent) = connect(rejecting_handler());
+    let _keep_read_loop_alive = agent._executor.clone();
+    block_on(async {
+        let request = connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+        let agent = async move {
+            let mut agent = agent;
+            agent.next_message().await;
+            agent.send(update(1)).await;
+            drop(agent);
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err();
+        assert!(error.downcast_ref::<RpcError>().is_none(), "{error:#}");
+        assert!(notifications.recv().await.is_err());
+        assert!(notifications.is_closed());
+    });
+}
+
+#[test]
+fn an_ordinary_request_after_a_replaying_one_keeps_its_notifications() {
+    let (connection, notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let load = connection.request_discarding_replay::<_, Value>("session/load", json!({}));
+        let agent_load = async {
+            let message = agent.next_message().await;
+            agent.send(update(1)).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": message["id"], "result": null}))
+                .await;
+        };
+        let (loaded, ()) = join!(load, agent_load);
+        loaded.unwrap();
+
+        let prompt = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent_prompt = async {
+            let message = agent.next_message().await;
+            agent.send(update(2)).await;
+            agent
+                .send(json!({"jsonrpc": "2.0", "id": message["id"], "result": null}))
+                .await;
+        };
+        let (prompted, ()) = join!(prompt, agent_prompt);
+        prompted.unwrap();
+
+        assert_eq!(notifications.try_recv().unwrap().params["n"], 2);
         assert!(notifications.try_recv().is_err());
     });
 }
