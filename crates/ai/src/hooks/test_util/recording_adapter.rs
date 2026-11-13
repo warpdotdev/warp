@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
 };
@@ -31,7 +32,7 @@ struct TestHookOutput {
     env: Vec<(String, String)>,
 }
 
-/// An adapter for tests. Matching compares the binding's matcher text to the canonical tool name
+/// An adapter for tests. Matching compares the binding's matcher text to [`test_tool_name`]
 /// exactly; an absent, empty, or `*` matcher matches everything. Decoding treats exit code 2 as a
 /// deny (stdout is the reason), exit code 0 with JSON stdout as a scripted verdict, and anything
 /// else as no opinion. A scripted continuation carries the binding's own loop limit.
@@ -103,8 +104,8 @@ impl HookFormatAdapter for RecordingAdapter {
         if matcher.is_empty() || matcher == "*" {
             return true;
         }
-        match envelope.payload.tool_name() {
-            Some(tool_name) => tool_name.as_str() == matcher,
+        match envelope.payload.action() {
+            Some(action) => test_tool_name(action) == matcher,
             None => true,
         }
     }
@@ -128,10 +129,10 @@ impl HookFormatAdapter for RecordingAdapter {
         if let Some(action_id) = &envelope.action_id {
             input["action_id"] = json!(action_id.to_string());
         }
-        if let Some(tool_name) = envelope.payload.tool_name() {
-            input["tool_name"] = json!(tool_name.as_str());
+        if let Some(action) = envelope.payload.action() {
+            input["tool_name"] = json!(test_tool_name(action));
         }
-        if let HookPayload::ToolPre { action, .. } = &envelope.payload {
+        if let HookPayload::ToolPre { action } = &envelope.payload {
             input["tool_input"] = json!(action.to_string());
         }
         input
@@ -202,5 +203,43 @@ impl HookFormatAdapter for RecordingAdapter {
             | ProcessExit::Cancelled
             | ProcessExit::SpawnFailed(_) => HookEffects::default(),
         }
+    }
+}
+
+/// The tool vocabulary this adapter's matchers and stdin use. It names the few tools tests match
+/// on and lumps the rest together; a real adapter names every tool its format defines.
+pub fn test_tool_name(action: &AIAgentActionType) -> &'static str {
+    match action {
+        AIAgentActionType::RequestCommandOutput { .. } => "Shell",
+        AIAgentActionType::ReadFiles(_) => "Read",
+        AIAgentActionType::RunAgents(_) => "Task",
+        AIAgentActionType::RequestFileEdits { .. }
+        | AIAgentActionType::Grep { .. }
+        | AIAgentActionType::CallMCPTool { .. }
+        | AIAgentActionType::FileGlob { .. }
+        | AIAgentActionType::FileGlobV2 { .. }
+        | AIAgentActionType::SearchCodebase(_)
+        | AIAgentActionType::ReadMCPResource { .. }
+        | AIAgentActionType::WriteToLongRunningShellCommand { .. }
+        | AIAgentActionType::ReadShellCommandOutput { .. }
+        | AIAgentActionType::TransferShellCommandControlToUser { .. }
+        | AIAgentActionType::ReadSkill(_)
+        | AIAgentActionType::UseComputer(_)
+        | AIAgentActionType::RequestComputerUse(_)
+        | AIAgentActionType::StartRecording { .. }
+        | AIAgentActionType::StopRecording { .. }
+        | AIAgentActionType::ReadDocuments(_)
+        | AIAgentActionType::EditDocuments(_)
+        | AIAgentActionType::CreateDocuments(_)
+        | AIAgentActionType::AskUserQuestion { .. }
+        | AIAgentActionType::SendMessageToAgent { .. }
+        | AIAgentActionType::FetchConversation { .. }
+        | AIAgentActionType::WaitForEvents { .. }
+        | AIAgentActionType::UploadArtifact(_)
+        | AIAgentActionType::SuggestNewConversation { .. }
+        | AIAgentActionType::SuggestPrompt(_)
+        | AIAgentActionType::InitProject
+        | AIAgentActionType::OpenCodeReview
+        | AIAgentActionType::InsertCodeReviewComments { .. } => "Other",
     }
 }

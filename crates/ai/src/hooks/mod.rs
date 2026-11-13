@@ -19,12 +19,12 @@ pub use adapters::{
 };
 pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
-    BindingCapabilities, CanonicalToolName, CapabilityWarning, ContinuationRequest,
-    DiagnosticSeverity, ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy,
-    FollowUpChainId, HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId,
-    HookBoundary, HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat,
-    HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface,
-    HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects, PermissionFacts,
+    BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
+    ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
+    HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId, HookBoundary,
+    HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookPayload,
+    HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSurface, HookTurnId,
+    HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects, PermissionFacts,
     PromptProvenance, RunMetadata, TurnStopStatus, UnsupportedEffect, reduce_effects,
     validate_capabilities,
 };

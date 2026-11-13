@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ai::hooks::{
-    CanonicalToolName, ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope,
-    HookExecutionHost, HookPayload, HookSurface, PermissionFacts, PromptProvenance, TurnStopStatus,
+    ENVELOPE_SCHEMA_VERSION, HOOK_PROTOCOL_VERSION, HookEnvelope, HookExecutionHost, HookPayload,
+    HookSurface, PermissionFacts, PromptProvenance, TurnStopStatus,
 };
 use repo_metadata::repositories::DetectedRepositories;
 use uuid::Uuid;
@@ -188,7 +188,6 @@ pub(crate) fn envelope_for_tool_pre(
         site,
         HookPayload::ToolPre {
             action: action.action.clone(),
-            tool_name: CanonicalToolName::for_action(&action.action),
         },
         ctx,
     );
@@ -206,7 +205,6 @@ pub(crate) fn envelope_for_tool_result(
         site,
         HookPayload::ToolResult {
             action: action.action.clone(),
-            tool_name: CanonicalToolName::for_action(&action.action),
             result: result.clone(),
             duration: None,
         },
@@ -227,7 +225,6 @@ pub(crate) fn envelope_for_tool_failure(
         site,
         HookPayload::ToolFailure {
             action: action.action.clone(),
-            tool_name: CanonicalToolName::for_action(&action.action),
             result: result.clone(),
             cancellation_reason: cancellation_reason
                 .map(|reason| cancellation_reason_name(reason).to_owned()),
