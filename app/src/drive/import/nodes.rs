@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use async_recursion::async_recursion;
-use futures_lite::StreamExt;
+use futures_lite::{AsyncRead, AsyncReadExt, StreamExt};
 use pathfinder_color::ColorU;
 use warp_errors::report_error;
 use warpui::Element;
@@ -891,11 +891,56 @@ impl FileUploadState {
     }
 }
 
+/// Files above this size are rejected during Warp Drive import instead of being read fully into
+/// memory (see APP-5426: an unbounded read of a large imported file was responsible for
+/// multi-GB heap growth). Mirrors `MAX_ATTACHMENT_SIZE_BYTES` in `ai/attachment_utils.rs`; a
+/// hand-authored notebook or workflow file is expected to be well under this bound.
+const MAX_IMPORT_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+
+fn import_file_size_limit_error() -> anyhow::Error {
+    anyhow::anyhow!(
+        "file exceeds the {} MiB import size limit",
+        MAX_IMPORT_FILE_SIZE_BYTES / (1024 * 1024)
+    )
+}
+
+/// Reads all of `reader`, rejecting it once the number of bytes read exceeds
+/// [`MAX_IMPORT_FILE_SIZE_BYTES`]. Bounding the read itself (rather than trusting a size
+/// reported up front) means a source whose reported size understates what it actually yields —
+/// for example a file that grows after being stat'd — still can't push past the limit in memory.
+async fn read_bounded_by_import_cap(reader: impl AsyncRead + Unpin) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_IMPORT_FILE_SIZE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > MAX_IMPORT_FILE_SIZE_BYTES {
+        return Err(import_file_size_limit_error());
+    }
+
+    Ok(bytes)
+}
+
+/// Reads `path` into memory for import, rejecting it once its size exceeds
+/// [`MAX_IMPORT_FILE_SIZE_BYTES`]. The size is checked up front so an oversized file is never
+/// opened, and [`read_bounded_by_import_cap`] additionally bounds the read itself so a file that
+/// grows after that check still can't push past the limit in memory.
+async fn read_capped_for_import(path: &Path) -> Result<Vec<u8>> {
+    let size = async_fs::metadata(path).await?.len();
+    if size > MAX_IMPORT_FILE_SIZE_BYTES {
+        return Err(import_file_size_limit_error());
+    }
+
+    read_bounded_by_import_cap(async_fs::File::open(path).await?).await
+}
+
 pub(super) async fn parse_file(path: PathBuf, file_type: FileType) -> Result<FileContent> {
     match file_type {
-        FileType::Notebook => Ok(FileContent::Notebook(async_fs::read_to_string(path).await?)),
+        FileType::Notebook => Ok(FileContent::Notebook(String::from_utf8(
+            read_capped_for_import(&path).await?,
+        )?)),
         FileType::Workflow => {
-            let file = async_fs::read(path).await?;
+            let file = read_capped_for_import(&path).await?;
             let mut workflow_enums: HashMap<ClientId, WorkflowEnum> = HashMap::new();
             let mut workflows = vec![];
 
