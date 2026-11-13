@@ -213,6 +213,7 @@ pub fn test_tool_name(action: &AIAgentActionType) -> &'static str {
         AIAgentActionType::RequestCommandOutput { .. } => "Shell",
         AIAgentActionType::ReadFiles(_) => "Read",
         AIAgentActionType::RunAgents(_) => "Task",
+        AIAgentActionType::InitProject => "InitProject",
         AIAgentActionType::RequestFileEdits { .. }
         | AIAgentActionType::Grep { .. }
         | AIAgentActionType::CallMCPTool { .. }
@@ -238,7 +239,6 @@ pub fn test_tool_name(action: &AIAgentActionType) -> &'static str {
         | AIAgentActionType::UploadArtifact(_)
         | AIAgentActionType::SuggestNewConversation { .. }
         | AIAgentActionType::SuggestPrompt(_)
-        | AIAgentActionType::InitProject
         | AIAgentActionType::OpenCodeReview
         | AIAgentActionType::InsertCodeReviewComments { .. } => "Other",
     }
