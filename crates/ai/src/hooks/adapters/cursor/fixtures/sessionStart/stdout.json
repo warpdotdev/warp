@@ -1,0 +1,1 @@
+{ "env": { "CI": "1" }, "additional_context": "This project uses pnpm, not npm." }
