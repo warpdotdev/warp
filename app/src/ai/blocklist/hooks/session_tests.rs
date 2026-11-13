@@ -4,7 +4,7 @@ use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::hooks::testing::{hook_test_app, settle};
+use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle};
 use crate::features::FeatureFlag;
 
 #[test]

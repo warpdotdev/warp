@@ -114,7 +114,7 @@ mod hooks {
         CancellationReason,
     };
     use crate::ai::blocklist::hooks::pre_tool::{PreToolHookState, cached_state};
-    use crate::ai::blocklist::hooks::testing::{
+    use crate::ai::blocklist::hooks::test_utils::{
         HookTestApp, action_model, hook_test_app, let_background_work_settle, settle, shell_action,
     };
     use crate::features::FeatureFlag;
