@@ -3315,7 +3315,6 @@ dependencies = [
  "base64 0.22.1",
  "command",
  "computer_use",
- "instant",
  "libc",
  "log",
  "rmcp",
