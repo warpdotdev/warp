@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use tempfile::tempdir;
-use warp_core::features::FeatureFlag;
 use warpui::r#async::executor::Background;
 
 use super::{LaunchFileWarmup, WarmupStats, read_files};
@@ -85,7 +84,7 @@ fn stops_at_the_byte_budget() {
 }
 
 #[test]
-fn starts_only_when_enabled_and_a_root_exists() {
+fn starts_only_when_a_root_exists() {
     let dir = tempdir().unwrap();
     write_file(&dir.path().join("file"), 10);
     let existing = vec![dir.path().to_owned()];
@@ -95,17 +94,8 @@ fn starts_only_when_enabled_and_a_root_exists() {
     let background = Arc::new(Background::new(1, |_| "launch-warmup-test".to_string()));
     let setup_events = SetupClientEventReporter::standby(Arc::new(client), background);
 
-    {
-        let _disabled = FeatureFlag::HarnessLaunchFileWarmup.override_enabled(false);
-        let disabled = LaunchFileWarmup::start(&setup_events, || {
-            panic!("roots are not resolved while the warm-up is disabled")
-        });
-        assert!(disabled.is_none());
-    }
-
-    let _enabled = FeatureFlag::HarnessLaunchFileWarmup.override_enabled(true);
-    assert!(LaunchFileWarmup::start(&setup_events, || missing).is_none());
-    assert!(LaunchFileWarmup::start(&setup_events, Vec::new).is_none());
-    let warmup = LaunchFileWarmup::start(&setup_events, || existing).expect("a warm-up starts");
+    assert!(LaunchFileWarmup::start(missing, &setup_events).is_none());
+    assert!(LaunchFileWarmup::start(Vec::new(), &setup_events).is_none());
+    let warmup = LaunchFileWarmup::start(existing, &setup_events).expect("a warm-up starts");
     warmup.stop();
 }

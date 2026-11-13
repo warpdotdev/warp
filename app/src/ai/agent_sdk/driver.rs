@@ -2433,7 +2433,7 @@ impl AgentDriver {
                 WorkspaceState::Pending(mut workspace) => {
                     let launch_file_warmup = match &task.harness {
                         HarnessKind::ThirdParty(harness) => {
-                            LaunchFileWarmup::start(&setup_events, || harness.launch_file_roots())
+                            LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
                         }
                         HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
                     };

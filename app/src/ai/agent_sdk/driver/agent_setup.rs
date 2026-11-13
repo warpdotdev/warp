@@ -66,7 +66,7 @@ impl AgentDriver {
         bootstrap_terminal(foreground, setup_events).await?;
         // A standby has no launch to yield to, so the warm-up is left to finish.
         if harness != Harness::Oz {
-            LaunchFileWarmup::start(setup_events, || sidecar_launch_file_roots(harness));
+            LaunchFileWarmup::start(sidecar_launch_file_roots(harness), setup_events);
         }
         Self::initialize_setup_vars(foreground, false).await?;
         setup_events

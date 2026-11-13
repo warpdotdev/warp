@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use instant::Instant;
 use walkdir::WalkDir;
-use warp_core::features::FeatureFlag;
 
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 
@@ -26,16 +25,13 @@ pub(crate) struct LaunchFileWarmup {
 }
 
 impl LaunchFileWarmup {
-    /// Starts reading every file under the directories `roots` returns that exist, recorded as a
+    /// Starts reading every file under the directories in `roots` that exist, recorded as a
     /// setup step. Returns `None` when there is nothing to read.
     pub(crate) fn start(
+        roots: Vec<PathBuf>,
         setup_events: &SetupClientEventReporter,
-        roots: impl FnOnce() -> Vec<PathBuf>,
     ) -> Option<Self> {
-        if !FeatureFlag::HarnessLaunchFileWarmup.is_enabled() {
-            return None;
-        }
-        let roots: Vec<_> = roots().into_iter().filter(|root| root.is_dir()).collect();
+        let roots: Vec<_> = roots.into_iter().filter(|root| root.is_dir()).collect();
         if roots.is_empty() {
             return None;
         }
