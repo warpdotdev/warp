@@ -8,6 +8,7 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use super::{
     AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, NewScrollable,
     NewScrollableElement, ScrollableAppearance, ScrollableAxis, SingleAxisConfig,
+    scrollbar_thumb_fill,
 };
 use crate::elements::{
     Axis, ClippedScrollStateHandle, ConstrainedBox, DispatchEventResult, EventHandler, Fill,
@@ -569,6 +570,61 @@ fn render(presenter: &mut Presenter, view_id: EntityId, ctx: &mut AppContext) {
 
     presenter.invalidate(invalidation, ctx);
     presenter.build_scene(vec2f(1000., 1000.), 1., None, ctx);
+}
+
+#[test]
+fn scrollbar_thumb_fill_is_hidden_without_hover_or_always_show() {
+    let nonactive = Fill::Solid(ColorU::white());
+    let active = Fill::Solid(ColorU::black());
+
+    // Neither the scrollbar nor its content is hovered, and the affordance isn't forced
+    // visible: matches today's default (hover-gated) behavior.
+    assert_eq!(
+        scrollbar_thumb_fill(false, false, false, nonactive, active),
+        Fill::None
+    );
+}
+
+#[test]
+fn scrollbar_thumb_fill_shows_nonactive_color_while_content_hovered() {
+    let nonactive = Fill::Solid(ColorU::white());
+    let active = Fill::Solid(ColorU::black());
+
+    assert_eq!(
+        scrollbar_thumb_fill(false, true, false, nonactive, active),
+        nonactive
+    );
+}
+
+#[test]
+fn scrollbar_thumb_fill_shows_active_color_while_scrollbar_hovered() {
+    let nonactive = Fill::Solid(ColorU::white());
+    let active = Fill::Solid(ColorU::black());
+
+    // The scrollbar thumb itself being hovered/dragged always wins, regardless of
+    // `always_show_thumb` or whether the content is hovered.
+    assert_eq!(
+        scrollbar_thumb_fill(true, false, false, nonactive, active),
+        active
+    );
+    assert_eq!(
+        scrollbar_thumb_fill(true, true, true, nonactive, active),
+        active
+    );
+}
+
+#[test]
+fn scrollbar_thumb_fill_always_show_thumb_bypasses_hover_gating() {
+    let nonactive = Fill::Solid(ColorU::white());
+    let active = Fill::Solid(ColorU::black());
+
+    // With `always_show_thumb` set, the nonactive thumb stays visible even without any
+    // hover -- this is what keeps a long, keyboard-navigated option list's scroll
+    // affordance discoverable.
+    assert_eq!(
+        scrollbar_thumb_fill(false, false, true, nonactive, active),
+        nonactive
+    );
 }
 
 #[test]
