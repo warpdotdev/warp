@@ -2032,10 +2032,7 @@ impl AIBlock {
             self.handle_web_search_messages(&output.messages, ctx);
         }
 
-        if FeatureFlag::WebFetchUI.is_enabled() {
-            // Handle WebFetch messages
-            self.handle_web_fetch_messages(&output.messages, ctx);
-        }
+        self.handle_web_fetch_messages(&output.messages, ctx);
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
