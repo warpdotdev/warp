@@ -14,9 +14,7 @@ use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use std::sync::Arc;
 
-        use ignore::gitignore::Gitignore;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
@@ -330,12 +328,12 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directories(
         &mut self,
         directory_paths: Vec<StandardizedPath>,
-        gitignores: Vec<Arc<Gitignore>>,
+        gitignore_rules: crate::GitignoreRules,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let futures: Vec<_> = directory_paths
             .into_iter()
-            .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
+            .map(|path| self.start_watching_directory(&path, gitignore_rules.clone(), ctx))
             .collect();
 
         async move {
@@ -353,16 +351,12 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directory(
         &mut self,
         directory_path: &StandardizedPath,
-        gitignores: Vec<Arc<Gitignore>>,
+        gitignore_rules: crate::GitignoreRules,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
-                // `gitignores` are the repo's cached root + global gitignores,
-                // threaded in from `Repository::start_watching` so we neither
-                // re-read `.gitignore` from disk nor re-enter the (already
-                // borrowed) `Repository` model here.
                 let force_included_paths = self.force_included_paths.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
@@ -371,7 +365,11 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
+                        repo_watch_filter(
+                            local_path.clone(),
+                            gitignore_rules,
+                            force_included_paths,
+                        ),
                         RecursiveMode::Recursive,
                     ))
                 })
@@ -536,6 +534,7 @@ impl DirectoryWatcher {
         let mut repo_updates: HashMap<ModelHandle<Repository>, RepositoryUpdate> = HashMap::new();
         let mut repos_to_refresh_tracked_remote_ref: HashSet<ModelHandle<Repository>> =
             HashSet::new();
+        let mut gitignore_operations = HashMap::new();
 
         {
             let mut process_upsert_paths =
@@ -561,8 +560,13 @@ impl DirectoryWatcher {
                         let standardized =
                             StandardizedPath::from_local_absolute_unchecked(path.as_path());
                         if let Some(repo_handle) = self.find_containing_directory(&standardized) {
+                            let operation = gitignore_operations
+                                .entry(repo_handle.clone())
+                                .or_insert_with(|| {
+                                    repo_handle.read(ctx, |repo, _| repo.gitignore_operation())
+                                });
                             let is_ignored =
-                                repo_handle.read(ctx, |repo, _| repo.check_gitignore_status(path));
+                                Repository::check_gitignore_status_with_operation(path, operation);
                             let target_file = TargetFile::new(path.to_path_buf(), is_ignored);
                             let repo_update = repo_updates.entry(repo_handle).or_default();
                             insert(repo_update, target_file);
@@ -599,9 +603,13 @@ impl DirectoryWatcher {
                 // symlink target's repo rather than the repo the path lexically belongs to.
                 let standardized = StandardizedPath::from_local_absolute_unchecked(path.as_path());
                 if let Some(repo_handle) = self.find_containing_directory(&standardized) {
-                    // Gitignore checking is pattern-based and doesn't require file existence.
+                    let operation = gitignore_operations
+                        .entry(repo_handle.clone())
+                        .or_insert_with(|| {
+                            repo_handle.read(ctx, |repo, _| repo.gitignore_operation())
+                        });
                     let is_ignored =
-                        repo_handle.read(ctx, |repo, _| repo.check_gitignore_status(path));
+                        Repository::check_gitignore_status_with_operation(path, operation);
                     let target_file = TargetFile::new(path.to_path_buf(), is_ignored);
                     let repo_update = repo_updates.entry(repo_handle).or_default();
                     repo_update.deleted.insert(target_file);
@@ -633,10 +641,15 @@ impl DirectoryWatcher {
                 let standardized =
                     StandardizedPath::from_local_absolute_unchecked(to_path.as_path());
                 if let Some(repo_handle) = self.find_containing_directory(&standardized) {
+                    let operation = gitignore_operations
+                        .entry(repo_handle.clone())
+                        .or_insert_with(|| {
+                            repo_handle.read(ctx, |repo, _| repo.gitignore_operation())
+                        });
                     let to_is_ignored =
-                        repo_handle.read(ctx, |repo, _| repo.check_gitignore_status(to_path));
+                        Repository::check_gitignore_status_with_operation(to_path, operation);
                     let from_is_ignored =
-                        repo_handle.read(ctx, |repo, _| repo.check_gitignore_status(from_path));
+                        Repository::check_gitignore_status_with_operation(from_path, operation);
                     let to_target = TargetFile::new(to_path.to_path_buf(), to_is_ignored);
                     let from_target = TargetFile::new(from_path.to_path_buf(), from_is_ignored);
                     let repo_update = repo_updates.entry(repo_handle).or_default();
