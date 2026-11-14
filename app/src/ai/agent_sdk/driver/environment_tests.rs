@@ -1281,8 +1281,52 @@ fn checkout_helper_quotes_paths_without_embedding_repository_payloads() {
         assert!(command.contains("' --report-file '"));
         assert!(!command.contains("github.com") && !command.contains("sh -c"));
         assert_eq!(command.starts_with("& "), shell == ShellType::PowerShell);
-        assert!(command.ends_with(" --remove-origins-only"));
+        if shell == ShellType::PowerShell {
+            assert!(
+                command.ends_with(" --remove-origins-only | Out-Host"),
+                "{command}"
+            );
+        } else {
+            assert!(command.ends_with(" --remove-origins-only"), "{command}");
+        }
     }
+}
+
+#[test]
+fn checkout_helper_renders_a_posix_command_without_a_pipeline() {
+    let command = build_checkout_helper_command(
+        Path::new("/Applications/Warp.app/Contents/MacOS/warp"),
+        Path::new("/private/a path/requests.json"),
+        Path::new("/private/a path/report.json"),
+        false,
+        false,
+        ShellType::Bash,
+    );
+    assert_eq!(
+        command,
+        "'/Applications/Warp.app/Contents/MacOS/warp' environment-checkout \
+         --requests-file '/private/a path/requests.json' \
+         --report-file '/private/a path/report.json'"
+    );
+}
+
+/// PowerShell only waits for a GUI-subsystem program when its output is consumed by the
+/// pipeline, so the helper is piped into the host; otherwise the driver would read the report
+/// file before the helper has written it.
+#[test]
+fn checkout_helper_pipes_into_the_host_under_powershell() {
+    let command = build_checkout_helper_command(
+        Path::new(r"C:\Program Files\Warp\warp.exe"),
+        Path::new(r"C:\Temp\oz x\requests.json"),
+        Path::new(r"C:\Temp\oz x\report.json"),
+        false,
+        false,
+        ShellType::PowerShell,
+    );
+    assert_eq!(
+        command,
+        r"& 'C:\Program Files\Warp\warp.exe' environment-checkout --requests-file 'C:\Temp\oz x\requests.json' --report-file 'C:\Temp\oz x\report.json' | Out-Host"
+    );
 }
 
 #[test]
@@ -1302,6 +1346,7 @@ fn only_skill_source_checkouts_run_under_legacy_preparation() {
                 skill_sources,
                 shell,
             );
+            let command = command.strip_suffix(" | Out-Host").unwrap_or(&command);
             assert_eq!(
                 command.ends_with(" --legacy-preparation"),
                 skill_sources,
