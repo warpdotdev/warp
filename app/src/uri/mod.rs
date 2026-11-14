@@ -842,7 +842,16 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
     };
 
     let workspace = match target_window_id {
-        Some(window_id) => WorkspaceRegistry::as_ref(ctx).get(window_id, ctx),
+        Some(window_id) => {
+            if ctx
+                .windows()
+                .windowing_system()
+                .is_some_and(|system| system.allows_programmatic_window_activation())
+            {
+                ctx.windows().show_window_and_focus_app(window_id);
+            }
+            WorkspaceRegistry::as_ref(ctx).get(window_id, ctx)
+        }
         None => {
             let new_window_id = open_new_window_get_handles(None, ctx).0;
             WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx)
