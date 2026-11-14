@@ -1,6 +1,7 @@
 pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
+mod centered_title_bar;
 pub(crate) mod chatgpt_plan_modal;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
@@ -120,6 +121,7 @@ use warpui::{
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use self::centered_title_bar::CenteredTitleBar;
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     SummaryPaneKind, SummaryPaneKindIcons, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
@@ -21305,43 +21307,30 @@ impl Workspace {
                 ctx,
             );
 
-            let left_padding = self.compute_tab_bar_left_padding(ctx);
+            // The side paddings (which include the macOS traffic lights on the left) belong to
+            // the side groups, so that the search bar is centered against the full title bar
+            // rather than against the asymmetric space left between the two groups.
+            let left_controls = Container::new(tab_bar.finish())
+                .with_padding_left(self.compute_tab_bar_left_padding(ctx))
+                .finish();
+            let right_controls = Container::new(right_controls.finish())
+                .with_padding_right(TAB_BAR_PADDING_RIGHT)
+                .finish();
 
-            // The title bar search bar can be hidden via a user setting; when hidden,
-            // an empty flexible slot keeps the right-side controls aligned to the right.
+            // The title bar search bar can be hidden via a user setting.
             let hide_search_bar =
                 *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
             let search_bar_slot = if hide_search_bar {
-                Expanded::new(1., Empty::new().finish()).finish()
+                Empty::new().finish()
             } else {
-                Shrinkable::new(
-                    1.,
-                    Clipped::new(
-                        Container::new(
-                            Align::new(self.render_title_bar_search_bar(appearance)).finish(),
-                        )
-                        .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .finish()
+                Container::new(self.render_title_bar_search_bar(appearance))
+                    .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
+                    .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
+                    .finish()
             };
 
-            let tab_bar = Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(tab_bar.finish())
-                .with_child(search_bar_slot)
-                .with_child(right_controls.finish())
-                .finish();
-
             return EventHandler::new(
-                Container::new(tab_bar)
-                    .with_padding_left(left_padding)
-                    .with_padding_right(TAB_BAR_PADDING_RIGHT)
-                    .finish(),
+                CenteredTitleBar::new(left_controls, search_bar_slot, right_controls).finish(),
             )
             .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
