@@ -44,8 +44,8 @@ pub mod spacectl;
 #[cfg(test)]
 use discovery::produce_candidates;
 use discovery::{CacheCandidate, CandidateKey, DETECTION_CONCURRENCY, candidate_receiver};
-use metadata::{CacheMetadataError, CacheUsage, normalized_cache_root};
-use spacectl::{MountContext, MountResponse, run_spacectl_mount};
+use metadata::{CacheMetadataError, CacheUsage, lexically_normalized, normalized_cache_root};
+use spacectl::{Mount, MountContext, MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 4 * 1024;
@@ -388,6 +388,9 @@ struct DetectedCacheModes {
     source: RepositoryCacheSource,
     relative_cache_dir: PathBuf,
     modes: Vec<String>,
+    /// Dry-run mount destinations inside the repository, relative to its root. `None` when the
+    /// dry run did not report a complete destination for every mount.
+    repository_mount_paths: Option<BTreeSet<PathBuf>>,
 }
 
 struct CandidateDetection {
@@ -827,6 +830,11 @@ where
         } else {
             Some(DetectedCacheModes {
                 order: candidate.key.clone(),
+                repository_mount_paths: repository_mount_paths(
+                    &candidate.repository_root,
+                    &candidate.source.cwd,
+                    &response.output.mounts,
+                ),
                 source: candidate.source,
                 relative_cache_dir: candidate.relative_cache_dir,
                 modes,
@@ -839,6 +847,38 @@ where
         detected,
         scheduled: true,
     }
+}
+
+/// Resolves dry-run mount destinations relative to `cwd` and keeps those inside
+/// `repository_root`, expressed relative to it. Tools may report destinations through a
+/// symlink-resolved working directory, so both the lexical and canonical roots are accepted.
+fn repository_mount_paths(
+    repository_root: &Path,
+    cwd: &Path,
+    mounts: &[Mount],
+) -> Option<BTreeSet<PathBuf>> {
+    if mounts.is_empty() {
+        return None;
+    }
+    let roots = [
+        Some(lexically_normalized(repository_root)),
+        std::fs::canonicalize(repository_root).ok(),
+    ];
+    let mut paths = BTreeSet::new();
+    for mount in mounts {
+        if mount.mount_path.as_os_str().is_empty() {
+            return None;
+        }
+        let destination = lexically_normalized(&cwd.join(&mount.mount_path));
+        if let Some(relative) = roots
+            .iter()
+            .flatten()
+            .find_map(|root| destination.strip_prefix(root).ok())
+        {
+            paths.insert(relative.to_owned());
+        }
+    }
+    Some(paths)
 }
 
 /// Construct a plan for setting up build caches on the current system. This requires:
@@ -866,7 +906,13 @@ where
 /// - `~/.cargo/registry` => `/cache/shared/$HOME/.cargo/registry`
 /// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
 /// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty))]
+///
+/// Because the global configuration covers everything outside the repositories, a repository
+/// configuration is only kept if it mounts a destination inside its repository that no earlier
+/// configuration (in canonical order) already mounts. Otherwise, sub-projects such as Cargo
+/// workspace members would each re-mount the workspace's shared `target` directory, so the
+/// winning cache location would depend on which sub-projects discovery happened to select.
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty, pruned_configurations = tracing::field::Empty))]
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<DetectedCacheModes>,
@@ -900,9 +946,25 @@ fn construct_plan(
             .iter()
             .map(|detection| detection.source.cwd.as_path()),
     )?;
-    let mut configurations = detections
-        .into_iter()
-        .map(|detection| CacheConfiguration {
+    let mut claimed_paths = BTreeSet::new();
+    let mut pruned_configurations = 0u64;
+    let mut configurations = Vec::new();
+    for detection in detections {
+        let mounts_unclaimed_path = match detection.repository_mount_paths {
+            None => true,
+            Some(paths) => {
+                let mut unclaimed = false;
+                for path in paths {
+                    unclaimed |= claimed_paths.insert((detection.order.repo_key.clone(), path));
+                }
+                unclaimed
+            }
+        };
+        if !mounts_unclaimed_path {
+            pruned_configurations += 1;
+            continue;
+        }
+        configurations.push(CacheConfiguration {
             scope: CacheScope::Repository {
                 name: detection.source.name,
                 key: detection.order.repo_key,
@@ -910,8 +972,9 @@ fn construct_plan(
             cwd: detection.source.cwd,
             relative_cache_dir: detection.relative_cache_dir,
             modes: detection.modes,
-        })
-        .collect::<Vec<_>>();
+        });
+    }
+    tracing::Span::current().record("pruned_configurations", pruned_configurations);
     tracing::Span::current().record("resolved_modes", global_modes.iter().join(", "));
     configurations.push(CacheConfiguration {
         scope: CacheScope::Global,

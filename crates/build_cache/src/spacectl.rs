@@ -70,11 +70,23 @@ pub(super) struct MountContext {
     pub stable_child_id: String,
 }
 
+/// Environment for `spacectl` and the tool queries it runs while planning (`go env`,
+/// `cargo metadata`, ...). Those queries only need cache locations, but by default they download
+/// whichever toolchain a repository pins. The download takes several seconds and lands in a
+/// directory that is about to be covered by a cache mount, so it is repeated on every run.
+const SPACECTL_ENV: &[(&str, &str)] = &[("GOTOOLCHAIN", "local"), ("RUSTUP_AUTO_INSTALL", "0")];
+
+fn spacectl_command() -> Command {
+    let mut command = Command::new_with_process_group("spacectl");
+    command.envs(SPACECTL_ENV.iter().copied());
+    command
+}
+
 /// Construct a `spacectl` command for detecting all cache modes that apply to
 /// `cwd`. Currently, this uses `spacectl cache mount`, though we could use
 /// `spacectl cache modes` as well.
 fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
-    let mut command = Command::new_with_process_group("spacectl");
+    let mut command = spacectl_command();
     command
         .args([
             "cache",
@@ -91,7 +103,7 @@ fn detect_command(cache_root: &Path, cwd: &Path) -> Command {
 
 /// Construct a `spacectl` command for mounting a specific set of modes on `cwd`.
 fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
-    let mut command = Command::new_with_process_group("spacectl");
+    let mut command = spacectl_command();
     command
         .args(["cache", "mount"])
         .arg(format!("--mode={}", modes.join(",")))
