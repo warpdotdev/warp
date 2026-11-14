@@ -1,14 +1,50 @@
 use chrono::Utc;
+use warpui::platform::WindowStyle;
+use warpui::{App, EntityId, SingletonEntity};
 
-use super::TombstoneDisplayData;
+use super::{ConversationEndedTombstoneView, TombstoneDisplayData};
+use crate::ai::agent::RenderableAIError;
+use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::ambient_agents::task::{RequestUsage, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, format_credits};
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 const INFERENCE_COST: f64 = 1.5;
 const COMPUTE_COST: f64 = 3.0;
 const PLATFORM_COST: f64 = 2.5;
+
+#[test]
+fn conversation_error_takes_precedence_over_startup_error() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view_id = EntityId::new();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_status_for_test(ConversationStatus::Error);
+        conversation.set_status_error_for_test(Some(RenderableAIError::other(
+            "conversation failed".to_string(),
+            false,
+        )));
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let (_, tombstone) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            ConversationEndedTombstoneView::new(
+                ctx,
+                terminal_view_id,
+                None,
+                None,
+                Some("startup failed".to_string()),
+            )
+        });
+
+        tombstone.read(&app, |view, _| {
+            assert_eq!(view.error_message_for_test(), Some("conversation failed"));
+        });
+    });
+}
 
 fn task_with_run_time_and_credits() -> AmbientAgentTask {
     let started_at = Utc::now();
