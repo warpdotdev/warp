@@ -14,6 +14,7 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::safe_info;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_util::path::ShellFamily;
 use warpui::{ModelHandle, ModelSpawner};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
@@ -217,6 +218,9 @@ const CLAUDE_EXIT_COMMAND: &str = "/exit";
 /// existing on-disk session; otherwise we pass `--session-id <uuid>` to pin a
 /// fresh session to that id. If `system_prompt_path` is provided, the CLI is
 /// told to append its contents to the base system prompt.
+///
+/// The prompt file is fed to the CLI on a non-TTY stdin. POSIX shells redirect it with `<`;
+/// PowerShell reserves `<`, so there the file is piped in with `Get-Content -Raw` instead.
 fn claude_command(
     cli_name: &str,
     session_id: &Uuid,
@@ -224,6 +228,7 @@ fn claude_command(
     system_prompt_path: Option<&str>,
     mcp_config_path: Option<&str>,
     resuming: bool,
+    shell_family: ShellFamily,
 ) -> String {
     let flag = if resuming { "--resume" } else { "--session-id" };
     let mut cmd = format!("{cli_name} {flag} {session_id} --dangerously-skip-permissions");
@@ -233,7 +238,10 @@ fn claude_command(
     if let Some(mcp_path) = mcp_config_path {
         let _ = write!(cmd, " --mcp-config '{mcp_path}'");
     }
-    format!("{cmd} < '{prompt_path}'")
+    match shell_family {
+        ShellFamily::Posix => format!("{cmd} < '{prompt_path}'"),
+        ShellFamily::PowerShell => format!("Get-Content -Raw '{prompt_path}' | {cmd}"),
+    }
 }
 
 /// Runtime state of a [`ClaudeHarnessRunner`].
@@ -248,9 +256,15 @@ enum ClaudeRunnerState {
 }
 
 struct ClaudeHarnessRunner {
-    command: String,
     /// The CLI name used to invoke Claude Code.
     cli_name: String,
+    /// Path of the prompt file fed to the CLI's stdin. The launch command is rendered in
+    /// [`HarnessRunner::start`], once the active session's shell is known.
+    prompt_path: String,
+    /// Path of the appended system prompt file, when there is one.
+    system_prompt_path: Option<String>,
+    /// Path of the MCP config file, when any MCP servers are configured.
+    mcp_config_path: Option<String>,
     /// Held so the temp file is cleaned up when the runner is dropped.
     _temp_prompt_file: NamedTempFile,
     /// Held so the system prompt temp file is cleaned up when the runner is dropped.
@@ -329,15 +343,10 @@ impl ClaudeHarnessRunner {
         let client: Arc<dyn HarnessSupportClient> = server_api.clone();
 
         Ok(Self {
-            command: claude_command(
-                cli_command,
-                &session_id,
-                &prompt_path,
-                system_prompt_path.as_deref(),
-                mcp_config_path.as_deref(),
-                preexisting_conversation_id.is_some(),
-            ),
             cli_name: cli_command.to_string(),
+            prompt_path,
+            system_prompt_path,
+            mcp_config_path,
             _temp_prompt_file: temp_file,
             _temp_system_prompt_file: temp_system_prompt_file,
             _temp_mcp_config_file: temp_mcp_config_file,
@@ -494,10 +503,29 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .await
             .map_err(AgentDriverError::ConfigBuildFailed)?;
 
-        let command = self.command.clone();
+        let cli_name = self.cli_name.clone();
+        let session_id = self.session_id;
+        let prompt_path = self.prompt_path.clone();
+        let system_prompt_path = self.system_prompt_path.clone();
+        let mcp_config_path = self.mcp_config_path.clone();
+        let resuming = self.preexisting_conversation_id.is_some();
         let terminal_driver = self.terminal_driver.clone();
         let command_handle = match foreground
             .spawn(move |_, ctx| {
+                let shell_family = terminal_driver
+                    .as_ref(ctx)
+                    .active_session_shell_type(ctx)
+                    .map(ShellFamily::from)
+                    .unwrap_or(ShellFamily::Posix);
+                let command = claude_command(
+                    &cli_name,
+                    &session_id,
+                    &prompt_path,
+                    system_prompt_path.as_deref(),
+                    mcp_config_path.as_deref(),
+                    resuming,
+                    shell_family,
+                );
                 terminal_driver.update(ctx, |driver, ctx| driver.execute_command(&command, ctx))
             })
             .await??
