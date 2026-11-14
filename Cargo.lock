@@ -315,6 +315,7 @@ dependencies = [
 name = "ai"
 version = "0.1.0"
 dependencies = [
+ "ai_types",
  "anyhow",
  "arborium",
  "async-channel",

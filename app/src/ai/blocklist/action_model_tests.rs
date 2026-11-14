@@ -191,6 +191,7 @@ mod hooks {
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
+            delegated_github_coauthor_user_uid: None,
         }
     }
 
