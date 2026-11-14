@@ -29,7 +29,7 @@ use warp::integration_testing::window::{
     add_and_save_window, assert_num_windows_open, save_active_window_id,
 };
 use warp::integration_testing::workspace::{
-    assert_focused_tab_index, assert_tab_count, press_native_modal_button,
+    assert_focused_tab_index, assert_tab_count, press_native_modal_button, trigger_undo_close,
 };
 use warp::search::command_palette::mixer::CommandPaletteItemAction;
 use warp::settings::PaneSettings;
@@ -1504,4 +1504,137 @@ pub fn test_single_tab_handoff_continues_drag() -> Builder {
                 .add_assertion(assert_focused_editor_in_tab(0)),
         )
         .with_step(focus_saved_window(TARGET_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+}
+
+/// Regression test: dragging a tab into a different, existing window closes the temporary preview
+/// with `TerminationMode::ContentTransferred`. That close must not be pushed onto `UndoCloseStack`
+/// -- undo-close resurrecting it would give two windows ownership of the same pane group again.
+pub fn test_undo_close_does_not_resurrect_content_transferred_window() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a new tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            1,
+            "echo source-one".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(add_and_save_window(TARGET_WINDOW_KEY))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo target-only".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(set_saved_window_origin(
+            SOURCE_WINDOW_KEY,
+            vec2f(100.0, 100.0),
+        ))
+        .with_step(set_saved_window_origin(
+            TARGET_WINDOW_KEY,
+            vec2f(900.0, 100.0),
+        ))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(
+            TestStep::new("Attach the dragged tab into the target window and release")
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 1);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 1);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(0.0, 140.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let target_window_id = *data
+                        .get::<_, WindowId>(TARGET_WINDOW_KEY)
+                        .expect("saved target window id should exist");
+                    let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+                    let attach_point = tab_screen_point(
+                        app,
+                        target_window_id,
+                        0,
+                        8.0,
+                        target_tab_bounds.height() / 2.0,
+                    );
+                    let source_local_target =
+                        source_local_point_for_screen_point(app, source_window_id, attach_point);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: source_local_target,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseUp {
+                            position: source_local_target,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .add_assertion(assert_num_windows_open(2))
+                .add_assertion(assert_total_tab_count(3)),
+        )
+        .with_step(
+            focus_saved_window(TARGET_WINDOW_KEY)
+                .add_assertion(assert_tab_count(2))
+                .add_assertion(assert_focused_tab_index(1))
+                .add_assertion(assert_focused_editor_in_tab(1)),
+        )
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+        .with_step(
+            trigger_undo_close()
+                .add_assertion(assert_num_windows_open(2))
+                .add_assertion(assert_total_tab_count(3)),
+        )
+        .with_step(
+            focus_saved_window(TARGET_WINDOW_KEY)
+                .add_assertion(assert_tab_count(2))
+                .add_assertion(assert_focused_editor_in_tab(1)),
+        )
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
 }
