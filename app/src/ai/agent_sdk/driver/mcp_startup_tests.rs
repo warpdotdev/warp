@@ -43,8 +43,8 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::AmbientAgentEnvironment;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::builtin::{
-    COMPUTER_USE_MCP_SERVER_NAME, FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME,
-    PREVIEW_URLS_MCP_SERVER_NAME,
+    COMPUTER_USE_MCP_INSTALLATION_UUID, COMPUTER_USE_MCP_SERVER_NAME,
+    FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME, PREVIEW_URLS_MCP_SERVER_NAME,
 };
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
@@ -2438,12 +2438,17 @@ fn configured_servers_take_precedence_over_the_computer_use_mcp() {
         .insert(COMPUTER_USE_MCP_SERVER_NAME.to_owned(), configured.clone());
     attach_computer_use_mcp(&mut servers, computer_use_server(Harness::Claude).unwrap());
     assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], configured);
+    assert!(servers.installation_ids.is_empty());
     assert!(servers.harness_settings.is_empty());
 
     let mut servers = ResolvedMCPServers::default();
     let computer_use = computer_use_server(Harness::Claude).unwrap();
     attach_computer_use_mcp(&mut servers, computer_use.clone());
     assert_eq!(servers.configs[COMPUTER_USE_MCP_SERVER_NAME], computer_use);
+    assert_eq!(
+        servers.installation_ids[COMPUTER_USE_MCP_SERVER_NAME],
+        COMPUTER_USE_MCP_INSTALLATION_UUID
+    );
     assert_eq!(
         servers.harness_settings[COMPUTER_USE_MCP_SERVER_NAME].forwarded_env_vars,
         ["WARP_API_KEY"]

@@ -42,7 +42,13 @@ pub const FACTORY_MCP_SERVER_NAME: &str = "warp-factory";
 pub const PREVIEW_URLS_MCP_SERVER_NAME: &str = "warp-preview-urls";
 
 /// The server name under which the computer use MCP's tools are given to third-party harnesses.
-pub const COMPUTER_USE_MCP_SERVER_NAME: &str = "warp-computer-use";
+/// Transcript viewers identify the server's tool calls by this name, so it is the server's own.
+pub const COMPUTER_USE_MCP_SERVER_NAME: &str = computer_use_mcp::SERVER_NAME;
+
+/// Stable installation UUID for the built-in computer use MCP server, which its tool calls
+/// carry as their server id.
+pub const COMPUTER_USE_MCP_INSTALLATION_UUID: Uuid =
+    Uuid::from_u128(0x19384842_354f_46f9_a666_c372292d61e8);
 
 /// Code-owned definition of a streamable-HTTP MCP server hosted by warp-server.
 struct BuiltinMcpServer {

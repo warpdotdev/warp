@@ -26,6 +26,10 @@ pub use recording::RecordingDestination;
 pub use server::ComputerUseMcpServer;
 pub use stdio::run_stdio;
 
+/// The name the server introduces itself by. Transcripts identify its tool calls by this name,
+/// and viewers title those calls from the tool and argument names in `tool_contract.json`.
+pub const SERVER_NAME: &str = "warp-computer-use";
+
 /// Configuration for a computer-use MCP server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputerUseMcpConfig {
