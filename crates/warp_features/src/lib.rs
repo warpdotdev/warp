@@ -672,6 +672,9 @@ pub enum FeatureFlag {
     /// Enables loading and returning bundled skills in the SkillManager.
     BundledSkills,
 
+    /// Scopes cloud repository skill listings to the active working directory.
+    CwdScopedCloudSkills,
+
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 
@@ -1090,6 +1093,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::CwdScopedCloudSkills,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
