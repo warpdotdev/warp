@@ -90,6 +90,8 @@ pub enum StageAction {
     DownloadChromium,
     GrantScreenRecording,
     Screenshot,
+    /// Rotates the front simulator to its next orientation.
+    Rotate,
     /// Moves the previews between the pane and the picture-in-picture window.
     TogglePictureInPicture,
     AddPreview,
@@ -136,6 +138,7 @@ pub struct StageMouseStates {
     watch: MouseStateHandle,
     control: MouseStateHandle,
     screenshot: MouseStateHandle,
+    rotate: MouseStateHandle,
     picture_in_picture: MouseStateHandle,
     add: MouseStateHandle,
     status_button: MouseStateHandle,
@@ -605,6 +608,23 @@ fn render_bar<A: Action + Clone>(
             Some(wrap(StageAction::Screenshot)),
             appearance,
         ))
+        .with_child(
+            if matches!(
+                front.map(|preview| &preview.source),
+                Some(Source::Simulator(_))
+            ) {
+                bar_button(
+                    Icon::RefreshCw04,
+                    "Rotate simulator",
+                    BarButtonState::Normal,
+                    &mouse_states.rotate,
+                    Some(wrap(StageAction::Rotate)),
+                    appearance,
+                )
+            } else {
+                Empty::new().finish()
+            },
+        )
         .with_child(bar_button(
             picture_in_picture_icon,
             picture_in_picture_tip,

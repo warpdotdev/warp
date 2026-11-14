@@ -22,6 +22,8 @@ pub(crate) enum Control {
     Navigate(String),
     /// Lays the page out at a new size, in points. Browser sources only.
     Resize(u32, u32),
+    /// Rotates a simulator to its next orientation. Simulator sources only.
+    Rotate,
     Input(InputEvent),
     Stop,
 }
@@ -49,6 +51,11 @@ impl Stream {
     /// Lays a browser preview's page out at `width` by `height` points. Does nothing for windows.
     pub fn resize(&self, width: u32, height: u32) {
         let _ = self.control.send(Control::Resize(width, height));
+    }
+
+    /// Rotates a simulator to its next orientation. Does nothing for other sources.
+    pub fn rotate(&self) {
+        let _ = self.control.send(Control::Rotate);
     }
 
     /// Delivers pointer or keyboard input to the source.

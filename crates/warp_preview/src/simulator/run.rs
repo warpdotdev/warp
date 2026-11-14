@@ -65,7 +65,8 @@ fn run(
     events: &async_channel::Sender<StreamEvent>,
 ) -> Result<(), String> {
     boot(baguette, &source.udid)?;
-    let screen = screen_points(baguette, &source.udid)?;
+    let mut screen = screen_points(baguette, &source.udid)?;
+    let mut orientation = Orientation::Portrait;
     let mut frames = FrameStream::start(baguette, &source.udid, rate, events)?;
     let mut input: Option<InputProcess> = None;
     loop {
@@ -89,12 +90,60 @@ fn run(
                 }
             }
             Ok(Control::Navigate(_) | Control::Resize(..)) => {}
+            Ok(Control::Rotate) => {
+                orientation = orientation.next();
+                set_orientation(baguette, &source.udid, orientation)?;
+                screen = screen_points(baguette, &source.udid)?;
+            }
             Ok(Control::Stop) | Err(_) => {
                 frames.stop();
                 return Ok(());
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Orientation {
+    Portrait,
+    LandscapeRight,
+    PortraitUpsideDown,
+    LandscapeLeft,
+}
+
+impl Orientation {
+    fn next(self) -> Self {
+        match self {
+            Self::Portrait => Self::LandscapeRight,
+            Self::LandscapeRight => Self::PortraitUpsideDown,
+            Self::PortraitUpsideDown => Self::LandscapeLeft,
+            Self::LandscapeLeft => Self::Portrait,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Portrait => "portrait",
+            Self::LandscapeRight => "landscape-right",
+            Self::PortraitUpsideDown => "pud",
+            Self::LandscapeLeft => "landscape-left",
+        }
+    }
+}
+
+fn set_orientation(baguette: &Path, udid: &str, orientation: Orientation) -> Result<(), String> {
+    let output = Command::new(baguette)
+        .args(["orientation", "--udid", udid, orientation.as_str()])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| format!("Couldn't rotate simulator: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Couldn't rotate simulator: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// Boots the device without the Simulator app's window. Booting a booted device is harmless.

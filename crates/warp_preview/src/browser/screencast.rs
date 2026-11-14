@@ -237,6 +237,7 @@ fn run(
                     viewport = (width, height);
                     set_viewport(&mut cdp, viewport, session)?;
                 }
+                Ok(Control::Rotate) => {}
                 Ok(Control::Input(event)) => {
                     for (method, params) in super::input::commands(&event, viewport) {
                         cdp.send(method, params, session)?;

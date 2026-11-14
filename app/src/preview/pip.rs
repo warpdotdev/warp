@@ -283,6 +283,11 @@ impl PreviewPipView {
                     }
                 }
             }
+            StageAction::Rotate => {
+                PreviewStreams::handle(ctx).update(ctx, |streams, _| {
+                    streams.rotate(self.front);
+                });
+            }
             StageAction::TogglePictureInPicture | StageAction::AddPreview => {
                 self.return_to_pane(ctx)
             }

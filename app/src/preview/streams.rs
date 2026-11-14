@@ -254,6 +254,21 @@ impl PreviewStreams {
         }
     }
 
+    /// Rotates a simulator preview to its next orientation.
+    pub fn rotate(&self, id: PreviewId) -> bool {
+        let Some(preview) = self.get(id) else {
+            return false;
+        };
+        if !matches!(preview.source, Source::Simulator(_)) {
+            return false;
+        }
+        let Some(stream) = &preview.stream else {
+            return false;
+        };
+        stream.rotate();
+        true
+    }
+
     /// Sets how often a preview updates, from how prominently it is shown.
     pub fn set_rate(&mut self, id: PreviewId, rate: Rate) {
         let Some(preview) = self.get_mut(id) else {

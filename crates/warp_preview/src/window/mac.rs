@@ -301,7 +301,7 @@ fn run(
                 next = Instant::now();
                 continue;
             }
-            Ok(Control::Navigate(_) | Control::Resize(..)) => continue,
+            Ok(Control::Navigate(_) | Control::Resize(..) | Control::Rotate) => continue,
             Ok(Control::Input(event)) => {
                 if input.is_none() {
                     input = InputWorker::start(window_id, source.pid);

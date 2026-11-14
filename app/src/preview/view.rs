@@ -441,6 +441,13 @@ impl PreviewView {
                 self.refresh_windows(ctx);
             }
             StageAction::Screenshot => self.take_screenshot(ctx),
+            StageAction::Rotate => {
+                if let Some(front) = self.front {
+                    PreviewStreams::handle(ctx).update(ctx, |streams, _| {
+                        streams.rotate(front);
+                    });
+                }
+            }
             StageAction::TogglePictureInPicture => self.pop_out(ctx),
             StageAction::AddPreview => {
                 self.show_start_page = true;
