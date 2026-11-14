@@ -1012,10 +1012,6 @@ impl Input {
                 }
             }
             SlashCommandKind::Profile => {
-                if !FeatureFlag::InlineProfileSelector.is_enabled() {
-                    return false;
-                }
-
                 self.open_profile_selector(ctx);
             }
             SlashCommandKind::Prompts => {
