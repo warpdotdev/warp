@@ -439,3 +439,17 @@ async fn detached_tag_display_returns_short_sha() {
         "expected {full_sha} to start with {result}"
     );
 }
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn repo_git_summary_skips_untracked_files_with_diff_unset() {
+    let (_dir, repo) = init_repo().await;
+    std::fs::write(repo.join(".gitattributes"), "*.sql -diff\n").unwrap();
+    std::fs::write(repo.join("big.sql"), "a\nb\nc\n").unwrap();
+    std::fs::write(repo.join("small.txt"), "x\n").unwrap();
+
+    let summary = super::get_repo_git_summary(&repo).await.unwrap();
+
+    // `.gitattributes` (1 line) + `small.txt` (1 line); `big.sql` is excluded.
+    assert_eq!(summary.lines_added, 2);
+}
