@@ -87,6 +87,8 @@ workflows:
     '.github/workflows/update-triage-local.yml': []
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7.0.1'
+    '.github/workflows/zizmor.yml':
+        - 'actions/checkout@v7.0.1'
 dependencies:
     'actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7':
         ref: 'v5.0.4'
