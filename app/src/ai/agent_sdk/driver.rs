@@ -3454,6 +3454,13 @@ impl AgentDriver {
         let resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
+        let harness_kind = harness.harness();
+        let resolved_mcp_servers = foreground
+            .spawn(move |me, ctx| {
+                me.with_builtin_computer_use_mcp(harness_kind, resolved_mcp_servers, ctx)
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         if !resolved_mcp_servers.configs.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",

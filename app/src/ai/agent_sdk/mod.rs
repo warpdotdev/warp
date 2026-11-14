@@ -59,6 +59,7 @@ use crate::ai::agent::api::convert_conversation::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
@@ -758,10 +759,13 @@ fn build_execution_task_and_options(
             workspace.definition_skill_dirs = Some(definition_skill_dirs);
             workspace
         },
-        computer_use_config: (selected_harness == Harness::Oz).then(|| {
+        computer_use_config: harness_takes_computer_use_config(selected_harness).then(|| {
             (
                 config.computer_use_enabled,
-                config.computer_use_model_id.map(Into::into),
+                config
+                    .computer_use_model_id
+                    .filter(|_| selected_harness == Harness::Oz)
+                    .map(Into::into),
             )
         }),
         selected_harness,

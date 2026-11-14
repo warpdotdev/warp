@@ -36,6 +36,7 @@ use crate::ai::agent_sdk::driver::environment::{WorkspaceConfiguration, merge_re
 use crate::ai::agent_sdk::driver::git_credentials::restricted::{
     self, CredentialStoreGuard, ManagedStoreOwner,
 };
+use crate::ai::agent_sdk::driver::mcp_startup::harness_takes_computer_use_config;
 use crate::ai::agent_sdk::driver::{
     AgentDriver, AgentDriverError, AgentDriverOptions, Task, cloud_provider, git_credentials,
 };
@@ -762,7 +763,7 @@ async fn prepare(
         environment_variables: config.environment_variables,
         workspace,
         cloud_providers,
-        computer_use_config: (harness == Harness::Oz)
+        computer_use_config: harness_takes_computer_use_config(harness)
             .then_some((preparation.computer_use_enabled, None)),
         selected_harness: harness,
         ..Default::default()

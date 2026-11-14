@@ -125,6 +125,37 @@ fn codex_pty_assignment_applies_run_environment_and_model() {
     );
 }
 
+#[test]
+fn third_party_assignment_omits_computer_use_config_without_computer_use_mcp() {
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let root = tempfile::tempdir().unwrap();
+        let mut configuration = config();
+        configuration.harness = warp_graphql::ai::AgentHarness::ClaudeCode;
+        configuration.model_id = Some("assigned-model".into());
+        configuration.computer_use_enabled = true;
+        validate_assignment(&configuration).unwrap();
+        let (options, ..) = app.update(|ctx| {
+            build_execution_task_and_options(
+                None,
+                HarnessTransport::Acp,
+                configuration,
+                RepositoryContract {
+                    supports_deferred_repositories: true,
+                    use_factory_repositories: true,
+                },
+                root.path().into(),
+                None,
+                Vec::new(),
+                ctx,
+            )
+            .unwrap()
+        });
+        assert_eq!(options.computer_use_config, None);
+    });
+}
+
 fn assert_third_party_assignment(
     server_harness: warp_graphql::ai::AgentHarness,
     harness: Harness,
@@ -132,6 +163,7 @@ fn assert_third_party_assignment(
     transport_name: &str,
 ) {
     let transport_name = transport_name.to_owned();
+    let _computer_use_mcp = FeatureFlag::ComputerUseMcp.override_enabled(true);
     App::test((), move |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let root = tempfile::tempdir().unwrap();
@@ -144,6 +176,8 @@ fn assert_third_party_assignment(
         configuration.harness = server_harness;
         configuration.model_id = Some("assigned-model".into());
         configuration.factory_skill_dirs = vec![".agents/skills".into()];
+        configuration.computer_use_enabled = true;
+        configuration.computer_use_model_id = Some("computer-use-model".into());
         let runtime_env = HashMap::from([
             ("WARP_HARNESS_TRANSPORT".into(), transport_name),
             ("WARP_API_KEY".into(), "run-key".into()),
@@ -175,7 +209,9 @@ fn assert_third_party_assignment(
             transport == HarnessTransport::Pty
         );
         assert_eq!(options.harness_transport, transport);
-        assert!(options.computer_use_config.is_none());
+        // Third-party harnesses get computer use through the computer use MCP server, which
+        // the harness's own model drives, so only the enablement carries over.
+        assert_eq!(options.computer_use_config, Some((true, None)));
         options.environment_variables = runtime_env;
         options.secrets.insert(
             "HARNESS_SECRET".into(),
