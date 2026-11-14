@@ -24,10 +24,10 @@ fn records_provider_skill_files_and_project_rules() {
     let root_rule = repo_path("WARP.md");
     let nested_rule = repo_path("packages/api/AGENTS.md");
 
-    results.record_path(&skills_provider, true, &definitions);
-    results.record_path(&skill_file, false, &definitions);
-    results.record_path(&root_rule, false, &definitions);
-    results.record_path(&nested_rule, false, &definitions);
+    results.record_path(&skills_provider, true, false, &definitions);
+    results.record_path(&skill_file, false, false, &definitions);
+    results.record_path(&root_rule, false, false, &definitions);
+    results.record_path(&nested_rule, false, false, &definitions);
 
     assert!(
         results
@@ -84,9 +84,27 @@ fn support_file_beneath_skill_does_not_synthesize_provider_update() {
     let mut results = StandingQueryResults::default();
     let support_file = repo_path(".agents/skills/review/README.md");
 
-    results.record_path(&support_file, false, &definitions);
+    results.record_path(&support_file, false, false, &definitions);
 
     assert!(results.project_skills().next().is_none());
+}
+
+#[test]
+fn rule_below_ignored_ancestor_is_not_recorded_but_skill_is() {
+    let definitions = definitions();
+    let mut results = StandingQueryResults::default();
+    let vendored_rule = repo_path("node_modules/pkg/AGENTS.md");
+    let ignored_skill = repo_path(".agents/skills/review/SKILL.md");
+
+    results.record_path(&vendored_rule, false, true, &definitions);
+    results.record_path(&ignored_skill, false, true, &definitions);
+
+    assert!(results.project_rules().next().is_none());
+    assert!(
+        results
+            .project_skills()
+            .any(|content| content == &StandingQueryContent::file(standardized(&ignored_skill)))
+    );
 }
 
 /// Emulates the open `AGENTS.md` discovery contract that non-Warp agents follow:
