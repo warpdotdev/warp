@@ -1382,6 +1382,11 @@ impl ansi::Handler for GridHandler {
         let scroll_right_cells =
             (scroll_right_px / (self.ansi_handler_state.cell_width as f32)).ceil() as usize;
 
+        // Image-only redraws must replace inline images without relying on a cell write.
+        let position = AbsolutePoint::from_point(self.cursor_point(), self);
+        self.images
+            .evict_images_at_point_with_type(position, &[ImageType::ITerm]);
+
         let image_id = image.metadata.id;
         let placement_id = rand::thread_rng().r#gen();
 
@@ -1406,7 +1411,7 @@ impl ansi::Handler for GridHandler {
         self.images.place(
             image_id,
             placement_id,
-            AbsolutePoint::from_point(self.cursor_point(), self),
+            position,
             ImageType::ITerm,
             self.num_lines_truncated(),
         );

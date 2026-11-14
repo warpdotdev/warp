@@ -3,16 +3,127 @@
 
 use std::ops::BitOrAssign;
 
+use pathfinder_geometry::vector::Vector2F;
 use warp_util::path::LineAndColumnArg;
 use warpui_core::text::words::is_default_word_boundary;
 
 use super::*;
 use crate::model::blockgrid::BlockGrid;
 use crate::model::char_or_str::CharOrStr;
+use crate::model::iterm_image::{ITermImage, ITermImageDimensionUnit, ITermImageMetadata};
 use crate::model::secrets::{IsObfuscated, ObfuscateSecrets, SecretLevel};
-use crate::test_util::mock_blockgrid;
+use crate::test_util::{
+    mock_blockgrid, test_kitty_image_metadata_map, test_kitty_store_and_display_action,
+};
 
 const MAX_SCROLL_LIMIT: usize = 1000;
+
+fn iterm_test_image(id: u32, width: u32) -> ITermImage {
+    ITermImage {
+        metadata: ITermImageMetadata {
+            id,
+            desired_width: Some((width, ITermImageDimensionUnit::Cell)),
+            desired_height: Some((1, ITermImageDimensionUnit::Cell)),
+            preserve_aspect_ratio: false,
+            inline: true,
+            image_size: Vector2F::new(240.0, 24.0),
+            ..Default::default()
+        },
+        data: vec![0],
+    }
+}
+
+#[test]
+fn iterm_image_replaces_previous_images_at_same_position() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut grid = GridHandler::new_for_alt_screen_test(10, 80);
+
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(1, 20));
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(2, 20));
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(3, 4));
+
+    let images = grid.get_image_ids_in_range(0, 9);
+    assert_eq!(
+        images
+            .iter()
+            .map(|image| image.image_id)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
+    assert_eq!(grid.cursor_point(), Point::new(2, 6));
+}
+
+#[test]
+fn iterm_image_replacement_preserves_images_at_other_positions() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut grid = GridHandler::new_for_alt_screen_test(10, 80);
+
+    grid.goto(VisibleRow(2), 30);
+    grid.handle_completed_iterm_image(iterm_test_image(1, 4));
+    grid.goto(VisibleRow(3), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(2, 4));
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(3, 20));
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(4, 20));
+
+    let images = grid.get_image_ids_in_range(0, 9);
+    let mut ids = images
+        .iter()
+        .map(|image| image.image_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2, 4]);
+}
+
+#[test]
+fn iterm_image_replacement_preserves_kitty_placements() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let mut grid = GridHandler::new_for_alt_screen_test(10, 80);
+    grid.goto(VisibleRow(2), 2);
+    let mut metadata = test_kitty_image_metadata_map(99);
+    grid.handle_completed_kitty_action(test_kitty_store_and_display_action(99, 1), &mut metadata)
+        .expect("Kitty action should be handled")
+        .expect("Kitty image should render");
+
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(1, 20));
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(2, 20));
+
+    let images = grid.get_image_ids_in_range(0, 9);
+    let mut ids = images
+        .iter()
+        .map(|image| image.image_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![2, 99]);
+}
+
+#[test]
+fn rejected_iterm_image_preserves_previous_image() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut grid = GridHandler::new_for_alt_screen_test(10, 80);
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(1, 20));
+
+    grid.goto(VisibleRow(2), 2);
+    grid.handle_completed_iterm_image(iterm_test_image(2, 0));
+
+    let images = grid.get_image_ids_in_range(0, 9);
+    assert_eq!(
+        images
+            .iter()
+            .map(|image| image.image_id)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(grid.cursor_point(), Point::new(2, 2));
+}
 
 fn has_wide_char_character(blockgrid: &BlockGrid) -> bool {
     let mut point = Point { row: 0, col: 0 };
