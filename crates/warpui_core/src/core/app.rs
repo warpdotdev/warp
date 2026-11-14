@@ -1486,6 +1486,23 @@ impl AppContext {
             .insert(view_id, parent_view_id);
     }
 
+    /// Removes `view_id`'s parent only when it is still `parent_view_id`.
+    pub fn remove_view_parent_if_matches(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+        parent_view_id: EntityId,
+    ) -> bool {
+        let Some(parents) = self.view_parents.get_mut(&window_id) else {
+            return false;
+        };
+        if parents.get(&view_id) != Some(&parent_view_id) {
+            return false;
+        }
+        parents.remove(&view_id);
+        true
+    }
+
     /// Render-time hook: merges the child-view → parent-view embeddings the
     /// active backend discovered while laying out a frame into the window's
     /// neutral view hierarchy.
