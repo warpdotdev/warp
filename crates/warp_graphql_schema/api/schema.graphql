@@ -982,6 +982,7 @@ type ConversationUsageMetadata {
 
 """Worker type for agent tasks."""
 input CreateAgentTaskInput {
+  localGithubContractVersion: Int
   """
   Optional JSON-serialized agent config snapshot to store on the task.
   
@@ -1006,6 +1007,9 @@ input CreateAgentTaskInput {
 }
 
 type CreateAgentTaskOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode
+  executionId: ID
+  mcpServers: String
   responseContext: ResponseContext!
 
   """The ID of the created task."""
@@ -4072,6 +4076,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  localExecutionId: ID
   githubCredentialContractVersion: Int
   """
   Refresh only these providers. Omitted or null refreshes all providers.

@@ -122,12 +122,19 @@ impl Drop for CredentialStoreGuard {
     }
 }
 
+struct LocalStore {
+    execution_id: String,
+    directory: tempfile::TempDir,
+    identity: Option<(String, String)>,
+}
+
 struct ManagedStore {
     owner: ManagedStoreOwner,
     directory: PathBuf,
     refresh_at: Option<Instant>,
     provider_refresh_at: HashMap<TaskGitCredentialProvider, Instant>,
     expires_at: Option<Instant>,
+    local: Option<LocalStore>,
 }
 
 struct ValidatedCredentials {
@@ -209,10 +216,10 @@ fn write_store(directory: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn git_config(args: &[&str]) -> Result<()> {
+fn git_config_file(path: &Path, args: &[&str]) -> Result<()> {
     let output = Command::new("git")
         .args(["config", "--file"])
-        .arg(home_dir()?.join(".gitconfig"))
+        .arg(path)
         .args(args)
         .output()?;
     ensure!(
@@ -220,6 +227,91 @@ fn git_config(args: &[&str]) -> Result<()> {
         "Could not configure restricted GitHub credentials"
     );
     Ok(())
+}
+
+#[cfg(test)]
+fn git_config(args: &[&str]) -> Result<()> {
+    git_config_file(&home_dir()?.join(".gitconfig"), args)
+}
+
+fn prepare_local(
+    owner: &ManagedStoreOwner,
+    execution_id: String,
+    working_dir: &Path,
+) -> Result<PathBuf> {
+    ensure!(
+        execution_id.parse::<u64>().is_ok_and(|id| id > 0),
+        "Invalid local execution ID"
+    );
+    for name in [".netrc", "_netrc"] {
+        match fs::read_to_string(home_dir()?.join(name)) {
+            Ok(content) => ensure!(
+                !content.contains('\\')
+                    && !content.split_whitespace().any(|word| {
+                        matches!(
+                            word.trim_matches(['\'', '"']).to_ascii_lowercase().as_str(),
+                            "github.com" | "default"
+                        )
+                    }),
+                "Local managed Git cannot isolate effective GitHub netrc authentication"
+            ),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => bail!("Local managed Git could not validate netrc authentication"),
+        }
+    }
+    let http_auth = Command::new("git")
+        .args([
+            "config",
+            "--local",
+            "--get-regexp",
+            r"^http\..*(extraheader|cookiefile)$",
+        ])
+        .current_dir(working_dir)
+        .output()?;
+    ensure!(
+        matches!(http_auth.status.code(), Some(1 | 128)),
+        "Local managed Git does not allow repository HTTP authentication overrides"
+    );
+    ensure!(
+        !["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]
+            .iter()
+            .any(|key| { std::env::var_os(key).is_some_and(|value| !value.is_empty()) }),
+        "Local managed Git does not allow inherited repository redirection"
+    );
+    let mut managed = MANAGED_STORE
+        .lock()
+        .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?;
+    ensure!(
+        managed.is_none(),
+        "A managed GitHub credential store is already active"
+    );
+    let directory = tempfile::Builder::new().prefix("oz-git-").tempdir()?;
+    private_directory(directory.path())?;
+    private_directory(&directory.path().join("gh"))?;
+    write_store(directory.path(), "")?;
+    fs::write(directory.path().join("gitconfig"), "")?;
+    let path = directory.path().to_owned();
+    *managed = Some(ManagedStore {
+        owner: owner.clone(),
+        directory: path.clone(),
+        refresh_at: None,
+        provider_refresh_at: HashMap::new(),
+        expires_at: None,
+        local: Some(LocalStore {
+            execution_id,
+            directory,
+            identity: None,
+        }),
+    });
+    Ok(path)
+}
+
+fn config_path(store: &ManagedStore) -> Result<PathBuf> {
+    if let Some(local) = &store.local {
+        Ok(local.directory.path().join("gitconfig"))
+    } else {
+        Ok(home_dir()?.join(".gitconfig"))
+    }
 }
 
 fn prepare(owner: impl Into<ManagedStoreOwner>) -> Result<PathBuf> {
@@ -291,11 +383,17 @@ fn prepare(owner: impl Into<ManagedStoreOwner>) -> Result<PathBuf> {
         refresh_at: None,
         provider_refresh_at: HashMap::new(),
         expires_at: None,
+        local: None,
     });
     Ok(directory)
 }
 
+#[cfg(test)]
 fn install_helper(directory: &Path, credentials: &[GitCredential]) -> Result<()> {
+    install_helper_at(directory, &home_dir()?.join(".gitconfig"), credentials)
+}
+
+fn install_helper_at(directory: &Path, config: &Path, credentials: &[GitCredential]) -> Result<()> {
     let store = directory.join("credentials");
     let store = store
         .to_str()
@@ -304,38 +402,59 @@ fn install_helper(directory: &Path, credentials: &[GitCredential]) -> Result<()>
     let helper = format!(
         "!f() {{ test \"$1\" = get && exec git credential-store --file={quoted} get; }}; f"
     );
-    git_config(&[
-        "--replace-all",
-        "credential.helper",
-        READ_ONLY_CREDENTIAL_HELPER,
-    ])?;
-    git_config(&["--replace-all", "credential.https://github.com.helper", ""])?;
-    git_config(&["--add", "credential.https://github.com.helper", &helper])?;
-    git_config(&[
-        "--add",
-        "url.https://github.com/.insteadOf",
-        "git@github.com:",
-    ])?;
-    git_config(&[
-        "--add",
-        "url.https://github.com/.insteadOf",
-        "ssh://git@github.com/",
-    ])?;
+    git_config_file(
+        config,
+        &[
+            "--replace-all",
+            "credential.helper",
+            READ_ONLY_CREDENTIAL_HELPER,
+        ],
+    )?;
+    git_config_file(
+        config,
+        &["--replace-all", "credential.https://github.com.helper", ""],
+    )?;
+    git_config_file(
+        config,
+        &["--add", "credential.https://github.com.helper", &helper],
+    )?;
+    git_config_file(
+        config,
+        &[
+            "--add",
+            "url.https://github.com/.insteadOf",
+            "git@github.com:",
+        ],
+    )?;
+    git_config_file(
+        config,
+        &[
+            "--add",
+            "url.https://github.com/.insteadOf",
+            "ssh://git@github.com/",
+        ],
+    )?;
     for credential in credentials
         .iter()
         .filter(|credential| credential.host != GITHUB_HOST)
     {
         let host = &credential.host;
-        git_config(&[
-            "--add",
-            &format!("url.https://{host}/.insteadOf"),
-            &format!("git@{host}:"),
-        ])?;
-        git_config(&[
-            "--add",
-            &format!("url.https://{host}/.insteadOf"),
-            &format!("ssh://git@{host}/"),
-        ])?;
+        git_config_file(
+            config,
+            &[
+                "--add",
+                &format!("url.https://{host}/.insteadOf"),
+                &format!("git@{host}:"),
+            ],
+        )?;
+        git_config_file(
+            config,
+            &[
+                "--add",
+                &format!("url.https://{host}/.insteadOf"),
+                &format!("ssh://git@{host}/"),
+            ],
+        )?;
     }
     Ok(())
 }
@@ -445,11 +564,19 @@ async fn fetch(
     ),
     TaskGitCredentialsError,
 > {
-    ensure_workload_token_available()?;
-    let token = warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(300)))
-        .await
-        .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
-        .token;
+    let local_execution_id = with_store(ManagedStoreOwner::from(task_id), |store| {
+        Ok(store.local.as_ref().map(|local| local.execution_id.clone()))
+    })
+    .map_err(TaskGitCredentialsError::Request)?;
+    let token = if local_execution_id.is_some() {
+        String::new()
+    } else {
+        ensure_workload_token_available()?;
+        warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(300)))
+            .await
+            .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
+            .token
+    };
     let response = ai_client
         .get_restricted_task_git_credentials(
             task_id.to_owned(),
@@ -457,6 +584,7 @@ async fn fetch(
             accepts_partial_refresh,
             use_factory_repositories,
             providers.clone(),
+            local_execution_id.clone(),
         )
         .await;
     match response {
@@ -468,6 +596,7 @@ async fn fetch(
                     accepts_partial_refresh,
                     use_factory_repositories,
                     None,
+                    local_execution_id,
                 )
                 .await?;
             Ok((response, None))
@@ -515,6 +644,39 @@ fn apply_github(store: &mut ManagedStore, response: &ValidatedCredentials) -> Re
     Ok(())
 }
 
+fn write_other_credentials(
+    store: &ManagedStore,
+    provider: TaskGitCredentialProvider,
+    credentials: &[GitCredential],
+) -> Result<()> {
+    if store.local.is_none() {
+        return write_git_credentials(credentials);
+    }
+    let host = match provider {
+        TaskGitCredentialProvider::Gitlab => "gitlab.com",
+        TaskGitCredentialProvider::AzureDevops => "dev.azure.com",
+        TaskGitCredentialProvider::Github | TaskGitCredentialProvider::CodeStorage => {
+            bail!("Unexpected local forge")
+        }
+    };
+    let directory = store.directory.join(host);
+    private_directory(&directory)?;
+    let mut content = String::new();
+    for credential in credentials
+        .iter()
+        .filter(|credential| credential.host == host)
+    {
+        let mut url = url::Url::parse(&format!("https://{host}"))?;
+        url.set_username(credential.username.as_deref().unwrap_or("oauth2"))
+            .map_err(|_| anyhow::anyhow!("Invalid Git username"))?;
+        url.set_password(Some(&credential.token))
+            .map_err(|_| anyhow::anyhow!("Invalid Git credential"))?;
+        content.push_str(url.as_str());
+        content.push('\n');
+    }
+    write_store(&directory, &content)
+}
+
 fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()> {
     apply_github(store, response)?;
     store.refresh_at = Some(response.refresh_at);
@@ -525,7 +687,16 @@ fn apply(store: &mut ManagedStore, response: &ValidatedCredentials) -> Result<()
         .filter(|credential| credential.host != GITHUB_HOST)
         .cloned()
         .collect::<Vec<_>>();
-    write_git_credentials(&other)
+    if store.local.is_none() {
+        return write_git_credentials(&other);
+    }
+    for provider in [
+        TaskGitCredentialProvider::Gitlab,
+        TaskGitCredentialProvider::AzureDevops,
+    ] {
+        write_other_credentials(store, provider, &other)?;
+    }
+    Ok(())
 }
 
 fn install(
@@ -534,15 +705,57 @@ fn install(
     set_identity: bool,
 ) -> Result<()> {
     with_store(owner, |store| {
-        install_helper(&store.directory, &response.credentials)?;
+        let config = config_path(store)?;
+        install_helper_at(&store.directory, &config, &response.credentials)?;
+        if store.local.is_some() {
+            for host in ["gitlab.com", "dev.azure.com"] {
+                let directory = store.directory.join(host);
+                private_directory(&directory)?;
+                let quoted = directory
+                    .join("credentials")
+                    .to_string_lossy()
+                    .replace('\'', "'\\''");
+                let helper = format!(
+                    "!f() {{ test \"$1\" = get && exec git credential-store --file='{quoted}' get; }}; f"
+                );
+                git_config_file(
+                    &config,
+                    &[
+                        "--replace-all",
+                        &format!("credential.https://{host}.helper"),
+                        "",
+                    ],
+                )?;
+                git_config_file(
+                    &config,
+                    &[
+                        "--add",
+                        &format!("credential.https://{host}.helper"),
+                        &helper,
+                    ],
+                )?;
+            }
+        }
         if set_identity {
             if let Some(github) = response
                 .credentials
                 .iter()
                 .find(|credential| credential.host == GITHUB_HOST)
             {
-                git_config(&["user.name", github.username.as_deref().unwrap_or_default()])?;
-                git_config(&["user.email", github.email.as_deref().unwrap_or_default()])?;
+                git_config_file(
+                    &config,
+                    &["user.name", github.username.as_deref().unwrap_or_default()],
+                )?;
+                git_config_file(
+                    &config,
+                    &["user.email", github.email.as_deref().unwrap_or_default()],
+                )?;
+                if let Some(local) = &mut store.local {
+                    local.identity = Some((
+                        github.username.clone().unwrap_or_default(),
+                        github.email.clone().unwrap_or_default(),
+                    ));
+                }
             }
             record_host_identities(&response.credentials);
         }
@@ -575,12 +788,29 @@ pub(crate) fn prepare_standby_credentials(
     result
 }
 
+pub(crate) async fn bootstrap_local_credentials(
+    task_id: &str,
+    execution_id: String,
+    working_dir: &Path,
+    ai_client: &Arc<dyn AIClient>,
+    use_factory_repositories: bool,
+) -> Result<(), TaskGitCredentialsError> {
+    bootstrap_task(
+        task_id,
+        ai_client,
+        use_factory_repositories,
+        None,
+        Some((execution_id, working_dir)),
+    )
+    .await
+}
+
 pub(crate) async fn bootstrap_restricted_credentials(
     task_id: &str,
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
 ) -> Result<(), TaskGitCredentialsError> {
-    bootstrap_task(task_id, ai_client, use_factory_repositories, None).await
+    bootstrap_task(task_id, ai_client, use_factory_repositories, None, None).await
 }
 
 pub(crate) async fn install_assignment_credentials(
@@ -594,6 +824,7 @@ pub(crate) async fn install_assignment_credentials(
         ai_client,
         use_factory_repositories,
         Some(repositories),
+        None,
     )
     .await
 }
@@ -603,9 +834,15 @@ async fn bootstrap_task(
     ai_client: &Arc<dyn AIClient>,
     use_factory_repositories: bool,
     repositories: Option<&[(PathBuf, &str)]>,
+    local_execution: Option<(String, &Path)>,
 ) -> Result<(), TaskGitCredentialsError> {
     let owner = ManagedStoreOwner::from(task_id);
-    prepare(&owner).map_err(TaskGitCredentialsError::Request)?;
+    if let Some((execution_id, working_dir)) = local_execution {
+        prepare_local(&owner, execution_id, working_dir)
+    } else {
+        prepare(&owner)
+    }
+    .map_err(TaskGitCredentialsError::Request)?;
     let mut guard = CredentialStoreGuard::new(owner.clone());
     let result = async {
         // Preparation is single-use. Retry only the raw fetch, never validation or installation.
@@ -831,7 +1068,7 @@ fn apply_partial_response(
                     if provider == TaskGitCredentialProvider::Github {
                         apply_github(store, validated)
                     } else {
-                        write_git_credentials(&validated.credentials)
+                        write_other_credentials(store, provider, &validated.credentials)
                     }
                 }
                 Err(_) if provider == TaskGitCredentialProvider::Github => clear_store(store),
@@ -1088,6 +1325,44 @@ pub(crate) fn restricted_child_environment(
         home_dir()?.join(".gitconfig").into_os_string(),
     );
     env.insert("GIT_CONFIG_COUNT".into(), "0".into());
+    let local = {
+        let managed = MANAGED_STORE
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GitHub store lock failed"))?;
+        ensure!(
+            managed.as_ref().is_none_or(|store| store.owner == owner),
+            "Managed GitHub store belongs to another owner"
+        );
+        managed
+            .as_ref()
+            .and_then(|store| store.local.as_ref())
+            .map(|local| {
+                (
+                    local.directory.path().join("gitconfig"),
+                    local.directory.path().to_owned(),
+                    local.identity.clone(),
+                )
+            })
+    };
+    if let Some((config, directory, identity)) = local {
+        for key in ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_SYSTEM"] {
+            env.insert(key.into(), OsString::new());
+        }
+        env.insert(
+            "GH_CONFIG_DIR".into(),
+            directory.join("gh").into_os_string(),
+        );
+        env.insert("GIT_CONFIG_GLOBAL".into(), config.clone().into_os_string());
+        env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+        env.insert("GIT_CONFIG_COUNT".into(), "1".into());
+        env.insert("GIT_CONFIG_KEY_0".into(), "include.path".into());
+        env.insert("GIT_CONFIG_VALUE_0".into(), config.into_os_string());
+        let (name, email) = identity.unwrap_or_else(|| ("Warp".into(), "agent@warp.dev".into()));
+        for prefix in ["AUTHOR", "COMMITTER"] {
+            env.insert(format!("GIT_{prefix}_NAME").into(), name.clone().into());
+            env.insert(format!("GIT_{prefix}_EMAIL").into(), email.clone().into());
+        }
+    }
     env.insert(
         "WARP_GITHUB_CREDENTIAL_MODE".into(),
         "restricted_installation".into(),
@@ -1096,7 +1371,17 @@ pub(crate) fn restricted_child_environment(
 }
 
 pub(crate) fn protected_environment_key(key: &str) -> bool {
-    GIT_OVERRIDE_ENV.contains(&key)
+    key.starts_with("GIT_CONFIG_KEY_")
+        || key.starts_with("GIT_CONFIG_VALUE_")
+        || matches!(
+            key,
+            "GIT_CONFIG_NOSYSTEM"
+                | "GIT_AUTHOR_NAME"
+                | "GIT_AUTHOR_EMAIL"
+                | "GIT_COMMITTER_NAME"
+                | "GIT_COMMITTER_EMAIL"
+        )
+        || GIT_OVERRIDE_ENV.contains(&key)
         || AUTH_ENV.contains(&key)
         || matches!(
             key,
@@ -1140,3 +1425,7 @@ mod lifecycle_tests;
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "restricted_provider_tests.rs"]
 mod provider_tests;
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "restricted_local_tests.rs"]
+mod local_tests;

@@ -759,9 +759,9 @@ fn factory_experiment_bootstrap_subprocess() {
         if scenario == "local" {
             let mut ai_client = MockAIClient::new();
             ai_client
-                .expect_create_agent_task()
+                .expect_create_local_agent_task()
                 .times(1)
-                .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+                .returning(|_, _, _| Ok(local_task_output()));
             let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
             AgentDriverRunner::initialize_new_task(
                 &foreground,
@@ -1099,10 +1099,10 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
 
         let mut ai_client = MockAIClient::new();
         ai_client
-            .expect_create_agent_task()
+            .expect_create_local_agent_task()
             .times(1)
-            .withf(move |_, _, _, _, _, scope| scope.team_uid() == Some(selected_team_uid))
-            .returning(|_, _, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
+            .withf(move |_, _, scope| scope.team_uid() == Some(selected_team_uid))
+            .returning(|_, _, _| Ok(local_task_output()));
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
         let mut driver_options = agent_driver_options();
         let runner = app.add_singleton_model(|_| AgentDriverRunner);
@@ -1458,4 +1458,71 @@ fn run_message_watch_telemetry_defaults_to_unknown_harness() {
     )));
 
     assert_eq!(event.payload(), Some(json!({ "harness": "unknown" })));
+}
+
+#[test]
+fn local_task_negotiation_fails_closed_without_retrying_creation() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        for scenario in [
+            "creation-error",
+            "missing-mode",
+            "missing-execution",
+            "invalid-execution",
+            "missing-mcp",
+            "invalid-mcp",
+            "missing-github",
+        ] {
+            let mut client = MockAIClient::new();
+            client.expect_create_agent_task().never();
+            client.expect_get_restricted_task_git_credentials().never();
+            client
+                .expect_create_local_agent_task()
+                .times(1)
+                .return_once(move |_, _, _| {
+                    let mut output = local_task_output();
+                    match scenario {
+                        "creation-error" => return Err(anyhow::anyhow!("creation unavailable")),
+                        "missing-mode" => output.github_credential_mode = None,
+                        "missing-execution" => output.execution_id = None,
+                        "invalid-execution" => output.execution_id = Some(cynic::Id::new("0")),
+                        "missing-mcp" => output.mcp_servers = None,
+                        "invalid-mcp" => output.mcp_servers = Some("invalid".into()),
+                        "missing-github" => {
+                            output.github_credential_mode =
+                                Some(super::GitHubCredentialMode::RestrictedInstallation)
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(output)
+                });
+            let client: Arc<dyn AIClient> = Arc::new(client);
+            let mut options = AgentDriverOptions::default();
+            assert!(
+                AgentDriverRunner::initialize_new_task(
+                    &foreground,
+                    &client,
+                    "prompt".into(),
+                    AgentConfigSnapshot::default(),
+                    HeadlessTeamScope::Personal,
+                    &mut options,
+                )
+                .await
+                .is_err(),
+                "{scenario}"
+            );
+            assert!(options.task_id.is_none());
+        }
+    });
+}
+
+fn local_task_output() -> warp_graphql::mutations::create_agent_task::LocalAgentTaskOutput {
+    warp_graphql::mutations::create_agent_task::LocalAgentTaskOutput {
+        task_id: cynic::Id::new(TASK_ID),
+        github_credential_mode: Some(super::GitHubCredentialMode::Legacy),
+        execution_id: Some(cynic::Id::new("1")),
+        mcp_servers: Some("{}".into()),
+    }
 }

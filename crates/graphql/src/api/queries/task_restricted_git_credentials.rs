@@ -26,6 +26,8 @@ pub struct RestrictedTaskGitCredentialsVariables {
 #[derive(cynic::InputObject, Debug)]
 #[cynic(graphql_type = "TaskGitCredentialsInput")]
 pub struct RestrictedTaskGitCredentialsInput {
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub local_execution_id: Option<cynic::Id>,
     pub task_id: cynic::Id,
     pub workload_token: String,
     pub accepts_partial_refresh: Option<bool>,

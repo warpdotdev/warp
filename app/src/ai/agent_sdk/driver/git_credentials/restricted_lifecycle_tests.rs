@@ -61,7 +61,7 @@ fn bootstrap_retries_only_raw_fetch_with_one_prepared_store() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(4)
-                .returning(move |task, workload, partial, factory, providers| {
+                .returning(move |task, workload, partial, factory, providers, _| {
                     assert_eq!(task, "task");
                     assert_eq!(workload, "workload-test-token");
                     assert!(!partial);
@@ -105,7 +105,7 @@ fn bootstrap_validation_failure_is_not_retried_and_closes_store() -> Result<()> 
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .returning(|_, _, partial, _, providers| {
+                .returning(|_, _, partial, _, providers, _| {
                     assert!(!partial);
                     assert!(providers.is_none());
                     let mut response = response();
