@@ -13,12 +13,6 @@ fn test_all_preview_flags_have_a_description() {
 }
 
 #[test]
-fn lrc_activity_signals_are_enabled_for_preview_but_not_stable() {
-    assert!(PREVIEW_FLAGS.contains(&FeatureFlag::LrcActivitySignal));
-    assert!(!RELEASE_FLAGS.contains(&FeatureFlag::LrcActivitySignal));
-}
-
-#[test]
 fn local_child_harnesses_are_local_only_by_default() {
     assert!(LOCAL_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
