@@ -196,10 +196,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
             handle.id(),
             self.window_id,
             self.view_id,
-            Box::new(ViewSubscriber::<T, ViewHandle<V>, F>(
-                callback,
-                PhantomData,
-            )),
+            Box::new(ViewSubscriber::<T, ViewHandle<V>, F>(callback, PhantomData)),
         );
     }
 
@@ -765,10 +762,7 @@ impl<V: 'static> ViewSpawner<V> {
 
     /// The body of [`Self::spawn`]. It takes the work boxed so that this future is compiled once
     /// per result type, instead of once per closure.
-    async fn spawn_boxed<R: Send + 'static>(
-        &self,
-        work: ViewWork<V, R>,
-    ) -> Result<R, ViewDropped> {
+    async fn spawn_boxed<R: Send + 'static>(&self, work: ViewWork<V, R>) -> Result<R, ViewDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let span = tracing::Span::current();
 
