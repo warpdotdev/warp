@@ -56,6 +56,7 @@ use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
+use crate::workspace::view::TAB_BAR_HEIGHT;
 use crate::workspace::{
     PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
 };
@@ -63,6 +64,7 @@ use crate::workspace::{
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 const TAB_SHORTCUT_HINT_REVEAL_DELAY: Duration = Duration::from_millis(750);
+const COMPACT_TAB_HEIGHT: f32 = 20.0;
 
 /// Binding names for switching to tabs 1–8 (tab index 0–7), used to surface the
 /// effective keystroke (including user overrides) on each tab.
@@ -1098,6 +1100,7 @@ pub struct TabComponent<'a> {
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
     shortcut_hint_label: Option<String>,
+    compact_horizontal_tabs: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -1267,6 +1270,7 @@ impl<'a> TabComponent<'a> {
             locator,
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
+            compact_horizontal_tabs: *TabSettings::as_ref(ctx).compact_horizontal_tabs,
         }
     }
 
@@ -1898,7 +1902,7 @@ impl<'a> TabComponent<'a> {
                 Container::new(flex_row.finish()).with_horizontal_padding(horizontal_padding);
             // Pad inside the Stack so the close-button overlay (anchored to
             // the Stack) stays vertically centered within the visible pill.
-            if self.grouped_member {
+            if self.grouped_member && !self.compact_horizontal_tabs {
                 container = container.with_vertical_padding(5.);
             }
             container.finish()
@@ -2074,10 +2078,16 @@ impl<'a> TabComponent<'a> {
         if self.grouped_member {
             let highlight = Container::new(stack)
                 .with_background(background_color)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                    if self.compact_horizontal_tabs {
+                        12.0
+                    } else {
+                        8.0
+                    },
+                )))
                 .finish();
             let member = Container::new(highlight)
-                .with_vertical_padding(3.)
+                .with_vertical_padding(if self.compact_horizontal_tabs { 0. } else { 3. })
                 .with_horizontal_padding(3.)
                 .finish();
             return if self.for_drag_ghost {
@@ -2094,9 +2104,11 @@ impl<'a> TabComponent<'a> {
         }
 
         let mut tab = Container::new(stack)
-            .with_vertical_padding(2.)
+            .with_vertical_padding(if self.compact_horizontal_tabs { 0. } else { 2. })
             .with_background(background_color);
-        if FeatureFlag::NewTabStyling.is_enabled() {
+        if self.compact_horizontal_tabs {
+            tab = tab.with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.0)));
+        } else if FeatureFlag::NewTabStyling.is_enabled() {
             let is_first_tab = self.tab_index == 0;
             tab = tab.with_border(
                 Border::all(1.)
@@ -2149,6 +2161,7 @@ impl UiComponent for TabComponent<'_> {
 
     fn build(self) -> Self::ElementType {
         let appearance = self.appearance;
+        let compact_horizontal_tabs = self.compact_horizontal_tabs;
         let tab_mouse_state = self.tab.tab_mouse_state.clone();
         let tab_index = self.tab_index;
         let is_tab_being_renamed = self.is_tab_being_renamed();
@@ -2361,7 +2374,7 @@ impl UiComponent for TabComponent<'_> {
         } else {
             // Use dynamic sizing when not hovering
             ConstrainedBox::new(tab.finish())
-                .with_max_width(200.)
+                .with_max_width(if compact_horizontal_tabs { 170. } else { 200. })
                 .finish()
         };
 
@@ -2401,7 +2414,19 @@ impl UiComponent for TabComponent<'_> {
             let tab_with_drag: Box<dyn Element> = draggable.finish();
             SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()
         };
-        if FeatureFlag::NewTabStyling.is_enabled() {
+        if compact_horizontal_tabs {
+            Shrinkable::new(
+                1.0,
+                Container::new(
+                    ConstrainedBox::new(full_tab)
+                        .with_height(COMPACT_TAB_HEIGHT)
+                        .finish(),
+                )
+                .with_vertical_margin((TAB_BAR_HEIGHT - COMPACT_TAB_HEIGHT) / 2.)
+                .with_horizontal_margin(2.)
+                .finish(),
+            )
+        } else if FeatureFlag::NewTabStyling.is_enabled() {
             Shrinkable::new(1.0, full_tab)
         } else {
             Shrinkable::new(

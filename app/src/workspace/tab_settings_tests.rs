@@ -6,6 +6,54 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 
 #[test]
+fn compact_horizontal_tabs_persists_changes_across_restarts() {
+    use std::path::PathBuf;
+
+    use settings::{PrivatePreferences, PublicPreferences, SettingsManager};
+    use warpui_extras::user_preferences::in_memory::InMemoryPreferences;
+    use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
+
+    fn change_in_fresh_app(file_path: PathBuf, expected: bool, next: bool) {
+        App::test((), |mut app| async move {
+            app.add_singleton_model(move |_| {
+                let (prefs, error) = TomlBackedUserPreferences::new(file_path);
+                assert!(error.is_none());
+                PublicPreferences::new(Box::new(prefs))
+            });
+            app.add_singleton_model(|_| {
+                PrivatePreferences::new(Box::<InMemoryPreferences>::default())
+            });
+            app.add_singleton_model(|_| SettingsManager::default());
+            TabSettings::register(&mut app);
+            app.read(|ctx| assert_eq!(*TabSettings::as_ref(ctx).compact_horizontal_tabs, expected));
+            TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+                settings
+                    .compact_horizontal_tabs
+                    .set_value(next, ctx)
+                    .unwrap();
+            });
+            app.read(|ctx| assert_eq!(*TabSettings::as_ref(ctx).compact_horizontal_tabs, next));
+        });
+    }
+
+    let _guard = warp_core::features::FeatureFlag::SettingsFile.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("settings.toml");
+
+    change_in_fresh_app(file_path.clone(), false, true);
+    let document = std::fs::read_to_string(&file_path)
+        .unwrap()
+        .parse::<toml::Value>()
+        .unwrap();
+    assert_eq!(
+        document["appearance"]["tabs"]["compact_horizontal_tabs"].as_bool(),
+        Some(true)
+    );
+    change_in_fresh_app(file_path.clone(), true, false);
+    change_in_fresh_app(file_path, false, false);
+}
+
+#[test]
 fn use_latest_user_prompt_as_conversation_title_in_tab_names_defaults_to_false() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

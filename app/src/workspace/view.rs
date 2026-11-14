@@ -3841,6 +3841,7 @@ impl Workspace {
                 ctx.notify();
             }
             TabSettingsChangedEvent::ShowIndicatorsButton { .. }
+            | TabSettingsChangedEvent::CompactHorizontalTabs { .. }
             | TabSettingsChangedEvent::NewTabPlacement { .. }
             | TabSettingsChangedEvent::TabCloseButtonPosition { .. }
             | TabSettingsChangedEvent::PreserveActiveTabColor { .. } => {
@@ -23490,6 +23491,9 @@ impl Workspace {
 
         if *tab_settings.show_indicators.value() {
             context.set.insert(flags::TAB_INDICATORS_FLAG);
+        }
+        if *tab_settings.compact_horizontal_tabs {
+            context.set.insert(flags::COMPACT_HORIZONTAL_TABS_FLAG);
         }
         if *tab_settings.show_code_review_button.value() {
             context.set.insert(flags::SHOW_CODE_REVIEW_BUTTON_FLAG);
