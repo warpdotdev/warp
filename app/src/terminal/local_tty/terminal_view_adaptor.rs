@@ -1445,10 +1445,6 @@ impl TerminalManager<TerminalView> {
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
-                if !FeatureFlag::SharedSessionWriteToLongRunningCommands.is_enabled() {
-                    return;
-                }
-
                 let is_currently_long_running = {
                     let model = model.lock();
                     model
