@@ -509,7 +509,7 @@ impl AIExecutionProfile {
             cli_agent_model: None,
             computer_use_model: None,
             context_window_limit: None,
-            autosync_plans_to_warp_drive: FeatureFlag::SyncAmbientPlans.is_enabled(),
+            autosync_plans_to_warp_drive: true,
             web_search_enabled: true,
         }
     }
