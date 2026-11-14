@@ -1254,6 +1254,11 @@ impl RightPanelView {
                         me.handle_action(&RightPanelAction::ToggleMaximize, ctx);
                     }
                 }
+                CodeReviewViewEvent::EnsureMaximized => {
+                    if !me.is_maximized(ctx) {
+                        me.handle_action(&RightPanelAction::ToggleMaximize, ctx);
+                    }
+                }
                 CodeReviewViewEvent::SubmitReviewComments {
                     comments,
                     repo_path,
