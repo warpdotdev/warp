@@ -1005,17 +1005,16 @@ fn convert_mcp_tool(tool: rmcp::model::Tool) -> Option<api::request::mcp_context
 /// Builds the `MCPContext.MCPServer.identity` for a server from its `warp_id`
 /// (the `MCPServerConfig.warp_id` it was resolved from).
 ///
-/// A uuid is a managed MCP server; anything else is a well-known integration
-/// id owned by warp-server. An id this build does not know yields `None`, so a
-/// newer server-side integration is simply unnamed rather than misattributed;
-/// so does an empty id (local and ad-hoc servers). `display_name` is left
-/// unset: `MCPContext.MCPServer.name` carries it, and warp-server fills it in
-/// when it copies the identity onto tool calls.
+/// A uuid or the reserved `github` id is a managed MCP server; other known ids are integrations
+/// owned by warp-server. An id this build does not know yields `None`, so a newer server-side
+/// integration is simply unnamed rather than misattributed; so does an empty id (local and ad-hoc
+/// servers). `display_name` is left unset: `MCPContext.MCPServer.name` carries it, and warp-server
+/// fills it in when it copies the identity onto tool calls.
 pub(crate) fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentity> {
     if warp_id.is_empty() {
         return None;
     }
-    if uuid::Uuid::parse_str(warp_id).is_ok() {
+    if warp_id == "github" || uuid::Uuid::parse_str(warp_id).is_ok() {
         return Some(api::McpServerIdentity {
             managed_server_uid: warp_id.to_string(),
             ..Default::default()
