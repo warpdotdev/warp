@@ -41,7 +41,7 @@ jobs:
         run: |
           [ $GITHUB_REF == "refs/heads/master" ] || (echo "::error::Can only cut new releases on the master branch" && exit 1)
         shell: bash
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@v6.0.3
       - id: get-config
         run: |
           # Check to see if this was auto-run as a cron job.  If so, set the 
@@ -93,12 +93,12 @@ jobs:
     steps:
       - name: Mint channel-versions token
         id: app_token
-        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        uses: octo-sts/action@v1.1.1
         with:
           scope: warpdotdev/channel-versions
           identity: warp-internal-dispatch
       - name: Invoke update workflow in channel-versions repository
-        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        uses: peter-evans/repository-dispatch@v4.0.1
         with:
           repository: warpdotdev/channel-versions
           token: ${{ steps.app_token.outputs.token }}
