@@ -21,7 +21,7 @@ pub(crate) mod comment_rendering;
 pub mod comments;
 pub(crate) mod diff_menu;
 pub(crate) mod diff_selector;
-#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+#[cfg(feature = "local_fs")]
 pub(crate) mod file_invalidation_queue;
 
 use code_review_view::CodeReviewAction;
