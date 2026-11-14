@@ -90,7 +90,7 @@ pub struct HostSelector {
     menu: ViewHandle<Menu<HostSelectorAction>>,
     is_menu_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
-    selected: Host,
+    explicit_host: Option<Host>,
     /// The configured default self-hosted host, if any.
     default_host: Option<Host>,
 }
@@ -100,12 +100,24 @@ impl HostSelector {
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        // Initial selection. Reading `selected.display_name()` below ensures the
-        // field is exercised at construction time (not just written to on
-        // `SelectHost`), so it stays out of clippy's `field is never read`
-        // warning while still serving as the source of truth for the label.
-        let selected = Host::Warp;
-        let initial_label = selected.display_name().to_string();
+        let explicit_host = CloudAgentSettings::as_ref(ctx)
+            .last_selected_host
+            .value()
+            .as_deref()
+            .map(|slug| {
+                if slug == ORCHESTRATION_WARP_WORKER_HOST {
+                    Host::Warp
+                } else {
+                    Host::SelfHosted {
+                        slug: slug.to_string(),
+                    }
+                }
+            });
+        let initial_label = explicit_host
+            .as_ref()
+            .unwrap_or(&Host::Warp)
+            .display_name()
+            .to_string();
 
         let button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new(initial_label, NakedHeaderButtonTheme)
@@ -162,28 +174,9 @@ impl HostSelector {
             menu,
             is_menu_open: false,
             menu_positioning_provider,
-            selected,
+            explicit_host,
             default_host: None,
         };
-        // Restore the last selected host from settings.
-        if let Some(saved_slug) = CloudAgentSettings::as_ref(ctx)
-            .last_selected_host
-            .value()
-            .as_deref()
-        {
-            let restored = if saved_slug == ORCHESTRATION_WARP_WORKER_HOST {
-                Host::Warp
-            } else {
-                Host::SelfHosted {
-                    slug: saved_slug.to_string(),
-                }
-            };
-            me.selected = restored;
-            let label = me.selected.display_name().to_string();
-            me.button.update(ctx, |button, ctx| {
-                button.set_label(label, ctx);
-            });
-        }
         me.refresh_connected_hosts(ctx);
         me.refresh_menu(ctx);
         me
@@ -198,56 +191,34 @@ impl HostSelector {
     }
 
     pub fn selected(&self) -> &Host {
-        &self.selected
+        self.resolved_host().unwrap_or(&Host::Warp)
+    }
+
+    /// Returns no override for the Warp placeholder, preserving server-side defaults.
+    pub fn request_host(&self) -> Option<String> {
+        self.resolved_host().and_then(Host::worker_host_value)
+    }
+
+    fn resolved_host(&self) -> Option<&Host> {
+        self.explicit_host.as_ref().or(self.default_host.as_ref())
     }
 
     pub fn set_default_host(&mut self, slug: String, ctx: &mut ViewContext<Self>) {
-        let host = Host::SelfHosted { slug };
-        self.default_host = Some(host.clone());
-
-        // If the user has a saved selection, preserve it instead of
-        // unconditionally overwriting with the default.
-        let saved_slug = CloudAgentSettings::as_ref(ctx)
-            .last_selected_host
-            .value()
-            .clone();
-        if saved_slug.is_some() {
-            // The constructor already applied the saved selection;
-            // just refresh the menu so the new default appears as an option.
-            self.refresh_menu(ctx);
-            return;
-        }
-
-        // No saved preference — use the default host.
-        let label = host.display_name().to_string();
-        self.selected = host;
-        self.button.update(ctx, |button, ctx| {
-            button.set_label(label, ctx);
-        });
-        self.refresh_menu(ctx);
+        self.default_host = Some(Host::SelfHosted { slug });
+        self.refresh_selection(ctx);
     }
 
-    /// Drops the configured default host, e.g. because the window moved to a team that
-    /// configures none. The inverse of [`Self::set_default_host`], deferring to a saved
-    /// selection the same way: without it, a selection chosen only because of the previous
-    /// team's default would survive the move and keep pointing at that team's worker.
+    /// Drops the inherited default without replacing this pane's explicit choice.
     pub fn clear_default_host(&mut self, ctx: &mut ViewContext<Self>) {
         if self.default_host.is_none() {
             return;
         }
         self.default_host = None;
+        self.refresh_selection(ctx);
+    }
 
-        if CloudAgentSettings::as_ref(ctx)
-            .last_selected_host
-            .value()
-            .is_some()
-        {
-            self.refresh_menu(ctx);
-            return;
-        }
-
-        self.selected = Host::Warp;
-        let label = self.selected.display_name().to_string();
+    fn refresh_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let label = self.selected().display_name().to_string();
         self.button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);
         });
@@ -263,7 +234,7 @@ impl HostSelector {
     /// from closed to open so the user has a clear starting point for arrow-key navigation
     /// instead of an unselected list.
     fn highlight_selected_host(&mut self, ctx: &mut ViewContext<Self>) {
-        let selected_action = HostSelectorAction::SelectHost(self.selected.clone());
+        let selected_action = HostSelectorAction::SelectHost(self.selected().clone());
         self.menu.update(ctx, |menu, ctx| {
             menu.set_selected_by_action(&selected_action, ctx);
         });
@@ -300,7 +271,7 @@ impl HostSelector {
             hover_background,
             header_text_color,
             self.default_host.as_ref(),
-            &self.selected,
+            self.selected(),
             ctx,
         );
         self.menu.update(ctx, |menu, ctx| {
@@ -416,11 +387,8 @@ impl TypedActionView for HostSelector {
                 self.set_menu_visibility(new_state, ctx);
             }
             HostSelectorAction::SelectHost(host) => {
-                self.selected = host.clone();
-                let label = self.selected.display_name().to_string();
-                self.button.update(ctx, |button, ctx| {
-                    button.set_label(label.clone(), ctx);
-                });
+                self.explicit_host = Some(host.clone());
+                self.refresh_selection(ctx);
                 // Persist the selection to settings for next time.
                 if let Some(slug) = host.worker_host_value() {
                     CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
