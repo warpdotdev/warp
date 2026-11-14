@@ -554,9 +554,6 @@ pub enum FeatureFlag {
     /// Enables block context functionality in Agent View.
     AgentViewBlockContext,
 
-    /// Enables the inline history menu for quickly accessing previous commands and conversations.
-    InlineHistoryMenu,
-
     /// Enables the inline repo switcher menu for switching between indexed repos.
     InlineRepoMenu,
 
