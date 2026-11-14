@@ -1525,9 +1525,7 @@ impl AppearanceSettingsPageView {
             tab_settings_widgets.push(Box::new(
                 UseLatestUserPromptAsConversationTitleInTabNamesWidget::default(),
             ));
-            if FeatureFlag::ConfigurableToolbar.is_enabled() {
-                tab_settings_widgets.push(Box::new(EditToolbarWidget));
-            }
+            tab_settings_widgets.push(Box::new(EditToolbarWidget));
         }
 
         if FeatureFlag::DirectoryTabColors.is_enabled() {
