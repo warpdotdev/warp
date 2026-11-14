@@ -2935,12 +2935,15 @@ union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacing
 
 input PrewarmedSandboxConfigInput {
   githubCredentialContractVersion: Int
+  runnerPreparationContractVersion: Int
   sandboxId: ID!
 }
 
 union PrewarmedSandboxConfigResult = PrewarmedSandboxConfiguration | UserFacingError
 
 type PrewarmedSandboxConfiguration {
+  preparationKind: String!
+  runnerPreparationContractVersion: Int
   environmentVariables: [PrewarmedSandboxVariable!]!
   expiresAt: Time!
   fingerprint: String!

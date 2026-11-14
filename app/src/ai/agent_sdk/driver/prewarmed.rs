@@ -27,6 +27,7 @@ struct AssignmentInstallationContext {
     assigned_mode: GitHubCredentialMode,
     use_factory_repositories: bool,
     retained_mcp: Vec<TemplatableMCPServerInstallation>,
+    runner_preparation: bool,
 }
 
 fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
@@ -38,6 +39,19 @@ fn validate_assignment(config: &ExecutionConfiguration) -> anyhow::Result<()> {
                 .is_none_or(Vec::is_empty),
         "Pre-warmed assignment has deferred repositories this client cannot prepare"
     );
+    Ok(())
+}
+
+fn consume_runner_setup_commands(
+    assigned: &mut Vec<String>,
+    prepared: &[String],
+) -> Result<(), AgentDriverError> {
+    if !assigned.starts_with(prepared) {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
+            "Runner setup commands changed after preparation"
+        )));
+    }
+    assigned.drain(..prepared.len());
     Ok(())
 }
 
@@ -159,9 +173,24 @@ impl AgentDriver {
         }
         #[cfg(target_family = "wasm")]
         runtime_env.remove("WARP_CLOUD_AGENT_OTLP_TOKEN");
-        let (prepared_mode, standby_owner) = spawner
-            .spawn(|me, _| (me.github_credential_mode, me.credential_store_owner.clone()))
+        let (prepared_mode, standby_owner, runner_commands) = spawner
+            .spawn(|me, _| {
+                (
+                    me.github_credential_mode,
+                    me.credential_store_owner.clone(),
+                    match me.workspace.as_ref() {
+                        Some(WorkspaceState::RunnerPrepared(prepared)) => {
+                            Some(prepared.configuration.setup_commands.clone())
+                        }
+                        _ => None,
+                    },
+                )
+            })
             .await?;
+        let runner_preparation = runner_commands.is_some();
+        if let Some(commands) = runner_commands {
+            consume_runner_setup_commands(&mut config.setup_commands, &commands)?;
+        }
         let retained_mcp = Self::stop_prewarmed_mcp_servers(spawner, HashMap::new()).await?;
         if let Some(owner) = standby_owner {
             git_credentials::close_restricted_credentials(&owner)
@@ -189,7 +218,7 @@ impl AgentDriver {
                 .map(String::as_str),
         )
         .map_err(AgentDriverError::ConfigBuildFailed)?;
-        if assigned_mode != prepared_mode {
+        if !runner_preparation && assigned_mode != prepared_mode {
             return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
                 "Assigned GitHub credential mode does not match preparation"
             )));
@@ -239,23 +268,39 @@ impl AgentDriver {
                 )
             })
             .await?;
-        let repositories = spawner
-            .spawn(|me, _| {
-                let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
-                    return Err(AgentDriverError::InvalidRuntimeState);
-                };
-                Ok(prepared
-                    .repositories
-                    .iter()
-                    .map(|repo| {
-                        (
-                            me.working_dir.join(&repo.repo),
-                            repo.code_forge.map(|forge| forge.host()).unwrap_or(""),
-                        )
-                    })
-                    .collect::<Vec<_>>())
-            })
-            .await??;
+        let repositories = if runner_preparation {
+            execution_config::repositories(config.repositories.clone())
+                .map_err(AgentDriverError::ConfigBuildFailed)?
+                .into_iter()
+                .map(|repo| {
+                    (
+                        working_dir.join(&repo.source.repo),
+                        repo.source
+                            .code_forge
+                            .map(|forge| forge.host())
+                            .unwrap_or(""),
+                    )
+                })
+                .collect()
+        } else {
+            spawner
+                .spawn(|me, _| {
+                    let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
+                        return Err(AgentDriverError::InvalidRuntimeState);
+                    };
+                    Ok(prepared
+                        .repositories
+                        .iter()
+                        .map(|repo| {
+                            (
+                                me.working_dir.join(&repo.repo),
+                                repo.code_forge.map(|forge| forge.host()).unwrap_or(""),
+                            )
+                        })
+                        .collect::<Vec<_>>())
+                })
+                .await??
+        };
         if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
             git_credentials::restricted::install_assignment_credentials(
                 &task_id.to_string(),
@@ -294,6 +339,7 @@ impl AgentDriver {
                 assigned_mode,
                 use_factory_repositories,
                 retained_mcp,
+                runner_preparation,
             },
         );
         if assigned_mode == GitHubCredentialMode::RestrictedInstallation {
@@ -326,10 +372,28 @@ impl AgentDriver {
             assigned_mode,
             use_factory_repositories,
             retained_mcp,
+            runner_preparation,
         } = installation;
         AgentDriverRunner::refresh_team_metadata(spawner, true).await?;
-        let (first_skill, discovery_dirs) =
-            resolve_configured_skills(spawner, specs, false, &working_dir, &setup_events).await?;
+        if runner_preparation {
+            setup_events
+                .record_result(SetupStep::WarpDriveSync, async {
+                    spawner
+                        .spawn(|_, ctx| crate::ai::agent_sdk::common::refresh_warp_drive(ctx))
+                        .await?
+                        .await
+                        .map_err(|_| AgentDriverError::WarpDriveSyncFailed)
+                })
+                .await?;
+        }
+        let (first_skill, discovery_dirs) = resolve_configured_skills(
+            spawner,
+            specs,
+            runner_preparation,
+            &working_dir,
+            &setup_events,
+        )
+        .await?;
         let harness_transport = assignment_harness_transport(&runtime_env)
             .map_err(AgentDriverError::ConfigBuildFailed)?;
         let (mut options, mut task, conversation_id, providers) = spawner
@@ -348,14 +412,17 @@ impl AgentDriver {
                     discovery_dirs,
                     ctx,
                 )?;
-                let Some(WorkspaceState::Prepared(prepared)) = me.workspace.as_ref() else {
-                    anyhow::bail!("Standby resources were not prepared");
-                };
-                anyhow::ensure!(
-                    prepared.harness == options.selected_harness
-                        && prepared.configuration.same_preparation(&options.workspace),
-                    "Assignment workspace does not match prepared resources"
-                );
+                match me.workspace.as_ref() {
+                    Some(WorkspaceState::RunnerPrepared(_)) => {}
+                    Some(WorkspaceState::Prepared(prepared)) => {
+                        anyhow::ensure!(
+                            prepared.harness == options.selected_harness
+                                && prepared.configuration.same_preparation(&options.workspace),
+                            "Assignment workspace does not match prepared resources"
+                        );
+                    }
+                    _ => anyhow::bail!("Standby resources were not prepared"),
+                }
                 Ok::<_, anyhow::Error>((options, task, conversation_id, providers))
             })
             .await?
