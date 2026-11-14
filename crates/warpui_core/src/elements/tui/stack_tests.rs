@@ -140,6 +140,59 @@ fn a_wide_foreground_glyph_clears_every_lower_cell_it_covers() {
     assert_eq!(render_to_lines(stack, TuiSize::new(3, 1)), vec!["界z"],);
 }
 #[test]
+fn hyperlink_survives_compositing_translated_to_the_padded_final_position() {
+    let style = Style::default().underline_color(Color::Indexed(0));
+    let link_text = TuiText::from_spans([("link".to_owned(), style)])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")]);
+    let padded = TuiContainer::new(link_text.finish())
+        .with_padding_left(3)
+        .finish();
+    let stack = TuiStack::new().child(padded);
+
+    let frame = render_to_frame(stack, TuiSize::new(10, 1));
+
+    assert_eq!(frame.buffer.to_lines()[0].trim_end(), "   link");
+    let url: Rc<str> = Rc::from("https://warp.dev");
+    // The link lands at columns 3..7 after the container's 3-column left
+    // padding. Before translating scratch-local coordinates during
+    // compositing, this would have wrongly recorded columns 0..4 (the
+    // pre-padding, scratch-buffer-local position) instead.
+    for x in 3..7 {
+        assert_eq!(
+            frame.hyperlinks.get(&(x, 0)),
+            Some(&url),
+            "column {x} should be tagged at its final, padded position"
+        );
+    }
+    for x in [0, 1, 2, 7, 8, 9] {
+        assert!(
+            !frame.hyperlinks.contains_key(&(x, 0)),
+            "column {x} should not be tagged"
+        );
+    }
+}
+
+#[test]
+fn opaque_foreground_layer_clears_a_lower_layers_hyperlink() {
+    let style = Style::default().underline_color(Color::Indexed(0));
+    let link_text = TuiText::from_spans([("link".to_owned(), style)])
+        .with_hyperlinks(vec![Rc::from("https://warp.dev")]);
+    let stack = TuiStack::new()
+        .child(link_text.finish())
+        .child(TuiText::new("XXXX").finish());
+
+    let frame = render_to_frame(stack, TuiSize::new(4, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["XXXX"]);
+    for x in 0..4 {
+        assert!(
+            !frame.hyperlinks.contains_key(&(x, 0)),
+            "column {x} must not remain clickable once an opaque, non-hyperlinked layer covers it"
+        );
+    }
+}
+
+#[test]
 fn zero_sized_front_child_leaves_the_full_sized_back_child_visible() {
     let stack = TuiStack::new()
         .child(TuiText::new("back").finish())
