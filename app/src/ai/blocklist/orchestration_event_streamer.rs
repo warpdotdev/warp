@@ -2816,7 +2816,9 @@ pub(super) fn conversation_status_from_lifecycle_event_type(
         },
         // Forward-compat catch-all: matches the viewer's
         // `AmbientAgentTaskState::Unknown` → `Error` behaviour.
-        api::LifecycleEventType::Unspecified => ConversationStatus::Error,
+        api::LifecycleEventType::Unspecified | api::LifecycleEventType::Waiting => {
+            ConversationStatus::Error
+        }
     }
 }
 

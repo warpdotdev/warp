@@ -1026,6 +1026,7 @@ pub(crate) fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentit
         "slack" => api::McpIntegration::Slack,
         "jira" => api::McpIntegration::Jira,
         "linear_agent_session" => api::McpIntegration::LinearAgentSession,
+        "github" => api::McpIntegration::Github,
         _ => return None,
     };
     Some(api::McpServerIdentity {

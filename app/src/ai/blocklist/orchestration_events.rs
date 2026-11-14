@@ -634,7 +634,7 @@ fn lifecycle_event_detail_from_type(
                 error_message: detail_payload.error_message.clone().unwrap_or_default(),
             },
         )),
-        LifecycleEventType::Unspecified => None,
+        LifecycleEventType::Unspecified | LifecycleEventType::Waiting => None,
     }
 }
 
@@ -671,7 +671,9 @@ pub(super) fn lifecycle_event_type_from_proto(
         Some(api::agent_event::lifecycle_event::Detail::Errored(_)) => {
             api::LifecycleEventType::Errored
         }
-        None => api::LifecycleEventType::Unspecified,
+        Some(api::agent_event::lifecycle_event::Detail::Waiting(_)) | None => {
+            api::LifecycleEventType::Unspecified
+        }
     }
 }
 
