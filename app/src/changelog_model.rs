@@ -11,7 +11,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::autoupdate::{self};
 use crate::channel::{Channel, ChannelState};
-use crate::features::{FeatureFlag, PREVIEW_FLAGS};
+use crate::features::PREVIEW_FLAGS;
 use crate::server::server_api::ServerApi;
 
 pub struct ChangelogModel {
@@ -76,13 +76,11 @@ impl ChangelogModel {
     ) {
         match changelog {
             Ok(Some(changelog)) => {
-                if FeatureFlag::OzChangelogUpdates.is_enabled() {
-                    self.oz_updates = changelog
-                        .oz_updates
-                        .iter()
-                        .filter_map(|update_markdown| parse_markdown(update_markdown).ok())
-                        .collect();
-                }
+                self.oz_updates = changelog
+                    .oz_updates
+                    .iter()
+                    .filter_map(|update_markdown| parse_markdown(update_markdown).ok())
+                    .collect();
                 self.changelog = ChangelogState::Some(changelog.clone());
                 self.maybe_add_changelog_sections();
                 self.parse_changelog_markdown();

@@ -234,7 +234,6 @@ impl AgentViewZeroStateBlock {
                     event,
                     AISettingsChangedEvent::ShouldShowOzUpdatesInZeroState { .. }
                 )
-                && FeatureFlag::OzChangelogUpdates.is_enabled()
                 && !ChangelogModel::as_ref(ctx).oz_updates.is_empty();
             if should_rerender_for_oz_updates_visibility {
                 ctx.notify();
@@ -1001,12 +1000,8 @@ struct OzUpdatesProps<'a> {
     is_expanded: bool,
     state_handles: &'a StateHandles,
 }
-fn should_render_oz_updates_section(
-    is_oz_changelog_updates_enabled: bool,
-    should_show_oz_updates: bool,
-    has_oz_updates: bool,
-) -> bool {
-    is_oz_changelog_updates_enabled && should_show_oz_updates && has_oz_updates
+fn should_render_oz_updates_section(should_show_oz_updates: bool, has_oz_updates: bool) -> bool {
+    should_show_oz_updates && has_oz_updates
 }
 
 fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -1015,7 +1010,6 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
         .should_show_oz_updates_in_zero_state
         .value();
     if !should_render_oz_updates_section(
-        FeatureFlag::OzChangelogUpdates.is_enabled(),
         should_show_oz_updates,
         !changelog_model.oz_updates.is_empty(),
     ) {
