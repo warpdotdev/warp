@@ -35,7 +35,6 @@ pub use self::context_chip::{
 use self::context_chip::{ChipFingerprintInput, ChipRuntimePolicy, ContextChip, RefreshConfig};
 use self::renderer::RendererStyles;
 use crate::appearance::Appearance;
-use crate::features::FeatureFlag;
 use crate::themes::theme::PromptColors;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -327,7 +326,6 @@ impl ContextChipKind {
                 )
                 .with_allow_empty_value(),
             ),
-            Self::GithubPullRequest if !FeatureFlag::GithubPrPromptChip.is_enabled() => None,
             Self::GithubPullRequest => Some(ContextChip::builtin(
                 "GitHub Pull Request",
                 |_| None,
@@ -562,7 +560,7 @@ pub fn agent_footer_available_chips() -> Vec<ContextChipKind> {
 
 /// TODO: this needs to also fetch the custom chips from sqlite
 pub fn available_chips() -> Vec<ContextChipKind> {
-    let mut chips = vec![
+    vec![
         ContextChipKind::WorkingDirectory,
         ContextChipKind::Username,
         ContextChipKind::Hostname,
@@ -570,11 +568,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::ShellGitBranch,
         ContextChipKind::GitBranchStatus,
         ContextChipKind::GitDiffStats,
-    ];
-    if FeatureFlag::GithubPrPromptChip.is_enabled() {
-        chips.push(ContextChipKind::GithubPullRequest);
-    }
-    chips.extend([
+        ContextChipKind::GithubPullRequest,
         ContextChipKind::Date,
         ContextChipKind::Time12,
         ContextChipKind::Time24,
@@ -584,8 +578,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::KubernetesContext,
         ContextChipKind::SvnBranch,
         ContextChipKind::SvnDirtyItems,
-    ]);
-    chips
+    ]
 }
 
 /// Parses [`display_chip::GitLineChanges`] from the raw shell command output stored in a
