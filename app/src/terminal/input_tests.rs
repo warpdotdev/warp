@@ -2454,7 +2454,6 @@ fn queued_command_completion_preserves_draft() {
             input.handle_block_completed_event(
                 BlockCompletedEvent {
                     block_type: BlockType::User(UserBlockCompleted::new_for_test(
-                        BlockIndex::zero(),
                         Arc::new(SerializedBlock::new_for_test(b"echo 1".to_vec(), vec![])),
                         "echo 1".to_owned(),
                         "echo 1".to_owned(),
@@ -2466,7 +2465,6 @@ fn queued_command_completion_preserves_draft() {
                         0,
                     )),
                     num_secrets_obfuscated: 0,
-                    block_index: BlockIndex::zero(),
                     block_id: BlockId::new(),
                     session_id: None,
                     restored_block_was_local: None,
@@ -2483,7 +2481,6 @@ fn queued_command_completion_preserves_draft() {
 
 fn user_block_completed_for_test(command: &str) -> BlockType {
     BlockType::User(UserBlockCompleted::new_for_test(
-        BlockIndex::zero(),
         Arc::new(SerializedBlock::new_for_test(
             command.as_bytes().to_vec(),
             vec![],
@@ -2523,7 +2520,6 @@ async fn complete_ctrl_t_handoff(
             BlockCompletedEvent {
                 block_type: user_block_completed_for_test(original_buffer),
                 num_secrets_obfuscated: 0,
-                block_index: BlockIndex::zero(),
                 block_id,
                 session_id: None,
                 restored_block_was_local: None,
@@ -2564,7 +2560,6 @@ async fn complete_ctrl_r_handoff(
             BlockCompletedEvent {
                 block_type: user_block_completed_for_test(original_buffer),
                 num_secrets_obfuscated: 0,
-                block_index: BlockIndex::zero(),
                 block_id,
                 session_id: None,
                 restored_block_was_local: None,
@@ -2724,7 +2719,6 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
                 BlockCompletedEvent {
                     block_type: user_block_completed_for_test(" warp_run_external_ctrl_t_widget"),
                     num_secrets_obfuscated: 0,
-                    block_index: BlockIndex::zero(),
                     block_id,
                     session_id: None,
                     restored_block_was_local: None,
