@@ -135,6 +135,8 @@ runs:
 
     - name: Install dependencies
       shell: bash
+      env:
+        TARGET_OS: ${{ inputs.target_os }}
       run: |
         cd "${{ steps.repo-root.outputs.path }}"
         if ${{ inputs.target_os == 'macos' }}; then
@@ -170,7 +172,7 @@ runs:
           sudo apt update -y
           ./script/wasm/install_build_deps
         else
-          echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
+          echo "::error::Missing logic to install build dependencies for OS \"${TARGET_OS}\""
           exit 1
         fi
 
@@ -206,7 +208,9 @@ runs:
       # Windows and macOS surface failures via their fallback steps above.
       if: ${{ inputs.target_os != 'windows' && inputs.target_os != 'macos' && steps.install_protoc.outcome == 'failure' }}
       shell: bash
+      env:
+        TARGET_OS: ${{ inputs.target_os }}
       run: |
-        echo "::error::protoc install step failed on ${{ inputs.target_os }}"
+        echo "::error::protoc install step failed on ${TARGET_OS}"
         exit 1
 

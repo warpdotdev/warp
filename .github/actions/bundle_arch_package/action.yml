@@ -31,6 +31,10 @@ runs:
     - name: Run in container
       shell: bash
       env:
+        BUNDLE_CHANNEL: ${{ inputs.channel }}
+        BUNDLE_RELEASE_TAG: ${{ inputs.release-tag }}
+        BUNDLE_ARCH: ${{ inputs.arch }}
+        BUNDLE_ARTIFACT: ${{ inputs.artifact }}
         SETTINGS_SCHEMA_SOURCE: ${{ inputs.settings-schema-source }}
       run: |
         settings_schema_source="$(realpath "$SETTINGS_SCHEMA_SOURCE")"
@@ -46,4 +50,4 @@ runs:
           -e GITHUB_OUTPUT="/dev/null" \
           -e SETTINGS_SCHEMA_SOURCE="/tmp/settings_schema.json" \
           arch-bundle-builder \
-          ${{ inputs.channel }} ${{ inputs.release-tag }} ${{ inputs.arch }} ${{ inputs.artifact }}
+          ${BUNDLE_CHANNEL} ${BUNDLE_RELEASE_TAG} ${BUNDLE_ARCH} ${BUNDLE_ARTIFACT}

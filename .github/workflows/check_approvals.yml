@@ -35,10 +35,11 @@ jobs:
       - name: Get PR approvers
         id: approvers
         env:
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
-          PR_AUTHOR=${{ github.event.pull_request.user.login }}
+          PR_AUTHOR="${PR_AUTHOR_LOGIN}"
 
           # Get all approved reviews.
           REVIEWERS=$(gh pr view "$PR_NUMBER" --json reviews --jq '[.reviews[] | select(.state == "APPROVED") | .author.login] | unique | join(" ")')

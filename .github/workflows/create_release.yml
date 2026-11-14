@@ -3013,17 +3013,19 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.github_app_auth.outputs.token }}
           LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
         run: |
-          CHANGELOG_DIR="${{ runner.temp }}/changelog-draft"
+          CHANGELOG_DIR="${RUNNER_TEMP}/changelog-draft"
           LEGACY_CHANGELOG_FILE="$CHANGELOG_DIR/changelog-legacy.json"
           mkdir -p "$CHANGELOG_DIR"
           printf '%s\n' "$LEGACY_CHANGELOG" > "$LEGACY_CHANGELOG_FILE"
           python3 .agents/skills/changelog-draft/scripts/add_tui_updates.py \
             --input "$LEGACY_CHANGELOG_FILE" \
             --output "$CHANGELOG_DIR/changelog-release.json" \
-            --repo "${{ github.repository }}" \
-            --channel "${{ inputs.channel }}" \
-            --release-tag "${{ needs.prepare_release.outputs.release_tag }}"
+            --repo "${GITHUB_REPOSITORY}" \
+            --channel "${RELEASE_CHANNEL}" \
+            --release-tag "${RELEASE_TAG}"
 
       - name: Load changelog into step output
         id: generate_changelog
