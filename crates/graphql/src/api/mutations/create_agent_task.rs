@@ -72,7 +72,6 @@ pub struct LocalAgentTaskOutput {
     pub task_id: cynic::Id,
     pub github_credential_mode:
         Option<crate::queries::task_restricted_git_credentials::GitHubCredentialMode>,
-    pub execution_id: Option<cynic::Id>,
     pub mcp_servers: Option<String>,
 }
 

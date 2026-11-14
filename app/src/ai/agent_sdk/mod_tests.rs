@@ -19,6 +19,7 @@ use warp_cli::agent::{
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
+use warp_cli::mcp::MCPSpec;
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::{Args, CliCommand, Command};
 use warp_core::features::FeatureFlag;
@@ -1469,11 +1470,9 @@ fn local_task_negotiation_fails_closed_without_retrying_creation() {
         for scenario in [
             "creation-error",
             "missing-mode",
-            "missing-execution",
-            "invalid-execution",
             "missing-mcp",
             "invalid-mcp",
-            "missing-github",
+            "restricted-mode",
         ] {
             let mut client = MockAIClient::new();
             client.expect_create_agent_task().never();
@@ -1486,11 +1485,9 @@ fn local_task_negotiation_fails_closed_without_retrying_creation() {
                     match scenario {
                         "creation-error" => return Err(anyhow::anyhow!("creation unavailable")),
                         "missing-mode" => output.github_credential_mode = None,
-                        "missing-execution" => output.execution_id = None,
-                        "invalid-execution" => output.execution_id = Some(cynic::Id::new("0")),
                         "missing-mcp" => output.mcp_servers = None,
                         "invalid-mcp" => output.mcp_servers = Some("invalid".into()),
-                        "missing-github" => {
+                        "restricted-mode" => {
                             output.github_credential_mode =
                                 Some(super::GitHubCredentialMode::RestrictedInstallation)
                         }
@@ -1522,7 +1519,60 @@ fn local_task_output() -> warp_graphql::mutations::create_agent_task::LocalAgent
     warp_graphql::mutations::create_agent_task::LocalAgentTaskOutput {
         task_id: cynic::Id::new(TASK_ID),
         github_credential_mode: Some(super::GitHubCredentialMode::Legacy),
-        execution_id: Some(cynic::Id::new("1")),
         mcp_servers: Some("{}".into()),
     }
+}
+
+#[test]
+fn local_task_keeps_git_configuration_and_managed_mcp() {
+    App::test((), |mut app| async move {
+        let _well_known = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let runner = app.add_singleton_model(|_| AgentDriverRunner);
+        let foreground = runner.update(&mut app, |_, ctx| ctx.spawner());
+        let root = tempfile::TempDir::new().unwrap();
+        let git_config = root.path().join(".gitconfig");
+        let content = "[user]\nname = Developer\nemail = developer@example.com\n[credential]\nhelper = manager\n";
+        fs::write(&git_config, content).unwrap();
+        let mut client = MockAIClient::new();
+        client.expect_get_restricted_task_git_credentials().never();
+        client.expect_get_task_git_credentials().never();
+        client
+            .expect_create_local_agent_task()
+            .times(1)
+            .returning(|_, _, _| {
+                let mut output = local_task_output();
+                output.mcp_servers = Some(json!({"GitHub": {"warp_id": "github"}}).to_string());
+                Ok(output)
+            });
+        let client: Arc<dyn AIClient> = Arc::new(client);
+        let mut options = agent_driver_options();
+        options.working_dir = root.path().to_owned();
+        options.environment_variables.insert(
+            "GIT_CONFIG_GLOBAL".into(),
+            git_config.to_string_lossy().into_owned(),
+        );
+        let environment = options.environment_variables.clone();
+        let specs = AgentDriverRunner::initialize_new_task(
+            &foreground,
+            &client,
+            "prompt".into(),
+            AgentConfigSnapshot::default(),
+            HeadlessTeamScope::Personal,
+            &mut options,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(specs.as_slice(), [MCPSpec::WellKnown(id)] if id == "github"));
+        assert_eq!(
+            options.github_credential_mode,
+            super::GitHubCredentialMode::Legacy
+        );
+        assert!(options.strict_mcp_startup);
+        assert!(options.execution_id.is_none());
+        assert!(options.credential_store_owner.is_none());
+        assert_eq!(options.environment_variables, environment);
+        assert_eq!(fs::read_to_string(&git_config).unwrap(), content);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    });
 }

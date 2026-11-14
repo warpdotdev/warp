@@ -1913,7 +1913,6 @@ pub trait AIClient: 'static + Send + Sync {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
         providers: Option<Vec<TaskGitCredentialProvider>>,
-        local_execution_id: Option<String>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
@@ -3531,11 +3530,9 @@ impl AIClient for ServerApi {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
         providers: Option<Vec<TaskGitCredentialProvider>>,
-        local_execution_id: Option<String>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
         let variables = RestrictedTaskGitCredentialsVariables {
             input: RestrictedTaskGitCredentialsInput {
-                local_execution_id: local_execution_id.map(Into::into),
                 task_id: cynic::Id::new(task_id),
                 workload_token,
                 accepts_partial_refresh: Some(accepts_partial_refresh),

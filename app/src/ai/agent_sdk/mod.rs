@@ -1736,15 +1736,11 @@ impl AgentDriverRunner {
                 "Local GitHub policy is missing; upgrade the server"
             ))
         })?;
-        let execution_id = output
-            .execution_id
-            .map(cynic::Id::into_inner)
-            .filter(|id| id.parse::<u64>().is_ok_and(|id| id > 0))
-            .ok_or_else(|| {
-                AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-                    "Local execution ID is missing"
-                ))
-            })?;
+        if mode != GitHubCredentialMode::Legacy {
+            return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                "Local runs require existing Git authentication; upgrade the server"
+            )));
+        }
         let servers = output
             .mcp_servers
             .context("Local MCP configuration is missing")
@@ -1756,31 +1752,12 @@ impl AgentDriverRunner {
             .unwrap_or_default();
         let specs = config_file::mcp_specs_from_mcp_servers(&servers)
             .map_err(AgentDriverError::ConfigBuildFailed)?;
-        if mode == GitHubCredentialMode::RestrictedInstallation {
-            if !servers.values().any(|server| {
-                server.get("warp_id").and_then(serde_json::Value::as_str) == Some("github")
-            }) {
-                return Err(AgentDriverError::MCPStartupFailed {
-                    details: vec![
-                        "Restricted GitHub mode requires the managed GitHub MCP integration".into(),
-                    ],
-                });
-            }
-            driver::git_credentials::restricted::bootstrap_local_credentials(
-                &task_id.to_string(),
-                execution_id.clone(),
-                &driver_options.working_dir,
-                server_api,
-                driver_options.use_factory_repositories,
-            )
-            .await
-            .map_err(AgentDriverError::GitCredentialsFetchFailed)?;
-        }
         Self::set_ambient_agent_task_id(foreground, Some(task_id)).await?;
         driver_options.task_id = Some(task_id);
-        driver_options.execution_id = Some(execution_id);
         driver_options.github_credential_mode = mode;
-        if mode == GitHubCredentialMode::RestrictedInstallation {
+        if servers.values().any(|server| {
+            server.get("warp_id").and_then(serde_json::Value::as_str) == Some("github")
+        }) {
             driver_options.strict_mcp_startup = true;
         }
         Ok(specs)
