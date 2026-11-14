@@ -30,7 +30,7 @@ use warpui::{
 };
 
 use crate::GlobalResourceHandlesProvider;
-use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
+use crate::ai::blocklist::secret_redaction::find_secrets_in_text_excluding_ips;
 use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, prettify_json, resolve_json};
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::{
@@ -540,7 +540,7 @@ impl MCPServersEditPageView {
         let enterprise_enforced =
             UserWorkspaces::as_ref(ctx).is_enterprise_secret_redaction_enabled();
         let contains_secrets =
-            !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty();
+            !find_secrets_in_text_excluding_ips(&templatable_mcp_server.template.json).is_empty();
 
         if should_block_save_for_secrets(safe_mode_enabled, enterprise_enforced, contains_secrets) {
             let window_id = ctx.window_id();
