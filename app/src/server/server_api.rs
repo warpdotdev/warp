@@ -527,8 +527,8 @@ impl ServerApi {
         let client = Arc::new(http_client::Client::new_for_test());
 
         Self::new_with_parts(
+            client.clone(),
             client,
-            Arc::new(http_client::Client::new_external()),
             auth_state,
             tx,
             None,
