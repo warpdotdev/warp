@@ -78,6 +78,19 @@ impl InactivityModal {
             });
         });
     }
+
+    /// Stops the countdown in place, without emitting any event -- unlike the countdown
+    /// reaching zero on its own, or the user clicking a button, this is an external
+    /// dismissal (e.g. the warning phase became disabled out from under an already-open
+    /// modal) that must not be mistaken for the user's own "continue" or "stop sharing"
+    /// choice.
+    pub fn stop_countdown(&mut self, ctx: &mut ViewContext<Self>) {
+        self.modal.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.stop_countdown(ctx);
+            });
+        });
+    }
 }
 
 impl Entity for InactivityModal {
@@ -128,6 +141,15 @@ impl InactivityModalBody {
         self.is_countdown_running = true;
         self.duration = duration;
         self.update_countdown(ctx);
+    }
+
+    /// Marks the countdown as no longer running. `update_countdown`'s next scheduled tick
+    /// (already in flight from the last `Timer::after`) checks this flag before doing
+    /// anything, so this reliably prevents a `TimedOut` emission for a countdown that's
+    /// being dismissed externally rather than by the user or by reaching zero.
+    fn stop_countdown(&mut self, ctx: &mut ViewContext<Self>) {
+        self.is_countdown_running = false;
+        ctx.notify();
     }
 
     fn update_countdown(&mut self, ctx: &mut ViewContext<Self>) {
