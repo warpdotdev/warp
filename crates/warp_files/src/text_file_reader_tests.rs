@@ -248,6 +248,23 @@ fn global_budget_shared_across_ranges() {
     assert_eq!(bytes_read, 10);
 }
 
+#[test]
+fn bounded_line_buffer_caps_capacity_at_growth_boundary() {
+    let mut buffer = BoundedLineBuffer::new(8193);
+    buffer.extend_from_slice(&[b'a'; 8192]);
+    buffer.extend_from_slice(b"a");
+
+    assert_eq!(buffer.bytes.len(), 8193);
+    assert_eq!(buffer.bytes.capacity(), 8193);
+    assert!(!buffer.exceeded_byte_budget());
+
+    buffer.extend_from_slice(b"a");
+
+    assert_eq!(buffer.bytes.len(), 0);
+    assert_eq!(buffer.bytes.capacity(), 8193);
+    assert!(buffer.exceeded_byte_budget());
+}
+
 // ── Trailing newline preservation ───────────────────────────────────
 
 #[test]
@@ -332,6 +349,121 @@ fn non_utf8_file_returns_not_text() {
     let result =
         futures::executor::block_on(FileModel::read_text_file(&path, 10_000, &[], None)).unwrap();
     assert!(matches!(result, TextFileReadResult::NotText));
+}
+
+#[test]
+fn read_text_file_bounds_newline_free_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-line.txt");
+    std::fs::write(&path, vec![b'a'; 8194]).unwrap();
+
+    let result =
+        futures::executor::block_on(FileModel::read_text_file(&path, 8192, &[], None)).unwrap();
+    let TextFileReadResult::Segments {
+        segments,
+        bytes_read,
+    } = result
+    else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(1..1));
+    assert_eq!(segments[0].line_count, 1);
+    assert_eq!(bytes_read, 0);
+}
+
+#[test]
+fn read_text_file_handles_utf8_split_at_buffer_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("split-utf8.txt");
+    let mut input = vec![b'a'; 8191];
+    input.extend_from_slice("é".as_bytes());
+    std::fs::write(&path, &input).unwrap();
+
+    let result =
+        futures::executor::block_on(FileModel::read_text_file(&path, 8193, &[], None)).unwrap();
+    let TextFileReadResult::Segments {
+        segments,
+        bytes_read,
+    } = result
+    else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(segments[0].content.as_bytes(), input);
+    assert_eq!(segments[0].line_range, None);
+    assert_eq!(segments[0].line_count, 1);
+    assert_eq!(bytes_read, 8193);
+}
+
+#[test]
+fn read_text_file_handles_crlf_split_at_buffer_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("split-crlf.txt");
+    let mut input = vec![b'a'; 8191];
+    input.extend_from_slice(b"\r\n");
+    std::fs::write(&path, &input).unwrap();
+
+    let result =
+        futures::executor::block_on(FileModel::read_text_file(&path, 8192, &[], None)).unwrap();
+    let TextFileReadResult::Segments {
+        segments,
+        bytes_read,
+    } = result
+    else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(&segments[0].content.as_bytes()[..8191], &input[..8191]);
+    assert_eq!(segments[0].content.as_bytes()[8191], b'\n');
+    assert_eq!(segments[0].line_range, None);
+    assert_eq!(segments[0].line_count, 1);
+    assert_eq!(bytes_read, 8192);
+}
+
+#[test]
+fn read_text_file_drops_newline_when_zero_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("newline.txt");
+    std::fs::write(&path, "\n").unwrap();
+
+    let result =
+        futures::executor::block_on(FileModel::read_text_file(&path, 0, &[], None)).unwrap();
+    let TextFileReadResult::Segments {
+        segments,
+        bytes_read,
+    } = result
+    else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(1..1));
+    assert_eq!(segments[0].line_count, 1);
+    assert_eq!(bytes_read, 0);
+}
+
+#[test]
+fn read_text_file_drops_trailing_newline_at_tiny_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny.txt");
+    std::fs::write(&path, "a\n").unwrap();
+
+    let result =
+        futures::executor::block_on(FileModel::read_text_file(&path, 1, &[], None)).unwrap();
+    let TextFileReadResult::Segments {
+        segments,
+        bytes_read,
+    } = result
+    else {
+        panic!("expected Segments");
+    };
+
+    assert_eq!(segments[0].content, "a");
+    assert_eq!(segments[0].line_range, Some(1..1));
+    assert_eq!(segments[0].line_count, 1);
+    assert_eq!(bytes_read, 1);
 }
 
 #[test]
