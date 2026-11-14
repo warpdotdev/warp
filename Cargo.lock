@@ -16683,6 +16683,7 @@ dependencies = [
  "futures",
  "log",
  "notify-debouncer-full",
+ "tempfile",
  "warp_errors",
  "warpui_core",
 ]
