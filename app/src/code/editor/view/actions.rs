@@ -969,14 +969,14 @@ impl TypedActionView for CodeEditorView {
             }),
             SelectWord { offset, modifiers } => {
                 self.is_selecting = true;
-                let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
+                let multiselect = modifiers.alt;
                 self.model.update(ctx, |model, ctx| {
                     model.select_word_at(*offset, multiselect, ctx);
                 });
             }
             SelectLine { offset, modifiers } => {
                 self.is_selecting = true;
-                let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
+                let multiselect = modifiers.alt;
                 self.model.update(ctx, |model, ctx| {
                     model.select_line_at(*offset, multiselect, ctx);
                 });
