@@ -8,6 +8,7 @@ use warpui_core::text::words::is_default_word_boundary;
 
 use super::*;
 use crate::model::blockgrid::BlockGrid;
+use crate::model::cell::MAX_GRAPHEME_BYTES;
 use crate::model::char_or_str::CharOrStr;
 use crate::model::secrets::{IsObfuscated, ObfuscateSecrets, SecretLevel};
 use crate::test_util::mock_blockgrid;
@@ -1480,7 +1481,7 @@ fn test_emoji_variation_selector() {
 
     blockgrid.start();
     blockgrid.input('a');
-    // ☁️ should be a wide character - it is \0x2601\0xFE0F (uses emoji variation selector from Unicode).
+    // ☁️ should be a wide character - it is U+2601 U+FE0F (uses emoji variation selector from Unicode).
     // See https://www.unicode.org/reports/tr51/#def_emoji_presentation_selector.
     blockgrid.input('\u{2601}');
     blockgrid.input('\u{FE0F}');
@@ -1490,7 +1491,7 @@ fn test_emoji_variation_selector() {
     assert!(has_wide_char_character(&blockgrid));
     let grid = blockgrid.grid_storage();
     assert_eq!(grid[0][0].c, 'a');
-    // Not this is only \0x2601, without the variation selector.
+    // Not this is only U+2601, without the variation selector.
     assert_eq!(grid[0][1].c, '☁');
     // Assert that it is a String (has zerowidth characters).
     assert!(matches!(
@@ -1585,6 +1586,395 @@ fn emoji_variation_selector_does_not_advance_already_wide_grapheme() {
             .contains(Flags::WIDE_CHAR_SPACER)
     );
     assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// An emoji ZWJ sequence is one grapheme cluster and must occupy a single wide
+/// cell, not one wide cell per joined emoji: U+1F468 U+200D U+1F469 U+200D U+1F467
+/// (MAN + ZERO WIDTH JOINER + WOMAN + ZERO WIDTH JOINER + GIRL = 👨‍👩‍👧).
+#[test]
+fn emoji_zwj_sequence_occupies_a_single_wide_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    for c in "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".chars() {
+        grid.input(c);
+    }
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("👨\u{200D}👩\u{200D}👧")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][2].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// A wide base stays one wide cell while a modifier, a joiner, a narrow sign
+/// and a selector are appended to it: U+1F926 U+1F3FB U+200D U+2640 U+FE0F (FACE
+/// PALM + EMOJI MODIFIER FITZPATRICK TYPE-1-2 + ZERO WIDTH JOINER + FEMALE SIGN +
+/// VARIATION SELECTOR-16 = 🤦🏻‍♀️).
+#[test]
+fn emoji_zwj_sequence_with_modifier_and_selector_stays_one_wide_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    for c in "\u{1F926}\u{1F3FB}\u{200D}\u{2640}\u{FE0F}".chars() {
+        grid.input(c);
+    }
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("🤦🏻\u{200D}♀\u{FE0F}")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][2].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// A skin tone modifier joins the wide emoji before it instead of taking two
+/// cells of its own: U+1F44D U+1F3FD (THUMBS UP SIGN + EMOJI MODIFIER
+/// FITZPATRICK TYPE-4 = 👍🏽).
+#[test]
+fn emoji_modifier_joins_a_wide_base() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{1F44D}');
+    grid.input('\u{1F3FD}');
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("👍🏽")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][2].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// A modifier after a narrow base promotes the cell to a wide one, the same
+/// way an emoji presentation selector does: U+261D U+1F3FD (WHITE UP POINTING
+/// INDEX + EMOJI MODIFIER FITZPATRICK TYPE-4 = ☝🏽).
+#[test]
+fn emoji_modifier_promotes_a_narrow_base_to_wide() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('a');
+    grid.input('\u{261D}');
+    grid.input('\u{1F3FD}');
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert_eq!(storage[VisibleRow(0)][0].c, 'a');
+    assert!(matches!(
+        storage[VisibleRow(0)][1].content_for_display(),
+        CharOrStr::Str("☝🏽")
+    ));
+    assert!(storage[VisibleRow(0)][1].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][2]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][3].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 4));
+}
+
+/// A regional indicator pair is stored as one wide cell so that it renders as
+/// a single flag glyph: U+1F1EF U+1F1F5 (REGIONAL INDICATOR SYMBOL LETTER J +
+/// REGIONAL INDICATOR SYMBOL LETTER P = 🇯🇵).
+#[test]
+fn regional_indicator_pair_occupies_a_single_wide_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{1F1EF}');
+    grid.input('\u{1F1F5}');
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("🇯🇵")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][2].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// Two flags in a row must not be merged into one cluster; the third regional
+/// indicator starts a new flag: U+1F1EF U+1F1F5 U+1F1FA U+1F1F8 (REGIONAL
+/// INDICATOR SYMBOL LETTER J + P + U + S = 🇯🇵🇺🇸).
+#[test]
+fn consecutive_flags_stay_separate() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    for c in "\u{1F1EF}\u{1F1F5}\u{1F1FA}\u{1F1F8}".chars() {
+        grid.input(c);
+    }
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("🇯🇵")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Str("🇺🇸")
+    ));
+    assert!(storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(grid.cursor_point(), Point::new(0, 4));
+}
+
+/// A ZERO WIDTH JOINER between two ordinary letters does not join them: only
+/// emoji ZWJ sequences form a single grapheme cluster.
+#[test]
+fn zwj_between_letters_does_not_join_cells() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('a');
+    grid.input('\u{200D}');
+    grid.input('b');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("a\u{200D}")
+    ));
+    assert!(!storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(storage[VisibleRow(0)][1].c, 'b');
+    assert_eq!(grid.cursor_point(), Point::new(0, 2));
+}
+
+/// A skin tone modifier after an ordinary letter is not a meaningful emoji
+/// sequence, so it keeps its own cells.
+#[test]
+fn emoji_modifier_after_ascii_letter_does_not_join() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('a');
+    grid.input('\u{1F3FD}');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Char('a')
+    ));
+    assert!(matches!(
+        storage[VisibleRow(0)][1].content_for_display(),
+        CharOrStr::Char('🏽')
+    ));
+    assert!(storage[VisibleRow(0)][1].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// A joined emoji still wraps as a unit when it lands in the last column.
+#[test]
+fn emoji_zwj_sequence_wraps_as_a_unit_at_last_column() {
+    let mut grid = GridHandler::new_for_test(2, 4);
+    grid.input('a');
+    grid.input('b');
+    grid.input('\u{1F468}');
+    grid.input('\u{200D}');
+    grid.input('\u{1F469}');
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Str("👨\u{200D}👩")
+    ));
+    assert!(storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(1)][0].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(1, 1));
+}
+
+/// A joined emoji at the start of a row must not be merged into the last cell
+/// of the previous row.
+#[test]
+fn emoji_at_row_start_does_not_join_previous_row() {
+    let mut grid = GridHandler::new_for_test(2, 4);
+    grid.input('\u{1F468}');
+    grid.linefeed();
+    grid.carriage_return();
+    grid.input('\u{1F469}');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Char('👨')
+    ));
+    assert!(matches!(
+        storage[VisibleRow(1)][0].content_for_display(),
+        CharOrStr::Char('👩')
+    ));
+    assert!(storage[VisibleRow(1)][0].flags.contains(Flags::WIDE_CHAR));
+}
+
+/// A cell whose grapheme is already at `MAX_GRAPHEME_BYTES` cannot take another
+/// character, so an emoji that would otherwise join it starts a new cell
+/// instead of being dropped.
+#[test]
+fn emoji_after_a_full_cell_starts_a_new_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{1F600}');
+    // Fill the rest of the cell's byte budget with joiners.
+    let joiner_count = (MAX_GRAPHEME_BYTES - '\u{1F600}'.len_utf8()) / '\u{200D}'.len_utf8();
+    for _ in 0..joiner_count {
+        grid.input('\u{200D}');
+    }
+    grid.input('\u{1F469}');
+
+    let storage = grid.grid_storage();
+    let CharOrStr::Str(full) = storage[VisibleRow(0)][0].content_for_display() else {
+        panic!("first cell should hold the joiner-filled grapheme");
+    };
+    assert!(full.len() + '\u{1F469}'.len_utf8() > MAX_GRAPHEME_BYTES);
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Char('👩')
+    ));
+    assert!(storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(grid.cursor_point(), Point::new(0, 4));
+}
+
+/// Precomposed Hangul syllables are separate grapheme clusters, so each keeps
+/// its own wide cell: U+D55C U+AE00 (HANGUL SYLLABLE HAN + HANGUL SYLLABLE
+/// GEUL = 한글).
+#[test]
+fn hangul_syllables_stay_separate_wide_cells() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{D55C}');
+    grid.input('\u{AE00}');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Char('한')
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Char('글')
+    ));
+    assert!(storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(grid.cursor_point(), Point::new(0, 4));
+}
+
+/// Conjoining jamo form one syllable and therefore one wide cell, the same
+/// footprint as the precomposed syllable: U+1112 U+1161 U+11AB (HANGUL
+/// CHOSEONG HIEUH + HANGUL JUNGSEONG A + HANGUL JONGSEONG NIEUN = 한).
+#[test]
+fn conjoining_jamo_occupy_a_single_wide_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{1112}');
+    grid.input('\u{1161}');
+    grid.input('\u{11AB}');
+    grid.input('x');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("\u{1112}\u{1161}\u{11AB}")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert_eq!(storage[VisibleRow(0)][2].c, 'x');
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+/// The variation selector of an ideographic variation sequence stays in the
+/// ideograph's cell, and the next ideograph starts a new cell: U+8FBB U+E0100 U+8FBB (CJK UNIFIED
+/// IDEOGRAPH-8FBB + VARIATION SELECTOR-17 + CJK UNIFIED IDEOGRAPH-8FBB = 辻󠄀辻).
+#[test]
+fn ideographic_variation_sequence_occupies_a_single_wide_cell() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.input('\u{8FBB}');
+    grid.input('\u{E0100}');
+    grid.input('\u{8FBB}');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("\u{8FBB}\u{E0100}")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        storage[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Char('\u{8FBB}')
+    ));
+    assert!(storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(grid.cursor_point(), Point::new(0, 4));
+}
+
+/// When the shell cannot handle sequences that widen a narrow base (Zsh), a
+/// modifier after a wide base still joins it, but a modifier after a narrow
+/// base keeps the previous per-scalar layout so the shell's cursor stays in
+/// sync.
+#[test]
+fn emoji_joining_respects_presentation_selector_support() {
+    let mut grid = GridHandler::new_for_test(2, 10);
+    grid.set_supports_emoji_presentation_selector(false);
+    grid.input('\u{1F44D}');
+    grid.input('\u{1F3FD}');
+    grid.input('\u{261D}');
+    grid.input('\u{1F3FD}');
+
+    let storage = grid.grid_storage();
+    assert!(matches!(
+        storage[VisibleRow(0)][0].content_for_display(),
+        CharOrStr::Str("👍🏽")
+    ));
+    assert!(storage[VisibleRow(0)][0].flags.contains(Flags::WIDE_CHAR));
+    assert!(matches!(
+        storage[VisibleRow(0)][2].content_for_display(),
+        CharOrStr::Char('☝')
+    ));
+    assert!(!storage[VisibleRow(0)][2].flags.contains(Flags::WIDE_CHAR));
+    assert!(matches!(
+        storage[VisibleRow(0)][3].content_for_display(),
+        CharOrStr::Char('🏽')
+    ));
+    assert!(storage[VisibleRow(0)][3].flags.contains(Flags::WIDE_CHAR));
+    assert_eq!(grid.cursor_point(), Point::new(0, 5));
 }
 
 #[test]

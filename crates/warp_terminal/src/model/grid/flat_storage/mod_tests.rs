@@ -73,7 +73,6 @@ fn test_row_with_double_width_char() {
 ///  4. ♂   2642    MALE SIGN
 ///  5. ️    FE0F    VARIATION SELECTOR-16
 #[test]
-#[ignore = "will not pass until using a version of unicode-width that includes commit afab363"]
 fn test_row_with_complex_emoji() {
     let storage = FlatStorage::from_content_using_rows("🧑🏿‍🦰👩‍🦲🧔🏿‍♂️", 6, Some(1));
 
