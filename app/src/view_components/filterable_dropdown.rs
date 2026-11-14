@@ -279,10 +279,20 @@ where
         self.items.len()
     }
 
-    #[expect(dead_code)]
     pub fn reset_selection(&mut self, ctx: &mut ViewContext<Self>) {
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.reset_selection(ctx);
+            ctx.notify();
+        });
+    }
+
+    /// Re-highlights the cached selected item in the menu, e.g. after
+    /// `reset_selection` cleared it while the pointer was on a pinned footer.
+    /// The cached selection itself is left as is.
+    pub fn restore_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let label = self.current_selected_item_label().to_string();
+        self.dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(&label, ctx);
             ctx.notify();
         });
     }
@@ -788,6 +798,12 @@ where
         self.set_filtered_items(ctx);
     }
 
+    /// Test-only: the row the inner menu currently highlights as selected.
+    #[cfg(test)]
+    pub(crate) fn menu_selected_index_for_test(&self, ctx: &AppContext) -> Option<usize> {
+        self.dropdown.as_ref(ctx).selected_index()
+    }
+
     /// Test-only: the number of items currently visible after filtering.
     #[cfg(test)]
     pub(crate) fn visible_items_len_for_test(&self, ctx: &AppContext) -> usize {
@@ -883,3 +899,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "filterable_dropdown_tests.rs"]
+mod tests;
