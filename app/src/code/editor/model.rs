@@ -252,6 +252,14 @@ impl DelayRendering {
             DelayRenderingTrigger::SyntaxHighlighting(_) => false,
         }
     }
+    fn block_until_diff_update(&mut self, buffer_version: BufferVersion) {
+        if matches!(
+            self.block_until,
+            DelayRenderingTrigger::SyntaxHighlighting(_)
+        ) {
+            self.block_until = DelayRenderingTrigger::DiffUpdate(buffer_version);
+        }
+    }
 
     fn flush_render(self, model: &CodeEditorModel, ctx: &mut ModelContext<CodeEditorModel>) {
         model.render_state.update(ctx, move |render_state, _| {
@@ -1627,8 +1635,7 @@ impl CodeEditorModel {
                 if should_recalculate_hidden_lines {
                     self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     if let Some(delay_rendering) = &mut self.delay_rendering {
-                        delay_rendering.block_until =
-                            DelayRenderingTrigger::DiffUpdate(*buffer_version);
+                        delay_rendering.block_until_diff_update(*buffer_version);
                     } else {
                         self.delay_rendering = Some(DelayRendering::new(
                             DelayRenderingTrigger::DiffUpdate(*buffer_version),

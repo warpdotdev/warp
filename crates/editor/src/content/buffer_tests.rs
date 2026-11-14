@@ -1037,7 +1037,7 @@ fn test_edit_delta() {
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<text>te\\nst");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(1)..CharOffset::from(1),
                     replaced_points: Point::new(1, 0)..Point::new(1, 0),
@@ -1084,7 +1084,7 @@ fn test_edit_delta() {
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<text>tnst");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(2)..CharOffset::from(4),
                     replaced_points: Point::new(1, 1)..Point::new(2, 0),
@@ -1119,7 +1119,7 @@ fn test_edit_delta() {
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<text>tn\\n\\nt");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(2)..CharOffset::from(4),
                     replaced_points: Point::new(1, 1)..Point::new(1, 3),
@@ -1174,7 +1174,7 @@ fn test_edit_delta() {
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<text>ts\\n\\nt");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(2)..CharOffset::from(3),
                     replaced_points: Point::new(1, 1)..Point::new(1, 2),
@@ -1209,7 +1209,7 @@ fn test_edit_delta() {
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<text>ts\\nhi\\nt");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(4)..CharOffset::from(4),
                     replaced_points: Point::new(2, 0)..Point::new(2, 0),
@@ -1243,7 +1243,7 @@ fn test_edit_delta() {
                 .delta
                 .expect("Should exist");
             assert_eq!(
-                delta.precise_deltas,
+                (*delta.precise_deltas),
                 vec![PreciseDelta {
                     replaced_range: CharOffset::from(2)..CharOffset::from(3),
                     replaced_points: Point::new(1, 1)..Point::new(1, 2),
