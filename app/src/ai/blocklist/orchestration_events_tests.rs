@@ -46,7 +46,7 @@ fn lifecycle_pending_event(
         api::LifecycleEventType::Errored => Some(
             api::agent_event::lifecycle_event::Detail::Errored(Default::default()),
         ),
-        api::LifecycleEventType::Unspecified => None,
+        api::LifecycleEventType::Unspecified | api::LifecycleEventType::Waiting => None,
     };
     PendingEvent {
         event_id: event_id.to_string(),

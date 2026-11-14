@@ -571,7 +571,8 @@ fn mcp_context_servers_carry_their_identity_alongside_the_installation_id() {
     }
 
     let github = proto.servers[4].identity.as_ref().expect("identity");
-    assert_eq!(github.integration(), api::McpIntegration::Unspecified);
-    assert_eq!(github.managed_server_uid, "github");
+    assert_eq!(github.integration(), api::McpIntegration::Github);
+    assert_eq!(github.managed_server_uid, "");
+    assert_eq!(proto.servers[4].id, "7c9e2d4a-0000-4000-8000-000000000004");
     assert_eq!(github.display_name, "");
 }
