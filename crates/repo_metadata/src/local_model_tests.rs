@@ -407,14 +407,17 @@ fn remove_repository_aborts_and_drops_watcher_update_tasks() {
         });
 
         model_handle.read(&app, |model, _ctx| {
+            // Only one walk is ever in flight per repository: tracking the
+            // second task replaced (and aborted) the first.
+            let queue = model
+                .watcher_update_tasks
+                .get(&repo_path)
+                .expect("watcher tasks should be tracked");
             assert_eq!(
-                model
-                    .watcher_update_tasks
-                    .get(&repo_path)
-                    .expect("watcher tasks should be tracked")
-                    .len(),
-                2
+                queue.in_flight.as_ref().map(|(id, _)| *id),
+                Some(second_future_id)
             );
+            assert!(queue.pending.is_none());
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -472,13 +475,13 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
 
         let nested_handle = model_handle.update(&mut app, |model, _ctx| {
             assert!(model.repository_state(&parent_repo_path).is_none());
-            let tasks = model
+            let queue = model
                 .watcher_update_tasks
                 .remove(&nested_repo_path)
                 .expect("nested repo watcher task should not be aborted by parent teardown");
-            tasks
-                .into_values()
-                .next()
+            queue
+                .in_flight
+                .map(|(_, handle)| handle)
                 .expect("nested repo watcher task should still be tracked")
         });
 
@@ -488,6 +491,199 @@ fn remove_repository_keeps_nested_repo_watcher_update_tasks() {
                 ctx.await_spawned_future(nested_future_id)
             })
             .await;
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn watcher_updates_coalesce_while_a_walk_is_in_flight() {
+    let repo_path = StandardizedPath::try_new("/watcher_update_coalesced_repo").unwrap();
+    let path_a = PathBuf::from("/watcher_update_coalesced_repo/a");
+    let path_b = PathBuf::from("/watcher_update_coalesced_repo/b");
+    let path_c = PathBuf::from("/watcher_update_coalesced_repo/c");
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let in_flight_id = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+            );
+            let handle = ctx.spawn(
+                async move {
+                    let _ = release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let future_id = handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), handle);
+            future_id
+        });
+
+        // Two debounced events arrive while the walk is still running. Neither
+        // may start a second walk; both are merged into one pending batch with
+        // duplicate paths collapsed.
+        model_handle.update(&mut app, |model, ctx| {
+            model.enqueue_watcher_update(
+                repo_path.clone(),
+                RepoUpdate {
+                    added: vec![path_a.clone()],
+                    ..Default::default()
+                },
+                ctx,
+            );
+            model.enqueue_watcher_update(
+                repo_path.clone(),
+                RepoUpdate {
+                    added: vec![path_a.clone(), path_b.clone()],
+                    deleted: vec![path_c.clone()],
+                    ..Default::default()
+                },
+                ctx,
+            );
+            let queue = model
+                .watcher_update_tasks
+                .get(&repo_path)
+                .expect("watcher queue should be tracked");
+            assert_eq!(
+                queue.in_flight.as_ref().map(|(id, _)| *id),
+                Some(in_flight_id),
+                "no second walk may start while one is in flight"
+            );
+            let pending = queue
+                .pending
+                .as_ref()
+                .expect("events during a walk are held as one pending batch");
+            assert_eq!(pending.added, vec![path_a.clone(), path_b.clone()]);
+            assert_eq!(pending.deleted, vec![path_c.clone()]);
+        });
+
+        // The walk finishes: the pending batch becomes exactly one new task.
+        let _ = release_tx.send(());
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(in_flight_id))
+            .await;
+        let next_id = model_handle.update(&mut app, |model, ctx| {
+            assert!(
+                model
+                    .finish_watcher_update_task(&repo_path, Some(in_flight_id))
+                    .is_some()
+            );
+            model.dispatch_pending_watcher_update(&repo_path, ctx);
+            let queue = model
+                .watcher_update_tasks
+                .get(&repo_path)
+                .expect("pending batch should have been dispatched");
+            assert!(queue.pending.is_none());
+            queue
+                .in_flight
+                .as_ref()
+                .map(|(id, _)| *id)
+                .expect("pending batch should now be the in-flight walk")
+        });
+        assert_ne!(next_id, in_flight_id);
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(next_id))
+            .await;
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn modified_event_on_indexed_directory_does_not_rebuild_its_subtree() {
+    VirtualFS::test("modified_indexed_directory_no_rebuild", |dirs, mut vfs| {
+        vfs.mkdir("repo/src/nested")
+            .with_files(vec![Stub::FileWithContent(
+                "repo/src/nested/main.rs",
+                "fn main() {}\n",
+            )]);
+
+        let repo_root = dirs.tests().join("repo");
+        let src_dir = repo_root.join("src");
+        let source_file = repo_root.join("src/nested/main.rs");
+
+        App::test((), |mut app| async move {
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let repo_root_for_index =
+                StandardizedPath::from_local_canonicalized(&repo_root).unwrap();
+
+            let (tx, rx) = oneshot::channel();
+            let repo_root_for_event = repo_root_for_index.clone();
+            let indexed = Rc::new(RefCell::new(Some(tx)));
+            let indexed_for_event = indexed.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if matches!(
+                        event,
+                        RepositoryMetadataEvent::RepositoryUpdated { path }
+                            if path == &repo_root_for_event
+                    ) && let Some(tx) = indexed_for_event.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                });
+            });
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_directory_path(&repo_root_for_index, ctx)
+                    .unwrap();
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for repository index")
+                .expect("repository index completion sender dropped");
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&repo_root_for_index)
+                else {
+                    panic!("expected indexed repository");
+                };
+                assert!(matches!(
+                    state
+                        .entry
+                        .get(&StandardizedPath::try_from_local(&src_dir).unwrap()),
+                    Some(FileTreeEntryState::Directory(_))
+                ));
+            });
+
+            // Windows reports a directory as modified whenever a child is
+            // created, removed or renamed. That event carries nothing the
+            // children's own events do not, so it must not walk the subtree.
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        modified: std::collections::HashSet::from([src_dir.clone()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                assert!(
+                    !model.watcher_update_tasks.contains_key(&repo_root_for_index),
+                    "a modified event on an already-indexed directory must not spawn a subtree rebuild"
+                );
+            });
+
+            // A modified file still flows through the pipeline.
+            let file_task_id = model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        modified: std::collections::HashSet::from([source_file.clone()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                model
+                    .watcher_update_tasks
+                    .get(&repo_root_for_index)
+                    .and_then(|queue| queue.in_flight.as_ref().map(|(id, _)| *id))
+                    .expect("a modified file should still be refreshed by the watcher pipeline")
+            });
+            model_handle
+                .update(&mut app, |_, ctx| ctx.await_spawned_future(file_task_id))
+                .await;
+        });
     });
 }
 
