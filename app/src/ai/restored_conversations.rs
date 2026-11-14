@@ -23,6 +23,14 @@ use crate::persistence::{database_file_path_for_current_scope, establish_ro_conn
 /// restoration) asks for a conversation. Consuming restored data this way
 /// avoids piping it from the root view down to the terminal view(s) that
 /// require it.
+///
+/// Loading one conversation is expensive: it reads and protobuf-decodes every
+/// `agent_tasks` row for that conversation, and the result is retained in
+/// `conversations` until someone takes it. Callers that only need to *decide*
+/// something about a conversation must therefore go through a predicate that
+/// can answer from the write-time `summary` column
+/// ([`Self::should_restore_into_pane`]) instead of loading a payload they are
+/// about to discard.
 pub struct RestoredAgentConversations {
     /// Conversations already loaded (or test-seeded) but not yet taken.
     conversations: HashMap<AIConversationId, AIConversation>,
@@ -79,6 +87,24 @@ impl RestoredAgentConversations {
         }
     }
 
+    /// Seeds the store with a backing database instead of already-loaded
+    /// conversations. Only used by tests.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub fn new_with_db_connection(connection: SqliteConnection) -> Self {
+        Self {
+            conversations: HashMap::new(),
+            taken: HashSet::new(),
+            db_connection: Some(Arc::new(Mutex::new(connection))),
+        }
+    }
+
+    /// The number of conversations currently held in memory. Only used by tests
+    /// asserting that rejected conversations aren't retained.
+    #[cfg(test)]
+    pub fn cached_conversation_count(&self) -> usize {
+        self.conversations.len()
+    }
+
     /// Loads and converts a conversation from the local database.
     fn load_from_db(&self, id: &AIConversationId) -> Option<AIConversation> {
         #[cfg(feature = "local_fs")]
@@ -108,6 +134,9 @@ impl RestoredAgentConversations {
 
     /// Gets a reference to a restored conversation without taking it, loading
     /// it from the local database when it isn't cached yet.
+    ///
+    /// A conversation loaded this way stays cached until it is taken, so only
+    /// call this when the caller actually needs the payload.
     pub fn get_conversation(&mut self, id: &AIConversationId) -> Option<&AIConversation> {
         if self.taken.contains(id) {
             return None;
@@ -117,6 +146,77 @@ impl RestoredAgentConversations {
             self.conversations.insert(*id, loaded);
         }
         self.conversations.get(id)
+    }
+
+    /// Whether a restored terminal pane should restore this conversation:
+    /// conversations with nothing to show, and passive suggestions the user
+    /// never acted on, are skipped so the pane doesn't surface a "Previous
+    /// session" banner or re-apply an ignored code diff.
+    ///
+    /// Answered from the conversation's write-time summary whenever that
+    /// summary can answer it, so the common case never reads or decodes the
+    /// conversation's `agent_tasks` blobs. When it can't, the conversation is
+    /// loaded and evaluated directly — but a conversation that fails the filter
+    /// is dropped again instead of being retained for the process lifetime.
+    pub fn should_restore_into_pane(&mut self, id: &AIConversationId) -> bool {
+        if self.taken.contains(id) {
+            return false;
+        }
+
+        if let Some(conversation) = self.conversations.get(id) {
+            return Self::passes_pane_restore_filter(conversation);
+        }
+
+        if let Some(is_entirely_passive) = self.summary_is_entirely_passive(id) {
+            // Restore always produces at least a root task — a synthesized one
+            // for a task-less row — so a conversation the summary can speak for
+            // can never fail the has-tasks half of the filter.
+            return !is_entirely_passive;
+        }
+
+        let conversation = self.load_from_db(id);
+        let Some(conversation) = conversation.filter(Self::passes_pane_restore_filter) else {
+            return false;
+        };
+        // Caching only the conversations that pass keeps the ones we just
+        // rejected out of memory while still letting the imminent
+        // `take_conversation` reuse this load.
+        self.conversations.insert(*id, conversation);
+        true
+    }
+
+    /// The pane-restore filter evaluated against a fully loaded conversation.
+    fn passes_pane_restore_filter(conversation: &AIConversation) -> bool {
+        if conversation.all_tasks().next().is_none() {
+            return false;
+        }
+        !conversation.is_entirely_passive()
+    }
+
+    /// Reads `is_entirely_passive` out of the conversation's write-time
+    /// summary, without touching its task payloads. `None` means the summary
+    /// can't answer the question and the caller must fall back to a full load.
+    fn summary_is_entirely_passive(&self, id: &AIConversationId) -> Option<bool> {
+        #[cfg(feature = "local_fs")]
+        {
+            let conn = self.db_connection.clone()?;
+            let mut conn = conn.lock().ok()?;
+            match crate::persistence::agent::read_agent_conversation_summary_by_id(
+                &mut conn,
+                &id.to_string(),
+            ) {
+                Ok(summary) => summary?.is_entirely_passive,
+                Err(e) => {
+                    log::warn!("Failed to read AgentConversation summary {id}: {e:?}");
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "local_fs"))]
+        {
+            let _ = id;
+            None
+        }
     }
 
     /// Takes the restored conversation and returns it, if any. Each
