@@ -151,3 +151,39 @@ fn test_readonly_comment_editor_hides_final_trailing_newline_for_non_empty_code_
         );
     });
 }
+
+// Regression coverage for APP-4843 ("CommentViewCard eagerly allocates full RichTextEditorView
+// chrome"). A comment editor disables the block insertion menu and never becomes editable in the
+// read-only case, so none of the omnibar/link editor/find bar/block insertion menu chrome (each
+// of which drags in its own Buffer, DisplayMap/FoldMap, etc.) should ever be constructed.
+#[test]
+fn test_readonly_comment_editor_never_constructs_chrome() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view, _test_view) =
+            initialize_editor(&mut app, CommentEditorMode::Readonly);
+
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                0,
+                "A read-only comment editor should never construct chrome"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_editable_comment_editor_does_not_eagerly_construct_chrome() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view, _test_view) =
+            initialize_editor(&mut app, CommentEditorMode::Editable);
+
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                0,
+                "A freshly constructed comment editor should not eagerly construct chrome"
+            );
+        });
+    });
+}
