@@ -402,7 +402,8 @@ impl CLIAgent {
 
     /// Whether Warp should show its CLI-agent footer for this agent.
     pub(crate) fn supports_cli_agent_footer(&self) -> bool {
-        !matches!(self, CLIAgent::WarpTui)
+        // Kiro's live prompt grows to the terminal bottom, so reserving footer rows can hide its cursor.
+        !matches!(self, CLIAgent::Kiro | CLIAgent::WarpTui)
     }
 
     /// Returns the brand color for this CLI agent, or `None` for unknown/custom agents.
