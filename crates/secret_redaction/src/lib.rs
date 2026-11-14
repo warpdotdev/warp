@@ -6,6 +6,8 @@ use std::sync::Arc;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use regex_automata::Input;
+use regex_automata::util::iter::Searcher;
 use regex_dfas::RegexDFAs;
 use string_offset::StringRange;
 use warp_core::safe_warn;
@@ -191,9 +193,14 @@ pub fn find_secrets_in_text_with_levels_using_regex(
     }
     byte_to_char_index[text.len()] = char_index; // Map the last byte to the last character index
 
+    // Keep the cache call-scoped because the regex's shared pool retains caches up to the peak
+    // number of concurrent searches.
+    let mut cache = regex.create_cache();
+    let mut it = Searcher::new(Input::new(text));
+
     // Iterate over the text once, finding all matches against secret regex. Map the byte ranges
     // to character ranges and store them.
-    for mat in regex.find_iter(text) {
+    while let Some(mat) = it.advance(|input| Ok(regex.search_with(&mut cache, input))) {
         let start_byte = mat.start();
         let end_byte = mat.end();
         let start_char = byte_to_char_index[start_byte];
