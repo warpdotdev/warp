@@ -41,9 +41,7 @@ use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::ai::onboarding::{
-    build_onboarding_models, current_onboarding_auth_state, onboarding_pricing_promotion_message,
-};
+use crate::ai::onboarding::{build_onboarding_models, current_onboarding_auth_state};
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
@@ -74,7 +72,6 @@ use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
-use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
@@ -2199,7 +2196,7 @@ impl RootView {
 
             let auth_state = current_onboarding_auth_state(ctx);
 
-            let mut view = AgentOnboardingView::new(
+            AgentOnboardingView::new(
                 themes.clone(),
                 false, // Always use unskippable onboarding.
                 models,
@@ -2207,22 +2204,8 @@ impl RootView {
                 enforces_autonomy,
                 auth_state,
                 ctx,
-            );
-            view.set_pricing_promotion_message(onboarding_pricing_promotion_message(ctx), ctx);
-            view
+            )
         });
-        // Keep the offer slide's promotion in sync with server pricing.
-        let onboarding_view_for_pricing = onboarding_view.clone();
-        ctx.subscribe_to_model(
-            &PricingInfoModel::handle(ctx),
-            move |_, _pricing, event, ctx| {
-                let PricingInfoModelEvent::PricingInfoUpdated = event;
-                let promotion_message = onboarding_pricing_promotion_message(ctx);
-                onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
-                    onboarding_view.set_pricing_promotion_message(promotion_message, ctx);
-                });
-            },
-        );
 
         let onboarding_view_clone = onboarding_view.clone();
         ctx.subscribe_to_model(
