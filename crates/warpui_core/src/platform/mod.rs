@@ -72,6 +72,28 @@ impl WindowBackdrop {
 #[cfg(feature = "settings_value")]
 impl settings_value::SettingsValue for WindowBackdrop {}
 
+/// The tint color used behind the [`WindowBackdrop::Acrylic`] material.
+///
+/// Acrylic is applied via a custom accent-policy call rather than through winit,
+/// since winit's system backdrop API has no way to customize this tint (see
+/// `WindowExt::set_acrylic_tint` in the winit windowing backend). This is ignored
+/// for all other [`WindowBackdrop`] variants.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
+pub enum AcrylicTintColor {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl AcrylicTintColor {
+    pub const ALL: [Self; 2] = [Self::Dark, Self::Light];
+}
+
+#[cfg(feature = "settings_value")]
+impl settings_value::SettingsValue for AcrylicTintColor {}
+
 /// Type of the callback function that provides the result of requesting
 /// desktop notification permissions.
 pub type RequestNotificationPermissionsCallback =
@@ -113,6 +135,8 @@ pub struct WindowOptions {
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
     pub background_backdrop: WindowBackdrop,
+    pub background_backdrop_tint_color: AcrylicTintColor,
+    pub background_backdrop_tint_opacity: u8,
     pub gpu_power_preference: GPUPowerPreference,
     pub backend_preference: Option<GraphicsBackend>,
     pub on_gpu_device_info_reported: Box<OnGPUDeviceSelected>,
@@ -135,6 +159,14 @@ impl std::fmt::Debug for WindowOptions {
                 &self.background_blur_radius_pixels,
             )
             .field("background_backdrop", &self.background_backdrop)
+            .field(
+                "background_backdrop_tint_color",
+                &self.background_backdrop_tint_color,
+            )
+            .field(
+                "background_backdrop_tint_opacity",
+                &self.background_backdrop_tint_opacity,
+            )
             .field("gpu_power_preference", &self.gpu_power_preference)
             .field("backend_preference", &self.backend_preference)
             .field("window_instance", &self.window_instance)
@@ -466,7 +498,13 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn toggle_maximized(&self);
     fn toggle_fullscreen(&self);
     fn fullscreen_state(&self) -> FullscreenState;
-    fn set_background_backdrop(&self, _backdrop: WindowBackdrop) {}
+    fn set_background_backdrop(
+        &self,
+        _backdrop: WindowBackdrop,
+        _tint_color: AcrylicTintColor,
+        _tint_opacity: u8,
+    ) {
+    }
     /// Whether the window has the native OS window frame (title bar and buttons).
     fn uses_native_window_decorations(&self) -> bool;
     fn set_titlebar_height(&self, height: f64);
