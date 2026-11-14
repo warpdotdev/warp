@@ -9,6 +9,13 @@ enum GitHubCredentialMode {
   RESTRICTED_INSTALLATION
 }
 
+enum TaskGitCredentialProvider {
+  GITHUB
+  GITLAB
+  AZURE_DEVOPS
+  CODE_STORAGE
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -4067,6 +4074,11 @@ type TaskGitCredential {
 input TaskGitCredentialsInput {
   githubCredentialContractVersion: Int
   """
+  Refresh only these providers. Omitted or null refreshes all providers.
+  Requires acceptsPartialRefresh and a nonempty list.
+  """
+  providers: [TaskGitCredentialProvider!]
+  """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
   credentials over its existing stores rather than rebuilding them from the
@@ -4093,12 +4105,13 @@ type TaskGitCredentialsOutput implements Response {
   """
   Hosts whose credential could not be issued this cycle because of a
   transient failure. A host listed here is distinct from one that is simply
-  absent from `credentials`: absent means the run has no repository on that
-  forge and needs no credential there, while listed here means the caller
-  should keep whatever it already has for that host and retry.
+  absent from `credentials`: for a requested provider, absence means no
+  credential is available, while listed here means issuance failed.
+  Providers not requested must be left unchanged.
 
   Only populated when the request set `acceptsPartialRefresh`; otherwise a
-  failure on any forge fails the whole request.
+  failure on any forge fails the whole request. An explicit providers list
+  preserves these failures even when no selected provider succeeds.
   """
   failedHosts: [String!]!
   responseContext: ResponseContext!
