@@ -1,12 +1,13 @@
 use computer_use::{Action, Key, MouseButton, Vector2I};
 
 use super::*;
+use crate::RecordingDestination;
 use crate::coords::{Point, ScreenGeometry};
 use crate::keys::{KeyDialect, parse_chord};
-use crate::test_util::{FakeActorLog, synthetic_screenshot, test_config};
+use crate::test_util::{FakeActorLog, FakeRecorder, synthetic_screenshot, test_config};
 
 fn session(log: &FakeActorLog) -> Session {
-    Session::new(test_config(), log.factory())
+    Session::new(test_config(), log.factory(), Box::new(FakeRecorder))
 }
 
 fn full_screen_geometry() -> ScreenGeometry {
@@ -193,4 +194,124 @@ async fn cursor_position_is_reported_in_screenshot_coordinates() {
         serde_json::json!({ "x": expected.x, "y": expected.y }).to_string()
     );
     assert!(output.image.is_none());
+}
+
+fn recording_session(log: &FakeActorLog, recordings: &std::path::Path) -> Session {
+    let config = ComputerUseMcpConfig {
+        recording: Some(RecordingDestination::Directory(recordings.to_owned())),
+        ..test_config()
+    };
+    Session::new(config, log.factory(), Box::new(FakeRecorder))
+}
+
+fn start_recording() -> SessionCommand {
+    SessionCommand::StartRecording {
+        title: Some("Demo".to_owned()),
+        description: None,
+    }
+}
+
+fn stop_recording(recording_id: &str, discard: bool) -> SessionCommand {
+    SessionCommand::StopRecording {
+        recording_id: recording_id.to_owned(),
+        discard,
+    }
+}
+
+#[tokio::test]
+async fn recording_requires_a_destination() {
+    let log = FakeActorLog::default();
+    let error = session(&log).execute(start_recording()).await.unwrap_err();
+    assert_eq!(error.to_string(), "Recording is disabled.");
+}
+
+#[tokio::test]
+async fn input_is_logged_while_recording() {
+    let log = FakeActorLog::default();
+    let recordings = tempfile::tempdir().unwrap();
+    let mut session = recording_session(&log, recordings.path());
+
+    let started = session.execute(start_recording()).await.unwrap();
+    assert_eq!(
+        started.text,
+        serde_json::json!({ "recording_id": "recording-1", "width_px": 1920, "height_px": 1080 })
+            .to_string()
+    );
+    let already_started = session.execute(start_recording()).await.unwrap_err();
+    assert!(already_started.to_string().contains("already in progress"));
+
+    session.handle(ToolRequest::Screenshot, true).await.unwrap();
+    session
+        .handle(
+            ToolRequest::Key {
+                keys: "ctrl+s".to_owned(),
+                repeat: 1,
+            },
+            true,
+        )
+        .await
+        .unwrap();
+    log.fail_next_input("display went away");
+    session.handle(click(1, 1), true).await.unwrap_err();
+
+    let recorded: Vec<_> = log.batches().iter().map(|batch| batch.recorded).collect();
+    // The screenshot isn't input, so only the key press and the click are recorded.
+    assert_eq!(recorded, [false, true, true]);
+    let actions = session.active_recording().unwrap().action_log.entries();
+    let [entry] = actions else {
+        panic!("only the successful key press should be logged, got {actions:?}");
+    };
+    assert_eq!(entry.labels, ["ctrl+s"]);
+}
+
+#[tokio::test]
+async fn stopping_requires_the_recording_id_and_can_discard() {
+    let log = FakeActorLog::default();
+    let recordings = tempfile::tempdir().unwrap();
+    let mut session = recording_session(&log, recordings.path());
+    session.execute(start_recording()).await.unwrap();
+
+    let wrong_id = session
+        .execute(stop_recording("recording-7", false))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        wrong_id.to_string(),
+        "No recording has ID \"recording-7\"; the recording in progress is \"recording-1\"."
+    );
+    assert!(session.active_recording().is_some());
+
+    let discarded = session
+        .execute(stop_recording("recording-1", true))
+        .await
+        .unwrap();
+    assert_eq!(discarded.text, r#"{"status":"discarded"}"#);
+    assert!(session.active_recording().is_none());
+    assert_eq!(
+        session
+            .execute(stop_recording("recording-1", false))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "No recording is in progress."
+    );
+}
+
+#[tokio::test]
+async fn failing_to_stop_a_recording_ends_it() {
+    let log = FakeActorLog::default();
+    let recordings = tempfile::tempdir().unwrap();
+    let mut session = recording_session(&log, recordings.path());
+    session.execute(start_recording()).await.unwrap();
+
+    let error = session
+        .execute(stop_recording("recording-1", false))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Failed to stop the recording: Recording failed to finalize: test recordings have no video"
+    );
+    assert!(session.active_recording().is_none());
+    assert!(session.finish_recording().await.is_none());
 }

@@ -200,23 +200,23 @@ fn begin_and_commit_record_finish_offset_and_labels() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    // `begin_action_group` reserves a pending group and returns the capture
-    // start instant; `commit_action_group` records the finish offset measured
-    // after the action sequence (here 500 ms) returns.
+    // `begin_action_group` reserves a pending group and returns a sink carrying the capture start
+    // instant; `commit_action_group` records the finish offset measured after the action sequence
+    // (here 500 ms) returns.
     assert!(
         controller
             .begin_action_group(owner, vec!["ctrl+a".to_string()])
             .is_some()
     );
-    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
+    controller.commit_action_group(owner, Duration::from_millis(500));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
-    assert_eq!(recording.actions.len(), 1);
-    let entry = &recording.actions[0];
+    assert_eq!(recording.action_log.entries().len(), 1);
+    let entry = &recording.action_log.entries()[0];
     assert_eq!(entry.labels, ["ctrl+a"]);
     assert_eq!(entry.finish_offset, Duration::from_millis(500));
     // The finish is after the start, capturing the whole multi-action sequence.
@@ -231,15 +231,17 @@ fn commit_clamps_finish_to_start() {
     controller.begin_action_group(owner, vec!["a".to_string()]);
     // A finish before the start is clamped up to the start so the segment
     // builder's one-frame minimum can apply downstream.
-    controller.commit_action_group(owner, Duration::ZERO, Vec::new());
+    controller.commit_action_group(owner, Duration::ZERO);
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
-    assert_eq!(recording.actions.len(), 1);
-    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
+    assert_eq!(recording.action_log.entries().len(), 1);
+    assert!(
+        recording.action_log.entries()[0].finish_offset >= recording.action_log.entries()[0].offset
+    );
 }
 
 #[test]
@@ -247,24 +249,24 @@ fn pointer_only_group_commits_with_empty_labels_and_geometry() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    controller.begin_action_group(owner, vec![]);
-    let pointer_events = vec![PointerEvent {
+    let pointer_sink = controller.begin_action_group(owner, vec![]).unwrap();
+    pointer_sink.events.lock().unwrap().push(PointerEvent {
         offset: Duration::from_millis(50),
         kind: PointerEventKind::Down,
         button: Some(MouseButton::Left),
         point: Vector2I::new(10, 20),
-    }];
-    controller.commit_action_group(owner, Duration::from_millis(200), pointer_events);
+    });
+    controller.commit_action_group(owner, Duration::from_millis(200));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
-    assert_eq!(recording.actions.len(), 1);
+    assert_eq!(recording.action_log.entries().len(), 1);
     // A pointer-only group keeps its geometry even though it has no text labels.
-    assert!(recording.actions[0].labels.is_empty());
-    assert_eq!(recording.actions[0].pointer_events.len(), 1);
+    assert!(recording.action_log.entries()[0].labels.is_empty());
+    assert_eq!(recording.action_log.entries()[0].pointer_events.len(), 1);
 }
 
 #[test]
@@ -281,7 +283,7 @@ fn discard_drops_pending_group_without_committing() {
     else {
         panic!("active recording should be claimed");
     };
-    assert!(recording.actions.is_empty());
+    assert!(recording.action_log.entries().is_empty());
     assert!(recording.pending_group.is_none());
 }
 
@@ -290,14 +292,14 @@ fn commit_without_begin_is_noop() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
+    controller.commit_action_group(owner, Duration::from_millis(500));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
-    assert!(recording.actions.is_empty());
+    assert!(recording.action_log.entries().is_empty());
 }
 
 #[test]
@@ -318,18 +320,18 @@ fn begin_and_commit_are_scoped_to_the_owning_conversation() {
             .begin_action_group(other, vec!["other".to_string()])
             .is_none()
     );
-    controller.commit_action_group(other, Duration::from_millis(999), Vec::new());
-    controller.commit_action_group(owner, Duration::from_millis(300), Vec::new());
+    controller.commit_action_group(other, Duration::from_millis(999));
+    controller.commit_action_group(owner, Duration::from_millis(300));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
-    assert_eq!(recording.actions.len(), 1);
-    assert_eq!(recording.actions[0].labels, ["owner"]);
+    assert_eq!(recording.action_log.entries().len(), 1);
+    assert_eq!(recording.action_log.entries()[0].labels, ["owner"]);
     assert_eq!(
-        recording.actions[0].finish_offset,
+        recording.action_log.entries()[0].finish_offset,
         Duration::from_millis(300)
     );
 }
@@ -345,7 +347,7 @@ fn begin_while_pending_auto_commits_prior_group() {
     // rather than silently discarding it.
     controller.begin_action_group(owner, vec!["type".to_string()]);
     // Commit the second group explicitly.
-    controller.commit_action_group(owner, Duration::from_millis(700), Vec::new());
+    controller.commit_action_group(owner, Duration::from_millis(700));
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -354,15 +356,17 @@ fn begin_while_pending_auto_commits_prior_group() {
     };
     // Both groups should be present: the auto-committed first and the
     // explicitly-committed second.
-    assert_eq!(recording.actions.len(), 2);
-    assert_eq!(recording.actions[0].labels, ["click"]);
-    assert_eq!(recording.actions[1].labels, ["type"]);
+    assert_eq!(recording.action_log.entries().len(), 2);
+    assert_eq!(recording.action_log.entries()[0].labels, ["click"]);
+    assert_eq!(recording.action_log.entries()[1].labels, ["type"]);
     assert_eq!(
-        recording.actions[1].finish_offset,
+        recording.action_log.entries()[1].finish_offset,
         Duration::from_millis(700)
     );
     // Auto-committed group's finish is >= its own start.
-    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
+    assert!(
+        recording.action_log.entries()[0].finish_offset >= recording.action_log.entries()[0].offset
+    );
 }
 
 #[test]
@@ -382,11 +386,11 @@ fn commit_after_finalization_is_noop() {
     else {
         panic!("active recording should be claimed");
     };
-    assert_eq!(recording.actions.len(), 1);
+    assert_eq!(recording.action_log.entries().len(), 1);
     // A late commit lands on a controller that is now Finalizing, so it commits
     // nothing rather than recording on the wrong (finalized) recording.
-    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
-    assert_eq!(recording.actions.len(), 1);
+    controller.commit_action_group(owner, Duration::from_millis(500));
+    assert_eq!(recording.action_log.entries().len(), 1);
 }
 
 #[test]
@@ -420,6 +424,8 @@ fn finalization_commits_open_pending_group() {
         panic!("active recording should be claimed");
     };
     assert!(recording.pending_group.is_none());
-    assert_eq!(recording.actions.len(), 1);
-    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
+    assert_eq!(recording.action_log.entries().len(), 1);
+    assert!(
+        recording.action_log.entries()[0].finish_offset >= recording.action_log.entries()[0].offset
+    );
 }

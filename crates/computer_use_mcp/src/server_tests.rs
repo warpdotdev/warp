@@ -6,11 +6,19 @@ use rmcp::{ServiceError, ServiceExt};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::test_util::{FakeActorLog, test_config};
+use crate::RecordingDestination;
+use crate::test_util::{FakeActorLog, FakeRecorder, test_config};
 
 async fn connect(log: &FakeActorLog) -> RunningService<RoleClient, ()> {
+    connect_with_config(test_config(), log).await
+}
+
+async fn connect_with_config(
+    config: ComputerUseMcpConfig,
+    log: &FakeActorLog,
+) -> RunningService<RoleClient, ()> {
     let (client_stream, server_stream) = tokio::io::duplex(1 << 20);
-    let server = ComputerUseMcpServer::with_actor_factory(test_config(), log.factory());
+    let server = ComputerUseMcpServer::with_platform(config, log.factory(), Box::new(FakeRecorder));
     tokio::spawn(async move {
         let running = server.serve(server_stream).await.unwrap();
         running.waiting().await.unwrap();
@@ -63,6 +71,24 @@ async fn lists_every_tool() {
             "zoom",
         ]
     );
+}
+
+#[tokio::test]
+async fn recording_tools_are_listed_when_recording_is_enabled() {
+    let config = ComputerUseMcpConfig {
+        recording: Some(RecordingDestination::Directory(std::env::temp_dir())),
+        ..test_config()
+    };
+    let client = connect_with_config(config, &FakeActorLog::default()).await;
+    let names: Vec<_> = client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    assert!(names.contains(&"start_recording".to_owned()));
+    assert!(names.contains(&"stop_recording".to_owned()));
 }
 
 #[tokio::test]

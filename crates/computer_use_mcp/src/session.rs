@@ -1,15 +1,35 @@
 //! Per-connection computer-use state shared across tool calls.
 
 use computer_use::{
-    Action, ActionResult, Actor, Options, Screenshot, ScreenshotParams, TargetedAction,
+    Action, ActionResult, Actor, Options, Recorder, RecordingConfig, RecordingFinalizeReason,
+    Screenshot, TargetedAction, is_meaningful_action_group, overlay_labels_for,
 };
+use serde_json::{Value, json};
 
 use crate::actions::{self, ActionPlan, Capture, PlanContext, ToolRequest};
 use crate::coords::ScreenGeometry;
 use crate::keys::KeyPlatform;
+use crate::recording::{self, ActiveRecording};
 use crate::{ComputerUseMcpConfig, ToolError};
 
 pub(crate) type ActorFactory = Box<dyn Fn() -> Box<dyn Actor> + Send + Sync>;
+
+/// A tool call for the session to carry out.
+#[derive(Debug)]
+pub(crate) enum SessionCommand {
+    UseComputer {
+        request: ToolRequest,
+        screenshot_after_input: bool,
+    },
+    StartRecording {
+        title: Option<String>,
+        description: Option<String>,
+    },
+    StopRecording {
+        recording_id: String,
+        discard: bool,
+    },
+}
 
 /// The result of a successful tool call.
 #[derive(Debug)]
@@ -28,16 +48,42 @@ pub(crate) struct Session {
     /// The geometry of the most recent full screenshot, which defines the coordinate space of
     /// every tool's input.
     geometry: Option<ScreenGeometry>,
+    recorder: Box<dyn Recorder>,
+    recording: Option<ActiveRecording>,
+    recordings_started: u32,
 }
 
 impl Session {
-    pub fn new(config: ComputerUseMcpConfig, actor_factory: ActorFactory) -> Self {
+    pub fn new(
+        config: ComputerUseMcpConfig,
+        actor_factory: ActorFactory,
+        recorder: Box<dyn Recorder>,
+    ) -> Self {
         Self {
             config,
             key_platform: KeyPlatform::current(),
             actor_factory,
             actor: None,
             geometry: None,
+            recorder,
+            recording: None,
+            recordings_started: 0,
+        }
+    }
+
+    pub async fn execute(&mut self, command: SessionCommand) -> Result<ToolOutput, ToolError> {
+        match command {
+            SessionCommand::UseComputer {
+                request,
+                screenshot_after_input,
+            } => self.handle(request, screenshot_after_input).await,
+            SessionCommand::StartRecording { title, description } => {
+                self.start_recording(title, description).await
+            }
+            SessionCommand::StopRecording {
+                recording_id,
+                discard,
+            } => self.stop_recording(&recording_id, discard).await,
         }
     }
 
@@ -83,16 +129,35 @@ impl Session {
             Capture::FullScreen => Some(constraints.screenshot_params(None)),
             Capture::Region(region) => Some(constraints.screenshot_params(Some(region))),
         };
-        let actor = self.actor.get_or_insert_with(|| (self.actor_factory)());
         let targeted: Vec<_> = plan
             .actions
             .iter()
             .cloned()
             .map(TargetedAction::screen)
             .collect();
-        let result = actor
-            .perform_actions(&targeted, unattributed_options(screenshot_params))
-            .await;
+        let (recorded_group, pointer_sink) = self
+            .recording
+            .as_ref()
+            .filter(|_| is_meaningful_action_group(&targeted))
+            .map(|recording| {
+                recording
+                    .action_log
+                    .begin_group(overlay_labels_for(&targeted, &plan.summary))
+            })
+            .unzip();
+        let options = Options {
+            screenshot_params,
+            background_enabled: false,
+            pointer_sink,
+        };
+        let actor = self.actor.get_or_insert_with(|| (self.actor_factory)());
+        let result = actor.perform_actions(&targeted, options).await;
+        if let (Some(group), Some(recording)) = (recorded_group, self.recording.as_mut()) {
+            match &result {
+                Ok(_) => recording.action_log.commit_group(group),
+                Err(_) => recording.action_log.discard_group(group),
+            }
+        }
         match result {
             Ok(result) => {
                 if plan.capture == Capture::FullScreen
@@ -153,6 +218,106 @@ impl Session {
         })
     }
 
+    async fn start_recording(
+        &mut self,
+        title: Option<String>,
+        description: Option<String>,
+    ) -> Result<ToolOutput, ToolError> {
+        if self.config.recording.is_none() {
+            return Err("Recording is disabled.".into());
+        }
+        if let Some(recording) = &self.recording {
+            return Err(format!(
+                "Recording {:?} is already in progress. Stop it with stop_recording before \
+                 starting another.",
+                recording.id()
+            )
+            .into());
+        }
+        let config = RecordingConfig::default();
+        let frame_rate = config.frame_rate;
+        let handle = self
+            .recorder
+            .start(config)
+            .await
+            .map_err(|error| format!("Failed to start recording: {error}"))?;
+        self.recordings_started += 1;
+        let recording_id = format!("recording-{}", self.recordings_started);
+        let text = json!({
+            "recording_id": recording_id,
+            "width_px": handle.width(),
+            "height_px": handle.height(),
+        })
+        .to_string();
+        self.recording = Some(ActiveRecording::new(
+            recording_id,
+            handle,
+            frame_rate,
+            title,
+            description,
+        ));
+        Ok(ToolOutput { text, image: None })
+    }
+
+    async fn stop_recording(
+        &mut self,
+        recording_id: &str,
+        discard: bool,
+    ) -> Result<ToolOutput, ToolError> {
+        let Some(recording) = self
+            .recording
+            .take_if(|recording| recording.id() == recording_id)
+        else {
+            return Err(match &self.recording {
+                Some(recording) => format!(
+                    "No recording has ID {recording_id:?}; the recording in progress is {:?}.",
+                    recording.id()
+                ),
+                None => "No recording is in progress.".to_owned(),
+            }
+            .into());
+        };
+        let summary = if discard {
+            // Dropping the recording stops capture and deletes the partial video.
+            drop(recording);
+            json!({ "status": "discarded" })
+        } else {
+            self.finish(recording, RecordingFinalizeReason::StoppedByAgent)
+                .await?
+        };
+        Ok(ToolOutput {
+            text: summary.to_string(),
+            image: None,
+        })
+    }
+
+    /// Stops and publishes the recording in progress, if any, for when the session ends.
+    pub async fn finish_recording(&mut self) -> Option<Result<Value, ToolError>> {
+        let recording = self.recording.take()?;
+        Some(
+            self.finish(recording, RecordingFinalizeReason::RunEnded)
+                .await,
+        )
+    }
+
+    async fn finish(
+        &self,
+        recording: ActiveRecording,
+        reason: RecordingFinalizeReason,
+    ) -> Result<Value, ToolError> {
+        let destination = self
+            .config
+            .recording
+            .as_ref()
+            .ok_or("Recording is disabled.")?;
+        recording::finish(self.recorder.as_ref(), recording, destination, reason).await
+    }
+
+    #[cfg(test)]
+    pub fn active_recording(&self) -> Option<&ActiveRecording> {
+        self.recording.as_ref()
+    }
+
     fn describe_screenshot(&self) -> String {
         match self.geometry {
             Some(geometry) => {
@@ -165,15 +330,6 @@ impl Session {
             }
             None => "Screenshot.".to_owned(),
         }
-    }
-}
-
-/// Builds options for a whole-screen action batch that isn't part of a recording.
-fn unattributed_options(screenshot_params: Option<ScreenshotParams>) -> Options {
-    Options {
-        screenshot_params,
-        background_enabled: false,
-        pointer_sink: None,
     }
 }
 
@@ -197,7 +353,14 @@ async fn release_keys(actor: &mut dyn Actor, actions: &[Action]) {
         .map(|key| TargetedAction::screen(Action::KeyUp { key }))
         .collect();
     if let Err(error) = actor
-        .perform_actions(&releases, unattributed_options(None))
+        .perform_actions(
+            &releases,
+            Options {
+                screenshot_params: None,
+                background_enabled: false,
+                pointer_sink: None,
+            },
+        )
         .await
     {
         log::warn!("Failed to release keys after a failed computer use action: {error}");

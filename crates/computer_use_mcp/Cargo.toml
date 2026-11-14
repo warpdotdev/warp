@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
+command.workspace = true
 computer_use.workspace = true
 log.workspace = true
 rmcp.workspace = true
@@ -30,4 +31,6 @@ libc.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+computer_use = { workspace = true, features = ["test-util"] }
 rmcp = { workspace = true, features = ["client"] }
+tempfile.workspace = true

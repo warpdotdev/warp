@@ -3309,6 +3309,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "command",
  "computer_use",
  "libc",
  "log",
@@ -3316,6 +3317,7 @@ dependencies = [
  "schemars 1.0.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

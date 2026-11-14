@@ -956,8 +956,12 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
 /// Serves computer-use tools to an external agent harness over MCP on stdin/stdout.
 #[cfg(not(target_family = "wasm"))]
 fn run_computer_use_mcp(args: &warp_cli::computer_use_mcp::ComputerUseMcpArgs) -> Result<()> {
-    use computer_use_mcp::{ComputerUseMcpConfig, ImageConstraints, KeyDialect};
+    use computer_use_mcp::{
+        ComputerUseMcpConfig, ImageConstraints, KeyDialect, RecordingDestination,
+    };
     use warp_cli::computer_use_mcp::ComputerUseModelFamily;
+
+    use crate::ai::blocklist::video_recording_enabled;
 
     if !FeatureFlag::ComputerUseMcp.is_enabled() {
         return Err(anyhow!(
@@ -970,6 +974,20 @@ fn run_computer_use_mcp(args: &warp_cli::computer_use_mcp::ComputerUseMcpArgs) -
         log_destination: Some(LogDestination::Stderr),
         ..Default::default()
     })?;
+    let recording = if args.no_recording || !video_recording_enabled() {
+        None
+    } else if let Some(run_id) = &args.run_id {
+        Some(RecordingDestination::OzRun {
+            cli: std::env::current_exe().context("Failed to locate the Warp CLI")?,
+            run_id: run_id.clone(),
+        })
+    } else {
+        Some(RecordingDestination::Directory(
+            args.recordings_dir
+                .clone()
+                .unwrap_or_else(|| std::env::temp_dir().join("warp-computer-use-recordings")),
+        ))
+    };
     let (defaults, key_dialect) = match args.model_family {
         ComputerUseModelFamily::Anthropic => (ImageConstraints::ANTHROPIC, KeyDialect::Anthropic),
         ComputerUseModelFamily::OpenAi => (ImageConstraints::OPENAI, KeyDialect::OpenAi),
@@ -981,6 +999,7 @@ fn run_computer_use_mcp(args: &warp_cli::computer_use_mcp::ComputerUseMcpArgs) -
         },
         key_dialect,
         settle_delay: std::time::Duration::from_millis(args.settle_ms),
+        recording,
     })
 }
 

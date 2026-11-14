@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use computer_use::{MouseButton, ScrollDirection};
+use computer_use::{MouseButton, Recorder, ScrollDirection};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 use crate::ComputerUseMcpConfig;
 use crate::actions::ToolRequest;
 use crate::coords::Point;
-use crate::session::{ActorFactory, Session, ToolOutput};
+use crate::session::{ActorFactory, Session, SessionCommand, ToolOutput};
 
 const SERVER_NAME: &str = "warp-computer-use";
 
@@ -35,34 +35,62 @@ pub struct ComputerUseMcpServer {
 
 impl ComputerUseMcpServer {
     pub fn new(config: ComputerUseMcpConfig) -> Self {
-        Self::with_actor_factory(config, Box::new(computer_use::create_actor))
+        Self::with_platform(
+            config,
+            Box::new(computer_use::create_actor),
+            computer_use::create_recorder(),
+        )
     }
 
-    pub(crate) fn with_actor_factory(
+    pub(crate) fn with_platform(
         config: ComputerUseMcpConfig,
         actor_factory: ActorFactory,
+        recorder: Box<dyn Recorder>,
     ) -> Self {
+        let mut tool_router = Self::computer_tool_router();
+        if config.recording.is_some() {
+            tool_router += Self::recording_tool_router();
+        }
         Self {
-            session: Arc::new(Mutex::new(Session::new(config, actor_factory))),
-            tool_router: Self::tool_router(),
+            session: Arc::new(Mutex::new(Session::new(config, actor_factory, recorder))),
+            tool_router,
         }
     }
 
-    async fn run(
+    /// Stops and publishes the recording in progress, if any, for when the session ends.
+    pub(crate) async fn finish_recording(&self) {
+        match self.session.lock().await.finish_recording().await {
+            Some(Ok(summary)) => {
+                log::info!(
+                    "Published the recording that was in progress when the session ended: {summary}"
+                );
+            }
+            Some(Err(error)) => {
+                log::warn!(
+                    "Failed to publish the recording that was in progress when the session ended: {error}"
+                );
+            }
+            None => {}
+        }
+    }
+
+    async fn use_computer(
         &self,
         request: ToolRequest,
         screenshot_after_input: bool,
     ) -> Result<CallToolResult, ErrorData> {
+        self.run(SessionCommand::UseComputer {
+            request,
+            screenshot_after_input,
+        })
+        .await
+    }
+
+    async fn run(&self, command: SessionCommand) -> Result<CallToolResult, ErrorData> {
         let session = self.session.clone();
         // Run on a separate task so a cancelled request can't abandon an input batch halfway
         // through, e.g. with modifier keys still held.
-        let task = tokio::spawn(async move {
-            session
-                .lock()
-                .await
-                .handle(request, screenshot_after_input)
-                .await
-        });
+        let task = tokio::spawn(async move { session.lock().await.execute(command).await });
         match task.await {
             Ok(Ok(output)) => Ok(CallToolResult::success(content_blocks(output))),
             Ok(Err(error)) => Ok(CallToolResult::error(vec![ContentBlock::text(
@@ -249,7 +277,7 @@ struct WaitArgs {
 
 const DEFAULT_SCROLL_AMOUNT: u32 = 3;
 
-#[tool_router]
+#[tool_router(router = computer_tool_router)]
 impl ComputerUseMcpServer {
     #[tool(
         description = "Capture the screen. Every other tool takes coordinates in pixels of the \
@@ -258,7 +286,7 @@ impl ComputerUseMcpServer {
         annotations(read_only_hint = true)
     )]
     async fn screenshot(&self) -> Result<CallToolResult, ErrorData> {
-        self.run(ToolRequest::Screenshot, true).await
+        self.use_computer(ToolRequest::Screenshot, true).await
     }
 
     #[tool(description = "Click a mouse button at a point on the screen.")]
@@ -275,7 +303,8 @@ impl ComputerUseMcpServer {
             count: args.count.unwrap_or(1),
             modifiers: args.modifiers,
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(description = "Move the mouse pointer to a point on the screen.")]
@@ -289,7 +318,8 @@ impl ComputerUseMcpServer {
                 y: args.y,
             },
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(
@@ -313,7 +343,8 @@ impl ComputerUseMcpServer {
             at,
             button: args.button.unwrap_or_default().into(),
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(description = "Release a mouse button held by mouse_down.")]
@@ -324,7 +355,8 @@ impl ComputerUseMcpServer {
         let request = ToolRequest::MouseUp {
             button: args.button.unwrap_or_default().into(),
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(description = "Press a mouse button at one point, move to another, and release it.")]
@@ -338,7 +370,8 @@ impl ComputerUseMcpServer {
             button: args.button.unwrap_or_default().into(),
             modifiers: args.modifiers,
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(description = "Scroll the mouse wheel at a point on the screen.")]
@@ -355,7 +388,8 @@ impl ComputerUseMcpServer {
             amount: args.amount.unwrap_or(DEFAULT_SCROLL_AMOUNT),
             modifiers: args.modifiers,
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(description = "Type text with the keyboard into the focused element.")]
@@ -364,7 +398,8 @@ impl ComputerUseMcpServer {
         Parameters(args): Parameters<TypeTextArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let request = ToolRequest::TypeText { text: args.text };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(
@@ -379,7 +414,8 @@ impl ComputerUseMcpServer {
             keys: args.keys,
             repeat: args.repeat.unwrap_or(1),
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(
@@ -401,7 +437,7 @@ impl ComputerUseMcpServer {
                 y: args.y2,
             },
         };
-        self.run(request, false).await
+        self.use_computer(request, false).await
     }
 
     #[tool(
@@ -415,7 +451,8 @@ impl ComputerUseMcpServer {
         let request = ToolRequest::Wait {
             seconds: args.seconds,
         };
-        self.run(request, args.screenshot.unwrap_or(true)).await
+        self.use_computer(request, args.screenshot.unwrap_or(true))
+            .await
     }
 
     #[tool(
@@ -424,7 +461,57 @@ impl ComputerUseMcpServer {
         annotations(read_only_hint = true)
     )]
     async fn cursor_position(&self) -> Result<CallToolResult, ErrorData> {
-        self.run(ToolRequest::CursorPosition, false).await
+        self.use_computer(ToolRequest::CursorPosition, false).await
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct StartRecordingArgs {
+    /// A short title for the video, e.g. "Sign-up flow".
+    title: Option<String>,
+    /// What the video shows.
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct StopRecordingArgs {
+    /// The ID returned by start_recording.
+    recording_id: String,
+    /// Whether to throw the video away instead of publishing it. Defaults to false.
+    discard: Option<bool>,
+}
+
+#[tool_router(router = recording_tool_router)]
+impl ComputerUseMcpServer {
+    #[tool(
+        description = "Start recording a video of the screen, e.g. to demonstrate a change. Only \
+                       one recording can be in progress at a time. Stop it with stop_recording, \
+                       which publishes the video."
+    )]
+    async fn start_recording(
+        &self,
+        Parameters(args): Parameters<StartRecordingArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run(SessionCommand::StartRecording {
+            title: args.title,
+            description: args.description,
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Stop the recording in progress and publish its video, or discard it. \
+                       Publishing can take a minute."
+    )]
+    async fn stop_recording(
+        &self,
+        Parameters(args): Parameters<StopRecordingArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run(SessionCommand::StopRecording {
+            recording_id: args.recording_id,
+            discard: args.discard.unwrap_or(false),
+        })
+        .await
     }
 }
 

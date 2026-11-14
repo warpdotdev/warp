@@ -169,6 +169,7 @@ fn invalid_explicit_run_id_errors_even_if_env_fallback_exists() {
         run_id: Some("not-a-run-id".to_string()),
         conversation_id: None,
         description: None,
+        title: None,
     })
     .unwrap_err();
 
@@ -276,4 +277,18 @@ fn load_env_run_id_reads_variable() {
         loaded.as_deref(),
         Some("550e8400-e29b-41d4-a716-446655440000")
     );
+}
+
+#[test]
+fn upload_title_is_passed_through() {
+    let request = FileArtifactUploadRequest::try_from(UploadArtifactArgs {
+        path: PathBuf::from("outputs/recording.mp4"),
+        run_id: None,
+        conversation_id: None,
+        description: None,
+        title: Some("Sign-up flow".to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(request.title.as_deref(), Some("Sign-up flow"));
 }

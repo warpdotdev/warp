@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, ValueEnum};
 
 /// Options for serving computer-use tools to an external agent harness over MCP.
@@ -19,6 +21,19 @@ pub struct ComputerUseMcpArgs {
     /// How long to wait after an action before capturing its screenshot, in milliseconds.
     #[arg(long, default_value_t = 500)]
     pub settle_ms: u64,
+
+    /// The Oz run to attach screen recordings to. Without one, recordings are saved locally.
+    #[arg(long)]
+    pub run_id: Option<String>,
+
+    /// Where to save screen recordings that aren't attached to an Oz run. Defaults to a directory
+    /// under the system's temporary directory.
+    #[arg(long)]
+    pub recordings_dir: Option<PathBuf>,
+
+    /// Disables the screen recording tools.
+    #[arg(long)]
+    pub no_recording: bool,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]

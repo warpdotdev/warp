@@ -34,7 +34,7 @@ use super::transcript_persistence::{
     UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
 use super::{
-    HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
     install_docs_url, write_temp_file,
 };
 use crate::ai::agent::BaseUserQuery;
@@ -149,7 +149,7 @@ impl ThirdPartyHarness for CodexHarness {
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
-            &resolved_mcp_servers.configs,
+            resolved_mcp_servers,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -561,7 +561,7 @@ pub(super) fn prepare_codex_environment_config(
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
-    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    resolved_mcp_servers: &ResolvedMCPServers,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<()> {
     let codex_dir = codex_config_dir()?;
@@ -800,7 +800,7 @@ fn resolve_openai_base_url_from_secret(
 fn prepare_codex_config_toml(
     config_toml_path: &Path,
     working_dir: &Path,
-    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    resolved_mcp_servers: &ResolvedMCPServers,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
     openai_base_url: Option<&str>,
 ) -> Result<()> {
@@ -970,10 +970,8 @@ fn set_codex_project_trust_level(
 }
 
 /// Write resolved MCP servers into `[mcp_servers.<name>]` sections in the Codex config.
-fn write_codex_mcp_servers(
-    doc: &mut toml_edit::DocumentMut,
-    servers: &HashMap<String, JSONMCPServer>,
-) {
+fn write_codex_mcp_servers(doc: &mut toml_edit::DocumentMut, resolved: &ResolvedMCPServers) {
+    let servers = &resolved.configs;
     if servers.is_empty() {
         return;
     }
@@ -1029,6 +1027,22 @@ fn write_codex_mcp_servers(
                     }
                     entry["http_headers"] = toml_edit::value(hdrs_tbl);
                 }
+            }
+        }
+
+        if let Some(settings) = resolved.harness_settings.get(name) {
+            // Codex gives stdio MCP servers only an allowlist of its environment plus these.
+            if !settings.forwarded_env_vars.is_empty() {
+                entry["env_vars"] = toml_edit::value(
+                    settings
+                        .forwarded_env_vars
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<toml_edit::Array>(),
+                );
+            }
+            if let Some(timeout) = settings.tool_timeout {
+                entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs() as i64);
             }
         }
     }
