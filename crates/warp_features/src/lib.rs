@@ -546,9 +546,6 @@ pub enum FeatureFlag {
     /// Agent Management Details View - enables new details panel on card click.
     AgentManagementDetailsView,
 
-    /// Enables scheduled ambient agents.
-    ScheduledAmbientAgents,
-
     AgentView,
 
     /// Enables block context functionality in Agent View.
