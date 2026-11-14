@@ -1439,6 +1439,7 @@ impl TuiView for TuiOptionSelector {
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+        let items_len = self.items().len();
         let mut content = TuiFlex::column();
         if let Some(header) = &self.page.header {
             content.add_child(Self::render_header(header, &builder));
@@ -1474,6 +1475,8 @@ impl TuiView for TuiOptionSelector {
             list_focused: matches!(self.focus_zone(app), SelectorFocusZone::List),
             searchable: self.page.searchable,
             row_shortcuts: self.page.row_shortcuts.values().copied().collect(),
+            scroll_offset: self.interaction.scroll_offset,
+            items_len,
         }
         .finish()
     }
@@ -1583,6 +1586,8 @@ struct SelectorInputElement {
     list_focused: bool,
     searchable: bool,
     row_shortcuts: Vec<char>,
+    scroll_offset: usize,
+    items_len: usize,
 }
 
 impl TuiElement for SelectorInputElement {
@@ -1705,9 +1710,16 @@ impl TuiElement for SelectorInputElement {
                 if rows == 0 {
                     return false;
                 }
-                // Positive wheel delta scrolls the content up (toward the
-                // start of the list), matching the transcript's scrollable.
-                event_ctx.dispatch_typed_action(TuiOptionSelectorAction::ScrollBy(-rows));
+                let scroll_rows = -rows;
+                let max_offset = self.items_len.saturating_sub(MAX_VISIBLE_OPTION_ROWS);
+                let next_offset = self
+                    .scroll_offset
+                    .saturating_add_signed(scroll_rows)
+                    .min(max_offset);
+                if next_offset == self.scroll_offset {
+                    return false;
+                }
+                event_ctx.dispatch_typed_action(TuiOptionSelectorAction::ScrollBy(scroll_rows));
                 true
             }
             TuiEvent::Paste { .. } => false,
