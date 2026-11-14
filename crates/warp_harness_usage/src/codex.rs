@@ -257,7 +257,7 @@ fn observe_checkpoint(
 }
 
 fn parse_usage(value: &Value, findings: &mut Findings) -> Option<Counters<6>> {
-    let usage = Counters::parse(value, PATHS, findings)?;
+    let usage = Counters::parse(value, PATHS, &[], findings)?;
     let [input, cached, cache_write, output, reasoning, total] = usage.values;
     let invalid = matches!((input, cached), (Some(input), Some(cached)) if cached > input)
         || matches!((input, cache_write), (Some(input), Some(cache_write)) if cache_write > input)

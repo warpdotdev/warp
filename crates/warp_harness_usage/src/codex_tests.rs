@@ -347,6 +347,29 @@ fn counter_bounds_and_absence_survive_serialization() {
 }
 
 #[test]
+fn null_counters_preserve_the_valid_prefix() {
+    for field in [
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens",
+    ] {
+        let mut invalid = checkpoint(100, 90);
+        invalid["payload"]["info"]["total_token_usage"][field] = Value::Null;
+        let snapshot = capture(&[checkpoint(10, 10), invalid]);
+        assert_eq!(
+            serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+            json!({"total_tokens":10}),
+            "{field}"
+        );
+        assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+        assert_eq!(snapshot.diagnostics.reasons[&ReasonCode::InvalidData], 1);
+    }
+}
+
+#[test]
 fn excessive_cache_write_totals_preserve_the_valid_prefix() {
     for input in [0, 100, i64::MAX - 1] {
         let usage = json!({
