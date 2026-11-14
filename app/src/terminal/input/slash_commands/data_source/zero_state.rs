@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelHandle, SingletonEntity};
 
 use crate::ai::skills::SkillManager;
@@ -45,10 +44,7 @@ impl SyncDataSource for GuiZeroStateDataSource {
         let is_cloud_mode_v2 = source.is_cloud_mode_v2();
         let mut results = source.ordered_zero_state_commands(app);
 
-        if is_cloud_mode_v2
-            && FeatureFlag::ListSkills.is_enabled()
-            && AISettings::as_ref(app).is_any_ai_enabled(app)
-        {
+        if is_cloud_mode_v2 && AISettings::as_ref(app).is_any_ai_enabled(app) {
             let cli_agent_providers = source.active_cli_agent_providers(app);
             let active_session = source.active_session().as_ref(app);
             let cwd = active_session.current_working_directory_location(app);

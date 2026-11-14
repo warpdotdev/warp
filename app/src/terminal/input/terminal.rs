@@ -14,7 +14,6 @@ use super::common::{
 use super::{Input, InputAction, InputDropTargetData};
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;
-use crate::features::FeatureFlag;
 use crate::settings::{AppEditorSettings, InputModeSettings};
 use crate::terminal::block_list_settings::BlockListSettings;
 use crate::terminal::block_list_viewport::InputMode;
@@ -191,7 +190,7 @@ impl Input {
                             Some(ChildView::new(&self.inline_prompts_menu_view).finish())
                         } else if is_conversation_menu {
                             Some(ChildView::new(&self.inline_conversation_menu_view).finish())
-                        } else if FeatureFlag::ListSkills.is_enabled() && is_skill_menu {
+                        } else if is_skill_menu {
                             Some(ChildView::new(&self.inline_skill_selector_view).finish())
                         } else if is_inline_history_menu {
                             Some(ChildView::new(&self.inline_history_menu_view).finish())
@@ -220,7 +219,7 @@ impl Input {
                             Some(ChildView::new(&self.inline_prompts_menu_view).finish())
                         } else if is_conversation_menu {
                             Some(ChildView::new(&self.inline_conversation_menu_view).finish())
-                        } else if FeatureFlag::ListSkills.is_enabled() && is_skill_menu {
+                        } else if is_skill_menu {
                             Some(ChildView::new(&self.inline_skill_selector_view).finish())
                         } else if is_inline_history_menu {
                             Some(ChildView::new(&self.inline_history_menu_view).finish())
@@ -249,10 +248,7 @@ impl Input {
                         column.add_child(
                             ChildView::new(&self.inline_conversation_menu_view).finish(),
                         );
-                    } else if FeatureFlag::ListSkills.is_enabled()
-                        && is_skill_menu
-                        && !should_render_below
-                    {
+                    } else if is_skill_menu && !should_render_below {
                         column.add_child(ChildView::new(&self.inline_skill_selector_view).finish());
                     } else if is_inline_history_menu && !should_render_below {
                         column.add_child(ChildView::new(&self.inline_history_menu_view).finish());
@@ -272,10 +268,7 @@ impl Input {
                         column.add_child(
                             ChildView::new(&self.inline_conversation_menu_view).finish(),
                         );
-                    } else if FeatureFlag::ListSkills.is_enabled()
-                        && is_skill_menu
-                        && should_render_below
-                    {
+                    } else if is_skill_menu && should_render_below {
                         column.add_child(ChildView::new(&self.inline_skill_selector_view).finish());
                     } else if is_inline_history_menu && should_render_below {
                         column.add_child(ChildView::new(&self.inline_history_menu_view).finish());
