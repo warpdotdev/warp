@@ -688,9 +688,6 @@ pub enum FeatureFlag {
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 
-    /// Enables file-based MCP server support via .mcp.json files in repo roots.
-    FileBasedMcp,
-
     /// Enables passing user query arguments to skill invocations ($ARGUMENTS, $N).
     SkillArguments,
 

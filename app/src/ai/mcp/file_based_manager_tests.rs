@@ -6,7 +6,6 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use settings::Setting as _;
 use uuid::Uuid;
-use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
 
@@ -437,7 +436,6 @@ fn test_update_file_based_servers_removes_unreferenced_servers() {
 /// auto-spawns.
 #[test]
 fn test_global_warp_server_from_managed_home_root_always_spawns() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
         return;
     };
@@ -482,7 +480,6 @@ fn test_global_warp_server_from_managed_home_root_always_spawns() {
 /// A globally-scoped non-Warp installation only auto-spawns when the toggle is on.
 #[test]
 fn test_global_non_warp_server_respects_toggle() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(home_dir) = home_dir() else {
         // Skip on platforms where a home dir isn't available (shouldn't happen on
         // our supported platforms, but guard to avoid false failures).
@@ -536,7 +533,6 @@ fn test_global_non_warp_server_respects_toggle() {
 
 #[test]
 fn tui_global_third_party_servers_never_auto_start() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(home_dir) = home_dir() else {
         return;
     };
@@ -571,7 +567,6 @@ fn tui_global_third_party_servers_never_auto_start() {
 
 #[test]
 fn tui_global_warp_servers_start_only_after_activation() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
         return;
     };
@@ -611,7 +606,6 @@ fn tui_global_warp_servers_start_only_after_activation() {
 /// detection, and the toggle must not spawn or despawn them either.
 #[test]
 fn test_project_scoped_servers_never_auto_spawn() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let repo_path = PathBuf::from("/tmp/warp-test-repo");
     let claude_parsed =
         parse_mcp_json(r#"{"proj-claude": {"command": "npx", "args": ["proj-claude"]}}"#);
@@ -665,7 +659,6 @@ fn test_project_scoped_servers_never_auto_spawn() {
 
 #[test]
 fn test_project_scoped_cloud_scan_has_detected_servers_but_empty_wait_set() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let repo_path = PathBuf::from("/tmp/warp-test-cloud-repo");
     let claude_parsed =
         parse_mcp_json(r#"{"proj-claude": {"command": "npx", "args": ["proj-claude"]}}"#);
@@ -704,7 +697,6 @@ fn test_project_scoped_cloud_scan_has_detected_servers_but_empty_wait_set() {
 
 #[test]
 fn test_auto_started_cloud_scan_uuids_are_in_wait_set() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
         return;
     };
@@ -738,7 +730,6 @@ fn test_auto_started_cloud_scan_uuids_are_in_wait_set() {
 /// is considered global (and thus gated only by the toggle for non-Warp providers).
 #[test]
 fn test_server_referenced_from_both_global_and_project_is_global() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(home_dir) = home_dir() else {
         return;
     };
@@ -916,7 +907,6 @@ fn test_update_file_based_servers_removes_server_only_when_no_refs() {
 /// from a global-scoped parse — not from an ordinary project or cloud-environment scan.
 #[test]
 fn initial_global_scan_result_pending_until_watcher_signals_completion() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
         return;
     };
@@ -1001,7 +991,6 @@ fn initial_global_scan_result_pending_until_watcher_signals_completion() {
 /// update stays dynamic but is not retroactively added to the first-turn wait set.
 #[test]
 fn initial_global_wait_set_freezes_at_completion() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
         return;
     };
@@ -1058,8 +1047,6 @@ fn initial_global_wait_set_freezes_at_completion() {
 /// the transient completion event when it subscribes well after application startup.
 #[test]
 fn initial_global_scan_result_returns_cached_snapshot_after_completion() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
         manager.update(&mut app, |m, ctx| {
@@ -1080,8 +1067,6 @@ fn initial_global_scan_result_returns_cached_snapshot_after_completion() {
 /// result rather than staying pending.
 #[test]
 fn initial_global_scan_with_no_sources_resolves_to_empty_result() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
         manager.update(&mut app, |m, _| {
