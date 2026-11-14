@@ -536,13 +536,13 @@ fn mcp_context_servers_carry_their_identity_alongside_the_installation_id() {
                 "Team Sentry",
                 "db4d553f-8172-4cad-8f48-bc53ba6f736a",
             ),
-            server("7c9e2d4a-0000-4000-8000-000000000004", "github", "github"),
             server("7c9e2d4a-0000-4000-8000-000000000002", "github", ""),
             server(
                 "7c9e2d4a-0000-4000-8000-000000000003",
                 "future integration",
                 "not_yet_in_this_build",
             ),
+            server("7c9e2d4a-0000-4000-8000-000000000004", "GitHub", "github"),
         ],
     };
 
@@ -565,13 +565,14 @@ fn mcp_context_servers_carry_their_identity_alongside_the_installation_id() {
         "db4d553f-8172-4cad-8f48-bc53ba6f736a"
     );
 
-    let github = proto.servers[2].identity.as_ref().expect("identity");
-    assert_eq!(github.integration(), api::McpIntegration::Github);
-    assert_eq!(github.managed_server_uid, "");
-    assert_eq!(proto.servers[2].id, "7c9e2d4a-0000-4000-8000-000000000004");
-
     // Local servers and ids this build does not know send no identity.
-    for server in &proto.servers[3..] {
+    for server in &proto.servers[2..4] {
         assert!(server.identity.is_none(), "{}", server.name);
     }
+
+    let github = proto.servers[4].identity.as_ref().expect("identity");
+    assert_eq!(github.integration(), api::McpIntegration::Github);
+    assert_eq!(github.managed_server_uid, "");
+    assert_eq!(proto.servers[4].id, "7c9e2d4a-0000-4000-8000-000000000004");
+    assert_eq!(github.display_name, "");
 }
