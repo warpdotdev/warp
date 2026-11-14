@@ -339,16 +339,16 @@ pub(crate) async fn clone_global_skill_repos(
 /// with the `DetectedRepositories` model, so that we can scan for skills
 /// here.
 ///
-/// With `CwdScopedCloudSkills` enabled, listings use the ordinary ancestor-directory scoping
-/// and the harness working directory stands in for the cwd until the terminal publishes one;
-/// otherwise every environment skill is listed regardless of cwd.
+/// With cwd scoping enabled, listings use the ordinary ancestor-directory scoping and the harness
+/// working directory stands in for the cwd until the terminal publishes one; otherwise every
+/// environment skill is listed regardless of cwd.
 pub(crate) async fn load_environment_skills(
     foreground: &ModelSpawner<AgentDriver>,
     repos: Vec<SourceRepo>,
 ) {
     if let Err(err) = foreground
         .spawn(|me, ctx| {
-            if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+            if me.cwd_scoped_cloud_skills_enabled() {
                 SkillManager::handle(ctx).update(ctx, |manager, _| {
                     manager.set_cloud_working_dir(me.harness_working_dir.clone());
                 });
@@ -458,7 +458,7 @@ pub(crate) async fn load_environment_skills(
     }
 
     let load_skills_result = foreground
-        .spawn(move |_, ctx| {
+        .spawn(move |me, ctx| {
             let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
             if !skills.is_empty() {
                 log::info!("Loaded {} environment skill(s)", skills.len());
@@ -466,7 +466,7 @@ pub(crate) async fn load_environment_skills(
                 log::info!("No environment skills found");
             }
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                if !FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+                if !me.cwd_scoped_cloud_skills_enabled() {
                     manager.set_cloud_environment(true);
                 }
                 manager.handle_skills_added(skills);
@@ -482,8 +482,8 @@ pub(crate) async fn load_environment_skills(
 /// Load explicitly requested global skills by reading directly from disk.
 ///
 /// Global skill repositories are unregistered sibling clones, so their skills are never cwd
-/// ancestors. With `CwdScopedCloudSkills` enabled they are registered at home precedence so the
-/// selection stays listed from every cwd; otherwise they rely on the unscoped cloud listing.
+/// ancestors. With cwd scoping enabled they are registered at home precedence so the selection stays
+/// listed from every cwd; otherwise they rely on the unscoped cloud listing.
 pub(crate) async fn load_global_skills(
     foreground: &ModelSpawner<AgentDriver>,
     specs: Vec<SkillSpec>,
@@ -538,9 +538,9 @@ pub(crate) async fn load_global_skills(
 
     log::info!("Loaded {} global skill(s)", skills.len());
     let add_result = foreground
-        .spawn(move |_, ctx| {
+        .spawn(move |me, ctx| {
             SkillManager::handle(ctx).update(ctx, |manager, _| {
-                if FeatureFlag::CwdScopedCloudSkills.is_enabled() {
+                if me.cwd_scoped_cloud_skills_enabled() {
                     for skill in &mut skills {
                         skill.scope = SkillScope::Home;
                     }

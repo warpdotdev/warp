@@ -216,17 +216,22 @@ fn standby_provider_setup_precedes_workspace_preparation() {
 
 #[test]
 fn environment_skill_setup_uses_harness_working_dir_as_listing_fallback() {
-    assert_environment_skill_listing_fallback(true);
+    assert_environment_skill_listing_fallback(true, false);
 }
 
 #[test]
 fn environment_skill_setup_without_cwd_scoping_sets_no_listing_fallback() {
-    assert_environment_skill_listing_fallback(false);
+    assert_environment_skill_listing_fallback(false, false);
 }
 
-fn assert_environment_skill_listing_fallback(cwd_scoped: bool) {
+#[test]
+fn skill_delta_experiment_uses_harness_working_dir_as_listing_fallback() {
+    assert_environment_skill_listing_fallback(false, true);
+}
+
+fn assert_environment_skill_listing_fallback(flag_enabled: bool, skill_deltas: bool) {
     App::test((), move |mut app| async move {
-        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(cwd_scoped);
+        let _flag = FeatureFlag::CwdScopedCloudSkills.override_enabled(flag_enabled);
         initialize_app_for_terminal_view(&mut app);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
@@ -236,6 +241,10 @@ fn assert_environment_skill_listing_fallback(cwd_scoped: bool) {
             let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
             let mut driver = AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx);
             driver.harness_working_dir = harness_dir.clone();
+            driver.experimental = Some(serde_json::Map::from_iter([(
+                "skillsListingDeltas".into(),
+                serde_json::Value::Bool(skill_deltas),
+            )]));
             driver
         });
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
@@ -266,7 +275,7 @@ fn assert_environment_skill_listing_fallback(cwd_scoped: bool) {
 
         assert_eq!(
             names.contains(&"harness".to_string()),
-            cwd_scoped,
+            flag_enabled || skill_deltas,
             "{names:?}"
         );
         assert!(!names.contains(&"sibling".to_string()), "{names:?}");
