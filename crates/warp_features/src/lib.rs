@@ -740,10 +740,6 @@ pub enum FeatureFlag {
     /// Enables Kitty keyboard protocol support (CSI u encoding, progressive enhancement).
     KittyKeyboardProtocol,
 
-    /// Detects the word "figma" in the terminal input in real-time and shows a
-    /// contextual button above the input.
-    FigmaDetection,
-
     /// Enables header rows on all inline menus (label, tabs, resize handle).
     InlineMenuHeaders,
     /// Clears the current prompt when opening the inline model selector from the
