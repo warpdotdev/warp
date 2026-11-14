@@ -1,5 +1,7 @@
 //! General-purpose administrative commands in the Warp CLI.
 
+use std::io::{self, Write as _};
+
 use anyhow::{Context, Result};
 use serde::Serialize;
 use warp_cli::agent::OutputFormat;
@@ -180,6 +182,10 @@ impl warpui::Entity for WhoamiRunner {
 
 impl SingletonEntity for WhoamiRunner {}
 
+fn write_whoami_output(mut output: impl io::Write, message: &str) -> io::Result<()> {
+    writeln!(output, "{message}")
+}
+
 /// Print information about the currently authenticated principal.
 pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
     let auth_state = AuthStateProvider::as_ref(ctx).get();
@@ -224,22 +230,18 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
 
             info.set_workspace(UserWorkspaces::as_ref(ctx).current_workspace(), user_uid);
 
-            match output_format {
+            let output = match output_format {
                 OutputFormat::Json => {
                     match serde_json::to_string(&info).context("whoami output should serialize") {
-                        Ok(json) => println!("{json}"),
+                        Ok(json) => json,
                         Err(err) => {
                             ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                             return;
                         }
                     }
                 }
-                OutputFormat::Pretty => {
-                    println!("{}", info.pretty(principal_type));
-                }
-                OutputFormat::Text => {
-                    println!("{}:{}", info.principal_type, info.uid);
-                }
+                OutputFormat::Pretty => info.pretty(principal_type),
+                OutputFormat::Text => format!("{}:{}", info.principal_type, info.uid),
                 OutputFormat::Ndjson => {
                     ctx.terminate_app(
                         TerminationMode::ForceTerminate,
@@ -249,9 +251,13 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
                     );
                     return;
                 }
-            }
+            };
 
-            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            let write_result = write_whoami_output(io::stdout(), &output);
+            ctx.terminate_app(
+                TerminationMode::ForceTerminate,
+                write_result.err().map(|err| Err(err.into())),
+            );
         });
     });
 
