@@ -1091,7 +1091,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         commands.push(REWIND);
     }
 
-    if FeatureFlag::InlineRepoMenu.is_enabled() && !cfg!(target_family = "wasm") {
+    if !cfg!(target_family = "wasm") {
         commands.push(OPEN_REPO);
     }
 
