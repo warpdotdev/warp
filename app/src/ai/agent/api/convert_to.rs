@@ -1014,6 +1014,7 @@ pub(crate) fn mcp_server_identity(warp_id: &str) -> Option<api::McpServerIdentit
     if warp_id.is_empty() {
         return None;
     }
+    // TODO: Replace the GitHub UID exception with a GitHub MCPIntegration variant.
     if warp_id == "github" || uuid::Uuid::parse_str(warp_id).is_ok() {
         return Some(api::McpServerIdentity {
             managed_server_uid: warp_id.to_string(),
