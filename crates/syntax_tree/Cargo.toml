@@ -14,6 +14,7 @@ warp_editor.workspace = true
 languages.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
+instant.workspace = true
 parking_lot.workspace = true
 log.workspace = true
 string-offset.workspace = true
