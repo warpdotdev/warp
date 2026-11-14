@@ -8,16 +8,16 @@ use warpui_extras::user_preferences::UserPreferences;
 
 use super::{PrivatePreferences, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
-type UpdateFn = Box<dyn FnMut(String, bool, &mut AppContext) -> Result<()>>;
+pub type UpdateFn = Box<dyn FnMut(String, bool, &mut AppContext) -> Result<()>>;
 
-type ClearFn = Box<dyn FnMut(&mut AppContext) -> Result<()>>;
+pub type ClearFn = Box<dyn FnMut(&mut AppContext) -> Result<()>>;
 
 /// Loads a value into memory without persisting. Parameters: (serialized_value, explicitly_set, ctx).
-type LoadFn = Box<dyn FnMut(String, bool, &mut AppContext) -> Result<()>>;
+pub type LoadFn = Box<dyn FnMut(String, bool, &mut AppContext) -> Result<()>>;
 
-type EqualsFn = Box<dyn Fn(&str, &str) -> Result<bool>>;
+pub type EqualsFn = Box<dyn Fn(&str, &str) -> Result<bool>>;
 
-type IsSyncableFn = Box<dyn Fn(&AppContext) -> bool>;
+pub type IsSyncableFn = Box<dyn Fn(&AppContext) -> bool>;
 
 /// Intermediate data collected for each setting during reload, before
 /// calling the mutable `load_fns`.
@@ -95,6 +95,9 @@ impl SettingsManager {
     /// Registers a function that updates a setting with the given storage key
     /// to have a new value. Also tracks whether that storage key is for a cloud-synced
     /// setting and what platforms it's supported on.
+    ///
+    /// The callbacks arrive already boxed so that this body is compiled once, not once per
+    /// combination of callback types.
     #[allow(clippy::too_many_arguments)]
     pub fn register_setting(
         &mut self,
@@ -107,22 +110,18 @@ impl SettingsManager {
         toml_key: &'static str,
         max_table_depth: Option<u32>,
         is_private: bool,
-        update_fn: impl FnMut(String, bool, &mut AppContext) -> Result<()> + 'static,
-        clear_fn: impl FnMut(&mut AppContext) -> Result<()> + 'static,
-        load_fn: impl FnMut(String, bool, &mut AppContext) -> Result<()> + 'static,
-        equals_fn: impl Fn(&str, &str) -> Result<bool> + 'static,
-        is_syncable_fn: impl Fn(&AppContext) -> bool + 'static,
+        update_fn: UpdateFn,
+        clear_fn: ClearFn,
+        load_fn: LoadFn,
+        equals_fn: EqualsFn,
+        is_syncable_fn: IsSyncableFn,
     ) {
-        self.update_fns
-            .insert(storage_key.to_owned(), Box::new(update_fn));
-        self.clear_fns
-            .insert(storage_key.to_owned(), Box::new(clear_fn));
-        self.load_fns
-            .insert(storage_key.to_owned(), Box::new(load_fn));
-        self.equals_fns
-            .insert(storage_key.to_owned(), Box::new(equals_fn));
+        self.update_fns.insert(storage_key.to_owned(), update_fn);
+        self.clear_fns.insert(storage_key.to_owned(), clear_fn);
+        self.load_fns.insert(storage_key.to_owned(), load_fn);
+        self.equals_fns.insert(storage_key.to_owned(), equals_fn);
         self.is_syncable_fns
-            .insert(storage_key.to_owned(), Box::new(is_syncable_fn));
+            .insert(storage_key.to_owned(), is_syncable_fn);
         self.settings.insert(
             storage_key.to_owned(),
             SettingsInfo {
