@@ -32,6 +32,98 @@ fn broker_socket_reference_is_bound_to_instance_identity() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn broker_reference_resolves_to_instance_bound_pipe_on_windows() {
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+
+    assert_eq!(
+        record.broker_socket_path().expect("broker path"),
+        PathBuf::from(format!(
+            r"\\.\pipe\warp-local-control-{}.broker.sock",
+            record.instance_id.0
+        ))
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn unprotected_registry_is_not_trusted_on_windows() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    let path = record_path(dir.path(), &record.instance_id);
+    fs::write(&path, serde_json::to_vec(&record).expect("record encodes")).expect("write record");
+
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn unprotected_record_is_pruned_on_windows() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let protected = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    let _registered = RegisteredInstance::register_in_dir_for_test(protected.clone(), dir.path())
+        .expect("registered");
+    let planted = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4001)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    // Written after the directory was protected, so it only carries inherited
+    // entries rather than its own protected DACL.
+    let planted_path = record_path(dir.path(), &planted.instance_id);
+    fs::write(
+        &planted_path,
+        serde_json::to_vec(&planted).expect("record encodes"),
+    )
+    .expect("write planted record");
+
+    assert_eq!(
+        list_instances_from_dir(dir.path(), "local"),
+        vec![protected]
+    );
+    assert!(!planted_path.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn published_record_has_private_acl_on_windows() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    set_private_dir_permissions(dir.path()).expect("directory is protected");
+    let path = record_path(dir.path(), &record.instance_id);
+    write_record(&path, &record).expect("record is published");
+
+    crate::windows_security::validate_private_acl(dir.path()).expect("directory stays private");
+    crate::windows_security::validate_private_acl(&path).expect("record is private");
+}
+
 #[test]
 fn registered_instance_round_trips_discovery_record() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -68,6 +160,8 @@ fn incompatible_protocol_record_is_ignored() {
 #[test]
 fn malformed_record_and_matching_broker_socket_are_pruned() {
     let dir = tempfile::tempdir().expect("temp dir");
+    #[cfg(any(unix, windows))]
+    set_private_dir_permissions(dir.path()).expect("directory is protected");
     let record_path = dir.path().join("inst_malformed.json");
     let socket_path = dir.path().join("inst_malformed.broker.sock");
     fs::write(&record_path, "not json").expect("write malformed record");
@@ -309,7 +403,7 @@ fn discovery_record_is_owner_only_on_unix() {
 impl RegisteredInstance {
     fn register_in_dir_for_test(record: InstanceRecord, dir: &Path) -> Result<Self, ControlError> {
         fs::create_dir_all(dir).expect("create dir");
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         set_private_dir_permissions(dir)?;
         let path = record_path(dir, &record.instance_id);
         let bytes = serde_json::to_vec_pretty(&record).map_err(|err| {
@@ -326,7 +420,7 @@ impl RegisteredInstance {
                 err.to_string(),
             )
         })?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         set_private_permissions(&path)?;
         Ok(Self {
             record,
