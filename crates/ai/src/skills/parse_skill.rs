@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::fs;
+use std::io::Read as _;
 use std::ops::Range;
 use std::path::Path;
 
@@ -13,6 +14,12 @@ use super::parser::parse_markdown_content;
 use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path, get_scope_for_path};
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
+
+/// Bounds how much of a single local SKILL.md file is read into memory. Mirrors the cap the
+/// remote/project skill read path applies (`REMOTE_CONTEXT_MAX_FILE_BYTES`); without it,
+/// `fs::read_to_string` reads a pathologically large skill file in full and retains it in
+/// `ParsedSkill.content`, which has driven multi-GB heap growth on the client (Sentry 7259255054).
+const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
 lazy_static! {
     static ref BLOCK_SEPARATOR: Regex =
@@ -137,13 +144,34 @@ fn parse_local_skill_internal(
     provider: SkillProvider,
     scope: SkillScope,
 ) -> Result<ParsedSkill> {
-    let content = fs::read_to_string(path)?;
+    let content = read_capped_skill_file(path, MAX_SKILL_FILE_BYTES)?;
     parse_skill_content_at_location(
         LocalOrRemotePath::Local(path.to_path_buf()),
         &content,
         provider,
         scope,
     )
+}
+
+/// Reads a local skill file into a `String`, bounding the read to `max_bytes + 1` so a
+/// pathologically large file is never fully loaded into memory before being rejected.
+fn read_capped_skill_file(path: &Path, max_bytes: u64) -> Result<String> {
+    let file = fs::File::open(path)?;
+    let mut content = String::new();
+    let bytes_read = file
+        .take(max_bytes.saturating_add(1))
+        .read_to_string(&mut content)?;
+    if bytes_read as u64 > max_bytes {
+        log::warn!(
+            "Skipping oversized skill file {} (> {max_bytes} byte limit)",
+            path.display()
+        );
+        anyhow::bail!(
+            "Skill file {} exceeds the {max_bytes} byte limit",
+            path.display()
+        );
+    }
+    Ok(content)
 }
 
 fn derive_skill_name_from_path(path: &LocalOrRemotePath) -> Result<String> {
