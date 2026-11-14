@@ -21,6 +21,7 @@ use super::user::{
 };
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
+const SERVICE_ACCOUNT_TELEMETRY_PREFIX: &str = "serviceAccount:";
 
 /// Describes what persistence action to take based on the current auth state.
 pub enum PersistAction {
@@ -486,6 +487,21 @@ impl AuthState {
         self.user.read().as_ref().map(|user| user.local_id)
     }
 
+    /// Returns the authenticated principal identifier used for telemetry.
+    pub fn telemetry_user_id(&self) -> Option<String> {
+        let user = self.user.read();
+        let user = user.as_ref()?;
+        let user_id = user.local_id.as_str();
+
+        if user.principal_type == PrincipalType::ServiceAccount
+            && !user_id.starts_with(SERVICE_ACCOUNT_TELEMETRY_PREFIX)
+        {
+            Some(format!("{SERVICE_ACCOUNT_TELEMETRY_PREFIX}{user_id}"))
+        } else {
+            Some(user_id.to_string())
+        }
+    }
+
     /// Returns the user's anonymous id.
     /// The anonymous id will be consistent across the app's lifetime. It is a random UUID.
     pub fn anonymous_id(&self) -> String {
@@ -616,3 +632,7 @@ impl Entity for AuthStateProvider {
 }
 
 impl SingletonEntity for AuthStateProvider {}
+
+#[cfg(test)]
+#[path = "auth_state_tests.rs"]
+mod tests;
