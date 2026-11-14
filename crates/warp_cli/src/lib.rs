@@ -22,6 +22,7 @@ pub use sort_order::SortOrderArg;
 pub mod agent;
 pub mod api_key;
 pub mod completions;
+pub mod computer_use_mcp;
 pub mod config_file;
 mod date_time;
 pub mod environment;
@@ -534,6 +535,11 @@ pub enum WorkerCommand {
         #[clap(long = "launch-file")]
         launch_file: std::path::PathBuf,
     },
+
+    /// Serve computer-use tools to an external agent harness over MCP on stdin/stdout.
+    #[cfg(not(target_family = "wasm"))]
+    #[clap(hide = true)]
+    ComputerUseMcp(computer_use_mcp::ComputerUseMcpArgs),
 
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]

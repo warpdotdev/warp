@@ -48,6 +48,34 @@ pub enum Platform {
     LinuxWayland,
 }
 
+/// Returns the scaling factor applied to a `width`x`height` capture so that it meets the given
+/// screenshot size constraints.
+///
+/// The scale factor is chosen to ensure that:
+/// 1. The longer edge is at most `max_long_edge_px` pixels (if specified)
+/// 2. The total number of pixels is at most `max_total_px` (if specified)
+/// 3. The scale factor is at most 1.0 (no upscaling)
+///
+/// This must stay in sync with the server-side logic in logic/ai/computer_use/utils.go.
+pub fn screenshot_scale_factor(
+    width: u32,
+    height: u32,
+    max_long_edge_px: Option<usize>,
+    max_total_px: Option<usize>,
+) -> f64 {
+    let long_edge = width.max(height);
+    let total_pixels = width * height;
+
+    let long_edge_scale = max_long_edge_px
+        .map(|max| max as f64 / long_edge as f64)
+        .unwrap_or(1.0);
+    let total_pixels_scale = max_total_px
+        .map(|max| (max as f64 / total_pixels as f64).sqrt())
+        .unwrap_or(1.0);
+
+    long_edge_scale.min(total_pixels_scale).min(1.0)
+}
+
 pub fn is_supported_on_current_platform() -> bool {
     if cfg!(feature = "test-util") {
         noop::is_supported_on_current_platform()

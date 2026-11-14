@@ -361,6 +361,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::LocalComputerUse,
         #[cfg(feature = "background_computer_use")]
         FeatureFlag::BackgroundComputerUse,
+        #[cfg(feature = "computer_use_mcp")]
+        FeatureFlag::ComputerUseMcp,
         #[cfg(feature = "local_claude_codex_child_harnesses")]
         FeatureFlag::LocalClaudeCodexChildHarnesses,
         #[cfg(feature = "team_api_keys")]

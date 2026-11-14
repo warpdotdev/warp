@@ -27,6 +27,31 @@ fn identifies_worker_subcommands() {
 }
 
 #[test]
+fn parses_computer_use_mcp_worker() {
+    use crate::computer_use_mcp::ComputerUseModelFamily;
+
+    assert!(is_worker_invocation("computer-use-mcp"));
+    let args = Args::try_parse_from([
+        "warp",
+        "computer-use-mcp",
+        "--model-family",
+        "openai",
+        "--settle-ms",
+        "250",
+    ])
+    .unwrap();
+    let Some(Command::Worker(WorkerCommand::ComputerUseMcp(args))) = args.command() else {
+        panic!(
+            "expected the computer-use-mcp worker, got {:?}",
+            args.command()
+        );
+    };
+    assert_eq!(args.model_family, ComputerUseModelFamily::OpenAi);
+    assert_eq!(args.settle_ms, 250);
+    assert_eq!(args.max_long_edge_px, None);
+}
+
+#[test]
 fn execution_config_launch_requires_task_id() {
     let missing_task =
         Args::try_parse_from(["warp", "agent", "run", "--execution-id", "execution"]);
