@@ -378,9 +378,6 @@ pub enum FeatureFlag {
     /// Enables displaying imported PR review comments in the blocklist.
     PRCommentsV2,
 
-    /// Gates the bundled skill-based implementation of PR comment fetching.
-    PRCommentsSkill,
-
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStartedTab,
 
