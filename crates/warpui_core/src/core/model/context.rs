@@ -605,6 +605,9 @@ impl<M> GetSingletonModelHandle for ModelContext<'_, M> {
 /// A task which must run in the context of a model of type `M`.
 type ModelTask<M> = Box<dyn FnOnce(&mut M, &mut ModelContext<M>) + Send + 'static>;
 
+/// Work which must run in the context of a model of type `M`, and which produces an `R`.
+type ModelWork<M, R> = Box<dyn FnOnce(&mut M, &mut ModelContext<M>) -> R + Send + 'static>;
+
 /// A handle for spawning model tasks from background threads.
 pub struct ModelSpawner<M> {
     task_sender: async_channel::Sender<ModelTask<M>>,
@@ -631,7 +634,7 @@ impl<M: 'static> ModelSpawner<M> {
     /// per result type, instead of once per closure.
     async fn spawn_boxed<R: Send + 'static>(
         &self,
-        work: Box<dyn FnOnce(&mut M, &mut ModelContext<M>) -> R + Send>,
+        work: ModelWork<M, R>,
     ) -> Result<R, ModelDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let span = tracing::Span::current();

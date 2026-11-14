@@ -746,6 +746,9 @@ impl<T> std::ops::DerefMut for ViewContext<'_, T> {
 /// A task which must run in the context of a view of type `V`.
 type ViewTask<V> = Box<dyn FnOnce(&mut V, &mut ViewContext<V>) + Send + 'static>;
 
+/// Work which must run in the context of a view of type `V`, and which produces an `R`.
+type ViewWork<V, R> = Box<dyn FnOnce(&mut V, &mut ViewContext<V>) -> R + Send + 'static>;
+
 /// A handle for spawning view tasks from background threads.
 pub struct ViewSpawner<V> {
     task_sender: async_channel::Sender<ViewTask<V>>,
@@ -764,7 +767,7 @@ impl<V: 'static> ViewSpawner<V> {
     /// per result type, instead of once per closure.
     async fn spawn_boxed<R: Send + 'static>(
         &self,
-        work: Box<dyn FnOnce(&mut V, &mut ViewContext<V>) -> R + Send>,
+        work: ViewWork<V, R>,
     ) -> Result<R, ViewDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let span = tracing::Span::current();
