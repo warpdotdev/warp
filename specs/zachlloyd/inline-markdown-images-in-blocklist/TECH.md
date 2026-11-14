@@ -127,9 +127,7 @@ Implementation points:
 - wire it in `app/src/lib.rs` alongside the existing markdown table/Mermaid flags
 - enable it in `DOGFOOD_FLAGS`, but leave it out of `PREVIEW_FLAGS` until the surface is stable
 
-Mermaid rendering in the block list should require:
-- `FeatureFlag::BlocklistMarkdownImages`
-- `FeatureFlag::MarkdownMermaid`
+Mermaid rendering in the block list should require `FeatureFlag::BlocklistMarkdownImages`.
 
 File-backed images in the block list should require only `BlocklistMarkdownImages`.
 
@@ -206,7 +204,7 @@ For file-backed images:
 For Mermaid:
 - use `mermaid_asset_source` from `crates/editor/src/content/mermaid_diagram.rs (20-67)`
 - derive the rendered max width from the loaded asset's intrinsic size rather than calling a separate Mermaid layout helper from the block-list renderer
-- honor `FeatureFlag::MarkdownMermaid` in addition to the new block-list image flag
+- honor the new block-list image flag
 
 For actual rendering:
 - use a block-list-local renderer in the existing section flow
@@ -231,7 +229,7 @@ For file-backed images:
 - only include images in an inline row or grouped block row set when that individual image succeeds; unsupported or missing images fall back to raw Markdown in source order
 
 For Mermaid:
-- if either `BlocklistMarkdownImages` or `MarkdownMermaid` is disabled, render `markdown_source`
+- if `BlocklistMarkdownImages` is disabled, render `markdown_source`
 - if Mermaid SVG generation fails, render `markdown_source`
 
 This keeps fallback behavior local to rendering and avoids mutating stored section payloads based on transient failures.
@@ -278,7 +276,7 @@ The renderer should use:
 
 That means restored blocks will:
 - resolve relative file images against the original captured working directory
-- render Mermaid only when both flags are currently enabled
+- render Mermaid only when `BlocklistMarkdownImages` is currently enabled
 - still show raw Markdown if the file is gone or the platform cannot load it
 
 ## End-to-End Flow
