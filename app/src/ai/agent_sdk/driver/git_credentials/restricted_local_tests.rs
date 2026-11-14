@@ -201,7 +201,10 @@ fn concurrent_local_processes_keep_stores_independent() -> Result<()> {
     let home = tempfile::tempdir()?;
     let mut children = Vec::new();
     for index in ["0", "1"] {
-        children.push(Command::new(std::env::current_exe()?)
+        let mut command = Command::new(std::env::current_exe()?);
+        #[cfg(windows)]
+        command.creation_flags(0);
+        children.push(command
             .args(["--exact", "ai::agent_sdk::driver::git_credentials::restricted::local_tests::concurrent_local_processes_keep_stores_independent", "--nocapture"])
             .env("WARP_TEST_LOCAL_STORE_PROCESS", index)
             .env("HOME", home.path())
