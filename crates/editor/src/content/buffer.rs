@@ -1003,6 +1003,7 @@ impl Buffer {
                     CharOffset::from(1)..self.max_charoffset(),
                     StyledBlockBoundaryBehavior::Exclusive,
                 )),
+                additional_render_deltas: Vec::new(),
             }),
             anchor_updates,
         }
@@ -2607,6 +2608,7 @@ impl Buffer {
             new_lines: Arc::new(
                 self.styled_blocks_in_range(range, StyledBlockBoundaryBehavior::Exclusive),
             ),
+            additional_render_deltas: Vec::new(),
         }
     }
 
@@ -4558,6 +4560,15 @@ impl Buffer {
             self.set_version(new_version);
             return;
         }
+        let can_render_separately = edits.windows(2).all(|edits| {
+            let previous_range = &edits[0].0;
+            let next_range = &edits[1].0;
+            previous_range.end <= next_range.start
+                && self
+                    .block_or_line_end(previous_range.end)
+                    .min(self.max_charoffset())
+                    <= self.block_or_line_start(next_range.start)
+        });
 
         // Create edit actions similar to InsertAtCharOffsetRanges/insert_at_offsets.
         // apply_core_edit_actions handles offset shifting internally via anchors.
@@ -4577,7 +4588,11 @@ impl Buffer {
             )
         });
 
-        let edit_result = self.apply_core_edit_actions(edit_actions);
+        let edit_result = if can_render_separately {
+            self.apply_core_edit_actions_with_separate_render_deltas(edit_actions)
+        } else {
+            self.apply_core_edit_actions(edit_actions)
+        };
 
         let Some(content_update) = edit_result.delta else {
             log::debug!("Editor action was no-op");
@@ -4874,6 +4889,7 @@ impl Buffer {
                 new_lines: Arc::new(
                     self.styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
                 ),
+                additional_render_deltas: Vec::new(),
             }),
             ..Default::default()
         }
@@ -5013,6 +5029,7 @@ impl Buffer {
                 new_lines: Arc::new(
                     self.styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
                 ),
+                additional_render_deltas: Vec::new(),
             }),
             anchor_updates: vec![],
         }
@@ -5096,6 +5113,7 @@ impl Buffer {
                 new_lines: Arc::new(
                     self.styled_blocks_in_range(new_range, StyledBlockBoundaryBehavior::Exclusive),
                 ),
+                additional_render_deltas: Vec::new(),
             }),
             anchor_updates: vec![anchor_update],
         }
@@ -5217,6 +5235,7 @@ impl Buffer {
                     undo_item.replacement_range.new_range,
                     StyledBlockBoundaryBehavior::Exclusive,
                 )),
+                additional_render_deltas: Vec::new(),
             }),
             anchor_updates,
         }
@@ -5266,6 +5285,7 @@ impl Buffer {
                     undo_item.replacement_range.new_range,
                     StyledBlockBoundaryBehavior::Exclusive,
                 )),
+                additional_render_deltas: Vec::new(),
             }),
             anchor_updates,
         }
