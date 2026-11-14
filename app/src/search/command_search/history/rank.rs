@@ -20,8 +20,25 @@ const PRIOR_MULTIPLIER_SWING: f64 = 0.4;
 /// How much of `f(priors)` is driven by recency vs. the other priors below.
 const RECENCY_WEIGHT: f64 = 0.10;
 
+/// How much of `f(priors)` is driven by how often a command has been run.
+const FREQUENCY_WEIGHT: f64 = 0.08;
+
+/// Execution count at which the frequency term saturates (maxes out).
+const FREQUENCY_SATURATION_COUNT: f64 = 20.0;
+
 /// How much of `f(priors)` is driven by whether a command ran in the current session.
 const SESSION_WEIGHT: f64 = 0.05;
+
+/// How much of `f(priors)` is driven by whether a command tends to run from the current
+/// directory.
+const CWD_WEIGHT: f64 = 0.02;
+
+/// Beta(K, K) smoothing strength for the cwd prior (see `cwd_affinity`): the number of virtual
+/// "ran here" and "ran elsewhere" observations assumed before any real evidence. Set higher than
+/// the classic Laplace value of 1 so a single observation moves the prior only modestly (a 1-of-1
+/// match scores ~0.57 here vs. Laplace's ~0.67) -- cwd is noisier signal than recency, since
+/// people `cd` around, so it should take more corroboration to swing the prior.
+const CWD_PRIOR_SMOOTHING_STRENGTH: f64 = 3.0;
 
 /// How much `f(priors)` is reduced for a command whose last run failed.
 const EXIT_PENALTY_WEIGHT: f64 = 0.03;
@@ -53,7 +70,7 @@ const PRIOR_SUM_MIN: f64 = -EXIT_PENALTY_WEIGHT;
 
 /// Theoretical upper bound of the weighted prior sum, reached when every positive prior is fully
 /// satisfied and the command's last run succeeded.
-const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + SESSION_WEIGHT;
+const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + FREQUENCY_WEIGHT + SESSION_WEIGHT + CWD_WEIGHT;
 
 /// The Skim-scale quality of a fuzzy match, before history priors are applied.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -174,6 +191,14 @@ pub(crate) struct RankInputs<'a> {
     pub match_quality: MatchQuality,
     pub now: DateTime<Local>,
     pub current_session_id: SessionId,
+    /// Total number of times this command has been executed, per
+    /// `History::command_execution_stats`.
+    pub total_execution_count: u32,
+    /// Of those executions, how many happened in the current directory.
+    pub cwd_execution_count: u32,
+    /// Of those executions, how many happened in a *known* directory (i.e. had a recorded pwd at
+    /// all). Distinguishes "never run from here" from "no pwd data exists" for `cwd_affinity`.
+    pub pwd_known_execution_count: u32,
     /// Whether the query is empty (the zero-state case, where `SearchMixer` still invokes
     /// history so it has something to show before the user types). Priors like session are only
     /// meaningful relative to an actual query; applying them here would reorder the zero state
@@ -200,7 +225,11 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
         }
         None => MISSING_TIMESTAMP_RECENCY,
     };
+    let frequency = ((inputs.total_execution_count as f64 + 1.0).ln()
+        / (FREQUENCY_SATURATION_COUNT + 1.0).ln())
+    .min(1.0);
     let session = f64::from(inputs.entry.session_id == Some(inputs.current_session_id));
+    let cwd = cwd_affinity(inputs.cwd_execution_count, inputs.pwd_known_execution_count);
     let exit_penalty = f64::from(
         inputs
             .entry
@@ -208,8 +237,11 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
             .is_some_and(|code| !code.was_successful()),
     );
 
-    let prior_sum =
-        RECENCY_WEIGHT * recency + SESSION_WEIGHT * session - EXIT_PENALTY_WEIGHT * exit_penalty;
+    let prior_sum = RECENCY_WEIGHT * recency
+        + FREQUENCY_WEIGHT * frequency
+        + SESSION_WEIGHT * session
+        + CWD_WEIGHT * cwd
+        - EXIT_PENALTY_WEIGHT * exit_penalty;
     let normalized_priors =
         ((prior_sum - PRIOR_SUM_MIN) / (PRIOR_SUM_MAX - PRIOR_SUM_MIN)).clamp(0.0, 1.0);
     let prior_multiplier = PRIOR_MULTIPLIER_BASELINE + PRIOR_MULTIPLIER_SWING * normalized_priors;
@@ -223,6 +255,16 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
 fn age_days(start_ts: DateTime<Local>, now: DateTime<Local>) -> f64 {
     let seconds_per_day = chrono::TimeDelta::days(1).num_seconds() as f64;
     ((now - start_ts).num_seconds() as f64 / seconds_per_day).max(0.0)
+}
+
+/// Fraction of this command's known-pwd executions that happened in the current directory,
+/// smoothed by [`CWD_PRIOR_SMOOTHING_STRENGTH`] so a small sample can't reach the extremes.
+/// `pwd_known_count == 0` (no pwd data at all, as opposed to pwd data that just doesn't match)
+/// naturally falls out to exactly `0.5`, the same neutral value a partial sample converges
+/// toward, rather than needing a separate branch.
+fn cwd_affinity(cwd_count: u32, pwd_known_count: u32) -> f64 {
+    let k = CWD_PRIOR_SMOOTHING_STRENGTH;
+    (cwd_count as f64 + k) / (pwd_known_count as f64 + 2.0 * k)
 }
 
 #[cfg(test)]
