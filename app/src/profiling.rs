@@ -12,6 +12,9 @@
 
 use cfg_if::cfg_if;
 
+#[cfg(feature = "jemalloc_pprof")]
+mod heap_profile_symbols;
+
 // When using jemalloc heap profiling, this static variable enables and
 // configures the profiling behavior.
 cfg_if! {
@@ -89,8 +92,12 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 /// -- and is symbolized offline against the debug-info file uploaded to Sentry
 /// by the release process (matched by build-id).  On other platforms it spawns
 /// the bundled `pprof` binary to fetch and symbolicate the heap profile from
-/// the local HTTP server.  Either way, the resulting profile is attached to a
-/// Sentry event.
+/// the local HTTP server.  Wherever the profile is already symbolized,
+/// jemalloc's own sampling-prologue frames (`_rjem_je_prof_backtrace`,
+/// `imalloc_body`, etc.) are stripped from the leaf of each sample so
+/// attribution points at application code instead; see
+/// [`heap_profile_symbols::strip_allocator_prologue`]. Either way, the
+/// resulting profile is attached to a Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
     use sentry::protocol::{Attachment, AttachmentType};
@@ -138,15 +145,47 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
 
 #[cfg(feature = "heap_usage_tracking")]
 async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
+    let profile_data = dump_raw_jemalloc_heap_profile().await?;
+
+    // Every jemalloc heap-profile sample is captured from inside jemalloc's
+    // own sampling machinery, so the leaf of every sample is a run of
+    // allocator/profiler frames rather than the code that requested the
+    // memory. Strip that leading run wherever the profile is already
+    // symbolized (currently: the non-Linux path below, which symbolizes
+    // locally via the bundled `pprof` binary). On Linux, where the profile
+    // is deliberately shipped unsymbolized and resolved offline by Sentry,
+    // there are no function names yet to pattern-match against, so this is
+    // a no-op rather than dead code -- it will start taking effect
+    // automatically if that path ever gains in-process symbolization.
+    //
+    // Fall back to the unmodified profile if this fails so a bug in the
+    // filter never blocks a heap-profile report.
+    Ok(
+        match heap_profile_symbols::strip_allocator_prologue(&profile_data) {
+            Ok(stripped) => stripped,
+            Err(err) => {
+                log::warn!(
+                    "Failed to strip allocator prologue frames from heap profile, using \
+                     unmodified profile: {err:#}"
+                );
+                profile_data
+            }
+        },
+    )
+}
+
+#[cfg(feature = "heap_usage_tracking")]
+async fn dump_raw_jemalloc_heap_profile() -> anyhow::Result<Vec<u8>> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "linux")] {
-            // `jemalloc_pprof` only supports Linux. We build it WITHOUT the
-            // `symbolize` feature, so `dump_pprof()` returns a raw, gzipped
-            // pprof (sample addresses + mappings + GNU build-id) that is
-            // symbolized offline against the debug-info file by build-id.  Dump
-            // it directly in-process -- no external `pprof`/Go binary, HTTP
-            // round-trip, or port dependency required (the latter matter for
-            // the headless remote server daemon, which has no bundled helpers
+            // `jemalloc_pprof`'s `dump_pprof()` returns a raw, gzipped pprof
+            // (sample addresses + mappings + GNU build-id) with no function
+            // names attached -- it is built WITHOUT the `symbolize` feature,
+            // so symbolization happens offline against the debug-info file
+            // uploaded to Sentry, matched by build-id. Dump it directly
+            // in-process -- no external `pprof`/Go binary, HTTP round-trip,
+            // or port dependency required (the latter matter for the
+            // headless remote server daemon, which has no bundled helpers
             // next to it).
             dump_jemalloc_pprof_bytes().await
         } else {
@@ -156,7 +195,13 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
             let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
             let profile_path = temp_dir.path().join("heap-profile.pb");
 
-            // Run pprof to fetch and symbolicate the heap profile.
+            // Run pprof to fetch and symbolicate the heap profile. This hits
+            // `handle_get_heap` over loopback HTTP, which -- on every
+            // platform, including this one -- serves the same raw,
+            // unsymbolized `jemalloc_pprof::dump_pprof()` payload as the
+            // Linux branch above. `--symbolize=local` is what turns it into
+            // a fully symbolized profile here, using the local binary's
+            // symbol table.
             let pprof_path = pprof_binary_path()?;
             let output = command::r#async::Command::new(pprof_path)
                 .args(["--proto", "--symbolize=local", "-output"])
@@ -187,7 +232,10 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
 ///
 /// This is the same dump that [`handle_get_heap`] serves over HTTP, but
 /// invoked directly so callers don't need to reach the local HTTP server.
-/// Requires the `jemalloc_pprof` feature, which is Linux-only.
+/// The `jemalloc_pprof` *feature* is not Linux-only -- [`handle_get_heap`]
+/// also serves non-Linux builds -- but this particular in-process shortcut
+/// is: on other platforms the equivalent dump is fetched over HTTP by the
+/// bundled `pprof` binary instead, see [`dump_raw_jemalloc_heap_profile`].
 #[cfg(all(feature = "jemalloc_pprof", target_os = "linux"))]
 async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
     let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
