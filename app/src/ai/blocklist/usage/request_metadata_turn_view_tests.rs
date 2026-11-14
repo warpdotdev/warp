@@ -192,6 +192,39 @@ fn view_starts_with_collapsed_model_rows() {
     assert_eq!(view.records()[0].request_id, "req");
 }
 
+#[test]
+fn custom_endpoint_charge_rows_render_current_names_without_changing_charges() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        let key = "f647850b-4879-48cc-9342-88b42c9a3b60";
+        let info = serde_json::from_value(serde_json::json!({
+            "id": key,
+            "display_name": "Endpoint alias",
+            "usage_metadata": { "request_multiplier": 1, "credit_multiplier": null },
+            "provider": "Unknown"
+        }))
+        .unwrap();
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, _| {
+            workspaces.add_agent_mode_model_for_test_for_team_uid(None, info);
+        });
+        let mut charge = record(120., 0.);
+        charge.model_charges[0].model_id = key.into();
+        charge.model_charges[0].usage_type = InferenceUsageType::CustomEndpoint;
+        let mut view = RequestMetadataTurnView::new_for_test(vec![charge]);
+        view.team_context = Some(UserWorkspaces::teamless_context_resolver_for_test());
+        app.read(|ctx| {
+            let rows =
+                view.model_usage_rows(Appearance::as_ref(ctx), UsageDisplayUnit::Dollars, ctx);
+            let text = rows[0].0.debug_text_content().unwrap_or_default();
+            assert!(text.contains("Endpoint alias"));
+            assert!(!text.contains(key));
+            assert_eq!(view.summary.model_charges[0].model_id, key);
+            assert_eq!(view.summary.total_tokens(), 15);
+            assert_eq!(view.summary.inference_cost_in_cents(), 120.);
+        });
+    });
+}
+
 /// A legacy turn carries no records: an unknown-charges turn exposes no model rows to
 /// render zeros from.
 #[test]

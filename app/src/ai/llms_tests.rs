@@ -419,6 +419,80 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
 }
 
 #[test]
+fn model_display_names_use_current_scoped_metadata() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let first_uid = ServerId::from(101);
+        let second_uid = ServerId::from(102);
+        let key = "f647850b-4879-48cc-9342-88b42c9a3b60";
+        let teams = [
+            (first_uid, "first alias"),
+            (second_uid, "other team's alias"),
+        ]
+        .into_iter()
+        .map(|(uid, label)| {
+            Team::from_local_cache(
+                uid,
+                label.into(),
+                None,
+                None,
+                None,
+                Some(ModelsByFeature {
+                    agent_mode: available(key, vec![agent_llm(key, label)]),
+                    ..Default::default()
+                }),
+            )
+        })
+        .collect();
+        let workspace = Workspace::from_local_cache(
+            ServerId::from(100).into(),
+            "Workspace".into(),
+            Some(teams),
+            None,
+        );
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        let preferences = LLMPreferences::for_test(Vec::new());
+        let scope = TeamContextForOperation::new_for_test(first_uid);
+        app.read(|ctx| {
+            assert_eq!(
+                preferences.model_display_name(key, &scope, true, ctx),
+                "first alias"
+            );
+            assert_eq!(
+                preferences.model_display_name(key, &TeamlessScopeForTest, true, ctx),
+                "Unavailable custom model"
+            );
+            assert_eq!(
+                preferences.model_display_name("custom-router:missing", &scope, false, ctx),
+                "Unavailable router"
+            );
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, _| {
+            workspaces.set_feature_model_choice_for_team_uid(
+                Some(first_uid),
+                ModelsByFeature {
+                    agent_mode: available(key, vec![agent_llm(key, "renamed")]),
+                    ..Default::default()
+                },
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                preferences.model_display_name(key, &scope, true, ctx),
+                "renamed"
+            )
+        });
+    });
+}
+
+#[test]
 fn custom_llm_infos_skip_endpoints_with_empty_api_key() {
     let keys = ai::api_keys::ApiKeys {
         custom_endpoints: vec![

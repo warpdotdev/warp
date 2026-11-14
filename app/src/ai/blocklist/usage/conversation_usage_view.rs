@@ -29,6 +29,7 @@ use crate::ai::blocklist::view_util::{
     UsageLabelKind, effective_usage_unit, format_credits, format_usage, usage_label,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
@@ -36,6 +37,7 @@ use crate::persistence::model::{
 };
 use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::ui_components::blended_colors;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -100,6 +102,7 @@ pub enum ConversationUsageViewAction {
 /// This is used for both the usage footer and the usage history page in settings.
 pub struct ConversationUsageView {
     pub usage_info: ConversationUsageInfo,
+    team_context: Option<TeamContextResolver>,
     /// The display mode for this view.
     pub display_mode: DisplayMode,
     /// Optional timing information for the last set of responses (only shown in the footer version of this view).
@@ -143,6 +146,7 @@ impl ConversationUsageView {
     ) -> Self {
         Self {
             usage_info,
+            team_context: None,
             display_mode,
             timing_info,
             full_terminal_use_tooltip_mouse_state,
@@ -175,6 +179,7 @@ impl ConversationUsageView {
             }
         });
 
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, _, ctx| ctx.notify());
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, move |_, history, event, ctx| {
             // Narrow to events that can actually change *this* orchestrator's
@@ -223,6 +228,7 @@ impl ConversationUsageView {
 
         Self {
             usage_info,
+            team_context: Some(UserWorkspaces::team_context_resolver(ctx.handle())),
             display_mode: DisplayMode::Footer,
             timing_info,
             full_terminal_use_tooltip_mouse_state,
@@ -255,8 +261,24 @@ impl ConversationUsageView {
     /// Helper to collect models grouped by category.
     /// Returns a HashMap mapping category name to list of (model_id, shows_key_icon) tuples.
     /// Handles category-based fields plus legacy token-total fallbacks.
-    fn collect_models_by_category(&self) -> HashMap<String, Vec<(String, bool)>> {
+    fn collect_models_by_category(&self, ctx: &AppContext) -> HashMap<String, Vec<(String, bool)>> {
         let mut entries_by_category: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+
+        let custom_label = |model: &ModelTokenUsage| {
+            model
+                .custom_endpoint_config_key
+                .as_deref()
+                .map(|key| {
+                    let preferences = LLMPreferences::as_ref(ctx);
+                    self.team_context
+                        .as_ref()
+                        .map(|resolver| {
+                            preferences.model_display_name(key, &resolver(ctx), true, ctx)
+                        })
+                        .unwrap_or_else(|| preferences.custom_endpoint_usage_display_label(key))
+                })
+                .unwrap_or_else(|| "Unavailable custom model".to_string())
+        };
 
         // Collect from category-based fields
         for model in &self.usage_info.models {
@@ -281,7 +303,7 @@ impl ConversationUsageView {
                     entries_by_category
                         .entry(category.clone())
                         .or_default()
-                        .push((model.model_id.clone(), true));
+                        .push((custom_label(model), true));
                 }
             }
         }
@@ -305,7 +327,7 @@ impl ConversationUsageView {
                     entries_by_category
                         .entry(PRIMARY_AGENT_CATEGORY.to_string())
                         .or_default()
-                        .push((model.model_id.clone(), true));
+                        .push((custom_label(model), true));
                 }
             }
         }
@@ -413,7 +435,7 @@ impl ConversationUsageView {
             appearance,
         ));
 
-        let entries_by_category = self.collect_models_by_category();
+        let entries_by_category = self.collect_models_by_category(app);
         let mut categories: Vec<_> = entries_by_category.keys().cloned().collect();
         categories.sort_by(|a, b| match (a.as_str(), b.as_str()) {
             (PRIMARY_AGENT_CATEGORY, _) => Ordering::Less,
