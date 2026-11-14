@@ -63,6 +63,10 @@ unless the user asks you to normalize the tree.
    after an Agent's or Automation's closing `---` fence is its prompt; a
    Scorer's body is its rubric. Never fold either into frontmatter.
 3. Prefer the smallest edit that satisfies the request.
+4. Before creating or repairing an integration's communication automation,
+   read [the default automations](references/default-automations.md). Start
+   from the Factory's existing seeded listeners, not a generic webhook or
+   another integration's bot identity.
 
 ## Author against the server's schema
 Read the tree's `schemaVersion` from `factory.yaml`; a tree that omits it is
