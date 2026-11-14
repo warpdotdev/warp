@@ -234,15 +234,6 @@ impl Args {
                     }
                 }
 
-                if !FeatureFlag::IntegrationCommand.is_enabled() {
-                    let args: Vec<String> = env::args().collect();
-                    if args.len() > 1 && args[1] == "integration" {
-                        eprintln!("error: unrecognized subcommand 'integration'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
-                    }
-                }
-
                 if !FeatureFlag::ScheduledAmbientAgents.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "schedule" {
@@ -368,11 +359,6 @@ impl Args {
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
             command = command.mut_subcommand("provider", |c| c.hide(true));
-        }
-
-        // Hide the integration subcommand from help text
-        if !FeatureFlag::IntegrationCommand.is_enabled() {
-            command = command.mut_subcommand("integration", |c| c.hide(true));
         }
 
         // Hide the schedule subcommand from help text.
