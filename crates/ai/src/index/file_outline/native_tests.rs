@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+use instant::Instant;
 use tempfile::TempDir;
 
 use super::*;
@@ -193,4 +194,37 @@ fmt.Println("Helper function")
     assert_eq!(symbols[3].type_prefix, Some("type".to_owned()));
     assert_eq!(symbols[4].name, "helperFunction");
     assert_eq!(symbols[4].type_prefix, Some("func".to_owned()));
+}
+
+/// Dense, deeply nested, syntactically-invalid SQL: unmatched parens force tree-sitter's
+/// error-recovery machinery to repeatedly fork and merge stack versions. Tree-sitter's progress
+/// callback is polled periodically from its top-level parse loop (though not from within a
+/// single error-recovery pass); this input is large enough to guarantee at least one such poll,
+/// which is all the already-elapsed deadline below needs to trip.
+fn build_pathological_sql(repeat: usize) -> String {
+    let mut source = String::from("SELECT * FROM t WHERE ");
+    for _ in 0..repeat {
+        source.push_str("(a = b AND (c OR (d = (");
+    }
+    source
+}
+
+#[test]
+fn test_parse_file_outline_gives_up_once_parse_budget_is_exceeded() {
+    let temp_dir = TempDir::new().unwrap();
+    let content = build_pathological_sql(2_000);
+    let file_path = create_test_file(&temp_dir, "pathological.sql", &content);
+
+    // An already-elapsed deadline deterministically trips on the first progress-callback check,
+    // regardless of machine speed, instead of racing a real multi-second parse against a fixed
+    // wall-clock bound.
+    let result = parse_file_outline_with_deadline(&file_path, Instant::now());
+
+    match result {
+        Err(err) => assert!(
+            err.to_string().contains("parse budget"),
+            "expected the budget-specific error, got: {err}"
+        ),
+        Ok(_) => panic!("a parse past its deadline should give up instead of completing"),
+    }
 }
