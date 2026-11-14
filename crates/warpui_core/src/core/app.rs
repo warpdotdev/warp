@@ -3968,7 +3968,13 @@ impl AppContext {
                 let alive = match &mut subscription {
                     Subscription::FromModel { model_id, callback } => {
                         if let Some(mut model) = self.models.remove(model_id) {
-                            callback(model.as_any_mut(), payload.as_ref(), self, *model_id);
+                            callback.call(
+                                model.as_any_mut(),
+                                payload.as_ref(),
+                                entity_id,
+                                *model_id,
+                                self,
+                            );
                             self.models.insert(*model_id, model);
                             true
                         } else {
@@ -3990,12 +3996,13 @@ impl AppContext {
                             .get_mut(&current_window_id)
                             .and_then(|window| window.views.remove(view_id))
                         {
-                            callback(
+                            callback.call(
                                 view.as_any_mut(),
                                 payload.as_ref(),
-                                self,
+                                entity_id,
                                 current_window_id,
                                 *view_id,
+                                self,
                             );
 
                             // XXX We need to check whether window is None

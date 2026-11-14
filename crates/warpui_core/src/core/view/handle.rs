@@ -259,7 +259,7 @@ pub struct WeakViewHandle<T> {
 }
 
 impl<T: Entity> WeakViewHandle<T> {
-    pub(super) fn new(view_id: EntityId) -> Self {
+    pub(in crate::core) fn new(view_id: EntityId) -> Self {
         Self {
             view_id,
             view_type: PhantomData,

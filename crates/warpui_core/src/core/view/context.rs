@@ -17,7 +17,8 @@ use super::{TypedActionView, View};
 use crate::accessibility::AccessibilityContent;
 use crate::r#async::executor::{Background, Foreground};
 use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
-use crate::core::spawn::{SpawnCallbacks, downcast_entity, downcast_output, erase_output};
+use crate::core::spawn::{downcast_entity, downcast_output, erase_output};
+use crate::core::subscription::ViewSubscriber;
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::fonts::Cache as FontCache;
 use crate::modals::{AlertDialogWithCallbacks, ModalButton, ViewModalCallback};
@@ -168,55 +169,38 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         self.app.add_option_view(self.window_id, build_view)
     }
 
-    pub fn subscribe_to_model<E, F>(&mut self, handle: &ModelHandle<E>, mut callback: F)
+    pub fn subscribe_to_model<E, F>(&mut self, handle: &ModelHandle<E>, callback: F)
     where
         E: Entity,
         E::Event: 'static,
         F: 'static + FnMut(&mut T, ModelHandle<E>, &E::Event, &mut ViewContext<T>),
     {
-        let emitter_handle = handle.downgrade();
-        self.app
-            .subscriptions
-            .entry(handle.id())
-            .or_default()
-            .push(Subscription::FromView {
-                window_id: self.window_id,
-                view_id: self.view_id,
-                callback: Box::new(move |view, payload, app, window_id, view_id| {
-                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
-                        let model = view.downcast_mut().expect("downcast is type safe");
-                        let payload = payload.downcast_ref().expect("downcast is type safe");
-                        let mut ctx = ViewContext::new(app, window_id, view_id);
-                        callback(model, emitter_handle, payload, &mut ctx);
-                    }
-                }),
-            });
+        self.app.add_view_subscription(
+            handle.id(),
+            self.window_id,
+            self.view_id,
+            Box::new(ViewSubscriber::<T, ModelHandle<E>, F>(
+                callback,
+                PhantomData,
+            )),
+        );
     }
 
-    pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, mut callback: F)
+    pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, callback: F)
     where
         V: Entity,
         V::Event: 'static,
         F: 'static + FnMut(&mut T, ViewHandle<V>, &V::Event, &mut ViewContext<T>),
     {
-        let emitter_handle = handle.downgrade();
-
-        self.app
-            .subscriptions
-            .entry(handle.id())
-            .or_default()
-            .push(Subscription::FromView {
-                window_id: self.window_id,
-                view_id: self.view_id,
-                callback: Box::new(move |view, payload, app, window_id, view_id| {
-                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
-                        let model = view.downcast_mut().expect("downcast is type safe");
-                        let payload = payload.downcast_ref().expect("downcast is type safe");
-                        let mut ctx = ViewContext::new(app, window_id, view_id);
-                        callback(model, emitter_handle, payload, &mut ctx);
-                    }
-                }),
-            });
+        self.app.add_view_subscription(
+            handle.id(),
+            self.window_id,
+            self.view_id,
+            Box::new(ViewSubscriber::<T, ViewHandle<V>, F>(
+                callback,
+                PhantomData,
+            )),
+        );
     }
 
     pub fn unsubscribe_to_view<V>(&mut self, handle: &ViewHandle<V>)
@@ -514,20 +498,18 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>) -> U,
         U: 'static,
     {
-        self.app.spawn_abortable_erased(
+        self.app.spawn_for_view(
             erase_output::<S::Output>(Box::pin(future)),
-            SpawnCallbacks::View {
-                window_id: self.window_id,
-                view_id: self.view_id,
-                on_resolve: Box::new(move |view, output, app, window_id, view_id| {
-                    callback(
-                        downcast_entity(view),
-                        downcast_output(output),
-                        &mut ViewContext::new(app, window_id, view_id),
-                    );
-                }),
-                on_abort: Box::new(|_, _, _, _| {}),
-            },
+            self.window_id,
+            self.view_id,
+            Box::new(move |view, output, app, window_id, view_id| {
+                callback(
+                    downcast_entity(view),
+                    downcast_output(output),
+                    &mut ViewContext::new(app, window_id, view_id),
+                );
+            }),
+            None,
         )
     }
 
@@ -561,25 +543,23 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>),
         A: 'static + FnOnce(&mut T, &mut ViewContext<T>),
     {
-        self.app.spawn_abortable_erased(
+        self.app.spawn_for_view(
             erase_output::<S::Output>(Box::pin(future)),
-            SpawnCallbacks::View {
-                window_id: self.window_id,
-                view_id: self.view_id,
-                on_resolve: Box::new(move |view, output, app, window_id, view_id| {
-                    on_resolve(
-                        downcast_entity(view),
-                        downcast_output(output),
-                        &mut ViewContext::new(app, window_id, view_id),
-                    );
-                }),
-                on_abort: Box::new(move |view, app, window_id, view_id| {
-                    on_abort(
-                        downcast_entity(view),
-                        &mut ViewContext::new(app, window_id, view_id),
-                    );
-                }),
-            },
+            self.window_id,
+            self.view_id,
+            Box::new(move |view, output, app, window_id, view_id| {
+                on_resolve(
+                    downcast_entity(view),
+                    downcast_output(output),
+                    &mut ViewContext::new(app, window_id, view_id),
+                );
+            }),
+            Some(Box::new(move |view, app, window_id, view_id| {
+                on_abort(
+                    downcast_entity(view),
+                    &mut ViewContext::new(app, window_id, view_id),
+                );
+            })),
         )
     }
 
@@ -771,11 +751,20 @@ pub struct ViewSpawner<V> {
     task_sender: async_channel::Sender<ViewTask<V>>,
 }
 
-impl<V> ViewSpawner<V> {
+impl<V: 'static> ViewSpawner<V> {
     /// Spawn a task that will execute on the main thread, in the context of a view.
-    pub async fn spawn<R: Send + 'static>(
+    pub fn spawn<R: Send + 'static>(
         &self,
         work: impl FnOnce(&mut V, &mut ViewContext<V>) -> R + Send + 'static,
+    ) -> impl Future<Output = Result<R, ViewDropped>> {
+        self.spawn_boxed(Box::new(work))
+    }
+
+    /// The body of [`Self::spawn`]. It takes the work boxed so that this future is compiled once
+    /// per result type, instead of once per closure.
+    async fn spawn_boxed<R: Send + 'static>(
+        &self,
+        work: Box<dyn FnOnce(&mut V, &mut ViewContext<V>) -> R + Send>,
     ) -> Result<R, ViewDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let span = tracing::Span::current();
