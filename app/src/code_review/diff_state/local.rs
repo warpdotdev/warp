@@ -3002,6 +3002,18 @@ impl RepositorySubscriber for LocalDiffStateModelRepositorySubscriber {
 
 #[cfg(test)]
 impl LocalDiffStateModel {
+    /// Forces an empty loaded diff state for tests.
+    pub fn set_loaded_for_test(&mut self) {
+        self.state = InternalDiffState::Loaded(Diffs {
+            changes: Ok(GitDiffData {
+                files: vec![],
+                total_additions: 0,
+                total_deletions: 0,
+                files_changed: 0,
+            }),
+        });
+    }
+
     /// Test-only constructor that creates a bare model without a repository.
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         Self {
