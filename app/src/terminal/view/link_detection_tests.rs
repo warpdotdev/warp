@@ -1,9 +1,11 @@
 use std::iter;
 
-use warp_util::path::CleanPathResult;
+use warp_util::path::{CleanPathResult, LineAndColumnArg};
 
 use super::super::TerminalView;
-use super::{GridHighlightedLink, path_without_trailing_sentence_punctuation};
+use super::{
+    GridHighlightedLink, file_url_link_target, path_without_trailing_sentence_punctuation,
+};
 use crate::terminal::model::grid::grid_handler::PossiblePath;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::WithinModel;
@@ -208,4 +210,107 @@ fn compute_valid_paths_keeps_trailing_fullwidth_punctuation_when_it_is_the_filen
             col: end_col,
         }
     );
+}
+
+fn file_url(path: &std::path::Path) -> String {
+    url::Url::from_file_path(path)
+        .expect("absolute path converts to a file URL")
+        .to_string()
+}
+
+#[test]
+fn file_url_link_target_splits_line_and_column_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("Main.kt");
+    std::fs::write(&file, "").unwrap();
+    let url = file_url(&file);
+
+    assert_eq!(
+        file_url_link_target(&format!("{url}:35:24")),
+        Some((
+            file.clone(),
+            LineAndColumnArg {
+                line_num: 35,
+                column_num: Some(24),
+            }
+        ))
+    );
+    assert_eq!(
+        file_url_link_target(&format!("{url}:35")),
+        Some((
+            file,
+            LineAndColumnArg {
+                line_num: 35,
+                column_num: None,
+            }
+        ))
+    );
+}
+
+#[test]
+fn file_url_link_target_decodes_percent_encoded_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("my notes.kt");
+    std::fs::write(&file, "").unwrap();
+    let url = file_url(&file);
+    assert!(url.contains("my%20notes.kt"));
+
+    assert_eq!(
+        file_url_link_target(&format!("{url}:7:1")),
+        Some((
+            file,
+            LineAndColumnArg {
+                line_num: 7,
+                column_num: Some(1),
+            }
+        ))
+    );
+}
+
+#[test]
+fn file_url_link_target_leaves_other_urls_to_the_os() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("Main.kt");
+    std::fs::write(&file, "").unwrap();
+    let url = file_url(&file);
+
+    // No line/column suffix: keep handing the URL to the OS as before.
+    assert_eq!(file_url_link_target(&url), None);
+    // Not a file URL.
+    assert_eq!(file_url_link_target("https://warp.dev:443"), None);
+    assert_eq!(file_url_link_target("https://warp.dev/foo.kt:35:24"), None);
+    // The file doesn't exist, so there's nothing to open in an editor.
+    let missing = file_url(&dir.path().join("Missing.kt"));
+    assert_eq!(file_url_link_target(&format!("{missing}:35:24")), None);
+    // A remote host is not opened as a local (or UNC) path.
+    let remote = format!("{url}:35:24").replacen("file://", "file://example.com", 1);
+    assert_eq!(file_url_link_target(&remote), None);
+    // `localhost` is the local machine (on Windows, `url` maps any host to a UNC path).
+    #[cfg(unix)]
+    {
+        let localhost = format!("{url}:35:24").replacen("file://", "file://localhost", 1);
+        assert_eq!(
+            file_url_link_target(&localhost),
+            Some((
+                file,
+                LineAndColumnArg {
+                    line_num: 35,
+                    column_num: Some(24),
+                }
+            ))
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn file_url_link_target_keeps_file_names_that_end_in_a_colon_number() {
+    let dir = tempfile::tempdir().unwrap();
+    // Both `notes` and `notes:12` exist. The URL names `notes:12` exactly, so it is not
+    // reinterpreted as line 12 of `notes`.
+    std::fs::write(dir.path().join("notes"), "").unwrap();
+    let file = dir.path().join("notes:12");
+    std::fs::write(&file, "").unwrap();
+
+    assert_eq!(file_url_link_target(&file_url(&file)), None);
 }
