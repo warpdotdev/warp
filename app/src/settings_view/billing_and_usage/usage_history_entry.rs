@@ -1,17 +1,18 @@
+use std::collections::HashMap;
+
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Shrinkable, Text,
 };
 use warpui::platform::Cursor;
-use warpui::{AppContext, Element, View};
+use warpui::{AppContext, Element, View, ViewContext, ViewHandle};
 
-use crate::ai::blocklist::usage::conversation_usage_view::{
-    ConversationUsageInfo, ConversationUsageView, DisplayMode,
-};
+use crate::ai::blocklist::usage::usage_popover_view::HistoryUsageDetailsView;
 use crate::ai::blocklist::view_util::{effective_usage_unit, format_usage};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
@@ -24,7 +25,26 @@ pub struct UsageHistoryEntry {
     entry: Option<ConversationUsage>,
     is_expanded: bool,
     mouse_state: Option<MouseStateHandle>,
-    tooltip_mouse_state: MouseStateHandle,
+    details_view: Option<ViewHandle<HistoryUsageDetailsView>>,
+}
+
+pub(crate) fn update_usage_details_views<V: View>(
+    entries: &[ConversationUsage],
+    views: &mut HashMap<String, ViewHandle<HistoryUsageDetailsView>>,
+    ctx: &mut ViewContext<V>,
+) {
+    for entry in entries {
+        if let Some(view) = views.get(&entry.conversation_id) {
+            view.update(ctx, |view, ctx| {
+                view.update_metadata(&entry.usage_metadata, ctx)
+            });
+        } else {
+            let view = ctx.add_typed_action_view(|ctx| {
+                HistoryUsageDetailsView::new(&entry.usage_metadata, ctx)
+            });
+            views.insert(entry.conversation_id.clone(), view);
+        }
+    }
 }
 
 impl UsageHistoryEntry {
@@ -32,13 +52,13 @@ impl UsageHistoryEntry {
         entry: Option<ConversationUsage>,
         is_expanded: bool,
         mouse_state: Option<MouseStateHandle>,
-        tooltip_mouse_state: MouseStateHandle,
+        details_view: Option<ViewHandle<HistoryUsageDetailsView>>,
     ) -> Self {
         Self {
             entry,
             mouse_state,
             is_expanded,
-            tooltip_mouse_state,
+            details_view,
         }
     }
 
@@ -47,9 +67,7 @@ impl UsageHistoryEntry {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(self.render_header(appearance, app));
 
-        if let Some(entry) = &self.entry
-            && self.is_expanded
-        {
+        if self.entry.is_some() && self.is_expanded {
             res = res
                 .with_child(
                     // Separator between header and usage component
@@ -60,15 +78,10 @@ impl UsageHistoryEntry {
                         .with_overdraw_bottom(0.)
                         .finish(),
                 )
-                .with_child(
-                    ConversationUsageView::new(
-                        ConversationUsageInfo::from(entry),
-                        DisplayMode::Settings,
-                        None,
-                        self.tooltip_mouse_state.clone(),
-                    )
-                    .render(app),
-                );
+                .with_child(self.details_view.as_ref().map_or_else(
+                    || Empty::new().finish(),
+                    |view| ChildView::new(view).finish(),
+                ));
         }
 
         Container::new(res.finish())

@@ -10,6 +10,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use warp_core::ui::Icon;
+use warp_graphql::queries::get_conversation_usage as gql;
 use warp_multi_agent_api as api;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
@@ -33,6 +34,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     ChargedUsageTotals, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage, PRIMARY_AGENT_CATEGORY,
+    ToolUsageMetadata,
 };
 use crate::settings::UsageDisplayUnit;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
@@ -113,6 +115,15 @@ pub struct UsagePopoverView {
     /// `None` until the footer first opens the popover and points it at the
     /// active conversation.
     conversation_id: Option<AIConversationId>,
+    sections: UsageSections,
+    view_account_usage_mouse_state: MouseStateHandle,
+    /// Number of times this view rendered. Notification has no observable
+    /// state, so tests observe the render pass it should trigger instead.
+    #[cfg(test)]
+    render_count_for_test: Cell<usize>,
+}
+
+struct UsageSections {
     model_usage_section_expanded: bool,
     tool_call_summary_section_expanded: bool,
     /// Rows whose per-model breakdown subsection is currently expanded.
@@ -133,11 +144,21 @@ pub struct UsagePopoverView {
     view_id: EntityId,
     model_usage_toggle_mouse_state: MouseStateHandle,
     tool_call_summary_toggle_mouse_state: MouseStateHandle,
-    view_account_usage_mouse_state: MouseStateHandle,
-    /// Number of times this view rendered. Notification has no observable
-    /// state, so tests observe the render pass it should trigger instead.
-    #[cfg(test)]
-    render_count_for_test: Cell<usize>,
+}
+
+impl UsageSections {
+    fn new(view_id: EntityId) -> Self {
+        Self {
+            model_usage_section_expanded: true,
+            tool_call_summary_section_expanded: true,
+            expanded_model_ids: HashSet::new(),
+            hover_states: RefCell::new(HashMap::new()),
+            registered_tooltips: RefCell::new(Vec::new()),
+            view_id,
+            model_usage_toggle_mouse_state: MouseStateHandle::default(),
+            tool_call_summary_toggle_mouse_state: MouseStateHandle::default(),
+        }
+    }
 }
 
 impl UsagePopoverView {
@@ -176,14 +197,7 @@ impl UsagePopoverView {
         );
         Self {
             conversation_id,
-            model_usage_section_expanded: true,
-            tool_call_summary_section_expanded: true,
-            expanded_model_ids: HashSet::new(),
-            hover_states: RefCell::new(HashMap::new()),
-            registered_tooltips: RefCell::new(Vec::new()),
-            view_id: ctx.view_id(),
-            model_usage_toggle_mouse_state: MouseStateHandle::default(),
-            tool_call_summary_toggle_mouse_state: MouseStateHandle::default(),
+            sections: UsageSections::new(ctx.view_id()),
             view_account_usage_mouse_state: MouseStateHandle::default(),
             #[cfg(test)]
             render_count_for_test: Cell::new(0),
@@ -209,10 +223,10 @@ impl UsagePopoverView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.conversation_id = Some(conversation_id);
-        self.model_usage_section_expanded = true;
-        self.tool_call_summary_section_expanded = true;
-        self.expanded_model_ids.clear();
-        self.hover_states.borrow_mut().clear();
+        self.sections.model_usage_section_expanded = true;
+        self.sections.tool_call_summary_section_expanded = true;
+        self.sections.expanded_model_ids.clear();
+        self.sections.hover_states.borrow_mut().clear();
         ctx.notify();
     }
 
@@ -271,7 +285,9 @@ impl UsagePopoverView {
             .with_child(link)
             .finish()
     }
+}
 
+impl UsageSections {
     /// Renders a collapsible section header: an overline `label` on the
     /// left and, on the right, a chevron indicating expand state. When the
     /// section is collapsed, `summary`'s text (e.g. "144.3k tokens / $0.21",
@@ -400,17 +416,13 @@ impl UsagePopoverView {
     /// the parent column's spacing.
     fn render_usage_breakdown_section(
         &self,
-        conversation: &AIConversation,
+        models: &[ModelTokenUsage],
         charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
         custom_endpoint_label: impl Fn(&str) -> String,
         usage_display_unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let rows = model_usage_rows(
-            conversation.token_usage(),
-            charged_usage_by_key,
-            custom_endpoint_label,
-        );
+        let rows = model_usage_rows(models, charged_usage_by_key, custom_endpoint_label);
         if rows.is_empty() {
             return None;
         }
@@ -757,6 +769,21 @@ impl UsagePopoverView {
                 appearance,
             ));
         }
+        if charged_usage.web_fetch_count > 0 || charged_usage.web_fetch_cost_in_cents != 0. {
+            let cost = charged_usage.cost_value(
+                charged_usage.web_fetch_cost_in_credits,
+                charged_usage.web_fetch_cost_in_cents,
+            );
+            column.add_child(render_label_value_row(
+                "Web fetches",
+                format!(
+                    "{} pages / {}",
+                    charged_usage.web_fetch_count,
+                    format_tokens_and_cost(None, Some(cost), usage_display_unit),
+                ),
+                appearance,
+            ));
+        }
         column.finish()
     }
 
@@ -869,10 +896,9 @@ impl UsagePopoverView {
 
     fn render_tool_call_summary_section(
         &self,
-        conversation: &AIConversation,
+        tool_usage: &ToolUsageMetadata,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let tool_usage = conversation.tool_usage_metadata();
         if tool_usage.total_tool_calls() == 0 {
             return None;
         }
@@ -936,36 +962,11 @@ impl View for UsagePopoverView {
             return Empty::new().finish();
         };
         let usage_display_unit = conversation_usage_display_unit(conversation, app);
-        let llm_preferences = LLMPreferences::as_ref(app);
-        let custom_endpoint_label =
-            |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
-        let charged_usage_by_key =
-            sum_charged_usage_by_key(conversation.all_tasks().flat_map(|task| task.messages()));
-        let charged_totals = conversation_charged_totals(conversation);
-        self.registered_tooltips.borrow_mut().clear();
-
-        // Absent sections are skipped rather than rendered empty, so they don't
-        // leave the column's inter-section spacing behind as a stray gap.
-        let sections = [
-            Some(self.render_header(conversation, usage_display_unit, appearance)),
-            self.render_usage_breakdown_section(
-                conversation,
-                &charged_usage_by_key,
-                custom_endpoint_label,
-                usage_display_unit,
-                appearance,
-            ),
-            self.render_platform_usage_section(
-                charged_totals.as_ref(),
-                usage_display_unit,
-                appearance,
-            ),
-            self.render_tool_call_summary_section(conversation, appearance),
-        ];
-        let mut column = Flex::column().with_spacing(12.);
-        for section in sections.into_iter().flatten() {
-            column.add_child(section);
-        }
+        let data = UsageDetailsData::from_conversation(conversation);
+        let column = Flex::column()
+            .with_spacing(12.)
+            .with_child(self.render_header(conversation, usage_display_unit, appearance))
+            .with_child(self.sections.render(&data, usage_display_unit, app));
 
         let content = Container::new(column.finish())
             .with_background(theme.surface_2())
@@ -973,10 +974,7 @@ impl View for UsagePopoverView {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
             .with_uniform_padding(12.)
             .finish();
-        let mut content = Stack::new().with_child(content);
-        self.render_registered_tooltips(&mut content, appearance);
-
-        let popover = ConstrainedBox::new(content.finish())
+        let popover = ConstrainedBox::new(content)
             .with_width(POPOVER_WIDTH)
             .finish();
 
@@ -1007,25 +1005,177 @@ impl TypedActionView for UsagePopoverView {
     type Action = UsagePopoverAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        if *action == UsagePopoverAction::RequestClose {
+            ctx.emit(UsagePopoverEvent::Close);
+        } else {
+            self.sections.handle_action(action);
+            ctx.notify();
+        }
+    }
+}
+
+impl UsageSections {
+    fn handle_action(&mut self, action: &UsagePopoverAction) {
         match action {
             UsagePopoverAction::ToggleModelUsageSection => {
                 self.model_usage_section_expanded = !self.model_usage_section_expanded;
-                ctx.notify();
             }
             UsagePopoverAction::ToggleToolCallSummarySection => {
                 self.tool_call_summary_section_expanded = !self.tool_call_summary_section_expanded;
-                ctx.notify();
-            }
-            UsagePopoverAction::RequestClose => {
-                ctx.emit(UsagePopoverEvent::Close);
             }
             UsagePopoverAction::ToggleModelExpanded(row_key) => {
                 if !self.expanded_model_ids.remove(row_key) {
                     self.expanded_model_ids.insert(row_key.clone());
                 }
+            }
+            UsagePopoverAction::RequestClose => {}
+        }
+    }
+
+    fn render(
+        &self,
+        data: &UsageDetailsData,
+        unit: UsageDisplayUnit,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let preferences = LLMPreferences::as_ref(app);
+        self.registered_tooltips.borrow_mut().clear();
+        let sections = [
+            self.render_usage_breakdown_section(
+                &data.token_usage,
+                &data.charged_usage_by_key,
+                |key| preferences.custom_endpoint_usage_display_label(key),
+                unit,
+                appearance,
+            ),
+            self.render_platform_usage_section(data.charged_totals.as_ref(), unit, appearance),
+            self.render_tool_call_summary_section(&data.tool_usage, appearance),
+        ];
+        let mut column = Flex::column().with_spacing(12.);
+        for section in sections.into_iter().flatten() {
+            column.add_child(section);
+        }
+        let mut content = Stack::new().with_child(column.finish());
+        self.render_registered_tooltips(&mut content, appearance);
+        content.finish()
+    }
+}
+
+struct UsageDetailsData {
+    token_usage: Vec<ModelTokenUsage>,
+    charged_usage_by_key: HashMap<ModelChargeKey, ModelChargedUsage>,
+    charged_totals: Option<ChargedUsageTotals>,
+    tool_usage: ToolUsageMetadata,
+}
+
+impl UsageDetailsData {
+    fn from_history(metadata: &gql::ConversationUsageMetadata) -> Self {
+        let converted = crate::persistence::model::ConversationUsageMetadata::from(metadata);
+        let mut charged_usage_by_key: HashMap<ModelChargeKey, ModelChargedUsage> = HashMap::new();
+        for entry in metadata.charged_usage_by_category.iter().flatten() {
+            let key = match entry.usage_type {
+                gql::ChargedUsageType::DirectApi | gql::ChargedUsageType::Byok => {
+                    let Some(name) = &entry.display_model_name else {
+                        continue;
+                    };
+                    ModelChargeKey::Standard(name.clone())
+                }
+                gql::ChargedUsageType::CustomEndpoint => {
+                    ModelChargeKey::CustomEndpoint(entry.model_id.clone())
+                }
+            };
+            charged_usage_by_key
+                .entry(key)
+                .or_default()
+                .merge_from(&entry.into());
+        }
+        Self {
+            token_usage: converted.token_usage,
+            charged_usage_by_key,
+            charged_totals: metadata
+                .total_platform_cost_in_cents
+                .map(|cents| ChargedUsageTotals {
+                    platform_cost_in_cents: cents as f32,
+                    platform_cost_in_credits: metadata.platform_credits_spent as f32,
+                    ..Default::default()
+                }),
+            tool_usage: converted.tool_usage_metadata,
+        }
+    }
+    fn from_conversation(conversation: &AIConversation) -> Self {
+        Self {
+            token_usage: conversation.token_usage().to_vec(),
+            charged_usage_by_key: sum_charged_usage_by_key(
+                conversation.all_tasks().flat_map(|task| task.messages()),
+            ),
+            charged_totals: conversation_charged_totals(conversation),
+            tool_usage: conversation.tool_usage_metadata().clone(),
+        }
+    }
+}
+
+pub(crate) struct HistoryUsageDetailsView {
+    sections: UsageSections,
+    data: UsageDetailsData,
+    cost_in_cents: Option<f32>,
+}
+
+impl HistoryUsageDetailsView {
+    pub fn new(metadata: &gql::ConversationUsageMetadata, ctx: &mut ViewContext<Self>) -> Self {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
                 ctx.notify();
             }
+        });
+        Self {
+            sections: UsageSections::new(ctx.view_id()),
+            data: UsageDetailsData::from_history(metadata),
+            cost_in_cents: metadata.total_billed_cost_in_cents.map(|cost| {
+                (cost + metadata.total_platform_cost_in_cents.unwrap_or_default()) as f32
+            }),
         }
+    }
+
+    pub fn update_metadata(
+        &mut self,
+        metadata: &gql::ConversationUsageMetadata,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.data = UsageDetailsData::from_history(metadata);
+        self.cost_in_cents = metadata
+            .total_billed_cost_in_cents
+            .map(|cost| (cost + metadata.total_platform_cost_in_cents.unwrap_or_default()) as f32);
+        ctx.notify();
+    }
+}
+
+impl View for HistoryUsageDetailsView {
+    fn ui_name() -> &'static str {
+        "HistoryUsageDetailsView"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        Container::new(self.sections.render(
+            &self.data,
+            effective_usage_unit(self.cost_in_cents, app),
+            app,
+        ))
+        .with_uniform_padding(12.)
+        .finish()
+    }
+}
+
+impl Entity for HistoryUsageDetailsView {
+    type Event = ();
+}
+
+impl TypedActionView for HistoryUsageDetailsView {
+    type Action = UsagePopoverAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        self.sections.handle_action(action);
+        ctx.notify();
     }
 }
 
@@ -1079,33 +1229,34 @@ struct ModelUsageRow {
     charged_usage: Option<ModelChargedUsage>,
 }
 
-/// A known cost, in both display units, so the credits/dollars unit can be
-/// applied at format time.
+/// A dollar cost with an optional subject-aware credit amount.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CostValue {
-    credits: f32,
+    credits: Option<f32>,
     cost_in_cents: f32,
 }
 
 impl CostValue {
     fn new(credits: f32, cost_in_cents: f32) -> Self {
         Self {
-            credits,
+            credits: Some(credits),
             cost_in_cents,
         }
     }
 
     fn add_assign(&mut self, rhs: Self) {
-        self.credits += rhs.credits;
+        self.credits = self
+            .credits
+            .zip(rhs.credits)
+            .map(|(left, right)| left + right);
         self.cost_in_cents += rhs.cost_in_cents;
     }
 }
 
-/// Per-model charged usage, summed at render time from the conversation's
-/// persisted per-request `RequestMetadata` charges: every category's nested
-/// per-model inference usage is folded together across all requests.
+/// Per-model charged usage aggregated across categories and requests.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ModelChargedUsage {
+    credits_unavailable: bool,
     input_tokens: u32,
     output_tokens: u32,
     input_cache_read_tokens: u32,
@@ -1121,9 +1272,52 @@ struct ModelChargedUsage {
     web_search_count: u32,
     web_search_cost_in_cents: f32,
     web_search_cost_in_credits: f32,
+    web_fetch_count: u32,
+    web_fetch_cost_in_cents: f32,
+    web_fetch_cost_in_credits: f32,
+}
+impl From<&gql::ChargedUsageEntry> for ModelChargedUsage {
+    fn from(entry: &gql::ChargedUsageEntry) -> Self {
+        let credits = entry.token_cost_in_credits.as_ref();
+        Self {
+            credits_unavailable: credits.is_none()
+                || entry.web_search_cost_in_credits.is_none()
+                || (entry.web_fetch_cost_in_cents.is_some()
+                    && entry.web_fetch_cost_in_credits.is_none()),
+            input_tokens: u32::try_from(entry.token_count.input).unwrap_or_default(),
+            output_tokens: u32::try_from(entry.token_count.output).unwrap_or_default(),
+            input_cache_read_tokens: u32::try_from(entry.token_count.cache_read)
+                .unwrap_or_default(),
+            input_cache_write_tokens: u32::try_from(entry.token_count.cache_write)
+                .unwrap_or_default(),
+            input_cost_in_cents: entry.token_cost.input_cost_cents as f32,
+            output_cost_in_cents: entry.token_cost.output_cost_cents as f32,
+            input_cache_read_cost_in_cents: entry.token_cost.cache_read_cost_cents as f32,
+            input_cache_write_cost_in_cents: entry.token_cost.cache_write_cost_cents as f32,
+            input_cost_in_credits: credits.map_or(0., |cost| cost.input as f32),
+            output_cost_in_credits: credits.map_or(0., |cost| cost.output as f32),
+            input_cache_read_cost_in_credits: credits.map_or(0., |cost| cost.cache_read as f32),
+            input_cache_write_cost_in_credits: credits.map_or(0., |cost| cost.cache_write as f32),
+            web_search_count: u32::try_from(entry.web_search_count).unwrap_or_default(),
+            web_search_cost_in_cents: entry.web_search_cost_in_cents as f32,
+            web_search_cost_in_credits: entry.web_search_cost_in_credits.unwrap_or_default() as f32,
+            web_fetch_count: entry
+                .web_fetch_page_count
+                .and_then(|count| u32::try_from(count).ok())
+                .unwrap_or_default(),
+            web_fetch_cost_in_cents: entry.web_fetch_cost_in_cents.unwrap_or_default() as f32,
+            web_fetch_cost_in_credits: entry.web_fetch_cost_in_credits.unwrap_or_default() as f32,
+        }
+    }
 }
 
 impl ModelChargedUsage {
+    fn cost_value(&self, credits: f32, cents: f32) -> CostValue {
+        CostValue {
+            credits: (!self.credits_unavailable).then_some(credits),
+            cost_in_cents: cents,
+        }
+    }
     /// Every token bucket the expanded breakdown itemizes.
     fn tokens(&self) -> u64 {
         u64::from(self.input_tokens)
@@ -1133,29 +1327,29 @@ impl ModelChargedUsage {
     }
 
     fn input_cost(&self) -> CostValue {
-        CostValue::new(self.input_cost_in_credits, self.input_cost_in_cents)
+        self.cost_value(self.input_cost_in_credits, self.input_cost_in_cents)
     }
 
     fn output_cost(&self) -> CostValue {
-        CostValue::new(self.output_cost_in_credits, self.output_cost_in_cents)
+        self.cost_value(self.output_cost_in_credits, self.output_cost_in_cents)
     }
 
     fn input_cache_read_cost(&self) -> CostValue {
-        CostValue::new(
+        self.cost_value(
             self.input_cache_read_cost_in_credits,
             self.input_cache_read_cost_in_cents,
         )
     }
 
     fn input_cache_write_cost(&self) -> CostValue {
-        CostValue::new(
+        self.cost_value(
             self.input_cache_write_cost_in_credits,
             self.input_cache_write_cost_in_cents,
         )
     }
 
     fn web_search_cost(&self) -> CostValue {
-        CostValue::new(
+        self.cost_value(
             self.web_search_cost_in_credits,
             self.web_search_cost_in_cents,
         )
@@ -1169,16 +1363,23 @@ impl ModelChargedUsage {
         cost.add_assign(self.input_cache_read_cost());
         cost.add_assign(self.input_cache_write_cost());
         cost.add_assign(self.web_search_cost());
+        cost.add_assign(
+            self.cost_value(self.web_fetch_cost_in_credits, self.web_fetch_cost_in_cents),
+        );
         cost
     }
 
     /// Whether any charge this aggregates would be invisible as a zero-token,
     /// zero-cost row.
     fn has_activity(&self) -> bool {
-        self.tokens() > 0 || self.web_search_count > 0 || self.cost() != CostValue::new(0., 0.)
+        self.tokens() > 0
+            || self.web_search_count > 0
+            || self.web_fetch_count > 0
+            || self.cost() != CostValue::new(0., 0.)
     }
 
     fn merge_from(&mut self, other: &Self) {
+        self.credits_unavailable |= other.credits_unavailable;
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.input_cache_read_tokens = self
@@ -1198,6 +1399,9 @@ impl ModelChargedUsage {
         self.web_search_count = self.web_search_count.saturating_add(other.web_search_count);
         self.web_search_cost_in_cents += other.web_search_cost_in_cents;
         self.web_search_cost_in_credits += other.web_search_cost_in_credits;
+        self.web_fetch_count = self.web_fetch_count.saturating_add(other.web_fetch_count);
+        self.web_fetch_cost_in_cents += other.web_fetch_cost_in_cents;
+        self.web_fetch_cost_in_credits += other.web_fetch_cost_in_credits;
     }
 
     fn add(&mut self, usage: &api::InferenceUsage) {
@@ -1661,9 +1865,9 @@ fn format_tokens_and_cost(
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
     let token_text = tokens.map(|tokens| format!("{} tokens", format_token_count(tokens)));
-    let cost_text = cost.map(|cost| match usage_display_unit {
-        UsageDisplayUnit::Credits => format_credits(cost.credits),
-        UsageDisplayUnit::Dollars => format_dollars(cost.cost_in_cents),
+    let cost_text = cost.and_then(|cost| match usage_display_unit {
+        UsageDisplayUnit::Credits => cost.credits.map(format_credits),
+        UsageDisplayUnit::Dollars => Some(format_dollars(cost.cost_in_cents)),
     });
     match (token_text, cost_text) {
         (Some(tokens), Some(cost)) => format!("{tokens} / {cost}"),
@@ -1681,7 +1885,10 @@ fn format_searches_and_cost(
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
     let cost = match usage_display_unit {
-        UsageDisplayUnit::Credits => format_credits(cost.credits),
+        UsageDisplayUnit::Credits => cost
+            .credits
+            .map(format_credits)
+            .unwrap_or_else(|| EM_DASH.to_string()),
         UsageDisplayUnit::Dollars => format_dollars(cost.cost_in_cents),
     };
     match count {
