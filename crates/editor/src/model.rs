@@ -111,6 +111,23 @@ pub trait CoreEditorModel: Entity {
         });
     }
 
+    /// Requests a rebuild of the layout state scoped to `range`, snapped outward to the
+    /// enclosing block(s)/line(s). Cheaper than [`Self::rebuild_layout`] when the caller knows
+    /// the layout-affecting change (e.g. a newly loaded asset) can only affect that range.
+    fn rebuild_layout_for_range(&self, range: Range<CharOffset>, ctx: &mut ModelContext<Self::T>) {
+        log::debug!("Rebuilding layout state for range {range:?}");
+        let delta = self
+            .content()
+            .as_ref(ctx)
+            .invalidate_layout_for_range(range);
+        let buffer_version = self.content().as_ref(ctx).buffer_version();
+        self.render_state().update(ctx, move |render_state, _ctx| {
+            let scroll_position = render_state.snapshot_scroll_position();
+            render_state.add_pending_edit(delta, buffer_version);
+            render_state.scroll_to(scroll_position);
+        });
+    }
+
     /// Sets the document path for resolving relative paths (e.g., relative image paths in markdown).
     fn set_document_path(&self, path: Option<std::path::PathBuf>, ctx: &mut ModelContext<Self::T>) {
         self.render_state().update(ctx, |render_state, _| {
