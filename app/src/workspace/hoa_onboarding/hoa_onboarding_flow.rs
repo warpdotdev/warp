@@ -36,6 +36,7 @@ use crate::view_components::callout_bubble::{
     CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, callout_body_color,
     callout_checkbox, callout_label_color, callout_title_color, render_callout_bubble,
 };
+use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabSettings;
 
 const CALLOUT_WIDTH: f32 = 480.;
@@ -56,6 +57,7 @@ impl ActionButtonTheme for HoaPrimaryButtonTheme {
         PhenomenonStyle::primary_button_text()
     }
 }
+
 struct HoaWelcomeModalButtonTheme;
 struct HoaWelcomeModalCloseButtonTheme;
 
@@ -93,7 +95,7 @@ impl ActionButtonTheme for HoaWelcomeModalCloseButtonTheme {
     }
 }
 
-/// The 4 sequential steps in the HOA onboarding flow.
+/// Stages of the HOA onboarding flow, including optional callouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoaOnboardingStep {
     WelcomeBanner,
@@ -103,17 +105,19 @@ pub enum HoaOnboardingStep {
 }
 
 impl HoaOnboardingStep {
-    fn index(&self) -> usize {
+    fn index(&self, show_inbox_callout: bool) -> usize {
         match self {
             HoaOnboardingStep::WelcomeBanner => 0,
             HoaOnboardingStep::VerticalTabsCallout => 0,
             HoaOnboardingStep::AgentInboxCallout => 1,
-            HoaOnboardingStep::TabConfig => 2,
+            HoaOnboardingStep::TabConfig => {
+                if show_inbox_callout {
+                    2
+                } else {
+                    1
+                }
+            }
         }
-    }
-
-    fn total_dots() -> usize {
-        3
     }
 }
 
@@ -154,6 +158,7 @@ pub enum HoaOnboardingFlowEvent {
 
 pub struct HoaOnboardingFlow {
     step: HoaOnboardingStep,
+    show_inbox_callout: bool,
     /// When `true`, the user dismissed the welcome banner without clicking
     /// "See what's new". We show only the vertical-tabs callout with a
     /// "Dismiss" button and no progress dots.
@@ -190,6 +195,10 @@ pub struct HoaOnboardingFlow {
 impl HoaOnboardingFlow {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let show_oz = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+        let show_inbox_callout = TabSettings::as_ref(ctx)
+            .header_toolbar_chip_selection
+            .contains_item(&HeaderToolbarItemKind::NotificationsMailbox)
+            && HeaderToolbarItemKind::NotificationsMailbox.is_available(ctx);
         let session_types = session_config_rendering::visible_session_types(show_oz);
         let pill_mouse_states: Vec<_> = session_types
             .iter()
@@ -242,6 +251,7 @@ impl HoaOnboardingFlow {
 
         Self {
             step: HoaOnboardingStep::WelcomeBanner,
+            show_inbox_callout,
             truncated_flow: false,
             close_button,
             cta_button,
@@ -269,6 +279,10 @@ impl HoaOnboardingFlow {
         self.step
     }
 
+    fn total_dots(&self) -> usize {
+        if self.show_inbox_callout { 3 } else { 2 }
+    }
+
     fn selected_session_type(&self) -> SessionType {
         self.session_types[self.selected_session_type_index]
     }
@@ -282,7 +296,13 @@ impl HoaOnboardingFlow {
 
         self.step = match self.step {
             HoaOnboardingStep::WelcomeBanner => HoaOnboardingStep::VerticalTabsCallout,
-            HoaOnboardingStep::VerticalTabsCallout => HoaOnboardingStep::AgentInboxCallout,
+            HoaOnboardingStep::VerticalTabsCallout => {
+                if self.show_inbox_callout {
+                    HoaOnboardingStep::AgentInboxCallout
+                } else {
+                    HoaOnboardingStep::TabConfig
+                }
+            }
             HoaOnboardingStep::AgentInboxCallout => HoaOnboardingStep::TabConfig,
             HoaOnboardingStep::TabConfig => {
                 self.finish(ctx);
@@ -323,10 +343,10 @@ impl HoaOnboardingFlow {
 
     fn render_progress_dots(&self, appearance: &Appearance) -> Box<dyn Element> {
         let _ = appearance;
-        let active_index = self.step.index();
+        let active_index = self.step.index(self.show_inbox_callout);
 
         let mut row = Flex::row().with_spacing(4.);
-        for i in 0..HoaOnboardingStep::total_dots() {
+        for i in 0..self.total_dots() {
             let fill = if i == active_index {
                 Fill::Solid(PhenomenonStyle::blue())
             } else {
@@ -725,3 +745,7 @@ impl TypedActionView for HoaOnboardingFlow {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hoa_onboarding_flow_tests.rs"]
+mod tests;
