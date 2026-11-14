@@ -239,7 +239,7 @@ fn create_static_diff_content_editor<V: View>(
             CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight),
             ctx,
         )
-        .with_can_show_diff_ui(false)
+        .with_can_show_diff_ui(false, ctx)
         .with_show_line_numbers(false)
         .with_horizontal_scrollbar_appearance(ScrollableAppearance::new(
             ScrollbarWidth::Auto,
