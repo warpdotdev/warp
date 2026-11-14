@@ -15,6 +15,7 @@ fn provider_selection_is_optional_without_changing_the_restricted_query() {
         let operation =
             RestrictedTaskGitCredentials::build(RestrictedTaskGitCredentialsVariables {
                 input: RestrictedTaskGitCredentialsInput {
+                    local_execution_id: None,
                     task_id: cynic::Id::new("task"),
                     workload_token: "test-workload".into(),
                     accepts_partial_refresh: Some(true),

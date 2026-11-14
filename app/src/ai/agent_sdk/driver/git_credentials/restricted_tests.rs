@@ -1037,7 +1037,7 @@ fn bootstrap_stops_after_bounded_temporary_failures() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(4)
-                .returning(|_, _, _, _, _| Err(temporary_error()));
+                .returning(|_, _, _, _, _, _| Err(temporary_error()));
             let client: Arc<dyn AIClient> = Arc::new(client);
 
             assert!(
@@ -1071,8 +1071,8 @@ fn bootstrap_does_not_install_partial_credentials() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .withf(|_, _, partial, _, providers| !partial && providers.is_none())
-                .returning(|_, _, _, _, _| {
+                .withf(|_, _, partial, _, providers, _| !partial && providers.is_none())
+                .returning(|_, _, _, _, _, _| {
                     let mut response = live_response();
                     response.failed_hosts.push("gitlab.com".into());
                     Ok(response)
@@ -1115,8 +1115,8 @@ fn failed_gitlab_refresh_still_updates_github() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .withf(|task, _, partial, factory, _| task == "task" && *partial && *factory)
-                .returning(|_, _, _, _, _| {
+                .withf(|task, _, partial, factory, _, _| task == "task" && *partial && *factory)
+                .returning(|_, _, _, _, _, _| {
                     let mut response = live_response();
                     response.failed_hosts.push("gitlab.com".into());
                     Ok(response)

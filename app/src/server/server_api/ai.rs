@@ -31,6 +31,7 @@ use warp_graphql::mutations::confirm_file_artifact_upload::{
 };
 use warp_graphql::mutations::create_agent_task::{
     CreateAgentTask, CreateAgentTaskInput, CreateAgentTaskResult, CreateAgentTaskVariables,
+    CreateLocalAgentTask, CreateLocalAgentTaskResult, LocalAgentTaskOutput,
 };
 use warp_graphql::mutations::create_file_artifact_upload_target::{
     CreateFileArtifactUploadTarget, CreateFileArtifactUploadTargetInput,
@@ -1650,6 +1651,13 @@ pub trait AIClient: 'static + Send + Sync {
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error>;
 
+    async fn create_local_agent_task(
+        &self,
+        prompt: String,
+        config: AgentConfigSnapshot,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<LocalAgentTaskOutput>;
+
     /// Updates a run's server-side record. Every argument is independently optional; omitted
     /// fields are left untouched rather than cleared.
     ///
@@ -1905,6 +1913,7 @@ pub trait AIClient: 'static + Send + Sync {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
         providers: Option<Vec<TaskGitCredentialProvider>>,
+        local_execution_id: Option<String>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
@@ -2877,6 +2886,7 @@ impl AIClient for ServerApi {
 
         let variables = CreateAgentTaskVariables {
             input: CreateAgentTaskInput {
+                local_github_contract_version: None,
                 prompt,
                 environment_uid: environment_uid.map(|uid| uid.into()),
                 parent_run_id: parent_run_id.map(|run_id| run_id.into()),
@@ -2903,6 +2913,35 @@ impl AIClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
             CreateAgentTaskResult::Unknown => Err(anyhow!("failed to create agent task")),
+        }
+    }
+
+    async fn create_local_agent_task(
+        &self,
+        prompt: String,
+        config: AgentConfigSnapshot,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<LocalAgentTaskOutput> {
+        let variables = CreateAgentTaskVariables {
+            input: CreateAgentTaskInput {
+                local_github_contract_version: Some(1),
+                prompt,
+                environment_uid: config.environment_id.clone().map(Into::into),
+                parent_run_id: None,
+                agent_config_snapshot: Some(serde_json::to_string(&config)?),
+                metadata: None,
+            },
+            request_context: get_request_context(),
+        };
+        let response = self
+            .send_graphql_request_for_team(CreateLocalAgentTask::build(variables), team_scope)
+            .await?;
+        match response.create_agent_task {
+            CreateLocalAgentTaskResult::CreateAgentTaskOutput(output) => Ok(output),
+            CreateLocalAgentTaskResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            CreateLocalAgentTaskResult::Unknown => Err(anyhow!("Unknown local task response")),
         }
     }
 
@@ -3492,9 +3531,11 @@ impl AIClient for ServerApi {
         accepts_partial_refresh: bool,
         use_factory_repositories: bool,
         providers: Option<Vec<TaskGitCredentialProvider>>,
+        local_execution_id: Option<String>,
     ) -> Result<RestrictedTaskGitCredentialsOutput, TaskGitCredentialsError> {
         let variables = RestrictedTaskGitCredentialsVariables {
             input: RestrictedTaskGitCredentialsInput {
+                local_execution_id: local_execution_id.map(Into::into),
                 task_id: cynic::Id::new(task_id),
                 workload_token,
                 accepts_partial_refresh: Some(accepts_partial_refresh),

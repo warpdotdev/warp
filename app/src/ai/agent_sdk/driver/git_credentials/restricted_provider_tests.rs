@@ -222,7 +222,7 @@ fn selective_request_uses_due_providers_only() -> Result<()> {
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(1)
-                .returning(|task, token, partial, factory, providers| {
+                .returning(|task, token, partial, factory, providers, _| {
                     assert_eq!(task, "task");
                     assert_eq!(token, "test-workload");
                     assert!(partial && factory);
@@ -252,12 +252,13 @@ fn schema_fallback_retains_restricted_contract_and_reports_full_selection() -> R
             ("WARP_ISOLATION_PLATFORM", "docker"),
         ],
         |_| {
+            prepare("task")?;
             let mut calls = 0;
             let mut client = MockAIClient::new();
             client
                 .expect_get_restricted_task_git_credentials()
                 .times(2)
-                .returning(move |task, token, partial, factory, providers| {
+                .returning(move |task, token, partial, factory, providers, _| {
                     assert_eq!(task, "task");
                     assert_eq!(token, "test-workload");
                     assert!(partial && factory);
@@ -300,6 +301,7 @@ fn unrelated_errors_do_not_trigger_provider_fallback() -> Result<()> {
             ("WARP_ISOLATION_PLATFORM", "docker"),
         ],
         |_| {
+            prepare("task")?;
             for message in [
                 "Field \"acceptsPartialRefresh\" is not defined by type \"TaskGitCredentialsInput\"",
                 "providers request timed out",
@@ -309,7 +311,7 @@ fn unrelated_errors_do_not_trigger_provider_fallback() -> Result<()> {
                 client
                     .expect_get_restricted_task_git_credentials()
                     .times(1)
-                    .returning(move |_, _, _, _, _| {
+                    .returning(move |_, _, _, _, _, _| {
                         Err(TaskGitCredentialsError::Request(anyhow::anyhow!(message)))
                     });
                 let client: Arc<dyn AIClient> = Arc::new(client);
