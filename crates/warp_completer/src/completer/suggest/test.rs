@@ -2270,6 +2270,64 @@ pub fn test_autocd_completions_with_tilde() {
     assert_eq!(complete_at_end_of_line("~/src/", &ctx), vec!["app/"]);
 }
 
+/// Regression test for GitHub issue #2509: typing `..` should not suggest the `...` alias.
+#[test]
+pub fn test_dot_path_prefix_does_not_suggest_commands() {
+    let pwd = TypedPathBuf::from(TEST_WORK_DIR);
+    let path_ctx = MockPathCompletionContext::new(pwd)
+        .with_home_directory(TEST_WORK_DIR.to_owned())
+        .with_entries_in_pwd([
+            EngineDirEntry::test_file(".env"),
+            EngineDirEntry::test_dir(".git"),
+            EngineDirEntry::test_dir("src"),
+        ]);
+
+    let aliases = HashMap::from_iter([
+        ("...".into(), "cd ../..".to_string()),
+        ("ll".into(), "ls -l".to_string()),
+    ]);
+    let mut ctx = FakeCompletionContext::new(create_test_command_registry([]))
+        .with_path_completion_context(path_ctx.clone())
+        .with_aliases(aliases)
+        .with_top_level_commands(["...", "ll", "ls"])
+        .with_supports_autocd(true);
+
+    // `.` and `..` are path prefixes, so only paths are suggested, not the `...` alias.
+    assert_eq!(complete_at_end_of_line("..", &ctx), vec!["../"]);
+    assert_eq!(
+        complete_at_end_of_line(".", &ctx),
+        vec!["./", "../", ".env", ".git/"]
+    );
+
+    // The `...` alias is still suggested once it is typed out.
+    assert_eq!(complete_at_end_of_line("...", &ctx), vec!["..."]);
+
+    // Ordinary prefixes still suggest commands and aliases.
+    assert_eq!(complete_at_end_of_line("l", &ctx), vec!["ll", "ls"]);
+
+    // The same holds when autocd is disabled.
+    ctx = ctx.with_supports_autocd(false);
+    assert_eq!(complete_at_end_of_line("..", &ctx), vec!["../"]);
+    assert_eq!(complete_at_end_of_line("l", &ctx), vec!["ll", "ls"]);
+
+    // A command named exactly `.` or `..` (e.g. the `.` builtin or a `..` alias) is still
+    // suggested ahead of the paths, so accepting the top suggestion keeps what was typed.
+    let aliases = HashMap::from_iter([
+        ("..".into(), "cd ..".to_string()),
+        ("...".into(), "cd ../..".to_string()),
+    ]);
+    let ctx = FakeCompletionContext::new(create_test_command_registry([]))
+        .with_path_completion_context(path_ctx)
+        .with_aliases(aliases)
+        .with_top_level_commands([".", "..", "..."])
+        .with_supports_autocd(true);
+    assert_eq!(complete_at_end_of_line("..", &ctx), vec!["..", "../"]);
+    assert_eq!(
+        complete_at_end_of_line(".", &ctx),
+        vec![".", "./", "../", ".env", ".git/"]
+    );
+}
+
 #[test]
 fn test_option_name_with_missing_required_value() {
     let registry = create_test_command_registry([git_signature()]);
