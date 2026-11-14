@@ -30,6 +30,7 @@ use crate::test_fixtures::{TestHostView, add_test_action_model};
 /// Builds a request with the given harness and execution mode.
 fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRequest {
     RunAgentsRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         summary: "Parallelize the task.".to_string(),
         base_prompt: "base".to_string(),
@@ -338,7 +339,8 @@ fn local_request_with_implicit_oz_harness_preserves_explicit_model() {
 
 #[test]
 fn build_request_carries_card_fields_and_edited_run_wide_state() {
-    let original = request("oz", remote("env-1", "warp"));
+    let mut original = request("oz", remote("env-1", "warp"));
+    original.delegated_github_coauthor_user_uid = Some("delegating-human".to_string());
     let mut state = TuiOrchestrationBlock::config_state_from_request(&original, None);
     state.model_id = "gpt-5".to_string();
     state.harness_type = "codex".to_string();
@@ -352,6 +354,10 @@ fn build_request_carries_card_fields_and_edited_run_wide_state() {
     assert_eq!(built.base_prompt, original.base_prompt);
     assert_eq!(built.agent_run_configs, original.agent_run_configs);
     assert_eq!(built.plan_id, original.plan_id);
+    assert_eq!(
+        built.delegated_github_coauthor_user_uid,
+        original.delegated_github_coauthor_user_uid
+    );
     // Run-wide fields come from the edited state; the per-call
     // computer-use flag is preserved through the round trip.
     assert_eq!(built.model_id, "gpt-5");

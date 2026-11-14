@@ -90,6 +90,7 @@ fn orchestration_always_show_stays_expanded_after_finish() {
 fn orchestration_send_message_starts_collapsed() {
     let state = default_collapsible_state_for_orchestration_action(
         &AIAgentActionType::SendMessageToAgent {
+            delegated_github_coauthor_user_uid: None,
             addresses: vec!["child-agent".to_string()],
             subject: "Status".to_string(),
             message: "Body".to_string(),
@@ -185,6 +186,7 @@ fn open_code_action_routes_links_to_configured_editor_and_non_links_to_warp() {
 fn orchestration_show_and_collapse_starts_sent_messages_expanded() {
     let state = default_collapsible_state_for_orchestration_action(
         &AIAgentActionType::SendMessageToAgent {
+            delegated_github_coauthor_user_uid: None,
             addresses: vec!["child-agent".to_string()],
             subject: "Status".to_string(),
             message: "Body".to_string(),
@@ -206,6 +208,7 @@ fn orchestration_show_and_collapse_starts_sent_messages_expanded() {
 fn orchestration_always_show_starts_sent_messages_expanded() {
     let state = default_collapsible_state_for_orchestration_action(
         &AIAgentActionType::SendMessageToAgent {
+            delegated_github_coauthor_user_uid: None,
             addresses: vec!["child-agent".to_string()],
             subject: "Status".to_string(),
             message: "Body".to_string(),

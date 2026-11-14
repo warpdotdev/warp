@@ -106,6 +106,7 @@ pub fn init(app: &mut AppContext) {
 /// [`OrchestrationEditState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunAgentsCardFields {
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub metadata: HashMap<String, String>,
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
     pub base_prompt: String,
@@ -141,6 +142,7 @@ impl RunAgentsEditState {
         Self {
             orchestration_config_state,
             card: RunAgentsCardFields {
+                delegated_github_coauthor_user_uid: req.delegated_github_coauthor_user_uid.clone(),
                 metadata: req.metadata.clone(),
                 agent_run_configs: req.agent_run_configs.clone(),
                 base_prompt: req.base_prompt.clone(),
@@ -153,6 +155,10 @@ impl RunAgentsEditState {
 
     pub fn to_request(&self) -> RunAgentsRequest {
         RunAgentsRequest {
+            delegated_github_coauthor_user_uid: self
+                .card
+                .delegated_github_coauthor_user_uid
+                .clone(),
             metadata: self.card.metadata.clone(),
             summary: self.card.summary.clone(),
             base_prompt: self.card.base_prompt.clone(),

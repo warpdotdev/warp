@@ -44,6 +44,7 @@ fn make_request_with_skills(
     skills: Vec<SkillReference>,
 ) -> RunAgentsRequest {
     RunAgentsRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         summary: "summary".to_string(),
         base_prompt: "base".to_string(),
@@ -76,6 +77,7 @@ fn make_config_state_with_orch_fields(
             &request.execution_mode,
         ),
         card: RunAgentsCardFields {
+            delegated_github_coauthor_user_uid: request.delegated_github_coauthor_user_uid,
             metadata: request.metadata,
             agent_run_configs: request.agent_run_configs,
             base_prompt: request.base_prompt,
@@ -338,6 +340,7 @@ fn to_request_round_trips_request_fields() {
         ],
     );
     req.plan_id = "plan-1".to_string();
+    req.delegated_github_coauthor_user_uid = Some("delegating-human".to_string());
     let state = RunAgentsEditState::from_request(&req);
     let round_tripped = state.to_request();
     assert_eq!(round_tripped.summary, req.summary);
@@ -348,6 +351,10 @@ fn to_request_round_trips_request_fields() {
     assert_eq!(round_tripped.agent_run_configs, req.agent_run_configs);
     assert_eq!(round_tripped.skills, req.skills);
     assert_eq!(round_tripped.plan_id, req.plan_id);
+    assert_eq!(
+        round_tripped.delegated_github_coauthor_user_uid,
+        req.delegated_github_coauthor_user_uid
+    );
 }
 
 mod format_terminal_state_tests {

@@ -76,6 +76,7 @@ fn local_dispatch_fails_after_window_team_change() {
                 model.dispatch_create_agent(
                     parent_session_id,
                     StartAgentRequest {
+                        delegated_github_coauthor_user_uid: None,
                         metadata: Default::default(),
                         id: Default::default(),
                         name: "local-child".to_string(),
@@ -116,6 +117,7 @@ fn local_dispatch_fails_after_window_team_change() {
 }
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
     StartAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         id: Default::default(),
         name: "cloud-researcher".to_string(),
@@ -322,6 +324,7 @@ fn dispatch_and_recv(
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
+            None,
             RequestTeamScope::from_scope(
                 &UserWorkspaces::teamless_context_for_operation_for_test(),
             ),
@@ -464,6 +467,7 @@ fn local_oz_child_session_indexes_run_id_immediately() {
 
         let task_id: AmbientAgentTaskId = "44444444-4444-4444-4444-444444444444".parse().unwrap();
         let request = StartAgentRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             id: Default::default(),
             name: "verify-child".to_string(),
