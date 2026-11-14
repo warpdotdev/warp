@@ -30,7 +30,7 @@ use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
-use crate::server::server_api::team::TeamClient;
+use crate::server::server_api::team::{TeamClient, TemporaryInviteCode};
 use crate::server::server_api::workspace::{PurchaseAddonCreditsOutcome, WorkspaceClient};
 #[cfg(test)]
 use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
@@ -179,6 +179,19 @@ pub enum SoleTeamError {
 }
 
 impl UserWorkspaces {
+    pub fn generate_temporary_invite_code(
+        &self,
+        workspace_uid: WorkspaceUid,
+        team_uid: Option<ServerId>,
+    ) -> impl std::future::Future<Output = Result<TemporaryInviteCode>> + use<> {
+        let client = self.team_client.clone();
+        async move {
+            client
+                .generate_temporary_invite_code(workspace_uid, team_uid)
+                .await
+        }
+    }
+
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
         team_client: Arc<dyn TeamClient>,

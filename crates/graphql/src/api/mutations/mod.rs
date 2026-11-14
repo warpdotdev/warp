@@ -27,6 +27,7 @@ pub mod generate_code_embeddings;
 pub mod generate_commands;
 pub mod generate_dialogue;
 pub mod generate_metadata_for_command;
+pub mod generate_temporary_invite_code;
 pub mod give_up_notebook_edit_access;
 pub mod grab_notebook_edit_access;
 pub mod issue_task_identity_token;
