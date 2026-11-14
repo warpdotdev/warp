@@ -172,6 +172,7 @@ pub fn add_tui_history_test_models(
             environment_variable_names: HashSet::new(),
             aliases: HashMap::new(),
             abbreviations: HashMap::new(),
+            abbreviation_definitions: HashMap::new(),
             function_names: HashSet::new(),
             builtins: HashSet::new(),
             keywords: Vec::new(),

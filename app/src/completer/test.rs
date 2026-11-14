@@ -93,6 +93,27 @@ pub fn test_session_context_top_level_commands_includes_abbreviations() {
     });
 }
 
+/// An abbreviation with `--command` only expands as an argument, so it isn't a command.
+#[test]
+pub fn test_session_context_top_level_commands_excludes_command_specific_abbreviations() {
+    App::test((), |app| async move {
+        let session = Session::new(
+            SessionInfo::new_for_test().with_fish_abbreviations(
+                "abbr -a -- gl 'git log'
+abbr -a --position anywhere -- -C --color
+abbr -a --position anywhere --command git -- co checkout",
+            ),
+            Arc::new(TestCommandExecutor::default()),
+        );
+        let ctx = test_session_context(session, working_directory(), &app);
+
+        let top_level_commands = ctx.top_level_commands().collect_vec();
+        assert!(top_level_commands.contains(&"gl"));
+        assert!(top_level_commands.contains(&"-C"));
+        assert!(!top_level_commands.contains(&"co"));
+    });
+}
+
 #[test]
 pub fn test_session_context_top_level_commands_includes_keywords() {
     App::test((), |app| async move {
