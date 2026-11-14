@@ -12,6 +12,7 @@ use warp_cli::agent::OutputFormat;
 use warp_cli::harness_support::{
     FinishTaskArgs, HarnessSupportArgs, HarnessSupportCommand, NotifyUserArgs, ReportArtifactArgs,
     ReportArtifactCommand, ReportExternalReferenceArgs, ReportShutdownArgs, TaskStatus,
+    WaitForEventsArgs,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::TerminationMode;
@@ -46,6 +47,9 @@ pub fn run(
         }
         HarnessSupportCommand::NotifyUser(notify_args) => {
             notify_user(ctx, runner, notify_args, global_options.output_format)
+        }
+        HarnessSupportCommand::WaitForEvents(wait_args) => {
+            wait_for_events(runner, wait_args, global_options.output_format, ctx)
         }
         HarnessSupportCommand::FinishTask(finish_args) => {
             finish_task(ctx, runner, finish_args, global_options.output_format)
@@ -229,6 +233,40 @@ fn notify_user(
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
                 }
+            },
+        );
+    });
+
+    Ok(())
+}
+
+fn wait_for_events(
+    runner: ModelHandle<HarnessSupportRunner>,
+    args: WaitForEventsArgs,
+    output_format: OutputFormat,
+    ctx: &mut AppContext,
+) -> Result<()> {
+    runner.update(ctx, |_, ctx| {
+        let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+
+        ctx.spawn(
+            async move { client.wait_for_events(&args.run_ids).await },
+            move |_, result, ctx| match result {
+                Ok(response) => {
+                    match output_format {
+                        OutputFormat::Json | OutputFormat::Ndjson => {
+                            println!("{}", serde_json::to_string(&response).unwrap());
+                        }
+                        OutputFormat::Pretty | OutputFormat::Text => {
+                            println!(
+                                "Waiting on runs: {}",
+                                response.waiting_on_run_ids.join(", ")
+                            );
+                        }
+                    }
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(err) => super::report_fatal_error(err, ctx),
             },
         );
     });

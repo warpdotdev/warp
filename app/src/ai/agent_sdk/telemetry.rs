@@ -163,6 +163,8 @@ pub(super) enum CliTelemetryEvent {
     },
     /// Executing `warp harness-support notify-user`
     HarnessSupportNotifyUser,
+    /// Executing `warp harness-support wait-for-events`
+    HarnessSupportWaitForEvents,
     /// Executing `warp harness-support finish-task`
     HarnessSupportFinishTask {
         success: bool,
@@ -271,6 +273,7 @@ impl TelemetryEvent for CliTelemetryEvent {
                 Some(json!({ "artifact_type": artifact_type }))
             }
             CliTelemetryEvent::HarnessSupportNotifyUser => None,
+            CliTelemetryEvent::HarnessSupportWaitForEvents => None,
             CliTelemetryEvent::HarnessSupportFinishTask { success } => {
                 Some(json!({ "success": success }))
             }
@@ -400,6 +403,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::HarnessSupportNotifyUser => {
                 "CLI.Execute.HarnessSupport.NotifyUser"
+            }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "CLI.Execute.HarnessSupport.WaitForEvents"
             }
             CliTelemetryEventDiscriminants::HarnessSupportFinishTask => {
                 "CLI.Execute.HarnessSupport.FinishTask"
@@ -571,6 +577,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::HarnessSupportNotifyUser => {
                 "Sent a user notification via harness-support from the Warp CLI"
             }
+            CliTelemetryEventDiscriminants::HarnessSupportWaitForEvents => {
+                "Registered an event wait via harness-support from the Warp CLI"
+            }
             CliTelemetryEventDiscriminants::HarnessSupportFinishTask => {
                 "Reported task completion via harness-support from the Warp CLI"
             }
@@ -592,6 +601,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             Self::HarnessSupportPing
             | Self::HarnessSupportReportArtifact
             | Self::HarnessSupportNotifyUser
+            | Self::HarnessSupportWaitForEvents
             | Self::HarnessSupportFinishTask => EnablementState::Flag(FeatureFlag::AgentHarness),
             Self::ArtifactUpload | Self::ArtifactGet | Self::ArtifactDownload => {
                 EnablementState::Flag(FeatureFlag::ArtifactCommand)

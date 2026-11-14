@@ -23,7 +23,7 @@ const MARKETPLACE_NAME: &str = "claude-code-warp";
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.4.0";
 // Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.3";
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.4";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,
