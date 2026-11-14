@@ -145,6 +145,8 @@ pub enum SshLikeCommand {
     Gcloud,
     ElasticBeanstalk,
     DigitalOceanDroplet,
+    NamespaceDevbox,
+    NamespaceCloud,
 }
 
 /// Represents the different kinds of commands we recognize as starting an interactive SSH
@@ -174,6 +176,12 @@ lazy_static! {
 
     /// Matches "doctl compute ssh" for connecting to a digital ocean droplet.
     static ref DIGITAL_OCEAN_DROPLET_REGEX: Regex = Regex::new(r"^doctl\s+compute\s+ssh\s.+").expect("digital ocean SSH regex invalid");
+
+    /// Matches "devbox ssh" for connecting to a Namespace devbox.
+    static ref NAMESPACE_DEVBOX_REGEX: Regex = Regex::new(r"^devbox\s+ssh\s.+").expect("Namespace devbox SSH regex invalid");
+
+    // Namespace Cloud can prompt for an instance when no instance ID is provided.
+    static ref NAMESPACE_CLOUD_REGEX: Regex = Regex::new(r"^nsc\s+ssh(\s+.*)?$").expect("Namespace Cloud SSH regex invalid");
 }
 
 impl SshWarpifyCommand {
@@ -193,6 +201,10 @@ impl SshWarpifyCommand {
             Some(SshWarpifyCommand::SshLike(
                 SshLikeCommand::DigitalOceanDroplet,
             ))
+        } else if NAMESPACE_DEVBOX_REGEX.is_match(command) {
+            Some(SshWarpifyCommand::SshLike(SshLikeCommand::NamespaceDevbox))
+        } else if NAMESPACE_CLOUD_REGEX.is_match(command) {
+            Some(SshWarpifyCommand::SshLike(SshLikeCommand::NamespaceCloud))
         } else {
             None
         }
@@ -211,8 +223,58 @@ pub fn parse_interactive_ssh_command(command: &str) -> Option<InteractiveSshComm
         Some(SshWarpifyCommand::SshLike(SshLikeCommand::DigitalOceanDroplet)) => {
             Some(InteractiveSshCommand::default())
         }
+        Some(SshWarpifyCommand::SshLike(SshLikeCommand::NamespaceDevbox)) => {
+            Some(InteractiveSshCommand::default())
+        }
+        Some(SshWarpifyCommand::SshLike(SshLikeCommand::NamespaceCloud)) => {
+            parse_namespace_cloud_command(command)
+        }
         None => None,
     }
+}
+
+fn parse_namespace_cloud_command(command: &str) -> Option<InteractiveSshCommand> {
+    let command = command.strip_prefix("command ").unwrap_or(command);
+    let Ok(tokens) = shell_words::split(command) else {
+        return None;
+    };
+    if tokens.len() < 2 || tokens[0] != "nsc" || tokens[1] != "ssh" {
+        return None;
+    }
+
+    let mut positional_arg_seen = false;
+    let mut i = 2;
+    while i < tokens.len() {
+        match tokens[i].as_str() {
+            "-T" | "--disable-pty" => return None,
+            "-t" | "--force-pty" | "--oneshot" | "-A" | "--ssh_agent" => {}
+            "--container_name" | "--unique_tag" => {
+                i += 1;
+                if i >= tokens.len() || tokens[i].starts_with('-') {
+                    return None;
+                }
+            }
+            arg if arg.starts_with("--container_name=") || arg.starts_with("--unique_tag=") => {
+                if arg.ends_with('=') {
+                    return None;
+                }
+            }
+            arg if arg.starts_with("--disable-pty=") || arg.starts_with("-T=") => {
+                let (_, value) = arg.split_once('=')?;
+                match value {
+                    "1" | "t" | "T" | "TRUE" | "true" | "True" => return None,
+                    "0" | "f" | "F" | "FALSE" | "false" | "False" => {}
+                    _ => return None,
+                }
+            }
+            arg if arg.starts_with('-') => {}
+            _ if positional_arg_seen => return None,
+            _ => positional_arg_seen = true,
+        }
+        i += 1;
+    }
+
+    Some(InteractiveSshCommand::default())
 }
 
 fn parse_ssh_command_tokens(command: &str) -> Option<Vec<String>> {
