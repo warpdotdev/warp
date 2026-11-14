@@ -126,6 +126,46 @@ fn test_random() {
     }
 }
 
+/// Pushing items one at a time gives each item a leaf of its own once the tree is taller than a
+/// single leaf, where [`SumTree::extend`] fills a leaf before starting the next.
+///
+/// These tests build with `test-util`, which sets `TREE_BASE` to 2 — 4 item slots per leaf rather
+/// than the 12 of a release build — so the ratio observable here is about 4x (measured: 1494 nodes
+/// against 374, 3.995x). The waste factor is the slot count, so the same rule at production
+/// capacity is about 12x (measured: 1154 against 97, 11.897x). No test can observe that directly,
+/// because the feature that exposes this crate's internals is the same one that shrinks the leaf.
+#[test]
+fn extend_packs_leaves_that_per_item_push_leaves_nearly_empty() {
+    let items: Vec<u8> = (0..1000).map(|item| (item % 256) as u8).collect();
+
+    let mut pushed = SumTree::new();
+    for item in items.iter().copied() {
+        pushed.push(item);
+    }
+    let mut extended = SumTree::new();
+    extended.extend(items.iter().copied());
+
+    let pushed_stats = pushed.node_stats();
+    let extended_stats = extended.node_stats();
+    let slots_per_leaf = pushed_stats.slots_per_leaf as f64;
+
+    assert_eq!(pushed_stats.items, extended_stats.items);
+    assert!(
+        extended_stats.leaf_occupancy() > 0.99,
+        "extend should fill its leaves, got {extended_stats:?}"
+    );
+    assert!(
+        pushed_stats.leaf_occupancy() < 1.5 / slots_per_leaf,
+        "per-item push should leave roughly one item per leaf, got {pushed_stats:?}"
+    );
+    let node_ratio = pushed_stats.nodes() as f64 / extended_stats.nodes() as f64;
+    assert!(
+        node_ratio > slots_per_leaf - 1.,
+        "per-item push should cost close to {slots_per_leaf}x the nodes, got {node_ratio}: \
+         push {pushed_stats:?} vs extend {extended_stats:?}"
+    );
+}
+
 #[test]
 fn test_update_last() {
     let mut tree = SumTree::new();
