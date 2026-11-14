@@ -17,7 +17,6 @@ fn returns_manager_for_opencode() {
 
 #[test]
 fn returns_manager_for_codex() {
-    let _codex_guard = crate::features::FeatureFlag::CodexNotifications.override_enabled(true);
     let _hoa_guard = crate::features::FeatureFlag::HOANotifications.override_enabled(true);
     assert!(plugin_manager_for(CLIAgent::Codex).is_some());
 }
