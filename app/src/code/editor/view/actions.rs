@@ -1086,12 +1086,16 @@ impl TypedActionView for CodeEditorView {
             }
             NewCommentOnLine { line: line_info } => {
                 if FeatureFlag::InlineCodeReview.is_enabled() {
+                    // Built on demand: most files in a review never have a comment opened on them.
+                    self.ensure_active_comment_editor(ctx);
                     self.model.update(ctx, |model: &mut CodeEditorModel, ctx| {
                         model.open_comment_line(line_info, ctx);
                     });
                     ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
-                    ctx.focus(&self.active_comment_editor);
+                    if let Some(active_comment_editor) = &self.active_comment_editor {
+                        ctx.focus(active_comment_editor);
+                    }
                     ctx.notify();
                 }
             }
