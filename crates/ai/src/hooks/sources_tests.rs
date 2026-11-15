@@ -6,10 +6,7 @@ use crate::skills::parse_skills_dirs_value;
 #[test]
 fn hook_dirs_are_split_trimmed_and_resolved_like_skill_dirs() {
     let value = " /a/hooks , ,relative/hooks,~/shared ";
-    assert_eq!(
-        parse_hook_dirs_value(value),
-        parse_skills_dirs_value(value)
-    );
+    assert_eq!(parse_hook_dirs_value(value), parse_skills_dirs_value(value));
     assert!(parse_hook_dirs_value(" , ,").is_empty());
 
     assert_eq!(
@@ -102,8 +99,7 @@ mod loading {
 
         assert!(failures.is_empty(), "{failures:?}");
         assert!(registry.is_finalized());
-        let bindings =
-            registry.bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local);
+        let bindings = registry.bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local);
         assert_eq!(bindings.len(), 2);
         assert_eq!(
             bindings[0].binding.id.source.kind,
@@ -157,11 +153,8 @@ mod loading {
         let later = hook_dir(VALID);
         let mut registry = HookRegistry::new();
         assert!(
-            load_explicit_sources(
-                &[source(&initial, ExplicitSourceScope::Run)],
-                &mut registry
-            )
-            .is_empty()
+            load_explicit_sources(&[source(&initial, ExplicitSourceScope::Run)], &mut registry)
+                .is_empty()
         );
         let snapshot = registry.snapshot();
 

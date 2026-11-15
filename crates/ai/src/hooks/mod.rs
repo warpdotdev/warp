@@ -39,9 +39,9 @@ pub use registry::{ActiveBinding, HookRegistry, HookRegistryEvent, RegistrySnaps
 pub use runner::{
     HookInvocation, HookProcessOutcome, HookRunner, PathCapture, ProcessExit, UnavailableRunner,
 };
+#[cfg(feature = "local_fs")]
+pub use sources::load_explicit_sources;
 pub use sources::{
     ExplicitHookSource, ExplicitSourceScope, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value,
     resolve_hook_dirs, sources_for_hook_dirs,
 };
-#[cfg(feature = "local_fs")]
-pub use sources::load_explicit_sources;

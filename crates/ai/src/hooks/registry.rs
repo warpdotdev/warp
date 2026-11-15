@@ -218,7 +218,12 @@ impl HookRegistry {
             .bindings
             .iter()
             .map(|active| &active.binding.id.source)
-            .chain(previous.diagnostics.iter().map(|diagnostic| &diagnostic.source))
+            .chain(
+                previous
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| &diagnostic.source),
+            )
             .filter(|existing| existing.location == source.location)
             .map(|existing| existing.kind.priority())
             .min();

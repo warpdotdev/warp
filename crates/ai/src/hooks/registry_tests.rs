@@ -15,10 +15,7 @@ fn a_new_registry_has_an_empty_snapshot_at_revision_zero() {
     assert!(snapshot.diagnostics.is_empty());
     assert!(
         registry
-            .bindings_for(
-                HookBoundary::ToolPre,
-                HookExecutionHost::Local
-            )
+            .bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local)
             .is_empty()
     );
 }
@@ -73,10 +70,7 @@ fn bindings_for_filters_by_boundary() {
         vec!["run"]
     );
     assert_eq!(
-        names(registry.bindings_for(
-            HookBoundary::ToolResult,
-            HookExecutionHost::Local
-        )),
+        names(registry.bindings_for(HookBoundary::ToolResult, HookExecutionHost::Local)),
         vec!["run"]
     );
     assert!(

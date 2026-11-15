@@ -156,7 +156,6 @@ mod loader {
             message: message.into(),
         }
     }
-
 }
 
 #[cfg(test)]
