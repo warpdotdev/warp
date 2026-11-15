@@ -1,0 +1,35 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		100000000000000000000001 = {isa = PBXProject; buildConfigurationList = 100000000000000000000010; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = 100000000000000000000002; packageReferences = (100000000000000000000040); productRefGroup = 100000000000000000000004; targets = (100000000000000000000005); };
+		100000000000000000000002 = {isa = PBXGroup; children = (100000000000000000000003, 100000000000000000000004); sourceTree = "<group>"; };
+		100000000000000000000003 = {isa = PBXGroup; children = (100000000000000000000020, 100000000000000000000021, 100000000000000000000023, 100000000000000000000024); path = App; sourceTree = "<group>"; };
+		100000000000000000000004 = {isa = PBXGroup; children = (100000000000000000000022); name = Products; sourceTree = "<group>"; };
+		100000000000000000000005 = {isa = PBXNativeTarget; buildConfigurationList = 100000000000000000000013; buildPhases = (100000000000000000000030, 100000000000000000000031, 100000000000000000000032); buildRules = (); dependencies = (); name = WarpSwift; packageProductDependencies = (100000000000000000000041); productName = WarpSwift; productReference = 100000000000000000000022; productType = "com.apple.product-type.application"; };
+		100000000000000000000010 = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000011, 100000000000000000000012); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		100000000000000000000011 = {isa = XCBuildConfiguration; buildSettings = {MACOSX_DEPLOYMENT_TARGET = 26.0; SDKROOT = macosx; }; name = Debug; };
+		100000000000000000000012 = {isa = XCBuildConfiguration; buildSettings = {MACOSX_DEPLOYMENT_TARGET = 26.0; SDKROOT = macosx; }; name = Release; };
+		100000000000000000000013 = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000014, 100000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		100000000000000000000014 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "Warp Swift"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.warp.swift-local; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 6.0; }; name = Debug; };
+		100000000000000000000015 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "Warp Swift"; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.warp.swift-local; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; }; name = Release; };
+		100000000000000000000020 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WarpSwift.swift; sourceTree = "<group>"; };
+		100000000000000000000021 = {isa = PBXFileReference; lastKnownFileType = folder; path = Shell; sourceTree = "<group>"; };
+		100000000000000000000022 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = WarpSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000000000000000000023 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandHistory.swift; sourceTree = "<group>"; };
+		100000000000000000000024 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandRecall.swift; sourceTree = "<group>"; };
+		100000000000000000000030 = {isa = PBXSourcesBuildPhase; files = (100000000000000000000033, 100000000000000000000036, 100000000000000000000037); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000031 = {isa = PBXFrameworksBuildPhase; files = (100000000000000000000035); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000032 = {isa = PBXResourcesBuildPhase; files = (100000000000000000000034); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000033 = {isa = PBXBuildFile; fileRef = 100000000000000000000020; };
+		100000000000000000000034 = {isa = PBXBuildFile; fileRef = 100000000000000000000021; };
+		100000000000000000000035 = {isa = PBXBuildFile; productRef = 100000000000000000000041; };
+		100000000000000000000036 = {isa = PBXBuildFile; fileRef = 100000000000000000000023; };
+		100000000000000000000037 = {isa = PBXBuildFile; fileRef = 100000000000000000000024; };
+		100000000000000000000040 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/migueldeicaza/SwiftTerm"; requirement = {kind = exactVersion; version = 1.99.3; }; };
+		100000000000000000000041 = {isa = XCSwiftPackageProductDependency; package = 100000000000000000000040; productName = SwiftTerm; };
+	};
+	rootObject = 100000000000000000000001;
+}
