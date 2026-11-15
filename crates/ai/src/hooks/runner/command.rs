@@ -67,7 +67,6 @@ pub struct CommandHookRunner {
 struct HostShell {
     program: OsString,
     command_args: &'static [&'static str],
-    command_prefix: &'static str,
     command_suffix: &'static str,
 }
 
@@ -87,7 +86,6 @@ impl HostShell {
                     "Bypass",
                     "-Command",
                 ],
-                command_prefix: "$input | ",
                 command_suffix: "\n\
                     $__warp_hook_succeeded = $?\n\
                     if (-not $__warp_hook_succeeded) {\n\
@@ -101,7 +99,6 @@ impl HostShell {
             Self {
                 program: OsString::from("/bin/sh"),
                 command_args: &["-c"],
-                command_prefix: "",
                 command_suffix: "",
             }
         }
@@ -110,10 +107,9 @@ impl HostShell {
     /// The shell invocation for `script`.
     fn invoke(&self, script: &str) -> Command {
         let mut command = Command::new_in_job(&self.program);
-        command.args(self.command_args).arg(format!(
-            "{}{script}{}",
-            self.command_prefix, self.command_suffix
-        ));
+        command
+            .args(self.command_args)
+            .arg(format!("{script}{}", self.command_suffix));
         command
     }
 }

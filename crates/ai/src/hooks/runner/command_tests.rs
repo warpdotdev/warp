@@ -858,8 +858,8 @@ rm -f "$PWD/running.$$""#,
 mod windows {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::Instant;
 
+    use instant::Instant;
     use tempfile::TempDir;
 
     use super::*;
@@ -925,11 +925,11 @@ mod windows {
     }
 
     #[test]
-    fn a_powershell_hook_receives_the_payload_through_input() {
+    fn a_powershell_hook_receives_the_payload_through_stdin() {
         let dir = TempDir::new().expect("tempdir");
         fs::write(
             dir.path().join("hook.ps1"),
-            "[Console]::Out.Write(@($input)[0])\nexit 0\n",
+            "[Console]::Out.Write([Console]::In.ReadToEnd())\nexit 0\n",
         )
         .expect("write hook");
 
