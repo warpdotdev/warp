@@ -102,11 +102,8 @@ mod loading {
 
         assert!(failures.is_empty(), "{failures:?}");
         assert!(registry.is_finalized());
-        let bindings = registry.bindings_for(
-            HookBoundary::ToolPre,
-            Some(Path::new("/anywhere")),
-            HookExecutionHost::Local,
-        );
+        let bindings =
+            registry.bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local);
         assert_eq!(bindings.len(), 2);
         assert_eq!(
             bindings[0].binding.id.source.kind,

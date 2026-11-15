@@ -1,7 +1,7 @@
 //! Agent hooks: user-configured scripts that run at fixed points in the agent loop. This module
-//! holds the canonical model, the format adapters, the registry of active bindings, the trust and
-//! permission policies, and the dispatcher. The interception points that fire boundaries live in
-//! the application crate.
+//! holds the canonical model, the format adapters, the registry of active bindings, the permission
+//! policy, and the dispatcher. The interception points that fire boundaries live in the
+//! application crate.
 
 pub mod adapters;
 pub mod dispatch;
@@ -15,7 +15,6 @@ pub mod runner;
 pub mod sources;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
-pub mod trust;
 
 pub use adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookFormatAdapter, ParsedHookConfig,
@@ -36,9 +35,7 @@ pub use permission::{
     DEFAULT_DENY_REASON, DenyCause, HookPermissionPolicy, PermissionDecision, PermissionFloors,
     REWRITE_UNSUPPORTED_DENY_REASON, RunFacts, WarpPermissionResult,
 };
-pub use registry::{
-    ActiveBinding, BindingScope, HookRegistry, HookRegistryEvent, RegistrySnapshot,
-};
+pub use registry::{ActiveBinding, HookRegistry, HookRegistryEvent, RegistrySnapshot};
 pub use runner::{
     HookInvocation, HookProcessOutcome, HookRunner, PathCapture, ProcessExit, UnavailableRunner,
 };
@@ -48,4 +45,3 @@ pub use sources::{
 };
 #[cfg(feature = "local_fs")]
 pub use sources::load_explicit_sources;
-pub use trust::{CommandExecutionPosture, DenyAllTrustPolicy, TrustDecision, TrustPolicy};

@@ -19,22 +19,7 @@ use crate::hooks::model::{
     HookSourceId, HookSourceKind, HookSourceLocation, HookSurface, MalformedOutputPolicy,
     MatcherTarget, PermissionFacts,
 };
-use crate::hooks::registry::{ActiveBinding, BindingScope};
-use crate::hooks::trust::{CommandExecutionPosture, TrustDecision, TrustPolicy};
-
-/// A trust policy that returns the same decision for every source.
-pub struct StaticTrust(pub TrustDecision);
-
-impl TrustPolicy for StaticTrust {
-    fn may_activate(
-        &self,
-        _source: &HookSourceId,
-        _surface: HookSurface,
-        _posture: CommandExecutionPosture,
-    ) -> TrustDecision {
-        self.0.clone()
-    }
-}
+use crate::hooks::registry::ActiveBinding;
 
 pub fn test_source_id(name: &str) -> HookSourceId {
     HookSourceId {
@@ -91,12 +76,10 @@ pub fn test_binding(
 pub fn active_binding(
     binding: DeclaredBinding,
     adapter: Arc<dyn HookFormatAdapter>,
-    scope: BindingScope,
 ) -> ActiveBinding {
     ActiveBinding {
         binding,
         adapter,
-        scope,
         host: HookExecutionHost::Local,
         working_directory: PathBuf::from("/"),
     }

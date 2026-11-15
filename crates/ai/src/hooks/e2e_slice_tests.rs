@@ -301,7 +301,7 @@ fn loading_the_same_file_again_replaces_its_bindings() {
     harness
         .registry
         .install_explicit_source(&path, HookFormat::Cursor, HookSourceKind::RunDelivered)
-        .expect("reloads");
+        .expect("replaces before finalization");
     let snapshot = harness.registry.snapshot();
     assert_eq!(snapshot.revision, 2);
     assert_eq!(snapshot.bindings.len(), 2);

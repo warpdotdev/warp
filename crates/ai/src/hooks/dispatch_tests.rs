@@ -9,7 +9,6 @@ use super::*;
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::model::{HookBoundary, HookPayload, HookSourceKind, HookVerdict};
 use crate::hooks::notices::HookNoticeKind;
-use crate::hooks::registry::BindingScope;
 use crate::hooks::test_util::{
     RecordingAdapter, RecordingMessenger, ScriptedRunner, active_binding, test_binding,
     test_envelope, test_source_id, test_source_id_of_kind,
@@ -77,11 +76,7 @@ fn bindings_that_do_not_match_are_skipped() {
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("Read"));
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
-        snapshot(vec![active_binding(
-            binding,
-            h.adapter.clone(),
-            BindingScope::Everywhere,
-        )]),
+        snapshot(vec![active_binding(binding, h.adapter.clone())]),
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
@@ -98,11 +93,7 @@ fn one_deny_binding_denies_with_its_reason() {
     );
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
-        snapshot(vec![active_binding(
-            binding.clone(),
-            h.adapter.clone(),
-            BindingScope::Everywhere,
-        )]),
+        snapshot(vec![active_binding(binding.clone(), h.adapter.clone())]),
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
@@ -139,8 +130,8 @@ fn one_deny_binding_denies_with_its_reason() {
 #[test]
 fn two_bindings_run_in_priority_order_and_reduce() {
     let h = harness();
-    let project = test_binding(
-        test_source_id_of_kind("project", HookSourceKind::ProjectCursorFile),
+    let run = test_binding(
+        test_source_id_of_kind("run", HookSourceKind::RunDelivered),
         HookBoundary::ToolPre,
         0,
         None,
@@ -152,10 +143,10 @@ fn two_bindings_run_in_priority_order_and_reduce() {
         None,
     );
     h.runner.script(
-        project.id.clone(),
+        run.id.clone(),
         ScriptedRunner::exit_with(
             0,
-            r#"{"verdict":"allow","notices":["from project"],"continuation":"project"}"#,
+            r#"{"verdict":"allow","notices":["from run"],"continuation":"run"}"#,
         ),
     );
     h.runner.script(
@@ -168,8 +159,8 @@ fn two_bindings_run_in_priority_order_and_reduce() {
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
         snapshot(vec![
-            active_binding(project.clone(), h.adapter.clone(), BindingScope::Everywhere),
-            active_binding(factory.clone(), h.adapter.clone(), BindingScope::Everywhere),
+            active_binding(run.clone(), h.adapter.clone()),
+            active_binding(factory.clone(), h.adapter.clone()),
         ]),
         Arc::new(AtomicBool::new(false)),
     ));
@@ -178,7 +169,7 @@ fn two_bindings_run_in_priority_order_and_reduce() {
     assert_eq!(outcome.effects.verdict_binding, Some(factory.id.clone()));
     assert_eq!(
         outcome.effects.user_notices,
-        vec!["from factory", "from project"]
+        vec!["from factory", "from run"]
     );
     assert_eq!(
         outcome
@@ -194,7 +185,7 @@ fn two_bindings_run_in_priority_order_and_reduce() {
         .iter()
         .map(|record| record.binding.clone())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec![factory.id, project.id]);
+    assert_eq!(order, vec![factory.id, run.id]);
 
     let notices = h.messenger.notices();
     assert_eq!(notices.len(), 2);
@@ -210,11 +201,7 @@ fn a_cancel_flag_set_before_dispatch_runs_nothing() {
     let cancel = Arc::new(AtomicBool::new(true));
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
-        snapshot(vec![active_binding(
-            binding,
-            h.adapter.clone(),
-            BindingScope::Everywhere,
-        )]),
+        snapshot(vec![active_binding(binding, h.adapter.clone())]),
         cancel.clone(),
     ));
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
@@ -233,11 +220,7 @@ fn defer_is_reported_to_the_messenger_as_unsupported() {
     );
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
-        snapshot(vec![active_binding(
-            binding,
-            h.adapter.clone(),
-            BindingScope::Everywhere,
-        )]),
+        snapshot(vec![active_binding(binding, h.adapter.clone())]),
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);

@@ -165,13 +165,7 @@ impl TestHooks {
         let adapter: Arc<dyn ai::hooks::HookFormatAdapter> = self.adapter.clone();
         let active = bindings
             .into_iter()
-            .map(|binding| {
-                ai::hooks::test_util::active_binding(
-                    binding,
-                    adapter.clone(),
-                    ai::hooks::BindingScope::Everywhere,
-                )
-            })
+            .map(|binding| ai::hooks::test_util::active_binding(binding, adapter.clone()))
             .collect::<Vec<ActiveBinding>>();
         HookRegistry::handle(ctx).update(ctx, |registry, _| {
             registry.install_snapshot_for_test(active, Vec::<HookDiagnostic>::new());

@@ -13,21 +13,11 @@ use crate::hooks::model::{
 };
 use crate::hooks::model::{HookBoundary, HookDiagnostic, HookExecutionHost};
 
-/// Which working directories a binding applies to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindingScope {
-    /// Only operations whose working directory is inside this root.
-    Root(PathBuf),
-    /// Every operation on the host, regardless of working directory.
-    Everywhere,
-}
-
-/// A binding whose source passed the trust policy and is ready to run.
+/// A binding from a configured source that is ready to run.
 #[derive(Clone)]
 pub struct ActiveBinding {
     pub binding: DeclaredBinding,
     pub adapter: Arc<dyn HookFormatAdapter>,
-    pub scope: BindingScope,
     pub host: HookExecutionHost,
     /// The directory the hook command runs in and resolves relative paths against.
     pub working_directory: PathBuf,
@@ -37,15 +27,13 @@ impl std::fmt::Debug for ActiveBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActiveBinding")
             .field("binding", &self.binding)
-            .field("scope", &self.scope)
             .field("host", &self.host)
             .field("working_directory", &self.working_directory)
             .finish_non_exhaustive()
     }
 }
 
-/// An immutable view of the active hook set. Dispatch pins one snapshot for the whole of a
-/// boundary firing so a reload in the middle cannot change which hooks ran.
+/// An immutable view of the active hook set. Dispatch uses one snapshot for a boundary firing.
 #[derive(Debug, Default)]
 pub struct RegistrySnapshot {
     pub revision: u64,
@@ -58,29 +46,24 @@ impl RegistrySnapshot {
         self.bindings.is_empty()
     }
 
-    /// Bindings for `boundary` that apply at `cwd` on `host`, sorted by source priority with the
-    /// source's own order preserved within a priority.
+    /// Bindings for `boundary` on `host`, sorted by source priority with the source's own order
+    /// preserved within a priority.
     pub fn bindings_for(
         &self,
         boundary: HookBoundary,
-        cwd: Option<&Path>,
         host: HookExecutionHost,
     ) -> Vec<ActiveBinding> {
         let mut matching = self
             .bindings
             .iter()
             .filter(|active| active.binding.boundary == boundary && active.host == host)
-            .filter(|active| match &active.scope {
-                BindingScope::Everywhere => true,
-                BindingScope::Root(root) => cwd.is_some_and(|cwd| cwd.starts_with(root)),
-            })
             .cloned()
             .collect::<Vec<_>>();
         matching.sort_by_key(|active| active.binding.id.source.kind.priority());
         matching
     }
 
-    /// Whether any binding exists for `boundary` at all, before scope and matcher filtering.
+    /// Whether any binding exists for `boundary` at all, before matcher filtering.
     pub fn has_bindings_for(&self, boundary: HookBoundary) -> bool {
         self.bindings
             .iter()
@@ -136,10 +119,9 @@ impl HookRegistry {
     pub fn bindings_for(
         &self,
         boundary: HookBoundary,
-        cwd: Option<&Path>,
         host: HookExecutionHost,
     ) -> Vec<ActiveBinding> {
-        self.snapshot.bindings_for(boundary, cwd, host)
+        self.snapshot.bindings_for(boundary, host)
     }
 
     /// Replaces the active set with the given bindings and bumps the revision.
@@ -287,7 +269,6 @@ fn activate(
         bindings.push(ActiveBinding {
             binding,
             adapter: adapter.clone(),
-            scope: BindingScope::Everywhere,
             host: HookExecutionHost::Local,
             working_directory: working_directory.to_path_buf(),
         });

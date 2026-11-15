@@ -79,11 +79,7 @@ impl HookDispatcher {
     ) -> BoxFuture<'static, DispatchOutcome> {
         let registry_revision = pinned.revision;
         let matching = pinned
-            .bindings_for(
-                envelope.boundary(),
-                envelope.cwd.as_deref(),
-                envelope.execution_host,
-            )
+            .bindings_for(envelope.boundary(), envelope.execution_host)
             .into_iter()
             .filter(|active| active.adapter.matches(&active.binding, &envelope))
             .collect::<Vec<_>>();

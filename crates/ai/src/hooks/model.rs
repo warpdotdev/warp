@@ -155,7 +155,6 @@ impl Display for HookBoundary {
 /// Where a hook configuration came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookSourceKind {
-    ProjectCursorFile,
     RunDelivered,
     FactoryAgent,
     FactoryWide,
@@ -168,7 +167,6 @@ impl HookSourceKind {
             Self::FactoryAgent => 0,
             Self::FactoryWide => 1,
             Self::RunDelivered => 2,
-            Self::ProjectCursorFile => 3,
         }
     }
 }
@@ -176,7 +174,7 @@ impl HookSourceKind {
 /// Where a resolved hook source lives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookSourceLocation {
-    /// Canonical file path for a file discovered on disk.
+    /// Canonical file path for a configured source on disk.
     CanonicalPath(PathBuf),
     /// Name an explicit source was delivered under.
     Named(String),

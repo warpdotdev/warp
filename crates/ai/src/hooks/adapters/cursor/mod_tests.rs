@@ -12,7 +12,7 @@ use crate::hooks::adapters::cursor::test_support::{
 };
 use crate::hooks::dispatch::HookDispatcher;
 use crate::hooks::model::{HookBoundary, HookVerdict, validate_capabilities};
-use crate::hooks::registry::{BindingScope, RegistrySnapshot};
+use crate::hooks::registry::RegistrySnapshot;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::test_util::{
     RecordingMessenger, ScriptedRunner, active_binding, test_binding, test_source_id,
@@ -153,11 +153,7 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
     let dispatcher = HookDispatcher::new(runner, messenger.clone());
     let snapshot = Arc::new(RegistrySnapshot {
         revision: 1,
-        bindings: vec![active_binding(
-            binding.clone(),
-            adapter.clone(),
-            BindingScope::Everywhere,
-        )],
+        bindings: vec![active_binding(binding.clone(), adapter.clone())],
         diagnostics: Vec::new(),
     });
     let envelope = fixture_envelope(tool_result(

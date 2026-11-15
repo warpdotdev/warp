@@ -337,7 +337,6 @@ fn runs_and_hidden_children_are_headless_and_interactive_surfaces_are_not() {
 #[test]
 fn source_kind_priority_follows_the_documented_order() {
     let mut kinds = [
-        HookSourceKind::ProjectCursorFile,
         HookSourceKind::RunDelivered,
         HookSourceKind::FactoryWide,
         HookSourceKind::FactoryAgent,
@@ -349,7 +348,6 @@ fn source_kind_priority_follows_the_documented_order() {
             HookSourceKind::FactoryAgent,
             HookSourceKind::FactoryWide,
             HookSourceKind::RunDelivered,
-            HookSourceKind::ProjectCursorFile,
         ]
     );
     let factory = test_source_id_of_kind("agent", HookSourceKind::FactoryAgent);
