@@ -187,6 +187,26 @@ fn the_command_string_is_run_by_the_shell_as_written() {
 }
 
 #[test]
+fn an_executable_hook_uses_its_shebang_interpreter() {
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("hook.sh");
+    fs::write(
+        &path,
+        "#!/bin/bash\nif shopt -qo posix; then exit 3; fi\nprintf 'bash shebang'\n",
+    )
+    .expect("write script");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let outcome = run(
+        &runner(),
+        invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10)),
+    );
+
+    assert_eq!(outcome.exit, ProcessExit::Code(0));
+    assert_eq!(outcome.stdout, b"bash shebang");
+}
+
+#[test]
 fn a_timeout_kills_the_whole_process_group() {
     let dir = TempDir::new().expect("tempdir");
     write_script(

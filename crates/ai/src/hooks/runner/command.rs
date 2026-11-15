@@ -35,9 +35,9 @@ const PIPE_GRACE: Duration = Duration::from_secs(1);
 /// How long to wait for a killed process to be collected before moving on without it.
 const REAP_GRACE: Duration = Duration::from_secs(2);
 
-/// Runs hook commands through the host shell: `sh -c` on Unix, `cmd.exe /C` on Windows. The
-/// command string is passed to the shell exactly as written in the configuration; payload bytes
-/// only ever travel over stdin.
+/// Runs hook commands through the host shell: `sh -c` on Unix and PowerShell on Windows. The
+/// command string is passed to the shell as written in the configuration; payload bytes only ever
+/// travel over stdin.
 pub struct CommandHookRunner {
     path_capture: PathCapture,
     shell: HostShell,
@@ -46,7 +46,8 @@ pub struct CommandHookRunner {
 #[derive(Clone)]
 struct HostShell {
     program: OsString,
-    command_flag: &'static str,
+    command_args: &'static [&'static str],
+    command_suffix: &'static str,
 }
 
 impl HostShell {
@@ -54,15 +55,31 @@ impl HostShell {
         #[cfg(windows)]
         {
             Self {
-                program: OsString::from("cmd.exe"),
-                command_flag: "/C",
+                program: warp_util::path::windows::any_powershell_path()
+                    .map(|path| path.as_os_str().to_owned())
+                    .unwrap_or_else(|| OsString::from("powershell.exe")),
+                command_args: &[
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                ],
+                command_suffix: "\n\
+                    $__warp_hook_succeeded = $?\n\
+                    if (-not $__warp_hook_succeeded) {\n\
+                        if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }\n\
+                        exit 1\n\
+                    }",
             }
         }
         #[cfg(not(windows))]
         {
             Self {
                 program: OsString::from("/bin/sh"),
-                command_flag: "-c",
+                command_args: &["-c"],
+                command_suffix: "",
             }
         }
     }
@@ -151,9 +168,10 @@ fn build_command(
     invocation: &HookInvocation,
 ) -> Command {
     let mut command = shell.command();
+    let command_text = format!("{}{}", invocation.command, shell.command_suffix);
     command
-        .arg(shell.command_flag)
-        .arg(&invocation.command)
+        .args(shell.command_args)
+        .arg(command_text)
         .current_dir(&invocation.cwd)
         .envs(invocation.env.iter().map(|(key, value)| (key, value)));
     if let Some(path) = login_path {
@@ -376,6 +394,10 @@ fn stderr_tail(stderr: &[u8]) -> String {
     String::from_utf8_lossy(&stderr[start..]).into_owned()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "command_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "command_windows_tests.rs"]
+mod windows_tests;
