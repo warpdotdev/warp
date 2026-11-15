@@ -95,6 +95,7 @@ impl HookRuntime {
     }
 
     /// Replaces the runner. Dispatches already in flight keep the runner they started with.
+    #[cfg(any(feature = "local_tty", test))]
     pub fn set_runner(&mut self, runner: Arc<dyn HookRunner>) {
         self.dispatcher = Arc::new(HookDispatcher::new(runner, self.messenger.clone()));
     }
