@@ -315,7 +315,7 @@ mod subprocess {
     use crate::hooks::test_util::{test_binding_id, test_source_id};
 
     #[test]
-    fn a_hook_sees_the_policy_applied_to_the_real_process_environment() {
+    fn a_hook_sees_the_policy_applied_to_the_initial_process_environment() {
         // SAFETY: nextest runs each test in its own process and this test spawns no other
         // threads before these calls, so nothing reads the environment concurrently.
         unsafe {
@@ -333,8 +333,17 @@ mod subprocess {
         fs::write(&script, "#!/bin/sh\n/usr/bin/env\n").expect("write script");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
 
-        let runner = CommandHookRunner::new(Arc::new(|| Some(OsString::from("/captured/bin"))))
-            .with_home(Some(PathBuf::from("/custom/home")));
+        let runner = CommandHookRunner::new(
+            Arc::new(|| Some(OsString::from("/captured/bin"))),
+            std::env::vars_os().collect(),
+        )
+        .with_home(Some(PathBuf::from("/custom/home")));
+        // SAFETY: nextest runs this test in its own process and the runner has not spawned any
+        // threads, so nothing reads the environment concurrently.
+        unsafe {
+            std::env::set_var("HOOK_ENV_TEST_KEEP", "changed-after-snapshot");
+            std::env::set_var("HOOK_ENV_TEST_LATE", "must-not-be-inherited");
+        }
         let session_env = session(&[("FROM_SESSION", "yes"), ("WARP_PROJECT_DIR", "/hijacked")]);
         let outcome = block_on(runner.run(HookInvocation {
             binding: test_binding_id(test_source_id("hooks.json"), "sessionStart", 0),
@@ -364,6 +373,7 @@ mod subprocess {
             "not inherited from an outer run"
         );
         assert_eq!(value_of(&seen, "HOOK_ENV_TEST_KEEP"), Some("inherited"));
+        assert_eq!(value_of(&seen, "HOOK_ENV_TEST_LATE"), None);
         assert_eq!(value_of(&seen, "PATH"), Some("/captured/bin"));
         assert_eq!(value_of(&seen, "HOME"), Some("/custom/home"));
         assert_eq!(value_of(&seen, "WARP_HOOK_PROTOCOL_VERSION"), Some("1"));

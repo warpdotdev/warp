@@ -9,7 +9,7 @@ use super::*;
 use crate::hooks::test_util::{test_binding_id, test_source_id};
 
 fn runner() -> CommandHookRunner {
-    CommandHookRunner::new(Arc::new(|| None))
+    CommandHookRunner::new(Arc::new(|| None), std::env::vars_os().collect())
 }
 
 fn invocation(cwd: &Path, command: &str, stdin: &[u8], timeout: Duration) -> HookInvocation {
@@ -245,8 +245,11 @@ mod unix {
             "hook.sh",
             r#"printf '%s\n%s\n%s\n%s\n%s\n' "$PWD" "$PATH" "$HOME" "$WARP_HOOK_PROTOCOL_VERSION" "$HOOK_TEST_VAR""#,
         );
-        let runner = CommandHookRunner::new(Arc::new(|| Some(OsString::from("/custom/bin"))))
-            .with_home(Some(PathBuf::from("/custom/home")));
+        let runner = CommandHookRunner::new(
+            Arc::new(|| Some(OsString::from("/custom/bin"))),
+            std::env::vars_os().collect(),
+        )
+        .with_home(Some(PathBuf::from("/custom/home")));
         let mut invocation = invocation(dir.path(), "./hook.sh", b"{}", Duration::from_secs(10));
         invocation.env = vec![
             (

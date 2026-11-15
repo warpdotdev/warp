@@ -58,6 +58,8 @@ mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
 mod pricing;
+#[cfg(feature = "local_tty")]
+mod process_environment;
 mod profiling;
 mod projects;
 mod prompt;
@@ -1016,6 +1018,8 @@ pub type TuiMountFn = Box<dyn FnOnce(&mut warpui::AppContext)>;
 /// in place of the GUI/CLI `launch()` path.
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
+    #[cfg(feature = "local_tty")]
+    let initial_process_environment = process_environment::InitialProcessEnvironment::capture();
 
     // ── Early initialization (pre-AppBuilder) ──────────────────────
     // These steps run before the platform event loop is started.
@@ -1355,6 +1359,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 ctx,
             )
         });
+        #[cfg(feature = "local_tty")]
+        ctx.add_singleton_model(move |_| initial_process_environment);
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 

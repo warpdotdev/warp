@@ -57,6 +57,7 @@ const COLLECT_WAIT: Duration = Duration::from_secs(2);
 /// Runs hook commands through the host shell (`/bin/sh -c` on Unix, PowerShell on Windows).
 pub struct CommandHookRunner {
     path_capture: PathCapture,
+    initial_environment: Vec<(OsString, OsString)>,
     home: Option<PathBuf>,
     shell: HostShell,
     permits: Arc<Semaphore>,
@@ -120,9 +121,13 @@ impl HostShell {
 }
 
 impl CommandHookRunner {
-    pub fn new(path_capture: PathCapture) -> Self {
+    pub fn new(
+        path_capture: PathCapture,
+        initial_environment: Vec<(OsString, OsString)>,
+    ) -> Self {
         Self {
             path_capture,
+            initial_environment,
             home: dirs::home_dir(),
             shell: HostShell::for_this_host(),
             permits: Arc::new(Semaphore::new(HOOK_MAX_CONCURRENT)),
@@ -146,7 +151,7 @@ impl CommandHookRunner {
 impl HookRunner for CommandHookRunner {
     fn run(&self, invocation: HookInvocation) -> BoxFuture<'static, HookProcessOutcome> {
         let runner_env = RunnerEnvironment {
-            variables: std::env::vars_os().collect(),
+            variables: self.initial_environment.clone(),
             login_path: (self.path_capture)(),
             home: self.home.clone(),
             protocol_version: HOOK_PROTOCOL_VERSION,

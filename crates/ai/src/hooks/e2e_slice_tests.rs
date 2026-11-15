@@ -68,7 +68,10 @@ impl Harness {
 
         let messenger = Arc::new(RecordingMessenger::new());
         let dispatcher = HookDispatcher::new(
-            Arc::new(CommandHookRunner::new(Arc::new(|| None))),
+            Arc::new(CommandHookRunner::new(
+                Arc::new(|| None),
+                std::env::vars_os().collect(),
+            )),
             messenger.clone(),
         );
         Self {
