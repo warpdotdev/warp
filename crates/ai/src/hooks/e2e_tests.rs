@@ -125,7 +125,7 @@ fn runner(home: &Path) -> CommandHookRunner {
         Arc::new(|| Some(OsString::from(HOOK_PATH))),
         std::env::vars_os().collect(),
     )
-        .with_home(Some(home.to_path_buf()))
+    .with_home(Some(home.to_path_buf()))
 }
 
 fn dispatcher(home: &Path) -> (HookDispatcher, Arc<RecordingMessenger>) {
