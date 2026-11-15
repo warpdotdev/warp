@@ -270,6 +270,7 @@ pub(super) fn tool_input(action: &AIAgentActionType, envelope: &HookEnvelope) ->
             addresses,
             subject,
             message,
+            delegated_github_coauthor_user_uid: _,
         } => json!({ "addresses": addresses, "subject": subject, "message": message }),
         AIAgentActionType::TransferShellCommandControlToUser { reason } => {
             json!({ "reason": reason })

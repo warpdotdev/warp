@@ -356,6 +356,7 @@ fn tool_input_describes_non_shell_actions() {
     );
 
     let agents = tool_pre(AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         summary: "Split the work".to_owned(),
         base_prompt: "Help".to_owned(),

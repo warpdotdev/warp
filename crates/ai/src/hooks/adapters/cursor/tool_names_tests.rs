@@ -68,6 +68,7 @@ fn tool_names_follow_cursors_vocabulary() {
         ),
         (
             AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+                delegated_github_coauthor_user_uid: None,
                 metadata: Default::default(),
                 summary: String::new(),
                 base_prompt: String::new(),
@@ -173,6 +174,7 @@ fn tool_names_follow_cursors_vocabulary() {
                 addresses: vec![],
                 subject: String::new(),
                 message: String::new(),
+                delegated_github_coauthor_user_uid: None,
             },
             "SendMessageToAgent",
         ),

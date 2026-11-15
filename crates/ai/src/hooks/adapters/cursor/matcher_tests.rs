@@ -118,6 +118,7 @@ fn pre_tool_use_matches_the_tool_name() {
         (
             "Task",
             AIAgentActionType::RunAgents(Box::new(RunAgentsRequest {
+                delegated_github_coauthor_user_uid: None,
                 metadata: Default::default(),
                 summary: String::new(),
                 base_prompt: String::new(),
