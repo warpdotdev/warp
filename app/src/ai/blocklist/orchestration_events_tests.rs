@@ -24,6 +24,9 @@ fn lifecycle_pending_event(
         api::LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
+        api::LifecycleEventType::Waiting => {
+            Some(api::agent_event::lifecycle_event::Detail::Waiting(()))
+        }
         api::LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
         }

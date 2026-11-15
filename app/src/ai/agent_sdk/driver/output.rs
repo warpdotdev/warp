@@ -77,6 +77,9 @@ pub mod text {
                         )
                     }
                 },
+                AIAgentActionResultType::DeniedByHook { reason } => {
+                    writeln!(w, "Denied by an agent hook: {reason}")
+                }
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
                         writeln!(w, "Command is still running...")
@@ -894,6 +897,9 @@ pub mod json {
                         })
                     }
                 },
+                AIAgentActionResultType::DeniedByHook { .. } => Some(JsonMessage::ToolError {
+                    error: Cow::Owned(result.to_string()),
+                }),
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
                         Some(JsonMessage::ToolResult(JsonToolResult::RunCommand(
