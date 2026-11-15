@@ -598,9 +598,7 @@ fn lifecycle_event_detail_from_type(
         LifecycleEventType::InProgress => {
             Some(api::agent_event::lifecycle_event::Detail::InProgress(()))
         }
-        LifecycleEventType::Waiting => {
-            Some(api::agent_event::lifecycle_event::Detail::Waiting(()))
-        }
+        LifecycleEventType::Waiting => Some(api::agent_event::lifecycle_event::Detail::Waiting(())),
         LifecycleEventType::Succeeded => {
             Some(api::agent_event::lifecycle_event::Detail::Succeeded(()))
         }
