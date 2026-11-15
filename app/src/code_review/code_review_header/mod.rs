@@ -127,7 +127,7 @@ impl CodeReviewHeader {
             ));
         }
 
-        if FeatureFlag::DiffSetAsContext.is_enabled() && !has_no_changes {
+        if !has_no_changes {
             if FeatureFlag::FileAndDiffSetComments.is_enabled() {
                 right_section_wide.add_child(self.render_header_dropdown_button(
                     &code_review_header_fields.header_dropdown_button,
@@ -208,7 +208,7 @@ impl CodeReviewHeader {
 
         let has_no_changes = state.to_diff_stats().has_no_changes();
 
-        if FeatureFlag::DiffSetAsContext.is_enabled() && !has_no_changes {
+        if !has_no_changes {
             if FeatureFlag::FileAndDiffSetComments.is_enabled() {
                 right_subsection_compact.add_child(self.render_header_dropdown_button(
                     &code_review_header_fields.header_dropdown_button,
