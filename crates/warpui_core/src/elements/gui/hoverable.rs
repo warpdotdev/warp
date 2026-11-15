@@ -62,6 +62,8 @@ pub struct Hoverable {
     child_max_z_index: Option<ZIndex>,
     //
     suppress_drag: bool,
+    /// See [`Self::with_hover_during_drag`].
+    hover_during_drag: bool,
     defer_events_to_children: bool,
 }
 
@@ -88,6 +90,15 @@ pub struct MouseState {
     /// any non-synthetic event should reset this state to false.
     /// Shared with the TUI `TuiHoverable`, which applies the same guard.
     pub(crate) last_event_is_synthetic_hover: bool,
+
+    /// Set while a left-mouse drag is in progress, only for a `Hoverable` that
+    /// opted into [`Hoverable::with_hover_during_drag`]. The window's
+    /// compensating synthetic `MouseMoved` replay (dispatched after a scene
+    /// rebuild) reuses the cursor position from before the drag started, since
+    /// that cache is deliberately not updated on drags; while this is set, such
+    /// a replay is ignored instead of reverting the hover just computed from
+    /// the real drag position.
+    dragging: bool,
 
     /// A timer that starts when the mouse begins hovering the element.
     ///
@@ -136,6 +147,12 @@ impl MouseState {
     /// This is not affected by any hover delays.
     pub fn is_mouse_over_element(&self) -> bool {
         self.is_mouse_over_element
+    }
+
+    /// True while a left-mouse drag is in progress, for a `Hoverable` that
+    /// opted into [`Hoverable::with_hover_during_drag`].
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
     }
 
     pub fn reset_hover_state(&mut self) {
@@ -231,6 +248,7 @@ impl Hoverable {
             disabled: false,
             child_max_z_index: None,
             suppress_drag: true,
+            hover_during_drag: false,
             defer_events_to_children: false,
         }
     }
@@ -384,6 +402,17 @@ impl Hoverable {
 
     pub fn with_propagate_drag(mut self) -> Self {
         self.suppress_drag = false;
+        self
+    }
+
+    /// Keeps hover state tracking the pointer during a left-mouse drag
+    /// (`Event::LeftMouseDragged`) instead of freezing at whatever it was
+    /// when the drag began. Off by default because most draggable content
+    /// (text selection, tab reordering, pane resizing) must not retarget
+    /// hover mid-drag; enable only where a press-and-hold should behave
+    /// like a hover.
+    pub fn with_hover_during_drag(mut self) -> Self {
+        self.hover_during_drag = true;
         self
     }
 
@@ -628,6 +657,15 @@ impl Element for Hoverable {
             self.state().last_event_is_synthetic_hover = false;
         }
 
+        // A drag ends (cleanly or otherwise) at the latest by the next press or
+        // release, so treat either as the signal to stop ignoring synthetic replays.
+        if matches!(
+            event.raw_event(),
+            Event::LeftMouseDown { .. } | Event::LeftMouseUp { .. }
+        ) {
+            self.state().dragging = false;
+        }
+
         // If there's a mouse-down event outside of the element,
         // there's nothing to do except reset the hover state
         // (because there might have been a hover delay in-progress).
@@ -746,11 +784,18 @@ impl Element for Hoverable {
                 is_synthetic,
                 ..
             } => {
-                if self.handle_mouse_moved(*position, *is_synthetic, ctx, app) {
+                if *is_synthetic && self.state().dragging {
+                    // See `MouseState::dragging`: ignore this replay rather than let
+                    // it revert the hover tracked from the real drag position.
+                } else if self.handle_mouse_moved(*position, *is_synthetic, ctx, app) {
                     return true;
                 }
             }
-            Event::LeftMouseDragged { .. } => {
+            Event::LeftMouseDragged { position, .. } => {
+                if self.hover_during_drag {
+                    self.state().dragging = true;
+                    self.handle_mouse_moved(*position, false, ctx, app);
+                }
                 if self.suppress_drag && self.state().is_clicked() {
                     return true;
                 }
