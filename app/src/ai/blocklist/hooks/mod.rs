@@ -14,18 +14,18 @@ pub(crate) mod test_utils;
 pub(crate) mod tool_result;
 pub(crate) mod turn;
 
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
     HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, RegistrySnapshot,
     RunMetadata,
 };
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -34,7 +34,7 @@ use self::stream::StreamObserverState;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::features::FeatureFlag;
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 
 /// Process-wide hook state shared by every conversation and surface.
@@ -101,7 +101,7 @@ impl HookRuntime {
 
     /// Installs the runner that spawns hook processes. Hooks get the login shell's PATH once it
     /// has been captured; until then they inherit this process's PATH.
-    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+    #[cfg(feature = "local_tty")]
     pub fn install_command_runner(ctx: &mut AppContext) {
         let login_shell_path: Arc<Mutex<Option<OsString>>> = Arc::default();
         let captured = login_shell_path.clone();
@@ -113,7 +113,7 @@ impl HookRuntime {
     }
 
     /// Starts the interactive shell capture, which is only worth its cost when hooks can run.
-    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+    #[cfg(feature = "local_tty")]
     fn capture_login_shell_path(
         login_shell_path: Arc<Mutex<Option<OsString>>>,
         ctx: &mut ModelContext<Self>,
