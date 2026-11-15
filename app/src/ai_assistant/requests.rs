@@ -173,6 +173,10 @@ impl Requests {
         team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let server_api = self.server_api.clone();
         let raw_request = request.trim();
         let request_for_api = raw_request.to_string();

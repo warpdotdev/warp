@@ -141,13 +141,13 @@ impl TuiGenericToolCallView {
                 self.action.action,
                 AIAgentActionType::SuggestNewConversation { .. }
             ) {
-                action_model
-                    .suggest_new_conversation_executor(ctx)
-                    .update(ctx, |executor, _| {
-                        executor.complete_suggest_new_conversation_action(
-                            NewConversationDecision::Accept,
-                        );
-                    });
+                let Some(executor) = action_model.suggest_new_conversation_executor(ctx) else {
+                    return;
+                };
+                executor.update(ctx, |executor, _| {
+                    executor
+                        .complete_suggest_new_conversation_action(NewConversationDecision::Accept);
+                });
             }
             action_model.execute_action(&action_id, self.conversation_id, ctx);
         });
@@ -161,13 +161,13 @@ impl TuiGenericToolCallView {
                 self.action.action,
                 AIAgentActionType::SuggestNewConversation { .. }
             ) {
-                action_model
-                    .suggest_new_conversation_executor(ctx)
-                    .update(ctx, |executor, _| {
-                        executor.complete_suggest_new_conversation_action(
-                            NewConversationDecision::Reject,
-                        );
-                    });
+                let Some(executor) = action_model.suggest_new_conversation_executor(ctx) else {
+                    return;
+                };
+                executor.update(ctx, |executor, _| {
+                    executor
+                        .complete_suggest_new_conversation_action(NewConversationDecision::Reject);
+                });
                 action_model.execute_action(&action_id, self.conversation_id, ctx);
             } else {
                 action_model.cancel_action_with_id(

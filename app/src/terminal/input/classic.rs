@@ -314,7 +314,7 @@ impl Input {
                         } else {
                             None
                         },
-                        Some(ChildView::new(&self.agent_status_view).finish()),
+                        Some(self.render_agent_status_bar()),
                         Some(input),
                     ]
                     .into_iter()
@@ -325,7 +325,7 @@ impl Input {
                 column.add_children(
                     [
                         Some(input),
-                        Some(ChildView::new(&self.agent_status_view).finish()),
+                        Some(self.render_agent_status_bar()),
                         if is_model_selector {
                             Some(ChildView::new(&self.inline_model_selector_view).finish())
                         } else if is_slash_commands {
@@ -371,7 +371,7 @@ impl Input {
                     column.add_child(ChildView::new(&self.inline_repos_menu_view).finish());
                 }
 
-                column.add_children([ChildView::new(&self.agent_status_view).finish(), input]);
+                column.add_children([self.render_agent_status_bar(), input]);
 
                 if is_model_selector && should_render_below {
                     column.add_child(ChildView::new(&self.inline_model_selector_view).finish());

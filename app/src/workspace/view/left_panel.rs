@@ -1331,7 +1331,13 @@ impl View for LeftPanelView {
 
         let active_view = self.active_view.get();
         let availability = self.active_view_availability(app);
-        let content_area: Box<dyn Element> = if availability != ToolPanelAvailability::Available {
+        let content_area: Box<dyn Element> = if AuthStateProvider::as_ref(app)
+            .get()
+            .is_local_session()
+            && availability != ToolPanelAvailability::Available
+        {
+            Shrinkable::new(1.0, Empty::new().finish()).finish()
+        } else if availability != ToolPanelAvailability::Available {
             Shrinkable::new(
                 1.0,
                 self.render_unavailable_panel(appearance, active_view, availability),

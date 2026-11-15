@@ -165,16 +165,6 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
     assert!(commands::HARNESS.is_active(cloud_mode_v2_context));
 }
 
-#[test]
-fn natural_language_detection_command_is_supported_in_tui() {
-    let command = &commands::NATURAL_LANGUAGE_DETECTION;
-    assert_eq!(command.kind, SlashCommandKind::NaturalLanguageDetection);
-    assert!(command.supports_surface(settings::SettingsMode::Tui));
-    // The toggle command runs immediately and is never reiterated as a prompt.
-    assert!(command.argument.is_none());
-    assert!(!slash_command_is_submitted_as_prompt(command));
-}
-
 #[cfg(all(feature = "local_fs", windows))]
 mod windows {
     use std::sync::Arc;

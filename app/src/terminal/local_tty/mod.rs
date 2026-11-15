@@ -16,7 +16,7 @@ pub use warp_terminal::local_tty::*;
 #[cfg(unix)]
 pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
     warp_terminal::local_tty::server::run_terminal_server(
-        args,
+        args.parent.pid,
         crate::features::init_feature_flags,
         crate::terminal::platform::init,
     );

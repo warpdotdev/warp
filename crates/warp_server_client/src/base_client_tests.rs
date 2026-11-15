@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 use std::pin::pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(not(feature = "local_terminal"))]
+use std::sync::Mutex;
 use std::task::Poll;
 
 use chrono::{Duration, Utc};
+#[cfg(not(feature = "local_terminal"))]
 use cloud_objects::ids::ServerId;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::{join, poll};
+#[cfg(not(feature = "local_terminal"))]
 use warp_core::channel::ChannelState;
 use warp_isolation_platform::{IsolationPlatformError, WorkloadToken};
 use warp_server_auth::auth_state::AuthState;
@@ -15,9 +19,13 @@ use warp_server_auth::auth_state::AuthState;
 use super::{
     AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_DURATION, AMBIENT_WORKLOAD_TOKEN_HEADER,
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER,
-    GraphqlRoutingConfig, HeaderOverride, PREWARMED_SANDBOX_ID_HEADER,
-    PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER, TEAM_UID_HEADER,
+    GraphqlRoutingConfig, HeaderOverride,
 };
+#[cfg(not(feature = "local_terminal"))]
+use super::{
+    PREWARMED_SANDBOX_ID_HEADER, PREWARMED_SANDBOX_WORKLOAD_TOKEN_HEADER, TEAM_UID_HEADER,
+};
+#[cfg(not(feature = "local_terminal"))]
 use crate::auth::{AuthClient, AuthClientImpl};
 
 #[derive(Default)]
@@ -36,6 +44,7 @@ impl http_client::iap::IapTokenProvider for StaticIapTokenProvider {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn graphql_identity_transitions_between_standby_and_run() {
     let client = client();
     client.set_ambient_workload_token_for_test("proof".to_string(), None);
@@ -343,6 +352,7 @@ fn cached_workload_token_does_not_wait_for_refresh() {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn authenticated_graphql_options_include_configured_and_ambient_headers() {
     let client = client();
     client.set_ambient_agent_task_id(Some("ambient-task".to_string()));
@@ -371,6 +381,7 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers() {
     let (event_sender, _) = async_channel::unbounded();
     let mut headers = HashMap::new();
@@ -436,6 +447,7 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
     );
 }
 
+#[cfg(not(feature = "local_terminal"))]
 fn api_key_client(path_prefix: &str) -> (AuthClientImpl, Arc<Mutex<Option<String>>>) {
     let observed_team_uid = Arc::new(Mutex::new(None));
     let observed_team_uid_for_request = observed_team_uid.clone();
@@ -472,6 +484,7 @@ fn api_key_client(path_prefix: &str) -> (AuthClientImpl, Arc<Mutex<Option<String
     )
 }
 
+#[cfg(not(feature = "local_terminal"))]
 fn mock_api_key_list(path_prefix: &str) -> mockito::Mock {
     let mut server = ChannelState::mock_server();
     server
@@ -488,6 +501,7 @@ fn mock_api_key_list(path_prefix: &str) -> mockito::Mock {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn list_api_keys_sends_selected_team_header() {
     let team_uid = "abcdefghijklmnopqrstuv";
     let request = mock_api_key_list("/api-key-selected");
@@ -502,6 +516,7 @@ fn list_api_keys_sends_selected_team_header() {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn list_api_keys_omits_team_header_when_unscoped() {
     let request = mock_api_key_list("/api-key-unscoped");
     let (auth_client, observed_team_uid) = api_key_client("/api-key-unscoped");

@@ -23,36 +23,28 @@ use crate::settings::AISettingsChangedEvent;
 
 /// A config write produced by an [`InputModePolicy`] decision. The fields
 /// mirror exactly what the previously-inlined GUI decision code passed to the
-/// model's internal setter: the config, the decision source recorded with it,
-/// and (for one agent-view entry path) a brief autodetection suppression so
-/// the applied config isn't immediately overridden by a keystroke-driven
-/// detection pass.
+/// model's internal setter: the config and the decision source recorded with it.
 pub struct PolicyConfigUpdate {
     /// The config to apply.
     pub config: InputConfig,
     /// The decision source recorded alongside the config.
     pub decision_source: Option<InputTypeAutoDetectionSource>,
-    /// Whether to briefly suppress autodetection before applying.
-    pub temporarily_disable_autodetection: bool,
 }
 
 impl PolicyConfigUpdate {
-    /// An update with no decision source and no autodetection suppression.
+    /// An update with no decision source.
     pub fn new(config: InputConfig) -> Self {
         Self {
             config,
             decision_source: None,
-            temporarily_disable_autodetection: false,
         }
     }
 
-    /// An update recorded with `decision_source`, without autodetection
-    /// suppression.
+    /// An update recorded with `decision_source`.
     pub fn with_source(config: InputConfig, decision_source: InputTypeAutoDetectionSource) -> Self {
         Self {
             config,
             decision_source: Some(decision_source),
-            temporarily_disable_autodetection: false,
         }
     }
 }
@@ -104,3 +96,43 @@ pub trait InputModePolicy: 'static {
 
 /// Shared handle to a view-supplied [`InputModePolicy`].
 pub type InputModePolicyHandle = Rc<dyn InputModePolicy>;
+
+#[cfg(feature = "local_terminal")]
+pub(crate) struct ShellInputModePolicy;
+
+#[cfg(feature = "local_terminal")]
+impl InputModePolicy for ShellInputModePolicy {
+    fn initial_config(&self, _: &AppContext) -> InputConfig {
+        InputConfig {
+            input_type: super::input_model::InputType::Shell,
+            is_locked: true,
+        }
+    }
+
+    fn allows_locked_ai_input(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn is_autodetection_enabled(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn config_on_conversation_selection_changed(
+        &self,
+        _: &ConversationSelectionEvent,
+        _: InputConfig,
+        _: &AppContext,
+    ) -> Option<PolicyConfigUpdate> {
+        None
+    }
+
+    fn config_on_ai_settings_changed(
+        &self,
+        _: &AISettingsChangedEvent,
+        _: InputConfig,
+        _: bool,
+        _: &AppContext,
+    ) -> Option<PolicyConfigUpdate> {
+        None
+    }
+}

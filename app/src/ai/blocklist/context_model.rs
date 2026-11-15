@@ -160,6 +160,7 @@ impl BlocklistAIContextModel {
         conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(
             model_event_dispatcher,
             move |me, _, event, ctx| match event {
@@ -199,6 +200,7 @@ impl BlocklistAIContextModel {
             },
         );
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedActiveAgentModeLLM = event {
                 let vision_supported = LLMPreferences::as_ref(ctx).vision_supported(
@@ -212,6 +214,7 @@ impl BlocklistAIContextModel {
             }
         });
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&conversation_selection, |me, _, event, ctx| match event {
             ConversationSelectionEvent::Changed => {
                 ctx.emit(BlocklistAIContextEvent::PendingQueryStateUpdated);

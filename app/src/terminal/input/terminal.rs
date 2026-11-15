@@ -200,7 +200,7 @@ impl Input {
                         } else {
                             None
                         },
-                        Some(ChildView::new(&self.agent_status_view).finish()),
+                        Some(self.render_agent_status_bar()),
                         Some(input),
                     ]
                     .into_iter()
@@ -211,7 +211,7 @@ impl Input {
                 column.add_children(
                     [
                         Some(input),
-                        Some(ChildView::new(&self.agent_status_view).finish()),
+                        Some(self.render_agent_status_bar()),
                         if hide_menu {
                             None
                         } else if is_slash_commands {
@@ -261,7 +261,7 @@ impl Input {
                     }
                 }
 
-                column.add_children([ChildView::new(&self.agent_status_view).finish(), input]);
+                column.add_children([self.render_agent_status_bar(), input]);
 
                 if !hide_menu {
                     if is_slash_commands && should_render_below {

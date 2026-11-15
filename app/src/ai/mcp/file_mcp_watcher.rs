@@ -167,6 +167,12 @@ pub struct FileMCPWatcher {
 }
 
 impl FileMCPWatcher {
+    #[cfg(feature = "local_terminal")]
+    pub fn new(_: &mut ModelContext<Self>) -> Self {
+        Self::new_inert()
+    }
+
+    #[cfg(not(feature = "local_terminal"))]
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (file_mcp_tx, file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
         let settings_mode = settings::settings_mode();
@@ -249,9 +255,8 @@ impl FileMCPWatcher {
         watcher
     }
 
-    /// A watcher with no filesystem subscriptions and no owed scans, so tests can feed
-    /// consumers a deterministic event sequence.
-    #[cfg(test)]
+    /// A watcher with no filesystem subscriptions or pending scans.
+    #[cfg(any(test, feature = "local_terminal"))]
     pub(crate) fn new_inert() -> Self {
         Self {
             file_mcp_tx: async_channel::unbounded().0,

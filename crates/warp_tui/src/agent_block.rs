@@ -935,7 +935,10 @@ impl TuiAIBlock {
             let action_id = action.id.clone();
             let request = request.clone();
             let card_action_model = action_model.clone();
-            let run_agents_executor = action_model.as_ref(ctx).run_agents_executor(ctx);
+            let Some(run_agents_executor) = action_model.as_ref(ctx).run_agents_executor(ctx)
+            else {
+                return false;
+            };
             let fallback_base_model_id = self.block_model.base_model(ctx).map(|id| id.to_string());
             let is_restored = self.is_restored_for_telemetry;
             let conversation_id = self.conversation_id;

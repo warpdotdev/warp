@@ -205,9 +205,9 @@ impl Input {
 
         if input_mode.is_pinned_to_top() {
             column.add_child(input);
-            column.add_child(ChildView::new(&self.agent_status_view).finish());
+            column.add_child(self.render_agent_status_bar());
         } else {
-            column.add_child(ChildView::new(&self.agent_status_view).finish());
+            column.add_child(self.render_agent_status_bar());
             column.add_child(input);
         }
 

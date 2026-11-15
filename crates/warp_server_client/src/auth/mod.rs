@@ -1,5 +1,12 @@
+#[cfg(feature = "local_terminal")]
+mod local_auth_client;
+#[cfg(feature = "local_terminal")]
+#[path = "local_session.rs"]
+mod session;
+#[cfg(not(feature = "local_terminal"))]
 mod session;
 
+use std::fmt;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 
@@ -44,6 +51,39 @@ pub use warp_server_auth::user_uid;
 use crate::base_client::{BaseClient, TEAM_UID_HEADER};
 use crate::graphql_helpers::{send_graphql_request, send_graphql_request_with_options};
 use crate::ids::ApiKeyUid;
+
+/// Authentication and authenticated-transport conditions observed by shared client code.
+#[derive(Clone)]
+pub enum AuthEvent {
+    /// A staging API call was blocked, which may indicate a firewall misconfiguration.
+    StagingAccessBlocked,
+    /// The user's access token was invalid, so they need to reauthenticate.
+    NeedsReauth,
+    /// The user's account has been disabled.
+    UserAccountDisabled,
+    /// The current bearer token was refreshed.
+    AccessTokenRefreshed {
+        #[cfg_attr(target_family = "wasm", allow(dead_code))]
+        token: String,
+    },
+    /// An Identity-Aware Proxy challenge was received.
+    IapChallengeReceived,
+}
+
+impl fmt::Debug for AuthEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StagingAccessBlocked => f.write_str("StagingAccessBlocked"),
+            Self::NeedsReauth => f.write_str("NeedsReauth"),
+            Self::UserAccountDisabled => f.write_str("UserAccountDisabled"),
+            Self::AccessTokenRefreshed { .. } => f
+                .debug_struct("AccessTokenRefreshed")
+                .field("token", &"<redacted>")
+                .finish(),
+            Self::IapChallengeReceived => f.write_str("IapChallengeReceived"),
+        }
+    }
+}
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
 pub const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
@@ -170,11 +210,16 @@ pub trait AuthClient: Send + Sync {
 }
 
 /// Implements the [`AuthClient`] trait on top of a base client and auth session.
+#[cfg(not(feature = "local_terminal"))]
 pub struct AuthClientImpl {
     base_client: Arc<BaseClient>,
     auth_session: Arc<AuthSession>,
 }
 
+#[cfg(feature = "local_terminal")]
+pub use local_auth_client::AuthClientImpl;
+
+#[cfg(not(feature = "local_terminal"))]
 impl AuthClientImpl {
     pub fn new(base_client: Arc<BaseClient>) -> Self {
         let auth_session = base_client.auth_session();
@@ -213,6 +258,7 @@ impl AuthClientImpl {
     }
 }
 
+#[cfg(not(feature = "local_terminal"))]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AuthClient for AuthClientImpl {
@@ -563,6 +609,6 @@ pub enum MintCustomTokenError {
     Unknown,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "local_terminal")))]
 #[path = "mod_tests.rs"]
 mod tests;

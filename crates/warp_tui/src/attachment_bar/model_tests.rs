@@ -8,31 +8,8 @@ fn selection_tracks_newest_and_clamps_after_removal() {
 }
 
 #[test]
-fn attachment_transitions_lock_and_restore_nld() {
-    assert_eq!(
-        attachment_mode_transition(false, true, true, false),
-        AttachmentModeTransition::LockAgent
-    );
-    assert_eq!(
-        attachment_mode_transition(true, true, true, false),
-        AttachmentModeTransition::None
-    );
-    assert_eq!(
-        attachment_mode_transition(true, false, true, false),
-        AttachmentModeTransition::RestoreAgent {
-            request_detection: true
-        }
-    );
-    assert_eq!(
-        attachment_mode_transition(true, false, true, true),
-        AttachmentModeTransition::RestoreAgent {
-            request_detection: false
-        }
-    );
-    assert_eq!(
-        attachment_mode_transition(true, false, false, false),
-        AttachmentModeTransition::RestoreAgent {
-            request_detection: false
-        }
-    );
+fn attachment_transitions_lock_and_restore_agent_mode() {
+    assert_eq!(attachment_mode_transition(false, true), AttachmentModeTransition::LockAgent);
+    assert_eq!(attachment_mode_transition(true, true), AttachmentModeTransition::None);
+    assert_eq!(attachment_mode_transition(true, false), AttachmentModeTransition::RestoreAgent);
 }

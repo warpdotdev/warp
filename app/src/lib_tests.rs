@@ -129,7 +129,8 @@ fn command_line_launch_runs_in_sdk_execution_mode() {
 }
 
 #[test]
-fn app_api_key_requires_validation() {
+#[cfg(not(target_family = "wasm"))]
+fn desktop_app_ignores_api_key_and_starts_locally() {
     let app = LaunchMode::App {
         args: Default::default(),
         api_key: Some("app-api-key".to_owned()),
@@ -137,11 +138,30 @@ fn app_api_key_requires_validation() {
 
     assert!(matches!(
         app.auth_initialization(),
-        AuthInitialization::PendingApiKey(api_key) if api_key == "app-api-key"
+        AuthInitialization::LocalSession
     ));
 }
 
 #[test]
+#[cfg(feature = "local_terminal")]
+fn local_terminal_ignores_cli_api_key() {
+    let mode = LaunchMode::command_line(
+        CliCommand::Whoami,
+        GlobalOptions {
+            api_key: Some("cli-api-key".to_owned()),
+            ..Default::default()
+        },
+        false,
+    );
+
+    assert!(matches!(
+        mode.auth_initialization(),
+        AuthInitialization::LocalSession
+    ));
+}
+
+#[test]
+#[cfg(not(feature = "local_terminal"))]
 fn tui_api_key_requires_validation() {
     let tui = LaunchMode::Tui {
         entrypoint: TuiEntryPoint::Interactive {
@@ -157,6 +177,7 @@ fn tui_api_key_requires_validation() {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn command_line_api_key_requires_validation() {
     let command_line = LaunchMode::CommandLine {
         command: CliCommand::Whoami,
@@ -176,10 +197,13 @@ fn command_line_api_key_requires_validation() {
 }
 
 #[test]
+#[cfg(not(feature = "local_terminal"))]
 fn startup_without_api_key_loads_persisted_auth() {
-    let app = LaunchMode::App {
-        args: Default::default(),
-        api_key: None,
+    let app = LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
     };
 
     assert!(matches!(

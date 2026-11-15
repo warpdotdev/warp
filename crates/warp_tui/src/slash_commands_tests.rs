@@ -1,7 +1,7 @@
 use ai::skills::SkillReference;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
-use warp::settings::{AISettings, TuiTheme, TuiThemeSettings};
+use warp::settings::{TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer,
@@ -170,68 +170,6 @@ fn slash_command_menu_renders_auto_approve_row() {
                 lines
                     .iter()
                     .any(|line| line.contains("Toggle auto approve (currently on)"))
-            );
-        });
-    });
-}
-
-#[test]
-fn slash_command_menu_renders_natural_language_detection_row() {
-    App::test((), |mut app| async move {
-        register_tui_session_view_test_singletons(&mut app);
-        app.update(|ctx| {
-            let input_editor = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
-            let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
-            suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
-            });
-            let mixer = ctx.add_model(|_| SlashCommandMixer::new());
-            let conversation_selection = add_test_conversation_selection(ctx);
-            let model = ctx.add_model(|_| {
-                TuiSlashCommandModel::new_for_test(
-                    input_editor,
-                    suggestions_mode,
-                    mixer,
-                    conversation_selection,
-                    vec![TuiSlashCommandRow {
-                        title: slash_commands::NATURAL_LANGUAGE_DETECTION.name.to_owned(),
-                        description: Some(
-                            slash_commands::NATURAL_LANGUAGE_DETECTION
-                                .description
-                                .to_owned(),
-                        ),
-                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
-                            id: SlashCommandId::new(),
-                        },
-                    }],
-                    0,
-                )
-            });
-            let menu = TuiInlineMenu::new(model.clone());
-            let element = menu.render(ctx).expect("slash command menu should render");
-            let lines = render_menu_lines(element, ctx);
-
-            assert!(
-                lines
-                    .iter()
-                    .any(|line| line.contains("/natural-language-detection"))
-            );
-            assert!(lines.iter().any(|line| {
-                line.contains("Toggle natural language detection (currently off)")
-            }));
-
-            AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                settings
-                    .ai_autodetection_enabled_internal
-                    .set_value(true, ctx)
-                    .expect("natural language detection setting should persist");
-            });
-            let element = menu.render(ctx).expect("slash command menu should render");
-            let lines = render_menu_lines(element, ctx);
-            assert!(
-                lines.iter().any(|line| {
-                    line.contains("Toggle natural language detection (currently on)")
-                })
             );
         });
     });

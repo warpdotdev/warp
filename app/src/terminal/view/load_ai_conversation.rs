@@ -289,6 +289,10 @@ impl TerminalView {
     ) where
         F: FnOnce(&mut Self, &mut ViewContext<Self>) + 'static,
     {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let restore_context_state =
             self.resolve_dir_restoration_state(&cloud_conversation, is_local_conversation);
 
@@ -574,6 +578,10 @@ impl TerminalView {
         entry_behavior: RestoreConversationEntryBehavior,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let conversation_id = restored.ai_conversation.id();
         log::info!("Restoring conversation after view creation: {conversation_id}",);
 
@@ -638,6 +646,10 @@ impl TerminalView {
         conversation_restoration: ConversationRestorationInNewPaneType,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         // We don't want blocks to appear as restored for forked conversations
         // and conversations in the cloud conversation viewer.
         let use_live_appearance = conversation_restoration.should_use_live_appearance();
@@ -918,6 +930,10 @@ impl TerminalView {
         task_list: api::ConversationData,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let tasks = task_list.tasks;
         if tasks.is_empty() {
             log::warn!("No tasks provided - conversation will be empty");
@@ -973,6 +989,10 @@ impl TerminalView {
         params: AIBlockCreationParams,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         // Extract values we need before fields get moved
         let conversation_id = params.conversation_id;
         let exchange_id = params.exchange_id;
@@ -1091,6 +1111,10 @@ impl TerminalView {
     /// Loads an agent mode conversation from a debug link in the clipboard.
     /// This is used for debugging purposes only when in dogfood channel state.
     pub fn load_agent_mode_conversation(&mut self, ctx: &mut ViewContext<Self>) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         if !ChannelState::channel().is_dogfood() {
             return;
         }

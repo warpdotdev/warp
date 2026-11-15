@@ -162,6 +162,15 @@ impl FromStr for UriHost {
 
 impl UriHost {
     fn handle(&self, primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
+        if cfg!(feature = "local_terminal")
+            && !matches!(
+                self,
+                Self::Action | Self::Launch | Self::Settings | Self::TabConfig | Self::Session
+            )
+        {
+            return;
+        }
+
         // Handle host
         match self {
             UriHost::Auth => {
@@ -998,6 +1007,19 @@ impl Action {
     }
 
     fn handle(&self, primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
+        if cfg!(feature = "local_terminal")
+            && !matches!(
+                self,
+                Self::NewTab
+                    | Self::NewWindow
+                    | Self::OpenFileEditor { .. }
+                    | Self::Docker
+                    | Self::OpenRepo
+            )
+        {
+            return;
+        }
+
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let primary_window_id = self.window_behavior_hint().resolve(primary_window_id, ctx);
         match self {

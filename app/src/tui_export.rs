@@ -17,7 +17,6 @@ pub use voice_input::{
     VoiceInputState, VoiceInputToggledFrom, VoiceSession, VoiceSessionResult,
 };
 pub use warp_cli::agent::Harness;
-use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
 pub use warp_core::SessionId;
 use warpui::SingletonEntity as _;
@@ -207,7 +206,6 @@ pub use crate::terminal::conversation_restoration::{
 };
 pub use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
 pub use crate::terminal::input::CommandExecutionSource;
-pub use crate::terminal::input::decorations::parse_current_commands_and_tokens;
 pub use crate::terminal::input::models::{ModelPickerChoice, query_model_picker_choices};
 pub use crate::terminal::input::skills::{
     AcceptSkill, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, SelectableSkill,
@@ -221,7 +219,7 @@ pub use crate::terminal::input::slash_commands::{
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
     TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
-    build_slash_command_mixer, record_autodetection_toggle_from_slash_command,
+    build_slash_command_mixer,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     should_close_slash_command_menu_for_exact_match, slash_command_is_submitted_as_prompt,
     slash_command_query, slash_command_selection_behavior,
@@ -317,31 +315,6 @@ pub fn tui_completion_session_context(
     ))
 }
 
-/// Returns whether `command` exactly matches a top-level command available in
-/// the TUI's live shell completion context.
-pub fn tui_completion_context_has_exact_command(
-    completion_context: &SessionContext,
-    command: &str,
-) -> bool {
-    let case_sensitivity = completion_context.command_case_sensitivity();
-    let is_live_shell_command =
-        completion_context
-            .top_level_commands()
-            .any(|candidate| match case_sensitivity {
-                TopLevelCommandCaseSensitivity::CaseSensitive => candidate == command,
-                TopLevelCommandCaseSensitivity::CaseInsensitive => {
-                    candidate.eq_ignore_ascii_case(command)
-                }
-            });
-    if is_live_shell_command {
-        return true;
-    }
-
-    completion_context
-        .command_registry()
-        .signature_from_line(command, case_sensitivity)
-        .is_some()
-}
 
 /// Returns whether cloud conversation metadata failed to load.
 pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {

@@ -144,12 +144,10 @@ fi
 BINARY_SIZE=$(du -h "$BUILT_BINARY" | cut -f1)
 echo ""
 echo "==> Build complete ($BINARY_SIZE)"
-# Prepare the bundled resources tree (skills, settings schema) deployed to
-# the global, version-independent location the daemon reads.
+# Prepare the version metadata deployed with the remote helper.
 rm -rf "$LOCAL_RESOURCES_DIR"
 SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
-  "$LOCAL_RESOURCES_DIR" \
-  local
+  "$LOCAL_RESOURCES_DIR"
 
 # Resolve $HOME on the remote so our upload lands in the same directory the
 # Warp client checks. The client runs `test -x ~/.warp-local/...` and lets

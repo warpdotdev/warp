@@ -6,14 +6,7 @@
 # destination directory. It is used by macOS and Linux build scripts.
 #
 # Usage:
-#   prepare_bundled_resources <destination_directory> [channel]
-#
-# Arguments:
-#   destination_directory:  The directory where resources should be installed.
-#                           Resources will be copied to subdirectories within
-#                           this path (e.g., $DEST_DIR/skills).
-#   channel:                (Optional) Release channel (local, dev, preview,
-#                           stable). Used to include channel-gated skills.
+#   prepare_bundled_resources <destination_directory>
 #
 # Environment variables:
 #   SKIP_SETTINGS_SCHEMA: Set to "1" to skip generating the JSON settings
@@ -28,35 +21,17 @@
 
 set -e
 
-if [ $# -lt 1 ] || [ $# -gt 2 ]; then
-  echo "Error: Expected 1-2 arguments but received $#" >&2
-  echo "Usage: $0 <destination_directory> [channel]" >&2
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 <destination_directory>" >&2
   exit 1
 fi
 
 DEST_DIR="$1"
-CHANNEL="${2:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RESOURCES_SRC="$REPO_ROOT/resources"
 
-# Validate that the source resources directory exists
-if [ ! -d "$RESOURCES_SRC" ]; then
-  echo "Error: Resources directory not found at $RESOURCES_SRC" >&2
-  exit 1
-fi
-
-# Create the destination directory if it doesn't exist
-mkdir -p "$DEST_DIR"
-
-# Copy bundled resources
-if [ -d "$RESOURCES_SRC/bundled" ]; then
-  echo "Copying bundled resources to $DEST_DIR/bundled"
-  rm -rf "$DEST_DIR/bundled"
-  cp -R "$RESOURCES_SRC/bundled" "$DEST_DIR/bundled"
-else
-  echo "Warning: No bundled directory found at $RESOURCES_SRC/bundled" >&2
-fi
+rm -rf "$DEST_DIR/bundled"
+mkdir -p "$DEST_DIR/bundled"
 
 if [ -n "$GIT_RELEASE_TAG" ]; then
   VERSION_METADATA_DIR="$DEST_DIR/bundled/metadata"
@@ -65,18 +40,6 @@ if [ -n "$GIT_RELEASE_TAG" ]; then
   echo "Writing bundled Warp version metadata to $VERSION_METADATA_PATH"
   mkdir -p "$VERSION_METADATA_DIR"
   printf '{\n  "warp_version": "%s"\n}\n' "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
-fi
-
-# Copy channel-gated skills matching the current release channel.
-GATED_SRC="$REPO_ROOT/resources/channel-gated-skills"
-DEST_SKILLS="$DEST_DIR/bundled/skills"
-
-if [ -n "$CHANNEL" ] && [ -d "$GATED_SRC" ]; then
-  echo "Copying channel-gated skills for channel '$CHANNEL'..."
-  "$SCRIPT_DIR/copy_conditional_skills" \
-    "$CHANNEL" \
-    "$GATED_SRC" \
-    "$DEST_SKILLS"
 fi
 
 # Generate third-party license attribution.
@@ -90,7 +53,6 @@ ADDITIONAL_LICENSES=(
     "Hack Font|MIT|app/assets/bundled/fonts/hack/LICENSE.md"
     "Roboto Font|SIL Open Font License|app/assets/bundled/fonts/roboto/LICENSE.txt"
     "bash-preexec|MIT|app/assets/bundled/bootstrap/bash-preexec-LICENSE.md"
-    "Claude API Skill|Apache-2.0|resources/bundled/skills/claude-api/LICENSE.txt"
     "rudder-sdk-rust|MIT|app/src/server/telemetry/LICENSE-RUDDER-SDK-RUST.txt"
     "Windows Terminal|MIT|app/assets/windows/LICENSE-WINDOWS-TERMINAL"
     "GitHub Desktop|MIT|app/src/code_review/GITHUB-DESKTOP-LICENSE"

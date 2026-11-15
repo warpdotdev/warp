@@ -170,6 +170,6 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "local_terminal")))]
 #[path = "graphql_helpers_tests.rs"]
 mod tests;

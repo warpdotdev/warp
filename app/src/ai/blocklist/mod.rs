@@ -25,6 +25,7 @@ pub mod history_model;
 pub mod inline_action;
 mod input_mode_policy;
 mod input_model;
+mod input_type;
 mod permissions;
 mod persistence;
 pub mod prompt;
@@ -120,6 +121,8 @@ pub(crate) use history_model::{
     PRE_REWIND_PREFIX,
 };
 // The policy types are re-exported for the TUI frontend via `tui_export`.
+#[cfg(feature = "local_terminal")]
+pub(crate) use input_mode_policy::ShellInputModePolicy;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use input_mode_policy::{InputModePolicy, InputModePolicyHandle, PolicyConfigUpdate};
 pub(crate) use input_model::BlocklistAIInputEvent;

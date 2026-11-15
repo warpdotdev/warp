@@ -1509,6 +1509,9 @@ impl ServerApiProvider {
             ctx,
         );
 
+        #[cfg(feature = "local_terminal")]
+        drop(event_receiver);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.spawn_stream_local(
             event_receiver,
             move |_, event, ctx| {
@@ -1542,6 +1545,9 @@ impl ServerApiProvider {
             |_, _| {},
         );
         let server_api = Arc::new(server_api);
+        #[cfg(feature = "local_terminal")]
+        let auth_client = Arc::new(AuthClientImpl);
+        #[cfg(not(feature = "local_terminal"))]
         let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
         Self {
             server_api,
@@ -1566,6 +1572,9 @@ impl ServerApiProvider {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let server_api = Arc::new(ServerApi::new_for_test());
+        #[cfg(feature = "local_terminal")]
+        let auth_client = Arc::new(AuthClientImpl);
+        #[cfg(not(feature = "local_terminal"))]
         let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
         Self {
             server_api,

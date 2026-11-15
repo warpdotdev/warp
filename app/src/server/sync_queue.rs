@@ -399,6 +399,10 @@ impl SyncQueue {
     }
 
     pub fn start_dequeueing(&mut self, ctx: &mut ModelContext<Self>) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         self.should_dequeue = true;
         self.dequeue(ctx)
     }
@@ -713,7 +717,7 @@ impl SyncQueue {
     fn dequeue(&mut self, ctx: &mut ModelContext<Self>) {
         // In some cases, we shouldn't dequeue any items, such as when we're offline
         // or when initial load was unsuccessful
-        if !self.should_dequeue {
+        if cfg!(feature = "local_terminal") || !self.should_dequeue {
             return;
         }
         let object_client = self.object_client.clone();

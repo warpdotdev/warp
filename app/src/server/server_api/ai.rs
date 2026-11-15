@@ -1551,10 +1551,54 @@ pub struct UpdateMemoryResponse {
     pub version_id: String,
 }
 
-#[cfg_attr(test, automock)]
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
-pub trait AIClient: 'static + Send + Sync {
+#[cfg(feature = "local_terminal")]
+macro_rules! unavailable_ai_request {
+    (generate_commands_from_natural_language) => {
+        GenerateCommandsFromNaturalLanguageError::Other
+    };
+    (generate_metadata_for_command) => {
+        GeneratedCommandMetadataError::Other
+    };
+    (get_task_git_credentials) => {
+        TaskGitCredentialsError::Request(anyhow!(
+            "Agent services are unavailable in the local terminal"
+        ))
+    };
+    (get_restricted_task_git_credentials) => {
+        unavailable_ai_request!(get_task_git_credentials)
+    };
+    ($method:ident) => {
+        anyhow!("Agent services are unavailable in the local terminal")
+    };
+}
+
+macro_rules! define_ai_client {
+    ($($(#[$attribute:meta])* async fn $method:ident(
+        &self $(, $arg:ident: $ty:ty)* $(,)?
+    ) -> $result:ty;)*) => {
+        #[cfg_attr(test, automock)]
+        #[cfg_attr(not(target_family = "wasm"), async_trait)]
+        #[cfg_attr(target_family = "wasm", async_trait(?Send))]
+        pub trait AIClient: 'static + Send + Sync {
+            $($(#[$attribute])* async fn $method(&self $(, $arg: $ty)*) -> $result;)*
+        }
+
+        #[cfg(feature = "local_terminal")]
+        #[cfg_attr(not(target_family = "wasm"), async_trait)]
+        #[cfg_attr(target_family = "wasm", async_trait(?Send))]
+        impl AIClient for ServerApi {
+            $(
+                $(#[$attribute])*
+                async fn $method(&self $(, $arg: $ty)*) -> $result {
+                    let _ = ($($arg,)*);
+                    Err(unavailable_ai_request!($method))
+                }
+            )*
+        }
+    };
+}
+
+define_ai_client! {
     async fn list_run_previews(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2318,6 +2362,7 @@ fn convert_upload_field(
     })
 }
 
+#[cfg(not(feature = "local_terminal"))]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl AIClient for ServerApi {
@@ -4306,6 +4351,10 @@ impl StoreClient for ServerApi {
         embedding_config: EmbeddingConfig,
         nodes: Vec<IntermediateNode>,
     ) -> Result<HashMap<NodeHash, bool>, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let results = self.update_merkle_tree(embedding_config, nodes).await?;
         Ok(results)
     }
@@ -4317,6 +4366,10 @@ impl StoreClient for ServerApi {
         root_hash: NodeHash,
         repo_metadata: RepoMetadata,
     ) -> Result<HashMap<ContentHash, bool>, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let results = self
             .generate_code_embeddings(embedding_config, fragments, root_hash, repo_metadata)
             .await?;
@@ -4329,6 +4382,10 @@ impl StoreClient for ServerApi {
         root_hash: NodeHash,
         repo_metadata: RepoMetadata,
     ) -> Result<bool, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let variables = PopulateMerkleTreeCacheVariables {
             embedding_config: embedding_config.into(),
             root_hash: root_hash.into(),
@@ -4356,6 +4413,10 @@ impl StoreClient for ServerApi {
         nodes: Vec<NodeHash>,
         embedding_config: EmbeddingConfig,
     ) -> Result<HashSet<NodeHash>, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let input = SyncMerkleTreeInput {
             hashed_nodes: nodes.into_iter().map(Into::into).collect(),
             embedding_config: embedding_config.into(),
@@ -4390,6 +4451,10 @@ impl StoreClient for ServerApi {
         query: String,
         fragments: Vec<full_source_code_embedding::Fragment>,
     ) -> Result<Vec<full_source_code_embedding::Fragment>, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let variables = RerankFragmentsVariables {
             query,
             fragments: fragments.into_iter().map(Into::into).collect(),
@@ -4419,6 +4484,10 @@ impl StoreClient for ServerApi {
         root_hash: NodeHash,
         repo_metadata: RepoMetadata,
     ) -> Result<Vec<ContentHash>, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let variables = GetRelevantFragmentsVariables {
             query,
             root_hash: root_hash.into(),
@@ -4450,6 +4519,10 @@ impl StoreClient for ServerApi {
     async fn codebase_context_config(
         &self,
     ) -> Result<CodebaseContextConfig, full_source_code_embedding::Error> {
+        if cfg!(feature = "local_terminal") {
+            return Err(anyhow!("Agent indexing is unavailable in the local terminal").into());
+        }
+
         let variables = CodebaseContextConfigVariables {
             request_context: get_request_context(),
         };

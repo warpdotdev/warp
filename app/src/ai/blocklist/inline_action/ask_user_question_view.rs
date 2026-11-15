@@ -648,11 +648,10 @@ impl AskUserQuestionView {
         // Completing the executor only stages the result; execute_action drives the action model
         // to publish final status/events for this inline block.
         self.action_model.update(ctx, |action_model, ctx| {
-            action_model
-                .ask_user_question_executor(ctx)
-                .update(ctx, |executor, _| {
-                    executor.complete(answers.clone());
-                });
+            let Some(executor) = action_model.ask_user_question_executor(ctx) else {
+                return;
+            };
+            executor.update(ctx, |executor, _| executor.complete(answers.clone()));
             action_model.execute_action(&action_id, conversation_id, ctx);
         });
     }

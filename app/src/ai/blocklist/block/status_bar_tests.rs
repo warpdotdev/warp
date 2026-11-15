@@ -22,7 +22,12 @@ fn inactive_exchange_updates_do_not_close_summarization_dialog() {
         let terminal = add_window_with_terminal(&mut app, None);
         let terminal_surface_id = terminal.id();
         let status_bar = terminal.read(&app, |terminal, ctx| {
-            terminal.input().as_ref(ctx).agent_status_bar().clone()
+            terminal
+                .input()
+                .as_ref(ctx)
+                .agent_status_bar()
+                .unwrap()
+                .clone()
         });
         let history = app.read(BlocklistAIHistoryModel::handle);
         let conversation = AIConversation::new_restored(

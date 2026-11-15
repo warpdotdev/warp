@@ -47,7 +47,7 @@ use warp::tui_export::{
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
@@ -164,7 +164,6 @@ mod completions;
 
 #[path = "handoff/session.rs"]
 mod handoff_session;
-mod input_detection;
 mod shortcuts;
 pub(crate) mod state;
 mod status_menu;
@@ -172,7 +171,6 @@ mod statusline;
 mod todo_menu;
 mod usage_menu;
 use self::completions::CompletionRequestState;
-use self::input_detection::InputDetectionState;
 use self::state::{
     TuiFirstZeroStateState, TuiTerminalSessionState, TuiTerminalSessionStateModel,
     TuiTerminalSessionStateResolveError,
@@ -375,9 +373,6 @@ const COPY_DEBUGGING_ID_HINT: &str = "Debugging information copied to clipboard"
 const COPY_DEBUGGING_ID_NO_TOKEN_HINT: &str =
     "No debugging ID available for this conversation yet.";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
-const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
-const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
-const NLD_PERSISTENCE_FAILED_HINT: &str = "Could not save the natural language detection setting.";
 const VIM_MODE_ENABLED_HINT: &str = "Vim mode enabled.";
 const VIM_MODE_DISABLED_HINT: &str = "Vim mode disabled.";
 const VIM_MODE_PERSISTENCE_FAILED_HINT: &str = "Could not save the vim mode setting.";
@@ -739,7 +734,6 @@ pub(crate) struct TuiTerminalSessionView {
     keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
-    input_detection: InputDetectionState,
     completion_request: CompletionRequestState,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Last dimensions applied to the terminal model and PTY.
@@ -1289,10 +1283,10 @@ impl TuiTerminalSessionView {
             | CLISubagentEvent::UpdatedLastSnapshot
             | CLISubagentEvent::ToggledHideResponses => {}
             CLISubagentEvent::ControlHandedBackAfterTransfer => {
-                let executor = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx);
-                executor.update(ctx, |executor, _| {
-                    executor.notify_control_handed_back();
-                });
+                if let Some(executor) = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx)
+                {
+                    executor.update(ctx, |executor, _| executor.notify_control_handed_back());
+                }
             }
         }
         if matches!(
@@ -1568,21 +1562,21 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-        let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
-
-        ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
-            StartAgentExecutorEvent::CreateAgent(request) => {
-                ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
-                    request: request.clone(),
-                    working_directory: view.current_working_directory(ctx).map(PathBuf::from),
-                });
-            }
-            StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
-                ctx.emit(TuiTerminalSessionEvent::CleanupFailedChildLaunch {
-                    conversation_id: *conversation_id,
-                });
-            }
-        });
+        if let Some(start_agent_executor) = action_model.as_ref(ctx).start_agent_executor(ctx) {
+            ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
+                StartAgentExecutorEvent::CreateAgent(request) => {
+                    ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
+                        request: request.clone(),
+                        working_directory: view.current_working_directory(ctx).map(PathBuf::from),
+                    });
+                }
+                StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
+                    ctx.emit(TuiTerminalSessionEvent::CleanupFailedChildLaunch {
+                        conversation_id: *conversation_id,
+                    });
+                }
+            });
+        }
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
                 ai_input_model.clone(),
@@ -1785,7 +1779,7 @@ impl TuiTerminalSessionView {
         // leaves the buffer empty, so the window it arms survives its own clear.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
-            let CodeEditorModelEvent::ContentChanged { origin } = event else {
+            let CodeEditorModelEvent::ContentChanged { .. } = event else {
                 return;
             };
             let is_empty = editor_for_footer
@@ -1797,7 +1791,7 @@ impl TuiTerminalSessionView {
                 view.exit_confirmation.disarm();
                 view.child_kill_armed_conversation = None;
             }
-            view.handle_input_content_changed(origin.from_user(), ctx);
+            view.handle_input_content_changed(ctx);
             ctx.notify();
         });
 
@@ -2113,11 +2107,12 @@ impl TuiTerminalSessionView {
         });
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
-        let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
-        let model_for_shell_events = model.clone();
-        ctx.subscribe_to_model(&shell_command_executor, move |view, _, event, ctx| {
-            view.handle_shell_command_executor_event(event, &model_for_shell_events, ctx);
-        });
+        if let Some(shell_command_executor) = action_model.as_ref(ctx).shell_command_executor(ctx) {
+            let model_for_shell_events = model.clone();
+            ctx.subscribe_to_model(&shell_command_executor, move |view, _, event, ctx| {
+                view.handle_shell_command_executor_event(event, &model_for_shell_events, ctx);
+            });
+        }
 
         // These events update block metadata or grids the transcript reads.
         // PTY output redraws are driven by `wakeups_rx` below.
@@ -2172,9 +2167,6 @@ impl TuiTerminalSessionView {
                     | AISettingsChangedEvent::ExecutionProfiles { .. }
             ) {
                 ctx.notify();
-            }
-            if matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. }) {
-                view.schedule_input_detection(ctx);
             }
             if matches!(event, AISettingsChangedEvent::TuiStatusline { .. }) {
                 view.update_github_status_subscription(ctx);
@@ -2349,7 +2341,6 @@ impl TuiTerminalSessionView {
             keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
-            input_detection: InputDetectionState::default(),
             completion_request: CompletionRequestState::default(),
             terminal_model: model,
             size_info,
@@ -3514,8 +3505,6 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            TuiAttachmentBarEvent::AbortInputDetection => self.abort_input_detection(ctx),
-            TuiAttachmentBarEvent::RequestInputDetection => self.schedule_input_detection(ctx),
             TuiAttachmentBarEvent::RestorePastedText(text) => {
                 self.input_view
                     .update(ctx, |input, ctx| input.insert_pasted_text(text, ctx));
@@ -4900,9 +4889,6 @@ impl TuiTerminalSessionView {
                 self.send_prompt(prompt, ctx);
                 record_static_slash_command_accepted(command_name, true, ctx);
             }
-            SlashCommandKind::NaturalLanguageDetection => {
-                self.toggle_nld(command.name, ctx);
-            }
             SlashCommandKind::VimMode => {
                 self.toggle_vim_mode(command.name, ctx);
             }
@@ -5015,38 +5001,6 @@ impl TuiTerminalSessionView {
         self.persist_statusline_config(TuiStatuslineConfig::default(), STATUSLINE_RESET_HINT, ctx);
         record_static_slash_command_accepted(command_name, true, ctx);
     }
-    /// Toggles and persists natural-language detection (NLD), reports the change
-    /// via telemetry, and surfaces a confirmation hint.
-    fn toggle_nld(&mut self, command_name: &'static str, ctx: &mut ViewContext<Self>) {
-        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-        let enabled = !AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx);
-        let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings
-                .ai_autodetection_enabled_internal
-                .set_value(enabled, ctx)
-        });
-        match result {
-            Ok(()) => {
-                record_autodetection_toggle_from_slash_command(enabled, ctx);
-                let hint = if enabled {
-                    NLD_ENABLED_HINT
-                } else {
-                    NLD_DISABLED_HINT
-                };
-                self.show_success_hint(hint.to_owned(), ctx);
-            }
-            Err(error) => {
-                if enabled {
-                    log::warn!("Failed to enable TUI natural language detection: {error}");
-                } else {
-                    log::warn!("Failed to disable TUI natural language detection: {error}");
-                }
-                self.show_transient_hint(NLD_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
-            }
-        }
-        record_static_slash_command_accepted(command_name, true, ctx);
-    }
-
     /// Toggles and persists vim mode, and surfaces a confirmation hint.
     fn toggle_vim_mode(&mut self, command_name: &'static str, ctx: &mut ViewContext<Self>) {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));

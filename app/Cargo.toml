@@ -94,7 +94,6 @@ deltae = "0.3.1"
 derivative.workspace = true
 dhat = { version = "0.3.2", optional = true }
 diesel.workspace = true
-difflib = { git = "https://github.com/warpdotdev/difflib.git", rev = "114177e7d8e1f8017baca397f943e11644b14d63" }
 directories.workspace = true
 dirs.workspace = true
 dunce.workspace = true
@@ -127,7 +126,6 @@ jaq-all.workspace = true
 jemalloc_pprof = { version = "0.8.1", optional = true }
 lsp-types = "0.97.0"
 indexmap = { version = "2.0.2", features = ["serde"] }
-input_classifier.workspace = true
 instant.workspace = true
 ipc.workspace = true
 iso8601-duration.workspace = true
@@ -249,7 +247,6 @@ languages.workspace = true
 warp_terminal.workspace = true
 websocket.workspace = true
 wgpu = { workspace = true, optional = true }
-natural_language_detection.workspace = true
 onboarding.workspace = true
 aho-corasick = "1.1.3"
 strum.workspace = true
@@ -741,11 +738,7 @@ grep_tool = []
 # For the most part, including GUI code in headless builds is fine; the main use case is
 # for things that pull in external dependencies.
 gui = ["voice_input"]
-nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
-nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
-nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
-nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
-nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
+local_terminal = ["warp_assets/local_terminal", "warp_server_client/local_terminal"]
 nld_prompt_history_match = []
 msys2_shells = []
 file_backed_execution_profiles = []

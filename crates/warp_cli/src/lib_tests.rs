@@ -22,7 +22,29 @@ use crate::task::{MessageCommand, TaskCommand};
 fn identifies_worker_subcommands() {
     assert!(is_worker_invocation("minidump-server"));
     #[cfg(unix)]
-    assert!(is_worker_invocation(&terminal_server_subcommand()));
+    {
+        use command::worker::{TERMINAL_SERVER, parent_pid_flag};
+
+        assert!(is_worker_invocation(TERMINAL_SERVER));
+        let parsed = Args::try_parse_from(["warp", TERMINAL_SERVER, &parent_pid_flag()]).unwrap();
+        let Some(Command::Worker(WorkerCommand::TerminalServer(args))) = parsed.command() else {
+            panic!("expected the terminal server worker");
+        };
+        assert_eq!(args.parent.pid, Some(std::process::id()));
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        use command::worker::{RIPGREP_SEARCH, parent_pid_flag};
+
+        assert!(is_worker_invocation(RIPGREP_SEARCH));
+        let parsed = Args::try_parse_from(["warp", RIPGREP_SEARCH, &parent_pid_flag(), "pattern"])
+            .unwrap();
+        let Some(Command::Worker(WorkerCommand::RipgrepSearch { parent, .. })) = parsed.command()
+        else {
+            panic!("expected the ripgrep search worker");
+        };
+        assert_eq!(parent.pid, Some(std::process::id()));
+    }
     assert!(!is_worker_invocation("--prompt"));
 }
 

@@ -53,25 +53,25 @@ pub struct SkillManager {
     /// skill from every cloned repo.
     is_cloud_environment: bool,
     #[allow(dead_code)]
-    skill_watcher: ModelHandle<SkillWatcher>, // Can't remove this or it'll get cleaned up after new()
+    skill_watcher: Option<ModelHandle<SkillWatcher>>, // Retains the watcher while enabled.
 }
 
 impl SkillManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let (skill_watcher_tx, skill_watcher_rx) = async_channel::unbounded();
+        let skill_watcher = (!cfg!(feature = "local_terminal")).then(|| {
+            let (skill_watcher_tx, skill_watcher_rx) = async_channel::unbounded();
 
-        ctx.spawn_stream_local(
-            skill_watcher_rx,
-            |me, message, ctx| {
-                me.handle_skill_watcher_event(message, ctx);
-            },
-            |_, _| {}, // No cleanup needed when stream ends
-        );
+            ctx.spawn_stream_local(
+                skill_watcher_rx,
+                |me, message, ctx| {
+                    me.handle_skill_watcher_event(message, ctx);
+                },
+                |_, _| {}, // No cleanup needed when stream ends
+            );
+            ctx.add_model(|ctx| SkillWatcher::new(ctx, skill_watcher_tx))
+        });
 
-        // Create skill watcher
-        let skill_watcher = ctx.add_model(|ctx| SkillWatcher::new(ctx, skill_watcher_tx));
-
-        if FeatureFlag::BundledSkills.is_enabled() {
+        if skill_watcher.is_some() && FeatureFlag::BundledSkills.is_enabled() {
             ctx.spawn(BundledSkill::detect(), |me, result, _| {
                 me.bundled_skills.set_local(result);
             });

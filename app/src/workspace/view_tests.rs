@@ -3283,6 +3283,7 @@ fn test_view_only_session() {
     });
 }
 
+#[cfg(not(feature = "local_terminal"))]
 #[test]
 // This tests the end-to-end behavior to correctly switch focus among panels.
 // (The only panels that can be focused currently are WD, workspace, & the agent panel.)
@@ -3320,7 +3321,10 @@ fn test_switch_focus_panels() {
         });
         workspace.update(&mut app, |view, ctx| {
             assert!(
-                view.ai_assistant_panel.is_self_or_child_focused(ctx),
+                view.ai_assistant_panel
+                    .as_ref()
+                    .unwrap()
+                    .is_self_or_child_focused(ctx),
                 "Expected AI panel to be focused"
             );
         });
@@ -3343,7 +3347,10 @@ fn test_switch_focus_panels() {
         });
         workspace.update(&mut app, |view, ctx| {
             assert!(
-                view.ai_assistant_panel.is_self_or_child_focused(ctx),
+                view.ai_assistant_panel
+                    .as_ref()
+                    .unwrap()
+                    .is_self_or_child_focused(ctx),
                 "Expected AI panel to be focused"
             );
         });
@@ -4574,6 +4581,7 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
     });
 }
 
+#[cfg(not(feature = "local_terminal"))]
 #[test]
 fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempotent() {
     let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(true);
@@ -4599,6 +4607,8 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
             assert!(
                 workspace
                     .agent_management_view
+                    .as_ref()
+                    .unwrap()
                     .as_ref(ctx)
                     .is_showing_setup_guide()
             );
@@ -4612,6 +4622,8 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
             assert!(
                 workspace
                     .agent_management_view
+                    .as_ref()
+                    .unwrap()
                     .as_ref(ctx)
                     .is_showing_setup_guide()
             );

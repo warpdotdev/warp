@@ -30,8 +30,6 @@ pub(crate) struct TuiAttachmentSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TuiAttachmentModelEvent {
     Updated,
-    AbortInputDetection,
-    RequestInputDetection,
     RestorePastedText(String),
     ShowHint(String),
 }
@@ -47,7 +45,7 @@ pub(crate) enum TuiAttachmentPasteDisposition {
 enum AttachmentModeTransition {
     None,
     LockAgent,
-    RestoreAgent { request_detection: bool },
+    RestoreAgent,
 }
 
 pub(crate) struct TuiAttachmentModel {
@@ -379,8 +377,6 @@ impl TuiAttachmentModel {
         match attachment_mode_transition(
             self.had_locking_attachment,
             has_locking_attachment,
-            autodetection_enabled,
-            input_is_empty,
         ) {
             AttachmentModeTransition::LockAgent => {
                 self.input_mode.update(ctx, |input_mode, ctx| {
@@ -391,9 +387,8 @@ impl TuiAttachmentModel {
                         ctx,
                     );
                 });
-                ctx.emit(TuiAttachmentModelEvent::AbortInputDetection);
             }
-            AttachmentModeTransition::RestoreAgent { request_detection } => {
+            AttachmentModeTransition::RestoreAgent => {
                 self.input_mode.update(ctx, |input_mode, ctx| {
                     if autodetection_enabled {
                         input_mode.enable_autodetection(InputType::AI, ctx);
@@ -401,9 +396,6 @@ impl TuiAttachmentModel {
                         input_mode.set_input_config(AI_LOCKED_CONFIG, input_is_empty, None, ctx);
                     }
                 });
-                if request_detection {
-                    ctx.emit(TuiAttachmentModelEvent::RequestInputDetection);
-                }
             }
             AttachmentModeTransition::None => {}
         }
@@ -433,14 +425,10 @@ fn reconciled_selected_index(
 fn attachment_mode_transition(
     had_locking_attachment: bool,
     has_locking_attachment: bool,
-    autodetection_enabled: bool,
-    input_is_empty: bool,
 ) -> AttachmentModeTransition {
     match (had_locking_attachment, has_locking_attachment) {
         (false, true) => AttachmentModeTransition::LockAgent,
-        (true, false) => AttachmentModeTransition::RestoreAgent {
-            request_detection: autodetection_enabled && !input_is_empty,
-        },
+        (true, false) => AttachmentModeTransition::RestoreAgent,
         (false, false) | (true, true) => AttachmentModeTransition::None,
     }
 }

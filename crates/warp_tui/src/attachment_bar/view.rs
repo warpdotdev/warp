@@ -16,8 +16,6 @@ pub(crate) const FOCUS_ATTACHMENTS_BINDING_NAME: &str = "tui:session:focus_attac
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TuiAttachmentBarEvent {
-    AbortInputDetection,
-    RequestInputDetection,
     RestorePastedText(String),
     ShowHint(String),
     ReturnFocus,
@@ -136,12 +134,6 @@ impl TuiAttachmentBar {
         ctx.subscribe_to_model(&model, move |_, _, event, ctx| match event {
             TuiAttachmentModelEvent::Updated => {
                 ctx.notify();
-            }
-            TuiAttachmentModelEvent::AbortInputDetection => {
-                ctx.emit(TuiAttachmentBarEvent::AbortInputDetection);
-            }
-            TuiAttachmentModelEvent::RequestInputDetection => {
-                ctx.emit(TuiAttachmentBarEvent::RequestInputDetection);
             }
             TuiAttachmentModelEvent::RestorePastedText(text) => {
                 ctx.emit(TuiAttachmentBarEvent::RestorePastedText(text.clone()));

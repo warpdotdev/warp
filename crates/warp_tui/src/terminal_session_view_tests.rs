@@ -58,7 +58,6 @@ use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::{TuiFrame, TuiPresenter};
-use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext, WindowInvalidation};
 
 use super::statusline::{
@@ -1139,7 +1138,7 @@ fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
 
             // User edits must not reinterpret an explicit Agent lock as stale
             // agent-control state.
-            view.handle_input_content_changed(true, ctx);
+            view.handle_input_content_changed(ctx);
             assert_eq!(
                 view.ai_input_model.as_ref(ctx).input_config(),
                 AI_LOCKED_CONFIG,
@@ -3119,103 +3118,6 @@ fn empty_typeahead_event_leaves_the_tui_input_unchanged() {
         });
 
         assert_eq!(app.read(|ctx| input_text(&view, ctx)), "draft");
-    });
-}
-
-#[test]
-fn nld_slash_command_toggles_and_reports_its_effects() {
-    App::test((), |mut app| async move {
-        let _agent_mode = warp_core::features::FeatureFlag::AgentMode.override_enabled(true);
-        let fixture = focus_test_fixture(&mut app);
-        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        flush_events();
-
-        view.update(&mut app, |view, ctx| {
-            view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/natural-language-detection", ctx);
-            });
-            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
-        });
-
-        assert!(app.read(|ctx| {
-            *AISettings::as_ref(ctx)
-                .ai_autodetection_enabled_internal
-                .value()
-        }));
-        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
-        assert_eq!(
-            view.read(&app, |view, _| {
-                view.transient_hint
-                    .current()
-                    .map(|(text, tone)| (text.to_owned(), tone))
-            }),
-            Some((
-                "Natural language detection enabled.".to_owned(),
-                TransientHintTone::Success
-            ))
-        );
-
-        view.update(&mut app, |view, ctx| {
-            view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/natural-language-detection", ctx);
-            });
-            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
-        });
-        futures_lite::future::yield_now().await;
-
-        assert!(!app.read(|ctx| {
-            *AISettings::as_ref(ctx)
-                .ai_autodetection_enabled_internal
-                .value()
-        }));
-        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
-        assert_eq!(
-            view.read(&app, |view, _| {
-                view.transient_hint
-                    .current()
-                    .map(|(text, tone)| (text.to_owned(), tone))
-            }),
-            Some((
-                "Natural language detection disabled.".to_owned(),
-                TransientHintTone::Success
-            ))
-        );
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut toggles = Vec::new();
-        while toggles.len() < 2 {
-            toggles.extend(
-                flush_events()
-                    .into_iter()
-                    .filter_map(|event| match event.payload {
-                        EventPayload::NamedEvent {
-                            name,
-                            value: Some(value),
-                            ..
-                        } if name == "AgentMode.ToggleAutoDetectionSetting" => Some(value),
-                        _ => None,
-                    }),
-            );
-            if toggles.len() >= 2 || Instant::now() >= deadline {
-                break;
-            }
-            Timer::after(Duration::from_millis(10)).await;
-        }
-        assert_eq!(toggles.len(), 2);
-        assert_eq!(
-            toggles[0],
-            serde_json::json!({
-                "is_autodetection_enabled": true,
-                "origin": "slash_command",
-            })
-        );
-        assert_eq!(
-            toggles[1],
-            serde_json::json!({
-                "is_autodetection_enabled": false,
-                "origin": "slash_command",
-            })
-        );
     });
 }
 

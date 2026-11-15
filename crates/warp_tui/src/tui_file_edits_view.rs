@@ -310,10 +310,11 @@ impl TuiFileEditsView {
         // Legacy persisted ApplyFileDiffs results contain updated file metadata
         // but no line counts, so rendering only the recorded result produces
         // the incorrect +0/-0 fallback.
-        if !is_restored {
+        if !is_restored
+            && let Some(executor) = action_model.as_ref(ctx).request_file_edits_executor(ctx)
+        {
             // Live actions stay executor-backed; registering a storage here
             // lets preprocessing seed the authoritative resolved diffs.
-            let executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
             executor.update(ctx, |executor, _| {
                 let handle = TuiDiffStorageHandle::new(storage.clone());
                 executor.register_requested_edits(&action_id, Box::new(handle));

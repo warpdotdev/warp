@@ -837,6 +837,13 @@ impl TypedActionView for AuthViewBody {
     type Action = AuthViewBodyAction;
 
     fn handle_action(&mut self, action: &AuthViewBodyAction, ctx: &mut ViewContext<Self>) {
+        if cfg!(feature = "local_terminal") {
+            if let AuthViewBodyAction::Close = action {
+                ctx.emit(AuthViewBodyEvent::Close);
+            }
+            return;
+        }
+
         match action {
             AuthViewBodyAction::Login => {
                 send_telemetry_from_ctx!(

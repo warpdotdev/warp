@@ -1,43 +1,27 @@
 //! Model-layer AI input state management logic.
 //!
 //! The primary export of this module is `BlocklistAIInputModel`, which is a terminal-surface-scoped
-//! model managing input "type" state (whether the input is in AI or shell mode). This model also
-//! exposes methods for running query autodetection, where an algorithm determines if the current
-//! input contents are an AI query or shell command, which is then used to update the input mode.
+//! model managing input "type" state (whether the input is in AI or shell mode).
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Local};
-use futures::stream::AbortHandle;
-use input_classifier::util::{is_agent_follow_up_input, is_one_off_natural_language_word};
-pub use input_classifier::{InputClassifierDecisionSource, InputType};
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{InputMode, InputType as ProtocolInputType};
 use settings::Setting as _;
-use warp_completer::completer::CompletionContext;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 /// The source of the final input type decision applied to the user input.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputTypeAutoDetectionSource {
-    /// Decision produced by the input classifier pipeline.
-    InputClassifierDecisionSource(InputClassifierDecisionSource),
     /// User explicitly toggled the input type via cmd + I.
     ManualToggle,
     /// `!` shell prefix force-locked the input to Shell mode.
     ShellPrefix,
     /// Image / file attachment in progress force-locked AI mode.
     AttachmentForcedAi,
-    /// First token matched the autodetection command denylist.
-    Denylist,
-    /// Buffer text closely matched a recent shell command history or agent
-    /// prompt history entry.
-    HistoryMatch,
-    /// Input matched the natural-language follow-up allowlist after a preceding AI block.
-    NaturalLanguageAgentFollowUpAllowList,
     /// Inline history menu / history-up suggestion selection set the input type.
     HistorySelection,
     /// Inserting a workflow into the input set the input type based on workflow kind.
@@ -87,35 +71,17 @@ pub enum InputTypeAutoDetectionSource {
     AtContextMenuInsert,
 }
 
-impl From<InputClassifierDecisionSource> for InputTypeAutoDetectionSource {
-    fn from(value: InputClassifierDecisionSource) -> Self {
-        Self::InputClassifierDecisionSource(value)
-    }
-}
-
 use warp_errors::report_if_error;
 
 use super::ConversationSelectionHandle;
 use super::context_model::BlocklistAIContextModel;
-use super::history_model::BlocklistAIHistoryModel;
 use super::input_mode_policy::{InputModePolicyHandle, PolicyConfigUpdate};
-use super::telemetry_banner::should_collect_ai_ugc_telemetry;
-use crate::input_classifier::InputClassifierModel;
+pub use super::input_type::InputType;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use crate::terminal::input::decorations::ParsedTokensSnapshot;
-use crate::terminal::model::rich_content::RichContentType;
-use crate::terminal::model::session::SessionId;
-use crate::terminal::{History, TerminalModel};
-use crate::{PrivacySettings, TelemetryEvent, send_telemetry_from_ctx};
-
-/// Cutoff score for deciding an user input matches a history command entry.
-const HISTORY_ENTRY_MATCH_CUTOFF: f32 = 0.9;
-
-/// Duration to temporarily disable autodetection during operations like history selection.
-const AUTODETECTION_DISABLE_DURATION_MS: u64 = 250;
+use crate::terminal::TerminalModel;
 
 /// Configuration for the terminal pane's input.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,9 +178,6 @@ pub struct BlocklistAIInputModel {
     /// the latest input type classification decision source
     last_ai_autodetection_source: Option<InputTypeAutoDetectionSource>,
 
-    /// Timestamp of the last time the input type was explicitly set.
-    last_explicit_input_type_set_at: Option<Instant>,
-
     /// Whether the input buffer was empty at the time the lock was set.  This will be true
     /// if a persistent lock is in place and a buffer is submitted.
     was_lock_set_with_empty_buffer: bool,
@@ -229,8 +192,6 @@ pub struct BlocklistAIInputModel {
     /// View-supplied policy for decisions the model cannot make view-agnostically
     /// (lock gating, autodetection context, reactive config transitions).
     policy: InputModePolicyHandle,
-
-    autodetect_abort_handle: Option<AbortHandle>,
     model: Arc<FairMutex<TerminalModel>>,
 }
 
@@ -245,6 +206,7 @@ impl BlocklistAIInputModel {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         // Reactively restore input config when CLI agent rich input closes.
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(
             &CLIAgentSessionsModel::handle(ctx),
             move |me, _, event, ctx| {
@@ -276,6 +238,7 @@ impl BlocklistAIInputModel {
             },
         );
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&AISettings::handle(ctx), move |me, _, event, ctx| {
             // Computing the guarded autodetection state takes the terminal-model
             // lock, so only compute it for the one event whose handling can need
@@ -293,6 +256,7 @@ impl BlocklistAIInputModel {
             }
         });
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&conversation_selection, |me, _, event, ctx| {
             if let Some(update) =
                 me.policy
@@ -310,9 +274,7 @@ impl BlocklistAIInputModel {
             policy,
             last_ai_autodetection_ts: None,
             last_ai_autodetection_source: None,
-            last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
-            autodetect_abort_handle: None,
             model,
         }
     }
@@ -344,9 +306,7 @@ impl BlocklistAIInputModel {
             policy,
             last_ai_autodetection_ts: None,
             last_ai_autodetection_source: None,
-            last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
-            autodetect_abort_handle: None,
             model,
         })
     }
@@ -423,15 +383,13 @@ impl BlocklistAIInputModel {
         );
     }
 
-    /// Swaps between Agent/Shell input types while preserving lock state. Temporarily disables
-    /// autodetection.
+    /// Swaps between Agent/Shell input types while preserving lock state.
     pub fn set_input_type(
         &mut self,
         input_type: InputType,
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.temporarily_disable_autodetection();
         let current_config = self.input_config();
         self.set_input_config_internal(
             current_config.with_input_type(input_type),
@@ -442,19 +400,19 @@ impl BlocklistAIInputModel {
 
     /// Applies a policy-produced config update via the internal setter.
     fn apply_policy_update(&mut self, update: PolicyConfigUpdate, ctx: &mut ModelContext<Self>) {
-        if update.temporarily_disable_autodetection {
-            self.temporarily_disable_autodetection();
-        }
         self.set_input_config_internal(update.config, update.decision_source, ctx);
     }
 
-    /// Does not disable autodetection.
     fn set_input_config_internal(
         &mut self,
         new_config: InputConfig,
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        if cfg!(feature = "local_terminal") {
+            return false;
+        }
+
         // Locking the input to AI is only allowed when the view's policy permits it (e.g. the
         // GUI only allows it inside an agent view or an open CLI agent rich input session).
         if new_config.input_type.is_ai()
@@ -503,7 +461,7 @@ impl BlocklistAIInputModel {
         true
     }
 
-    /// Allows you to set the input config and mutate the lock state. Temporarily disables autodetection.
+    /// Allows you to set the input config and mutate the lock state.
     pub fn set_input_config(
         &mut self,
         new_config: InputConfig,
@@ -511,11 +469,7 @@ impl BlocklistAIInputModel {
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.temporarily_disable_autodetection();
         self.set_input_config_internal(new_config, decision_source, ctx);
-        if new_config.is_locked {
-            self.abort_in_progress_detection();
-        }
         self.was_lock_set_with_empty_buffer = self.is_input_type_locked() && is_input_buffer_empty;
     }
 
@@ -527,9 +481,7 @@ impl BlocklistAIInputModel {
         was_lock_set_with_empty_buffer: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.temporarily_disable_autodetection();
         self.set_input_config_internal(new_config, None, ctx);
-        self.abort_in_progress_detection();
         self.was_lock_set_with_empty_buffer = was_lock_set_with_empty_buffer;
     }
 
@@ -560,13 +512,6 @@ impl BlocklistAIInputModel {
         self.policy.is_autodetection_enabled(app)
     }
 
-    /// Temporarily disable autodetection for a fixed duration.
-    /// Useful for operations like history selection where we don't want
-    /// autodetection to interfere with the manual input type setting.
-    fn temporarily_disable_autodetection(&mut self) {
-        self.last_explicit_input_type_set_at = Some(Instant::now());
-    }
-
     pub fn enable_autodetection(&mut self, input_type: InputType, ctx: &mut ModelContext<Self>) {
         self.set_input_config_internal(
             InputConfig {
@@ -576,9 +521,6 @@ impl BlocklistAIInputModel {
             None,
             ctx,
         );
-        // The goal of this function is to allow autodetection to run, but if we
-        // don't clear this, it may be suppressed for a short duration.
-        self.last_explicit_input_type_set_at = None;
     }
 
     /// Handles the input buffer being submitted.
@@ -611,251 +553,6 @@ impl BlocklistAIInputModel {
         self.was_lock_set_with_empty_buffer
     }
 
-    /// Aborts any in progress work for autodetection.
-    pub fn abort_in_progress_detection(&mut self) {
-        if let Some(handle) = self.autodetect_abort_handle.take() {
-            handle.abort();
-        }
-    }
-
-    /// If the input type is unlocked, analyze the input and set the input type to the type we
-    /// detected. Emits an event if the input mode changed. If the input mode is locked, do
-    /// nothing.
-    ///
-    /// When `session_id` is `Some`, history matching is performed. The `completion_context`
-    /// is always used for alias expansion (callers without a live session should pass an
-    /// `EmptyCompletionContext`).
-    pub fn detect_and_set_input_type<C: CompletionContext + Clone + Send + 'static>(
-        &mut self,
-        input: ParsedTokensSnapshot,
-        completion_context: C,
-        session_id: Option<SessionId>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        // Abort the last autodetect handle if exists.
-        self.abort_in_progress_detection();
-
-        // If the input mode is locked, there's no point in running autodetection.
-        if !self.should_run_input_autodetection(ctx) {
-            return;
-        }
-
-        if self
-            .last_explicit_input_type_set_at
-            .map(|last_explicitly_set_at| {
-                Instant::now()
-                    < last_explicitly_set_at
-                        + std::time::Duration::from_millis(AUTODETECTION_DISABLE_DURATION_MS)
-            })
-            .unwrap_or(false)
-        {
-            return;
-        }
-
-        let first_token_str = input.parsed_tokens.first().map(|t| t.token.clone());
-        let Some(first_token_str) = first_token_str else {
-            // If the buffer is empty, short-circuit and leave input type unchanged.
-            //
-            // We don't know enough (anything) to be able to change the input type one way or
-            // another.
-            return;
-        };
-
-        let denylist: Vec<&str> = AISettings::as_ref(ctx)
-            .autodetection_command_denylist
-            .value()
-            .split(',')
-            .collect();
-
-        // Early return if the first token is included in the denylist. No need to parse history.
-        if denylist.contains(&first_token_str.as_str()) {
-            self.set_input_config_internal(
-                InputConfig {
-                    input_type: InputType::Shell,
-                    ..self.input_config()
-                },
-                Some(InputTypeAutoDetectionSource::Denylist),
-                ctx,
-            );
-            return;
-        }
-
-        // If we have a session, gather command history entries. `History::commands`
-        // returns entries in ascending (oldest-first) order, so downstream matching
-        // reverses them to iterate newest-first.
-        let history_entries = session_id.map(|sid| {
-            History::as_ref(ctx)
-                .commands(sid)
-                .into_iter()
-                .flatten()
-                .filter_map(|entry| {
-                    if entry
-                        .exit_code
-                        .is_some_and(|code| code.was_command_not_found())
-                    {
-                        return None;
-                    }
-                    Some((entry.command.to_string(), entry.start_ts))
-                })
-                .collect::<Vec<(String, Option<DateTime<Local>>)>>()
-        });
-
-        // Gather agent prompt history (ascending / oldest-first).
-        let prompt_entries = FeatureFlag::NldPromptHistoryMatch
-            .is_enabled()
-            .then(|| BlocklistAIHistoryModel::as_ref(ctx).prompt_history_candidates());
-
-        let buffer_cloned = input.buffer_text.clone();
-        let other_buffer_cloned = buffer_cloned.clone();
-        let current_input_type = self.input_type();
-
-        let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
-
-        // Determine if the input is a follow-up to an AI block.
-        let is_agent_follow_up = {
-            let model = self.model.lock();
-            let block_list = model.block_list();
-            let block_index = block_list.last_non_hidden_block_by_index();
-            match block_list.last_non_hidden_rich_content_block_after_block(block_index) {
-                Some((_, content)) => content.content_type == Some(RichContentType::AIBlock),
-                _ => false,
-            }
-        };
-
-        let classifier = InputClassifierModel::as_ref(ctx).classifier();
-        let handle = ctx
-            .spawn(
-                async move {
-                    // First check if the token is a natural language word, if current input type is AI
-                    if matches!(current_input_type, InputType::AI)
-                        && is_one_off_natural_language_word(first_token_str.to_lowercase().as_str())
-                    {
-                        return (
-                            InputType::AI,
-                            InputClassifierDecisionSource::NaturalLanguageOneOffAllowlist.into(),
-                        );
-                    }
-
-                    // If this is clearly intended to be a follow-up to an AI block, classify it as AI.
-                    if is_agent_follow_up
-                        && is_agent_follow_up_input(&buffer_cloned.trim().to_lowercase())
-                    {
-                        return (
-                            InputType::AI,
-                            InputTypeAutoDetectionSource::NaturalLanguageAgentFollowUpAllowList,
-                        );
-                    }
-
-                    // If we have history entries (i.e., a live session), check for
-                    // close matches against command history and agent prompt history.
-                    if let Some(history_entries) = history_entries {
-                        // Iterate commands newest-first so the first match is the
-                        // most-recent matching command.
-                        let command_match = most_recent_close_match(
-                            &buffer_cloned,
-                            history_entries
-                                .iter()
-                                .rev()
-                                .map(|(command, start_ts)| (command.as_str(), *start_ts)),
-                            HISTORY_ENTRY_MATCH_CUTOFF,
-                        )
-                        .await;
-
-                        if let Some(prompt_entries) = &prompt_entries {
-                            // `prompt_entries` is ascending (oldest-first); reverse it so the
-                            // matcher iterates newest-first and the first match is most-recent.
-                            let prompt_match = most_recent_close_match(
-                                &buffer_cloned,
-                                prompt_entries
-                                    .iter()
-                                    .rev()
-                                    .map(|entry| (&*entry.text, Some(entry.start_ts))),
-                                HISTORY_ENTRY_MATCH_CUTOFF,
-                            )
-                            .await;
-
-                            if let Some(decision) =
-                                resolve_history_match(command_match, prompt_match)
-                            {
-                                return decision;
-                            }
-                        } else if let Some(decision) =
-                            resolve_history_match(command_match, HistoryMatch::NoMatch)
-                        {
-                            // Feature disabled: preserve the command-only behavior.
-                            return decision;
-                        }
-                    }
-
-                    // Yield so that an attempt to abort the classification is handled.  We do this periodically
-                    // so that we can skip doing additional expensive work if the classification is aborted.
-                    futures_lite::future::yield_now().await;
-
-                    let input =
-                        warp_completer::util::expand_aliases(input, &completion_context).await;
-
-                    futures_lite::future::yield_now().await;
-
-                    let context = input_classifier::Context {
-                        current_input_type,
-                        is_agent_follow_up,
-                    };
-                    let classification =
-                        classifier.detect_input_type(input.clone(), &context).await;
-
-                    futures_lite::future::yield_now().await;
-                    (classification.input_type, classification.source.into())
-                },
-                move |me, (new_input_type, decision_source), ctx| {
-                    // In theory, we shouldn't need to check this, as we only run autodetection if the input
-                    // is not locked, and we should abort the autodetect future if the input is locked, but
-                    // we do it anyway out of an abundance of caution.
-                    if !me.should_run_input_autodetection(ctx) {
-                        return;
-                    }
-                    // If the autodetect abort handle is none, it means we aborted autodetection.
-                    // It's possible that the future already completed before we aborted, and then we reach this callback after abort.
-                    // In this case, don't set the input type.
-                    if me.autodetect_abort_handle.is_none() {
-                        return;
-                    }
-                    me.set_input_config_internal(
-                        InputConfig {
-                            input_type: new_input_type,
-                            ..me.input_config()
-                        },
-                        Some(decision_source),
-                        ctx,
-                    );
-                    if current_input_type != new_input_type {
-                        let buffer_length = other_buffer_cloned.len();
-                        let input_buffer_text_for_telemetry = should_collect_ai_ugc_telemetry(
-                            ctx,
-                            PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                        )
-                        .then_some(other_buffer_cloned);
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AgentModeChangedInputType {
-                                input: input_buffer_text_for_telemetry,
-                                buffer_length,
-                                is_manually_changed: false,
-                                new_input_type,
-                                active_block_id: me
-                                    .model
-                                    .lock()
-                                    .block_list()
-                                    .active_block_id()
-                                    .clone(),
-                                is_udi_enabled,
-                            },
-                            ctx
-                        );
-                    }
-                },
-            )
-            .abort_handle();
-        self.autodetect_abort_handle = Some(handle);
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -890,106 +587,6 @@ impl BlocklistAIInputEvent {
 
 impl Entity for BlocklistAIInputModel {
     type Event = BlocklistAIInputEvent;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HistoryMatch {
-    /// No entry in this source closely matched the input.
-    NoMatch,
-    /// An entry matched, and its recency is known via `start_ts`.
-    MatchedAt(DateTime<Local>),
-    /// An entry matched, but the source has no timestamp for it (e.g. a command
-    /// read from a shell history file such as `.zsh_history`).
-    MatchedWithoutTimestamp,
-}
-
-/// Returns the [`HistoryMatch`] for the most-recent entry that closely matches
-/// the provided word, using the given similarity threshold, or
-/// [`HistoryMatch::NoMatch`] if no entry matches. The possibilities must be
-/// ordered newest-first.
-async fn most_recent_close_match<'a>(
-    word: &str,
-    possibilities: impl Iterator<Item = (&'a str, Option<DateTime<Local>>)>,
-    cutoff: f32,
-) -> HistoryMatch {
-    const BATCH_SIZE: usize = 50;
-
-    if !(0.0..=1.0).contains(&cutoff) {
-        panic!("Cutoff must be greater than 0.0 and lower than 1.0");
-    }
-    let mut matcher = difflib::sequencematcher::SequenceMatcher::new("", word);
-    for (idx, (candidate, start_ts)) in possibilities.enumerate() {
-        // Periodically, yield to the executor so this task can be aborted if
-        // requested.
-        if idx % BATCH_SIZE == 0 {
-            futures_lite::future::yield_now().await;
-        }
-
-        matcher.set_first_seq(candidate);
-        // The fast ratio computations produce an upper bound on the value of
-        // ratio, so if a faster check fails, the slower checks are guaranteed
-        // to also fail.
-        if matcher.real_quick_ratio() >= cutoff && matcher.ratio() >= cutoff {
-            return match start_ts {
-                Some(ts) => HistoryMatch::MatchedAt(ts),
-                None => HistoryMatch::MatchedWithoutTimestamp,
-            };
-        }
-    }
-
-    HistoryMatch::NoMatch
-}
-
-/// Resolves the history-match decision from the command-history and agent
-/// prompt-history match results produced by [`most_recent_close_match`].
-///
-/// Returns `None` when neither source matched
-/// - command-only match -> Shell
-/// - prompt-only match -> AI
-/// - both matched: the entry with the later timestamp wins. When the command
-///   has no timestamp (e.g. a history-file entry) but the prompt does, the
-///   prompt is treated as more recent (AI).
-fn resolve_history_match(
-    command_match: HistoryMatch,
-    prompt_match: HistoryMatch,
-) -> Option<(InputType, InputTypeAutoDetectionSource)> {
-    use HistoryMatch::{MatchedAt, MatchedWithoutTimestamp, NoMatch};
-
-    match (command_match, prompt_match) {
-        (NoMatch, NoMatch) => None,
-        // Both sources matched: the entry with the later timestamp wins. When
-        // the command has no timestamp (e.g. a shell history-file entry) but the
-        // prompt does, the prompt is treated as more recent (AI). Without a
-        // prompt timestamp we cannot prove the prompt is newer, so we preserve
-        // the Shell short-circuit.
-        (MatchedAt(command_ts), MatchedAt(prompt_ts)) => {
-            if prompt_ts > command_ts {
-                log::debug!("found match from prompt history at {prompt_ts:?}");
-                Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
-            } else {
-                log::debug!("found match from command history at {command_ts:?}");
-                Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
-            }
-        }
-        (MatchedWithoutTimestamp, MatchedAt(prompt_ts)) => {
-            log::debug!("found match from prompt history at {prompt_ts:?}");
-            Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
-        }
-        (MatchedAt(_) | MatchedWithoutTimestamp, MatchedWithoutTimestamp) => {
-            log::debug!("found match from command history");
-            Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
-        }
-        // Command-only match -> Shell.
-        (MatchedAt(_) | MatchedWithoutTimestamp, NoMatch) => {
-            log::debug!("found match from command history");
-            Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch))
-        }
-        // Prompt-only match -> AI.
-        (NoMatch, MatchedAt(_) | MatchedWithoutTimestamp) => {
-            log::debug!("found match from prompt history");
-            Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
-        }
-    }
 }
 
 #[cfg(test)]

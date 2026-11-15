@@ -244,6 +244,11 @@ static NSView *get_titlebar_container_view(NSWindow *window) {
 // Returns the height constraint if newly created, or NULL if just updating.
 static NSLayoutConstraint *configure_titlebar_height(NSWindow *window, CGFloat height,
                                                      NSLayoutConstraint *existingConstraint) {
+    // Keep AppKit in charge of the title bar and button layout on macOS 27.
+    if (@available(macOS 27.0, *)) {
+        return existingConstraint;
+    }
+
     if (height <= 0) {
         return existingConstraint;
     }

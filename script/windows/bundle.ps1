@@ -205,9 +205,6 @@ if ($IS_TUI) {
     $BINARY_NAME = "$WARP_BIN.exe"
     $FEATURES = (($FEATURES -split ',') | Where-Object { $_ -ne 'gui' }) -join ','
     $FEATURES = "$FEATURES,standalone"
-} else {
-    # All app channels ship the v3 classifier and v2 heuristic.
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
@@ -300,7 +297,7 @@ if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE 
 }
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output 'Preparing bundled resources...'
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL"
+& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR"
 if (-Not $?) {
     Write-Error 'Failed to prepare bundled resources'
     exit 1

@@ -54,6 +54,7 @@ use self::telemetry::SettingsTelemetryEvent;
 use crate::ai::custom_model_routers::CustomModelRouter;
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextColors, TextOptions,
@@ -1180,7 +1181,7 @@ pub struct SettingsView {
     clipped_scroll_state: ClippedScrollStateHandle,
     context_menu: ViewHandle<Menu<SettingsAction>>,
     context_menu_state: Option<Vector2F>,
-    environments_page_handle: ViewHandle<EnvironmentsPageView>,
+    environments_page_handle: Option<ViewHandle<EnvironmentsPageView>>,
     /// Sidebar navigation items (pages + umbrellas). This is the single source
     /// of truth for which sections sit under which umbrella.
     nav_items: Vec<SettingsNavItem>,
@@ -1200,12 +1201,17 @@ pub struct SettingsView {
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let is_local_session = cfg!(feature = "local_terminal")
+            || AuthStateProvider::as_ref(ctx).get().is_local_session();
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
-        let main_page_handle = ctx.add_typed_action_view(MainSettingsPageView::new);
-        ctx.subscribe_to_view(&main_page_handle, |me, _, event, ctx| {
-            me.handle_main_page_event(event, ctx);
+        let main_page_handle = (!is_local_session).then(|| {
+            let main_page_handle = ctx.add_typed_action_view(MainSettingsPageView::new);
+            ctx.subscribe_to_view(&main_page_handle, |me, _, event, ctx| {
+                me.handle_main_page_event(event, ctx);
+            });
+            main_page_handle
         });
 
         // Appearance & themes page
@@ -1224,83 +1230,113 @@ impl SettingsView {
         });
 
         // Shared blocks page
-        let block_client = ServerApiProvider::as_ref(ctx).get_block_client();
-        let show_blocks_view_handle =
-            ctx.add_typed_action_view(|ctx| ShowBlocksView::new(block_client, ctx));
+        let show_blocks_view_handle = (!is_local_session).then(|| {
+            let block_client = ServerApiProvider::as_ref(ctx).get_block_client();
+            let show_blocks_view_handle =
+                ctx.add_typed_action_view(|ctx| ShowBlocksView::new(block_client, ctx));
 
-        ctx.subscribe_to_view(&show_blocks_view_handle, |_, _, event, ctx| match event {
-            ShowBlocksEvent::ShowToast { message, flavor } => {
-                ctx.emit(SettingsViewEvent::ShowToast {
-                    message: message.clone(),
-                    flavor: *flavor,
-                })
-            }
+            ctx.subscribe_to_view(&show_blocks_view_handle, |_, _, event, ctx| match event {
+                ShowBlocksEvent::ShowToast { message, flavor } => {
+                    ctx.emit(SettingsViewEvent::ShowToast {
+                        message: message.clone(),
+                        flavor: *flavor,
+                    })
+                }
+            });
+            show_blocks_view_handle
         });
 
         // About page
         let about_page_handle = ctx.add_typed_action_view(AboutPageView::new);
 
         // Warp Agent page
-        let warp_agent_page_handle = ctx.add_typed_action_view(WarpAgentPageView::new);
-        ctx.subscribe_to_view(&warp_agent_page_handle, |me, _, event, ctx| {
-            me.handle_warp_agent_page_event(event, ctx);
+        let warp_agent_page_handle = (!is_local_session).then(|| {
+            let warp_agent_page_handle = ctx.add_typed_action_view(WarpAgentPageView::new);
+            ctx.subscribe_to_view(&warp_agent_page_handle, |me, _, event, ctx| {
+                me.handle_warp_agent_page_event(event, ctx);
+            });
+            warp_agent_page_handle
         });
 
         // Agent profiles page, under the Agents umbrella
-        let agent_profiles_page_handle = ctx.add_typed_action_view(AgentProfilesPageView::new);
-        ctx.subscribe_to_view(&agent_profiles_page_handle, |me, _, event, ctx| {
-            me.handle_agent_profiles_page_event(event, ctx);
+        let agent_profiles_page_handle = (!is_local_session).then(|| {
+            let agent_profiles_page_handle = ctx.add_typed_action_view(AgentProfilesPageView::new);
+            ctx.subscribe_to_view(&agent_profiles_page_handle, |me, _, event, ctx| {
+                me.handle_agent_profiles_page_event(event, ctx);
+            });
+            agent_profiles_page_handle
         });
 
         // Knowledge page, under the Agents umbrella
-        let knowledge_page_handle = ctx.add_typed_action_view(KnowledgePageView::new);
-        ctx.subscribe_to_view(&knowledge_page_handle, |me, _, event, ctx| {
-            me.handle_knowledge_page_event(event, ctx);
+        let knowledge_page_handle = (!is_local_session).then(|| {
+            let knowledge_page_handle = ctx.add_typed_action_view(KnowledgePageView::new);
+            ctx.subscribe_to_view(&knowledge_page_handle, |me, _, event, ctx| {
+                me.handle_knowledge_page_event(event, ctx);
+            });
+            knowledge_page_handle
         });
 
         // Third party CLI agents page, under the Agents umbrella
-        let cli_agents_page_handle = ctx.add_typed_action_view(CLIAgentsPageView::new);
-        ctx.subscribe_to_view(&cli_agents_page_handle, |me, _, event, ctx| {
-            me.handle_cli_agents_page_event(event, ctx);
+        let cli_agents_page_handle = (!is_local_session).then(|| {
+            let cli_agents_page_handle = ctx.add_typed_action_view(CLIAgentsPageView::new);
+            ctx.subscribe_to_view(&cli_agents_page_handle, |me, _, event, ctx| {
+                me.handle_cli_agents_page_event(event, ctx);
+            });
+            cli_agents_page_handle
         });
 
         // Environments page
-        let environments_page_handle = ctx.add_typed_action_view(EnvironmentsPageView::new);
-        ctx.subscribe_to_view(&environments_page_handle, |me, _, event, ctx| {
-            me.handle_environments_page_event(event, ctx);
+        let environments_page_handle = (!is_local_session).then(|| {
+            let environments_page_handle = ctx.add_typed_action_view(EnvironmentsPageView::new);
+            ctx.subscribe_to_view(&environments_page_handle, |me, _, event, ctx| {
+                me.handle_environments_page_event(event, ctx);
+            });
+            environments_page_handle
         });
 
         // Billing & Usage page (internally, this routes to the v1 or v2 version. Depending on FFs and current plan).
-        let billing_and_usage_handle = ctx.add_typed_action_view(BillingAndUsageDispatchView::new);
-        ctx.subscribe_to_view(&billing_and_usage_handle, |me, _, event, ctx| {
-            me.handle_billing_and_usage_page_event(event, ctx);
+        let billing_and_usage_handle = (!is_local_session).then(|| {
+            let billing_and_usage_handle =
+                ctx.add_typed_action_view(BillingAndUsageDispatchView::new);
+            ctx.subscribe_to_view(&billing_and_usage_handle, |me, _, event, ctx| {
+                me.handle_billing_and_usage_page_event(event, ctx);
+            });
+            billing_and_usage_handle
         });
-        let billing_and_usage_page = SettingsPage::new(billing_and_usage_handle);
 
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
 
         // Code umbrella pages
-        let code_indexing_page_handle = ctx.add_typed_action_view(CodeIndexingPageView::new);
-        ctx.subscribe_to_view(&code_indexing_page_handle, |me, _, event, ctx| {
-            me.handle_code_indexing_page_event(event, ctx);
+        let code_indexing_page_handle = (!is_local_session).then(|| {
+            let code_indexing_page_handle = ctx.add_typed_action_view(CodeIndexingPageView::new);
+            ctx.subscribe_to_view(&code_indexing_page_handle, |me, _, event, ctx| {
+                me.handle_code_indexing_page_event(event, ctx);
+            });
+            code_indexing_page_handle
         });
-        let editor_review_page_handle = ctx.add_typed_action_view(EditorAndCodeReviewPageView::new);
+        let editor_review_page_handle = (!is_local_session).then(|| {
+            let editor_review_page_handle =
+                ctx.add_typed_action_view(EditorAndCodeReviewPageView::new);
+            editor_review_page_handle
+        });
 
-        // Teams page, adding unconditionally, as `should_render` later on decides whether it
-        // should be shown to the user or not
-        let teams_page_handle = ctx.add_typed_action_view(TeamsPageView::new);
-        ctx.subscribe_to_view(&teams_page_handle, |_, _, event, ctx| match event {
-            TeamsPageViewEvent::TeamsChanged => ctx.notify(),
-            TeamsPageViewEvent::OpenWarpDrive => ctx.emit(SettingsViewEvent::OpenWarpDrive),
-            TeamsPageViewEvent::ShowToast { message, flavor } => {
-                ctx.emit(SettingsViewEvent::ShowToast {
-                    message: message.clone(),
-                    flavor: *flavor,
-                })
-            }
-            // Modal rendering is handled in get_modal_content_for_page
-            TeamsPageViewEvent::ModalVisibilityChanged => ctx.notify(),
+        // Team visibility for online sessions is handled by the page.
+        let teams_page_handle = (!is_local_session).then(|| {
+            let teams_page_handle = ctx.add_typed_action_view(TeamsPageView::new);
+            ctx.subscribe_to_view(&teams_page_handle, |_, _, event, ctx| match event {
+                TeamsPageViewEvent::TeamsChanged => ctx.notify(),
+                TeamsPageViewEvent::OpenWarpDrive => ctx.emit(SettingsViewEvent::OpenWarpDrive),
+                TeamsPageViewEvent::ShowToast { message, flavor } => {
+                    ctx.emit(SettingsViewEvent::ShowToast {
+                        message: message.clone(),
+                        flavor: *flavor,
+                    })
+                }
+                // Modal rendering is handled in get_modal_content_for_page
+                TeamsPageViewEvent::ModalVisibilityChanged => ctx.notify(),
+            });
+            teams_page_handle
         });
 
         let warpify_page_handle = ctx.add_typed_action_view(WarpifyPageView::new);
@@ -1314,11 +1350,14 @@ impl SettingsView {
             me.handle_privacy_page_event(event, ctx);
         });
 
-        let referrals_client = ServerApiProvider::as_ref(ctx).get_referrals_client();
-        let referrals_page_handle =
-            ctx.add_typed_action_view(|ctx| ReferralsPageView::new(referrals_client, ctx));
-        ctx.subscribe_to_view(&referrals_page_handle, |me, _, event, ctx| {
-            me.handle_referrals_page_event(event, ctx);
+        let referrals_page_handle = (!is_local_session).then(|| {
+            let referrals_client = ServerApiProvider::as_ref(ctx).get_referrals_client();
+            let referrals_page_handle =
+                ctx.add_typed_action_view(|ctx| ReferralsPageView::new(referrals_client, ctx));
+            ctx.subscribe_to_view(&referrals_page_handle, |me, _, event, ctx| {
+                me.handle_referrals_page_event(event, ctx);
+            });
+            referrals_page_handle
         });
         let scripting_page_handle = if FeatureFlag::WarpControlCli.is_enabled() {
             Some(ctx.add_typed_action_view(ScriptingSettingsPageView::new))
@@ -1327,21 +1366,32 @@ impl SettingsView {
         };
 
         // Warp Drive page
-        let warp_drive_page_handle =
-            ctx.add_typed_action_view(warp_drive_page::WarpDriveSettingsPageView::new);
-        ctx.subscribe_to_view(&warp_drive_page_handle, |me, _, event, ctx| {
-            me.handle_warp_drive_page_event(event, ctx);
+        let warp_drive_page_handle = (!is_local_session).then(|| {
+            let warp_drive_page_handle =
+                ctx.add_typed_action_view(warp_drive_page::WarpDriveSettingsPageView::new);
+            ctx.subscribe_to_view(&warp_drive_page_handle, |me, _, event, ctx| {
+                me.handle_warp_drive_page_event(event, ctx);
+            });
+            warp_drive_page_handle
         });
 
-        let platform_page_handle = ctx.add_typed_action_view(platform_page::PlatformPageView::new);
-        ctx.subscribe_to_view(&platform_page_handle, |me, _, event, ctx| {
-            me.handle_platform_page_event(event, ctx);
+        let platform_page_handle = (!is_local_session).then(|| {
+            let platform_page_handle =
+                ctx.add_typed_action_view(platform_page::PlatformPageView::new);
+            ctx.subscribe_to_view(&platform_page_handle, |me, _, event, ctx| {
+                me.handle_platform_page_event(event, ctx);
+            });
+            platform_page_handle
         });
 
         // MCP Servers page
-        let mcp_servers_page_handle = ctx.add_typed_action_view(MCPServersSettingsPageView::new);
-        ctx.subscribe_to_view(&mcp_servers_page_handle, |me, _, event, ctx| {
-            me.handle_mcp_servers_page_event(event, ctx);
+        let mcp_servers_page_handle = (!is_local_session).then(|| {
+            let mcp_servers_page_handle =
+                ctx.add_typed_action_view(MCPServersSettingsPageView::new);
+            ctx.subscribe_to_view(&mcp_servers_page_handle, |me, _, event, ctx| {
+                me.handle_mcp_servers_page_event(event, ctx);
+            });
+            mcp_servers_page_handle
         });
 
         let font_family = Appearance::as_ref(ctx).ui_font_family();
@@ -1372,36 +1422,33 @@ impl SettingsView {
             me.handle_menu_event(event, ctx);
         });
 
-        let mut settings_pages = vec![
-            SettingsPage::new(main_page_handle),
-            SettingsPage::new(warp_agent_page_handle),
-            SettingsPage::new(agent_profiles_page_handle),
-            SettingsPage::new(knowledge_page_handle),
-            SettingsPage::new(cli_agents_page_handle),
-            billing_and_usage_page,
-            SettingsPage::new(code_indexing_page_handle),
-            SettingsPage::new(editor_review_page_handle),
-            SettingsPage::new(teams_page_handle),
-            SettingsPage::new(appearance_page_handle),
-            SettingsPage::new(features_page_handle),
-            SettingsPage::new(keybindings_handle),
-            SettingsPage::new(platform_page_handle),
-            SettingsPage::new(warpify_page_handle),
-            SettingsPage::new(referrals_page_handle),
-            SettingsPage::new(show_blocks_view_handle),
-            SettingsPage::new(warp_drive_page_handle),
-        ];
-
-        if let Some(scripting_page_handle) = scripting_page_handle {
-            settings_pages.push(SettingsPage::new(scripting_page_handle));
-        }
-
-        settings_pages.extend(vec![
-            SettingsPage::new(mcp_servers_page_handle),
-            SettingsPage::new(environments_page_handle.clone()),
-            SettingsPage::new(privacy_page_handle),
-            SettingsPage::new(about_page_handle),
-        ]);
+        let settings_pages: Vec<_> = [
+            main_page_handle.map(SettingsPage::new),
+            warp_agent_page_handle.map(SettingsPage::new),
+            agent_profiles_page_handle.map(SettingsPage::new),
+            knowledge_page_handle.map(SettingsPage::new),
+            cli_agents_page_handle.map(SettingsPage::new),
+            billing_and_usage_handle.map(SettingsPage::new),
+            code_indexing_page_handle.map(SettingsPage::new),
+            editor_review_page_handle.map(SettingsPage::new),
+            teams_page_handle.map(SettingsPage::new),
+            Some(SettingsPage::new(appearance_page_handle)),
+            Some(SettingsPage::new(features_page_handle)),
+            Some(SettingsPage::new(keybindings_handle)),
+            platform_page_handle.map(SettingsPage::new),
+            Some(SettingsPage::new(warpify_page_handle)),
+            referrals_page_handle.map(SettingsPage::new),
+            show_blocks_view_handle.map(SettingsPage::new),
+            warp_drive_page_handle.map(SettingsPage::new),
+            scripting_page_handle.map(SettingsPage::new),
+            mcp_servers_page_handle.map(SettingsPage::new),
+            environments_page_handle.clone().map(SettingsPage::new),
+            Some(SettingsPage::new(privacy_page_handle)),
+            Some(SettingsPage::new(about_page_handle)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
         // Build sidebar nav items. Umbrellas group their subpages here and
         // nowhere else, so this list is the only place membership is declared.
@@ -1457,7 +1504,28 @@ impl SettingsView {
             );
         }
 
+        if is_local_session {
+            let is_local_page = |section| {
+                matches!(
+                    section,
+                    SettingsSection::Appearance
+                        | SettingsSection::Features
+                        | SettingsSection::Keybindings
+                        | SettingsSection::Warpify
+                        | SettingsSection::Scripting
+                        | SettingsSection::Privacy
+                        | SettingsSection::About
+                )
+            };
+            nav_items.retain(
+                |item| matches!(item, SettingsNavItem::Page(section) if is_local_page(*section)),
+            );
+        }
+
         let initial_page = match page {
+            requested if is_local_session => requested
+                .filter(|section| settings_pages.iter().any(|page| page.section == *section))
+                .unwrap_or(SettingsSection::Appearance),
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
                 SettingsSection::Account
             }
@@ -2690,18 +2758,18 @@ impl View for SettingsView {
         // Render environment setup mode selector overlay when open.
         if let Some(selector_handle) = self
             .environments_page_handle
-            .as_ref(app)
-            .environment_setup_mode_selector_handle()
+            .as_ref()
+            .and_then(|handle| handle.as_ref(app).environment_setup_mode_selector_handle())
         {
             stack.add_child(ChildView::new(selector_handle).finish());
         }
 
         // Render agent-assisted environment modal overlay when open.
-        if let Some(modal_handle) = self
-            .environments_page_handle
-            .as_ref(app)
-            .agent_assisted_environment_modal_handle(app)
-        {
+        if let Some(modal_handle) = self.environments_page_handle.as_ref().and_then(|handle| {
+            handle
+                .as_ref(app)
+                .agent_assisted_environment_modal_handle(app)
+        }) {
             stack.add_child(ChildView::new(modal_handle).finish());
         }
 

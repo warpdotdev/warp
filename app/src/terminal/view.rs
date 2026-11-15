@@ -420,7 +420,6 @@ use crate::terminal::event::{
 use crate::terminal::find::{BlockGridMatch, BlockListMatch, TerminalFindModel};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
-use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
@@ -2780,7 +2779,7 @@ pub struct TerminalView {
     hover_near_snackbar_area: bool,
 
     ai_controller: ModelHandle<BlocklistAIController>,
-    passive_suggestions_models: PassiveSuggestionsModels,
+    passive_suggestions_models: Option<PassiveSuggestionsModels>,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
@@ -2926,7 +2925,7 @@ pub struct TerminalView {
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
     conversation_details_panel:
-        ViewHandle<crate::ai::conversation_details_panel::ConversationDetailsPanel>,
+        Option<ViewHandle<crate::ai::conversation_details_panel::ConversationDetailsPanel>>,
     /// Whether the conversation details panel is currently open.
     is_conversation_details_panel_open: bool,
     /// Whether we've already auto-opened the panel when the agent started running.
@@ -3212,12 +3211,13 @@ impl TerminalView {
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
-        let ambient_agent_view_model = is_ambient_agent.then(|| {
-            let terminal_view = terminal_view.clone();
-            ctx.add_model(|ctx| {
-                ambient_agent::AmbientAgentViewModel::new(terminal_view_id, terminal_view, ctx)
-            })
-        });
+        let ambient_agent_view_model = (!cfg!(feature = "local_terminal") && is_ambient_agent)
+            .then(|| {
+                let terminal_view = terminal_view.clone();
+                ctx.add_model(|ctx| {
+                    ambient_agent::AmbientAgentViewModel::new(terminal_view_id, terminal_view, ctx)
+                })
+            });
 
         let ephemeral_message_model = ctx.add_model(|_| EphemeralMessageModel::new());
 
@@ -3229,6 +3229,7 @@ impl TerminalView {
             )
         });
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| {
             match event {
                 AgentViewControllerEvent::EnteredAgentView {
@@ -3546,6 +3547,12 @@ impl TerminalView {
             ctx.notify();
         });
 
+        #[cfg(feature = "local_terminal")]
+        let conversation_selection = ctx.add_model(|_| {
+            use crate::ai::blocklist::conversation_selection::InactiveConversationSelection;
+            Box::new(InactiveConversationSelection) as Box<dyn ConversationSelection>
+        });
+        #[cfg(not(feature = "local_terminal"))]
         let conversation_selection = ctx.add_model(|ctx| {
             Box::new(AgentViewConversationSelection::new(
                 terminal_view_id,
@@ -3565,6 +3572,9 @@ impl TerminalView {
             )
         });
         let ai_input_model = ctx.add_model(|ctx| {
+            #[cfg(feature = "local_terminal")]
+            let policy = Rc::new(crate::ai::blocklist::ShellInputModePolicy);
+            #[cfg(not(feature = "local_terminal"))]
             let policy = Rc::new(GuiInputModePolicy::new(
                 conversation_selection.clone(),
                 ai_context_model.clone(),
@@ -3580,7 +3590,8 @@ impl TerminalView {
             );
 
             // If NLD is disabled, restore any input config that was saved.
-            if !model.is_autodetection_enabled_for_current_context(ctx)
+            if !cfg!(feature = "local_terminal")
+                && !model.is_autodetection_enabled_for_current_context(ctx)
                 && let Some(input_config) = initial_input_config
             {
                 let is_input_buffer_empty = true;
@@ -3616,39 +3627,41 @@ impl TerminalView {
                 ctx,
             )
         });
-        let maa_passive_suggestions_model = ctx.add_model(|ctx| {
-            MaaPassiveSuggestionsModel::new(
-                active_session.clone(),
-                model.clone(),
-                ai_controller.clone(),
-                &model_events_handle,
-                ambient_agent_view_model.clone(),
-                terminal_view_id,
-                ctx,
-            )
+        let passive_suggestions_models = (!cfg!(feature = "local_terminal")).then(|| {
+            let maa_passive_suggestions_model = ctx.add_model(|ctx| {
+                MaaPassiveSuggestionsModel::new(
+                    active_session.clone(),
+                    model.clone(),
+                    ai_controller.clone(),
+                    &model_events_handle,
+                    ambient_agent_view_model.clone(),
+                    terminal_view_id,
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_model(
+                &maa_passive_suggestions_model,
+                Self::handle_maa_passive_suggestions_event,
+            );
+            let legacy_passive_suggestions_model = ctx.add_model(|ctx| {
+                LegacyPassiveSuggestionsModel::new(
+                    active_session.clone(),
+                    model.clone(),
+                    ai_controller.clone(),
+                    &model_events_handle,
+                    terminal_view_id,
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_model(
+                &legacy_passive_suggestions_model,
+                Self::handle_legacy_passive_suggestions_event,
+            );
+            PassiveSuggestionsModels {
+                maa: maa_passive_suggestions_model,
+                legacy: legacy_passive_suggestions_model,
+            }
         });
-        ctx.subscribe_to_model(
-            &maa_passive_suggestions_model,
-            Self::handle_maa_passive_suggestions_event,
-        );
-        let legacy_passive_suggestions_model = ctx.add_model(|ctx| {
-            LegacyPassiveSuggestionsModel::new(
-                active_session.clone(),
-                model.clone(),
-                ai_controller.clone(),
-                &model_events_handle,
-                terminal_view_id,
-                ctx,
-            )
-        });
-        ctx.subscribe_to_model(
-            &legacy_passive_suggestions_model,
-            Self::handle_legacy_passive_suggestions_event,
-        );
-        let passive_suggestions_models = PassiveSuggestionsModels {
-            maa: maa_passive_suggestions_model,
-            legacy: legacy_passive_suggestions_model,
-        };
 
         let find_model = ctx.add_model(|ctx| TerminalFindModel::new(model.clone(), ctx));
 
@@ -3889,16 +3902,17 @@ impl TerminalView {
             me.handle_input_event(event, ctx);
         });
 
-        let ai_status_bar = input.as_ref(ctx).agent_status_bar().clone();
-        ctx.subscribe_to_view(&ai_status_bar, |me, _, event, ctx| match event {
-            BlocklistAIStatusBarEvent::SummarizationCancelDialogToggled { is_open } => {
-                me.pane_configuration.update(ctx, |pane_config, ctx| {
-                    pane_config.set_has_open_modal(*is_open, ctx)
-                });
-                ctx.emit(Event::SummarizationCancelDialogToggled { is_open: *is_open });
-            }
-            BlocklistAIStatusBarEvent::Stop => me.ctrl_c(ctx),
-        });
+        if let Some(ai_status_bar) = input.as_ref(ctx).agent_status_bar().cloned() {
+            ctx.subscribe_to_view(&ai_status_bar, |me, _, event, ctx| match event {
+                BlocklistAIStatusBarEvent::SummarizationCancelDialogToggled { is_open } => {
+                    me.pane_configuration.update(ctx, |pane_config, ctx| {
+                        pane_config.set_has_open_modal(*is_open, ctx)
+                    });
+                    ctx.emit(Event::SummarizationCancelDialogToggled { is_open: *is_open });
+                }
+                BlocklistAIStatusBarEvent::Stop => me.ctrl_c(ctx),
+            });
+        }
 
         let ai_render_context = Rc::new(RefCell::new(BlocklistAIRenderContext {
             block_ids: HashMap::from_iter([
@@ -3921,13 +3935,18 @@ impl TerminalView {
                 .is_some(),
         }));
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&ai_context_model, Self::handle_ai_context_model_event);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             Self::handle_ai_history_model_event,
         );
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&ai_input_model, Self::handle_ai_input_model_event);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&ai_action_model, Self::handle_ai_action_model_event);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |me, _, event, ctx| {
             if let CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id, ..
@@ -3941,15 +3960,14 @@ impl TerminalView {
             }
             me.handle_cli_agent_sessions_event(event, ctx)
         });
-        ctx.subscribe_to_model(
-            &ai_action_model.as_ref(ctx).shell_command_executor(ctx),
-            Self::handle_shell_command_executor_event,
-        );
-
-        ctx.subscribe_to_model(
-            &ai_action_model.as_ref(ctx).start_agent_executor(ctx),
-            Self::handle_start_agent_executor_event,
-        );
+        #[cfg(not(feature = "local_terminal"))]
+        if let Some(executor) = ai_action_model.as_ref(ctx).shell_command_executor(ctx) {
+            ctx.subscribe_to_model(&executor, Self::handle_shell_command_executor_event);
+        }
+        #[cfg(not(feature = "local_terminal"))]
+        if let Some(executor) = ai_action_model.as_ref(ctx).start_agent_executor(ctx) {
+            ctx.subscribe_to_model(&executor, Self::handle_start_agent_executor_event);
+        }
         let find_bar = ctx.add_typed_action_view(|ctx| Find::new(find_model.clone(), ctx));
         ctx.subscribe_to_view(&find_bar, move |me, _, event, ctx| {
             me.handle_find_event(event, ctx);
@@ -4353,25 +4371,28 @@ impl TerminalView {
         });
 
         // Conversation details panel (cloud Oz runs and any active local AI conversation).
-        let conversation_details_panel = ctx.add_typed_action_view(|ctx| {
-            crate::ai::conversation_details_panel::ConversationDetailsPanel::new(
-                false, // don't show "Open" button since we're already viewing the conversation
-                320.0, // initial width
-                ctx,
-            )
-        });
-        ctx.subscribe_to_view(&conversation_details_panel, |me, _, event, ctx| {
-            match event {
-                ConversationDetailsPanelEvent::Close => {
-                    me.is_conversation_details_panel_open = false;
-                    ctx.notify();
+        let conversation_details_panel = (!cfg!(feature = "local_terminal")).then(|| {
+            let conversation_details_panel = ctx.add_typed_action_view(|ctx| {
+                crate::ai::conversation_details_panel::ConversationDetailsPanel::new(
+                    false, // don't show "Open" button since we're already viewing the conversation
+                    320.0, // initial width
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_view(&conversation_details_panel, |me, _, event, ctx| {
+                match event {
+                    ConversationDetailsPanelEvent::Close => {
+                        me.is_conversation_details_panel_open = false;
+                        ctx.notify();
+                    }
+                    ConversationDetailsPanelEvent::OpenPlanNotebook { notebook_uid } => {
+                        // Convert NotebookId -> SyncId -> ObjectUid (String)
+                        let object_uid = SyncId::from(*notebook_uid).uid();
+                        ctx.emit(Event::OpenWarpDriveObjectInPane(object_uid));
+                    }
                 }
-                ConversationDetailsPanelEvent::OpenPlanNotebook { notebook_uid } => {
-                    // Convert NotebookId -> SyncId -> ObjectUid (String)
-                    let object_uid = SyncId::from(*notebook_uid).uid();
-                    ctx.emit(Event::OpenWarpDriveObjectInPane(object_uid));
-                }
-            }
+            });
+            conversation_details_panel
         });
 
         let window_id = ctx.window_id();
@@ -6390,6 +6411,10 @@ impl TerminalView {
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let history_model_ref = history_model.as_ref(ctx);
         let should_handle = match self.render_owner_for_ai_history_event(history_model_ref, event) {
             Some(owner_terminal_view_id) => owner_terminal_view_id == self.view_id,
@@ -7142,12 +7167,10 @@ impl TerminalView {
             | CLISubagentEvent::UpdatedLastSnapshot => {}
             CLISubagentEvent::ControlHandedBackAfterTransfer => {
                 // Notify the shell command executor that control was handed back after transfer.
-                self.ai_action_model
-                    .as_ref(ctx)
-                    .shell_command_executor(ctx)
-                    .update(ctx, |executor, _| {
-                        executor.notify_control_handed_back();
-                    });
+                if let Some(executor) = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx)
+                {
+                    executor.update(ctx, |executor, _| executor.notify_control_handed_back());
+                }
             }
         }
     }
@@ -9533,10 +9556,9 @@ impl TerminalView {
             });
         }
 
-        let status_bar = self.input.as_ref(ctx).agent_status_bar().clone();
-        status_bar.update(ctx, |status_bar, ctx| {
-            status_bar.handle_ctrl_c(ctx);
-        });
+        if let Some(status_bar) = self.input.as_ref(ctx).agent_status_bar().cloned() {
+            status_bar.update(ctx, |status_bar, ctx| status_bar.handle_ctrl_c(ctx));
+        }
     }
 
     /// If there is an active rich content block that is set up to handle ctrl-c
@@ -9566,9 +9588,13 @@ impl TerminalView {
             });
         } else if self
             .passive_suggestions_models
-            .legacy
-            .as_ref(ctx)
-            .is_passive_code_diff_being_generated()
+            .as_ref()
+            .is_some_and(|suggestions| {
+                suggestions
+                    .legacy
+                    .as_ref(ctx)
+                    .is_passive_code_diff_being_generated()
+            })
         {
             // Handle Ctrl-C for passive code generation blocks ("Generating fix..." state)
             self.abort_prompt_and_code_suggestions(ctx);
@@ -11843,13 +11869,15 @@ impl TerminalView {
 
     // Abort any pending prompt or code suggestions, which may now be irrelevant.
     fn abort_prompt_and_code_suggestions(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(suggestions) = &self.passive_suggestions_models else {
+            return;
+        };
         // Abort both models to handle any in-flight requests from before a
         // feature flag change.
-        self.passive_suggestions_models
+        suggestions
             .maa
             .update(ctx, |model, ctx| model.abort_pending_requests(ctx));
-        let pending_stream_ids = self
-            .passive_suggestions_models
+        let pending_stream_ids = suggestions
             .legacy
             .update(ctx, |model, ctx| model.abort_pending_requests(ctx));
         for stream_id in pending_stream_ids {
@@ -12095,12 +12123,12 @@ impl TerminalView {
         let Some(request) = self.cloud_shell_recovery_request(status) else {
             return false;
         };
-        self.ai_action_model
-            .as_ref(ctx)
-            .shell_command_executor(ctx)
-            .update(ctx, |executor, _| {
-                executor.begin_shell_recovery(&request.action_id, &request.block_id);
-            });
+        let Some(executor) = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx) else {
+            return false;
+        };
+        executor.update(ctx, |executor, _| {
+            executor.begin_shell_recovery(&request.action_id, &request.block_id);
+        });
         self.pending_cloud_shell_recovery = Some(request.clone());
         Self::send_cloud_shell_recovery_telemetry(
             CloudAgentShellRecoveryOutcome::Started,
@@ -12131,10 +12159,9 @@ impl TerminalView {
             return;
         };
         log::warn!("Cloud shell recovery failed: {error:#}");
-        self.ai_action_model
-            .as_ref(ctx)
-            .shell_command_executor(ctx)
-            .update(ctx, |executor, _| executor.abort_shell_recovery());
+        if let Some(executor) = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx) {
+            executor.update(ctx, |executor, _| executor.abort_shell_recovery());
+        }
         Self::send_cloud_shell_recovery_telemetry(
             CloudAgentShellRecoveryOutcome::Failed,
             &request,
@@ -14551,10 +14578,7 @@ impl TerminalView {
             async move { session.load_external_commands().await },
             move |me, _, ctx| {
                 input.update(ctx, |input, ctx| {
-                    input.run_input_background_jobs(
-                        InputBackgroundJobOptions::default().with_command_decoration(),
-                        ctx,
-                    );
+                    input.update_command_decorations(ctx);
                 });
                 me.refresh_warp_prompt(ctx);
             },
@@ -20517,6 +20541,10 @@ impl TerminalView {
         query: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         self.ai_input_model.update(ctx, |ai_input, ctx| {
             ai_input.set_input_config(
                 InputConfig {
@@ -20542,6 +20570,10 @@ impl TerminalView {
     /// terminal input with an AI query (depending on whether the text selection has already been
     /// attached as context). If the input box is not visible, make a new pane and do the same.
     pub fn ask_blocklist_ai(&mut self, ask_type: &AskAIType, ctx: &mut ViewContext<Self>) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let mut context_block_indices = HashSet::new();
 
         let (initial_query, auto_suggestion) = match ask_type {
@@ -24326,7 +24358,7 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<ViewHandle<SummarizationCancelDialog>> {
-        let agent_status_bar = self.input.as_ref(ctx).agent_status_bar().as_ref(ctx);
+        let agent_status_bar = self.input.as_ref(ctx).agent_status_bar()?.as_ref(ctx);
         agent_status_bar
             .should_show_summarization_cancel_dialog(ctx)
             .then(|| {
@@ -27432,12 +27464,9 @@ impl TerminalSurface for TerminalView {
             start_ts: request.start_ts,
             completed_ts: Some(Local::now()),
         };
-        self.ai_action_model
-            .as_ref(ctx)
-            .shell_command_executor(ctx)
-            .update(ctx, |executor, _| {
-                executor.finish_shell_recovery(result);
-            });
+        if let Some(executor) = self.ai_action_model.as_ref(ctx).shell_command_executor(ctx) {
+            executor.update(ctx, |executor, _| executor.finish_shell_recovery(result));
+        }
         self.input.update(ctx, |input, ctx| {
             input.editor().update(ctx, |editor, ctx| {
                 editor.set_interaction_state(crate::editor::InteractionState::Editable, ctx);
@@ -29619,13 +29648,13 @@ impl View for TerminalView {
             && self.is_conversation_details_panel_open
             && self.can_show_conversation_details_ui_from_model(&model, app);
 
-        if should_show_panel {
+        if should_show_panel && let Some(panel) = &self.conversation_details_panel {
             Container::new(
                 Flex::row()
                     .with_main_axis_size(warpui::elements::MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_child(Shrinkable::new(1., final_element).finish())
-                    .with_child(ChildView::new(&self.conversation_details_panel).finish())
+                    .with_child(ChildView::new(panel).finish())
                     .finish(),
             )
             .with_border(Border::top(1.0).with_border_fill(appearance.theme().outline()))

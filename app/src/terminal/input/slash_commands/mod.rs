@@ -50,10 +50,9 @@ use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGIST
 use crate::search::slash_command_menu::static_commands::{Availability, SlashCommandKind};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
-use crate::server::telemetry::{AgentModeAutoDetectionSettingOrigin, SlashCommandAcceptedDetails};
+use crate::server::telemetry::{SlashCommandAcceptedDetails};
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
-use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::message_bar::Message;
 use crate::terminal::input::models::InlineModelSelectorTab;
@@ -138,24 +137,6 @@ pub fn record_static_slash_command_accepted(
                 command_name: command_name.to_owned(),
             },
             is_in_agent_view,
-        },
-        ctx
-    );
-}
-
-/// Records an input auto-detection setting toggle triggered from a TUI slash
-/// command (`/natural-language-detection`).
-///
-/// Mirrors the `SettingsPage` and `Banner` origins used by the GUI toggle paths,
-/// but reports the toggle as originating from a TUI slash command.
-pub fn record_autodetection_toggle_from_slash_command(
-    is_autodetection_enabled: bool,
-    ctx: &mut AppContext,
-) {
-    send_telemetry_from_ctx!(
-        TelemetryEvent::AgentModeToggleAutoDetectionSetting {
-            is_autodetection_enabled,
-            origin: AgentModeAutoDetectionSettingOrigin::SlashCommand,
         },
         ctx
     );
@@ -322,7 +303,7 @@ impl Input {
         if event.old_state.is_detected_command() != new_state.is_detected_command() {
             let _ = self
                 .debounce_input_background_tx
-                .try_send(InputBackgroundJobOptions::default().with_command_decoration());
+                .try_send(());
         }
 
         match self.slash_command_model.as_ref(ctx).state().clone() {
@@ -1341,7 +1322,6 @@ impl Input {
             | SlashCommandKind::ManageBilling
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
-            | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Theme
             | SlashCommandKind::VimMode
             | SlashCommandKind::Exit

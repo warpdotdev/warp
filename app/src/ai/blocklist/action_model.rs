@@ -224,7 +224,7 @@ fn can_start_action_with_current_phase(
 }
 
 pub struct BlocklistAIActionModel {
-    executor: ModelHandle<BlocklistAIActionExecutor>,
+    executor: Option<ModelHandle<BlocklistAIActionExecutor>>,
 
     pending_preprocessed_actions: HashMap<AIConversationId, PendingPreprocessedActions>,
 
@@ -269,54 +269,57 @@ impl BlocklistAIActionModel {
         team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let executor = ctx.add_model(|ctx| {
-            BlocklistAIActionExecutor::new(
-                terminal_model,
-                active_session.clone(),
-                model_event_dispatcher,
-                get_relevant_files_controller,
-                terminal_view_id,
-                team_context_resolver,
-                ctx,
-            )
-        });
-        ctx.subscribe_to_model(&executor, move |me, _, event, ctx| match event {
-            BlocklistAIActionExecutorEvent::ExecutingAction { action_id } => {
-                ctx.emit(BlocklistAIActionEvent::ExecutingAction(action_id.clone()));
-            }
-            BlocklistAIActionExecutorEvent::FinishedAction {
-                result,
-                conversation_id,
-                cancellation_reason,
-            } => {
-                me.handle_action_result(*conversation_id, result.clone(), *cancellation_reason, ctx)
-            }
-            BlocklistAIActionExecutorEvent::HookVerdictResolved {
-                action_id,
-                conversation_id,
-                is_user_initiated,
-            } => {
-                me.resume_action_after_hooks(action_id, *conversation_id, *is_user_initiated, ctx);
-            }
-            BlocklistAIActionExecutorEvent::InitProject(id) => {
-                ctx.emit(BlocklistAIActionEvent::InitProject(id.clone()))
-            }
-            BlocklistAIActionExecutorEvent::OpenCodeReview(id) => {
-                ctx.emit(BlocklistAIActionEvent::ToggleCodeReview(id.clone()))
-            }
-            BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
-                action_id,
-                repo_path,
-                comments,
-                base_branch,
-            } => {
-                ctx.emit(BlocklistAIActionEvent::InsertCodeReviewComments {
-                    action_id: action_id.clone(),
-                    repo_path: repo_path.clone(),
-                    comments: comments.clone(),
-                    base_branch: base_branch.clone(),
-                });
-            }
+        let executor = (!cfg!(feature = "local_terminal")).then(|| {
+            let executor = ctx.add_model(|ctx| {
+                BlocklistAIActionExecutor::new(
+                    terminal_model,
+                    active_session.clone(),
+                    model_event_dispatcher,
+                    get_relevant_files_controller,
+                    terminal_view_id,
+                    team_context_resolver,
+                    ctx,
+                )
+            });
+            ctx.subscribe_to_model(&executor, move |me, _, event, ctx| match event {
+                BlocklistAIActionExecutorEvent::ExecutingAction { action_id } => {
+                    ctx.emit(BlocklistAIActionEvent::ExecutingAction(action_id.clone()));
+                }
+                BlocklistAIActionExecutorEvent::FinishedAction {
+                    result,
+                    conversation_id,
+                    cancellation_reason,
+                } => {
+                    me.handle_action_result(*conversation_id, result.clone(), *cancellation_reason, ctx)
+                }
+                BlocklistAIActionExecutorEvent::HookVerdictResolved {
+                    action_id,
+                    conversation_id,
+                    is_user_initiated,
+                } => {
+                    me.resume_action_after_hooks(action_id, *conversation_id, *is_user_initiated, ctx);
+                }
+                BlocklistAIActionExecutorEvent::InitProject(id) => {
+                    ctx.emit(BlocklistAIActionEvent::InitProject(id.clone()))
+                }
+                BlocklistAIActionExecutorEvent::OpenCodeReview(id) => {
+                    ctx.emit(BlocklistAIActionEvent::ToggleCodeReview(id.clone()))
+                }
+                BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
+                    action_id,
+                    repo_path,
+                    comments,
+                    base_branch,
+                } => {
+                    ctx.emit(BlocklistAIActionEvent::InsertCodeReviewComments {
+                        action_id: action_id.clone(),
+                        repo_path: repo_path.clone(),
+                        comments: comments.clone(),
+                        base_branch: base_branch.clone(),
+                    });
+                }
+            });
+            executor
         });
 
         Self {
@@ -372,60 +375,104 @@ impl BlocklistAIActionModel {
         self.is_view_only
     }
 
-    pub fn shell_command_executor(&self, app: &AppContext) -> ModelHandle<ShellCommandExecutor> {
-        self.executor.as_ref(app).shell_command_executor().clone()
+    pub fn shell_command_executor(
+        &self,
+        app: &AppContext,
+    ) -> Option<ModelHandle<ShellCommandExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .shell_command_executor()
+                .clone(),
+        )
     }
 
     pub fn suggest_new_conversation_executor(
         &self,
         app: &AppContext,
-    ) -> ModelHandle<SuggestNewConversationExecutor> {
-        self.executor
-            .as_ref(app)
-            .suggest_new_conversation_executor()
-            .clone()
+    ) -> Option<ModelHandle<SuggestNewConversationExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .suggest_new_conversation_executor()
+                .clone(),
+        )
     }
 
     pub fn request_file_edits_executor(
         &self,
         app: &AppContext,
-    ) -> ModelHandle<RequestFileEditsExecutor> {
-        self.executor
-            .as_ref(app)
-            .request_file_edits_executor()
-            .clone()
+    ) -> Option<ModelHandle<RequestFileEditsExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .request_file_edits_executor()
+                .clone(),
+        )
     }
 
     pub fn search_codebase_executor<'a>(
         &'a self,
         app: &'a AppContext,
-    ) -> &'a ModelHandle<SearchCodebaseExecutor> {
-        self.executor.as_ref(app).search_codebase_executor()
+    ) -> Option<&'a ModelHandle<SearchCodebaseExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .search_codebase_executor(),
+        )
     }
 
     pub fn suggest_prompt_executor(
         &self,
         app: &AppContext,
-    ) -> ModelHandle<PromptSuggestionExecutor> {
-        self.executor.as_ref(app).suggest_prompt_executor().clone()
+    ) -> Option<ModelHandle<PromptSuggestionExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .suggest_prompt_executor()
+                .clone(),
+        )
     }
 
-    pub fn start_agent_executor(&self, app: &AppContext) -> ModelHandle<StartAgentExecutor> {
-        self.executor.as_ref(app).start_agent_executor().clone()
+    pub fn start_agent_executor(
+        &self,
+        app: &AppContext,
+    ) -> Option<ModelHandle<StartAgentExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .start_agent_executor()
+                .clone(),
+        )
     }
 
-    pub fn run_agents_executor(&self, app: &AppContext) -> ModelHandle<RunAgentsExecutor> {
-        self.executor.as_ref(app).run_agents_executor().clone()
+    pub fn run_agents_executor(&self, app: &AppContext) -> Option<ModelHandle<RunAgentsExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .run_agents_executor()
+                .clone(),
+        )
     }
 
     pub fn ask_user_question_executor(
         &self,
         app: &AppContext,
-    ) -> ModelHandle<AskUserQuestionExecutor> {
-        self.executor
-            .as_ref(app)
-            .ask_user_question_executor()
-            .clone()
+    ) -> Option<ModelHandle<AskUserQuestionExecutor>> {
+        Some(
+            self.executor
+                .as_ref()?
+                .as_ref(app)
+                .ask_user_question_executor()
+                .clone(),
+        )
     }
 
     pub fn set_ambient_agent_task_id(
@@ -434,9 +481,11 @@ impl BlocklistAIActionModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.ambient_agent_task_id = id;
-        self.executor.update(ctx, |executor, ctx| {
-            executor.set_ambient_agent_task_id(id, ctx);
-        });
+        if let Some(executor) = &self.executor {
+            executor.update(ctx, |executor, ctx| {
+                executor.set_ambient_agent_task_id(id, ctx)
+            });
+        }
     }
 
     fn blocked_action_for_conversation(
@@ -594,10 +643,11 @@ impl BlocklistAIActionModel {
         app: &'a AppContext,
     ) -> Option<&'a AIAgentAction> {
         let conversation_id = self.active_conversation_id(app)?;
+        let executor = self.executor.as_ref()?.as_ref(app);
         self.running_actions
             .get(&conversation_id)
             .and_then(RunningActions::first_action_id)
-            .and_then(|action_id| self.executor.as_ref(app).async_executing_action(action_id))
+            .and_then(|action_id| executor.async_executing_action(action_id))
     }
 
     /// Returns whether there is a pending or running action for the active conversation.
@@ -916,7 +966,11 @@ impl BlocklistAIActionModel {
         action: &AIAgentAction,
         ctx: &ModelContext<Self>,
     ) -> RunningActionPhase {
-        self.executor.as_ref(ctx).action_phase(action, ctx)
+        self.executor
+            .as_ref()
+            .map_or(RunningActionPhase::Serial, |executor| {
+                executor.as_ref(ctx).action_phase(action, ctx)
+            })
     }
 
     fn can_start_action_in_current_phase(
@@ -929,8 +983,11 @@ impl BlocklistAIActionModel {
         // Recompute the candidate action's phase on demand so executor-side capability checks
         // (for example, whether the active session can run shell commands in parallel) are applied
         // using the latest runtime state.
+        let Some(executor) = &self.executor else {
+            return false;
+        };
         let next_phase = self.action_phase_for_action(action, ctx);
-        let can_autoexecute = self.executor.update(ctx, |executor, ctx| {
+        let can_autoexecute = executor.update(ctx, |executor, ctx| {
             executor.can_autoexecute_action(action, conversation_id, ctx)
         });
         can_start_action_with_current_phase(current_phase, next_phase, can_autoexecute)
@@ -943,6 +1000,7 @@ impl BlocklistAIActionModel {
         is_user_initiated: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Option<StartedAction> {
+        let executor = self.executor.as_ref()?;
         if is_user_initiated && self.running_actions.contains_key(&conversation_id) {
             // User-driven approvals still execute one action at a time so that interactive
             // confirmations do not overlap in the UI.
@@ -964,7 +1022,7 @@ impl BlocklistAIActionModel {
         // WaitForEvents owns its own status transition; skip the default
         // in-progress update.
         let is_wait_for_events = matches!(action.action, AIAgentActionType::WaitForEvents { .. });
-        let execute_result = self.executor.update(ctx, |executor, ctx| {
+        let execute_result = executor.update(ctx, |executor, ctx| {
             executor.try_to_execute_action(action, conversation_id, is_user_initiated, ctx)
         });
 
@@ -999,9 +1057,12 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> BoxFuture<'static, ()> {
-        self.executor.update(ctx, |executor, ctx| {
-            executor.preprocess_action(action, conversation_id, ctx)
-        })
+        match &self.executor {
+            Some(executor) => executor.update(ctx, |executor, ctx| {
+                executor.preprocess_action(action, conversation_id, ctx)
+            }),
+            None => Box::pin(async {}),
+        }
     }
 
     /// Queues the `actions` in the given iterator for the given conversation,
@@ -1012,6 +1073,10 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.executor.is_none() {
+            return;
+        }
+
         self.action_order.insert(
             conversation_id,
             actions
@@ -1150,9 +1215,11 @@ impl BlocklistAIActionModel {
             .get(&conversation_id)
             .is_some_and(|running| running.contains(action_id))
         {
-            self.executor.update(ctx, |executor, ctx| {
-                executor.cancel_running_async_action(action_id, Some(reason), ctx)
-            });
+            if let Some(executor) = &self.executor {
+                executor.update(ctx, |executor, ctx| {
+                    executor.cancel_running_async_action(action_id, Some(reason), ctx)
+                });
+            }
         } else {
             let Some(pending_actions_for_conversation) =
                 self.pending_actions.get_mut(&conversation_id)
@@ -1186,8 +1253,10 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let action_id = self.executor.update(ctx, |executor, _| {
-            executor.find_running_wait_for_events(conversation_id)
+        let action_id = self.executor.as_ref().and_then(|executor| {
+            executor
+                .as_ref(ctx)
+                .find_running_wait_for_events(conversation_id)
         });
         if let Some(action_id) = action_id {
             self.cancel_action_with_id(
@@ -1207,7 +1276,10 @@ impl BlocklistAIActionModel {
         reason: Option<CancellationReason>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.executor.update(ctx, |executor, ctx| {
+        let Some(executor) = &self.executor else {
+            return;
+        };
+        executor.update(ctx, |executor, ctx| {
             executor.cancel_all_running_async_actions_for_conversation(conversation_id, reason, ctx)
         });
         #[cfg(not(target_family = "wasm"))]
@@ -1310,15 +1382,17 @@ impl BlocklistAIActionModel {
             &cancelled_result,
             ctx,
         );
-        let active_session = self.executor.as_ref(ctx).active_session().clone();
-        tool_result::observe_terminal_result(
-            &pending_action,
-            &cancelled_result,
-            reason,
-            conversation_id,
-            &active_session,
-            ctx,
-        );
+        if let Some(executor) = &self.executor {
+            let active_session = executor.as_ref(ctx).active_session().clone();
+            tool_result::observe_terminal_result(
+                &pending_action,
+                &cancelled_result,
+                reason,
+                conversation_id,
+                &active_session,
+                ctx,
+            );
+        }
         let result = Arc::new(AIAgentActionResult {
             id: pending_action.id,
             task_id: pending_action.task_id,
@@ -1421,9 +1495,11 @@ impl BlocklistAIActionModel {
         // Every terminal outcome (success, failure, cancellation — from any
         // path) funnels through here, so this is the one place executor-held
         // per-action state is released.
-        self.executor.update(ctx, |executor, ctx| {
-            executor.discard_action_state(&action_id, ctx);
-        });
+        if let Some(executor) = &self.executor {
+            executor.update(ctx, |executor, ctx| {
+                executor.discard_action_state(&action_id, ctx)
+            });
+        }
         pre_tool::invalidate(conversation_id, &action_id, ctx);
 
         // If a command action entered long-running mode (returned a snapshot), cancel all other

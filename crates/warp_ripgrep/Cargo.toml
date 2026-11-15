@@ -18,7 +18,6 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 string-offset.workspace = true
-warp_cli.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 async-process.workspace = true

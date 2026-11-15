@@ -65,7 +65,7 @@ impl Default for InitialGlobalMcpScanState {
 impl FileBasedMCPManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let defer_global_warp_autostart = settings::settings_mode() == settings::SettingsMode::Tui;
-        if FeatureFlag::FileBasedMcp.is_enabled() {
+        if !cfg!(feature = "local_terminal") && FeatureFlag::FileBasedMcp.is_enabled() {
             ctx.subscribe_to_model(&FileMCPWatcher::handle(ctx), |me, _, event, ctx| {
                 me.handle_watcher_event(event, ctx);
             });

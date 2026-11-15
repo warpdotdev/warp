@@ -1564,6 +1564,10 @@ fn dispatch_start_agent_conversation(
     request: StartAgentRequest,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
+    if cfg!(feature = "local_terminal") {
+        return;
+    }
+
     let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     if !request.request_team_scope.matches_scope(&team_context) {
         let _ = create_error_child_agent_conversation(

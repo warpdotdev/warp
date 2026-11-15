@@ -1,4 +1,3 @@
-use std::fmt;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 
@@ -20,7 +19,7 @@ use warp_server_auth::credentials::{
 use warp_server_auth::user::FirebaseAuthTokens;
 use warpui_core::r#async::{BoxFuture, Timer};
 
-use super::UserAuthenticationError;
+use super::{AuthEvent, UserAuthenticationError};
 
 const FETCH_ACCESS_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_PROXY_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -143,39 +142,6 @@ impl Drop for ReauthDelivery<'_> {
     fn drop(&mut self) {
         if !self.completed {
             self.refresh_state.lock().reauth_delivery_in_flight = false;
-        }
-    }
-}
-
-/// Authentication and authenticated-transport conditions observed by shared client code.
-#[derive(Clone)]
-pub enum AuthEvent {
-    /// A staging API call was blocked, which may indicate a firewall misconfiguration.
-    StagingAccessBlocked,
-    /// The user's access token was invalid, so they need to reauthenticate.
-    NeedsReauth,
-    /// The user's account has been disabled.
-    UserAccountDisabled,
-    /// The current bearer token was refreshed.
-    AccessTokenRefreshed {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        token: String,
-    },
-    /// An Identity-Aware Proxy challenge was received.
-    IapChallengeReceived,
-}
-
-impl fmt::Debug for AuthEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::StagingAccessBlocked => f.write_str("StagingAccessBlocked"),
-            Self::NeedsReauth => f.write_str("NeedsReauth"),
-            Self::UserAccountDisabled => f.write_str("UserAccountDisabled"),
-            Self::AccessTokenRefreshed { .. } => f
-                .debug_struct("AccessTokenRefreshed")
-                .field("token", &"<redacted>")
-                .finish(),
-            Self::IapChallengeReceived => f.write_str("IapChallengeReceived"),
         }
     }
 }

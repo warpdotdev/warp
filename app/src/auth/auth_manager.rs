@@ -36,8 +36,7 @@ use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::graphql::get_user_facing_error_message;
 use crate::server::server_api::auth::{
-    AnonymousUserCreationError, AuthClient, FetchUserResult, MintCustomTokenError,
-    UserAuthenticationError,
+    AnonymousUserCreationError, AuthClient, FetchUserResult, UserAuthenticationError,
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::AnonymousUserSignupEntrypoint;
@@ -54,41 +53,9 @@ use crate::{
     send_telemetry_sync_from_ctx,
 };
 
-#[derive(Debug)]
-pub enum AuthManagerEvent {
-    /// Successfully authenticated a user with no errors.
-    AuthComplete,
-    /// Failed to authenticate a user, due to a particular `UserAuthenticationError`.
-    AuthFailed(UserAuthenticationError),
-    /// Failed to create an anonymous user.
-    CreateAnonymousUserFailed,
-    /// The user chose to skip login entirely (no Firebase user created).
-    SkippedLogin,
-    /// The user now needs to reauthenticate. If the user needs to reauth, an `AuthFailed`
-    /// event might be triggered instead, but there are some code paths where we don't
-    /// refresh the entire user, only their token, which is when this event might be emitted.
-    NeedsReauth,
-    /// The user is anonymous and has attempted to access a login-gated feature or link.
-    AttemptedLoginGatedFeature {
-        auth_view_variant: AuthViewVariant,
-    },
-    // The current user is anonymous and the client has received a browser intent to sign in with a different Warp account.
-    // Holds an auth payload from the received browser intent.
-    LoginOverrideDetected(AuthRedirectPayload),
-    /// Failed to mint a new custom token for an anonymous user.
-    MintCustomTokenFailed(MintCustomTokenError),
-    /// Received a device authorization code as part of the device auth flow.
-    ReceivedDeviceAuthorizationCode {
-        #[cfg_attr(target_family = "wasm", allow(unused))]
-        verification_url: String,
-        #[cfg_attr(target_family = "wasm", allow(unused))]
-        verification_url_complete: Option<String>,
-        #[cfg_attr(target_family = "wasm", allow(unused))]
-        user_code: String,
-    },
-}
-
-pub type LoginGatedFeature = &'static str;
+pub use super::auth_manager_types::{
+    AuthManagerEvent, LoginGatedFeature, PersistedCurrentUserInformation,
+};
 
 type URLConstructorCallback = Box<dyn FnOnce(Option<&str>) -> String>;
 const DEVICE_CODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -186,6 +153,10 @@ impl AuthManager {
         enforce_state_validation: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.auth_state.is_local_session() {
+            return;
+        }
+
         let AuthRedirectPayload {
             refresh_token,
             user_uid,
@@ -322,6 +293,10 @@ impl AuthManager {
     /// after the server accepts the key. A failed request leaves the client
     /// fully logged out.
     pub fn authenticate_api_key(&self, api_key: String, ctx: &mut ModelContext<Self>) {
+        if self.auth_state.is_local_session() {
+            return;
+        }
+
         log::info!("Authenticating via pending API key");
         let api_key = if api_key.starts_with(API_KEY_PREFIX) {
             api_key
@@ -670,6 +645,10 @@ impl AuthManager {
         referral_code: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.auth_state.is_local_session() {
+            return;
+        }
+
         let anonymous_user_type = AnonymousUserType::NativeClientAnonymousUserFeatureGated;
 
         let auth_client = self.auth_client.clone();
@@ -982,11 +961,6 @@ impl AuthManager {
 
         self.persist(ctx);
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct PersistedCurrentUserInformation {
-    pub email: String,
 }
 
 impl Entity for AuthManager {

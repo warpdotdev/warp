@@ -1126,11 +1126,11 @@ pub struct Workspace {
     reauth_banner_dismissed: bool,
     settings_file_error: Option<crate::settings::SettingsFileError>,
     settings_error_banner_dismissed: bool,
-    ai_assistant_panel: ViewHandle<AIAssistantPanelView>,
+    ai_assistant_panel: Option<ViewHandle<AIAssistantPanelView>>,
     should_show_ai_assistant_warm_welcome: bool,
     ai_assistant_close_warm_welcome_mouse_state_handle: MouseStateHandle,
-    auth_override_warning_modal: ViewHandle<AuthOverrideWarningModal>,
-    require_login_modal: ViewHandle<AuthView>,
+    auth_override_warning_modal: Option<ViewHandle<AuthOverrideWarningModal>>,
+    require_login_modal: Option<ViewHandle<AuthView>>,
     workflow_modal: ViewHandle<WorkflowModal>,
     prompt_editor_modal: ViewHandle<PromptEditorModal>,
     agent_toolbar_editor_modal: ViewHandle<AgentToolbarEditorModal>,
@@ -1201,7 +1201,7 @@ pub struct Workspace {
     left_panel_views: Vec<ToolPanelView>,
     right_panel_view: ViewHandle<RightPanelView>,
     working_directories_model: ModelHandle<pane_group::WorkingDirectoriesModel>,
-    agent_management_view: ViewHandle<AgentManagementView>,
+    agent_management_view: Option<ViewHandle<AgentManagementView>>,
     notification_mailbox_view: Option<ViewHandle<NotificationMailboxView>>,
     notification_toast_stack: Option<ViewHandle<AgentNotificationToastStack>>,
     lightbox_view: Option<ViewHandle<LightboxView>>,
@@ -1782,6 +1782,7 @@ impl Workspace {
         (welcome_tips_view, welcome_tips_view_state)
     }
 
+    #[cfg(not(feature = "local_terminal"))]
     fn build_ai_assistant_panel_view(
         ctx: &mut ViewContext<Self>,
         server_api: Arc<ServerApi>,
@@ -1843,6 +1844,7 @@ impl Workspace {
         (settings_pane, theme_chooser_view)
     }
 
+    #[cfg(not(feature = "local_terminal"))]
     fn build_require_login_modal(ctx: &mut ViewContext<Self>) -> ViewHandle<AuthView> {
         let require_login_modal = ctx.add_typed_action_view(|ctx| {
             AuthView::new(AuthViewVariant::RequireLoginCloseable, ctx)
@@ -1854,6 +1856,7 @@ impl Workspace {
         require_login_modal
     }
 
+    #[cfg(not(feature = "local_terminal"))]
     fn build_auth_override_warning_modal(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AuthOverrideWarningModal> {
@@ -3042,9 +3045,15 @@ impl Workspace {
             },
         );
 
-        let require_login_modal = Self::build_require_login_modal(ctx);
+        #[cfg(not(feature = "local_terminal"))]
+        let require_login_modal = Some(Self::build_require_login_modal(ctx));
+        #[cfg(feature = "local_terminal")]
+        let require_login_modal = None;
 
-        let auth_override_warning_modal = Self::build_auth_override_warning_modal(ctx);
+        #[cfg(not(feature = "local_terminal"))]
+        let auth_override_warning_modal = Some(Self::build_auth_override_warning_modal(ctx));
+        #[cfg(feature = "local_terminal")]
+        let auth_override_warning_modal = None;
 
         let workflow_modal = Self::build_workflow_modal(ai_client.clone(), ctx);
 
@@ -3144,18 +3153,22 @@ impl Workspace {
             me.handle_right_panel_event(event.clone(), ctx);
         });
 
-        // Get persisted filters from window snapshot if restoring.
-        let agent_management_filters = match workspace_setting {
-            NewWorkspaceSource::Restored {
-                ref window_snapshot,
-                ..
-            } => window_snapshot.agent_management_filters.clone(),
-            _ => None,
-        };
-        let agent_management_view = ctx
-            .add_typed_action_view(|ctx| AgentManagementView::new(agent_management_filters, ctx));
-        ctx.subscribe_to_view(&agent_management_view, |me, _, event, ctx| {
-            me.handle_agent_management_view_event(event, ctx);
+        let agent_management_view = (!cfg!(feature = "local_terminal")).then(|| {
+            // Get persisted filters from window snapshot if restoring.
+            let agent_management_filters = match workspace_setting {
+                NewWorkspaceSource::Restored {
+                    ref window_snapshot,
+                    ..
+                } => window_snapshot.agent_management_filters.clone(),
+                _ => None,
+            };
+            let agent_management_view = ctx.add_typed_action_view(|ctx| {
+                AgentManagementView::new(agent_management_filters, ctx)
+            });
+            ctx.subscribe_to_view(&agent_management_view, |me, _, event, ctx| {
+                me.handle_agent_management_view_event(event, ctx);
+            });
+            agent_management_view
         });
 
         let notification_mailbox_view = if FeatureFlag::HOANotifications.is_enabled() {
@@ -3200,8 +3213,14 @@ impl Workspace {
             None
         };
 
-        let ai_assistant_panel =
-            Self::build_ai_assistant_panel_view(ctx, server_api.clone(), ai_client.clone());
+        #[cfg(not(feature = "local_terminal"))]
+        let ai_assistant_panel = Some(Self::build_ai_assistant_panel_view(
+            ctx,
+            server_api.clone(),
+            ai_client.clone(),
+        ));
+        #[cfg(feature = "local_terminal")]
+        let ai_assistant_panel = None;
 
         ctx.observe(&tips_completed, Workspace::on_tips_model_changed);
 
@@ -4968,6 +4987,10 @@ impl Workspace {
     }
 
     fn toggle_ai_assistant_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.ai_assistant_panel.is_none() {
+            return;
+        }
+
         // Now that the user has interacted with the panel, we can close
         // the dialogue and mark it as dismissed.
         if self.should_show_ai_assistant_warm_welcome {
@@ -4988,10 +5011,15 @@ impl Workspace {
         // focusing the Warp AI panel _behind_ the floating modal. Instead, we opt for the normal
         // toggle behavior which will close the current modal view and then toggle Warp AI.
         if self.current_workspace_state.is_ai_assistant_panel_open
-            && !self.ai_assistant_panel.is_self_or_child_focused(ctx)
+            && !self
+                .ai_assistant_panel
+                .as_ref()
+                .is_some_and(|panel| panel.is_self_or_child_focused(ctx))
             && !self.current_workspace_state.is_any_modal_open(ctx)
         {
-            ctx.focus(&self.ai_assistant_panel);
+            if let Some(panel) = &self.ai_assistant_panel {
+                ctx.focus(panel);
+            }
             return;
         }
 
@@ -5005,7 +5033,9 @@ impl Workspace {
         if self.current_workspace_state.is_ai_assistant_panel_open {
             // Close the resource center panel if we open the AI Assistant panel.
             self.current_workspace_state.is_resource_center_open = false;
-            ctx.focus(&self.ai_assistant_panel);
+            if let Some(panel) = &self.ai_assistant_panel {
+                ctx.focus(panel);
+            }
         } else {
             self.focus_active_tab(ctx);
         }
@@ -5056,7 +5086,10 @@ impl Workspace {
             return FocusRegion::RightPanel;
         }
 
-        if self.ai_assistant_panel.is_self_or_child_focused(app)
+        if self
+            .ai_assistant_panel
+            .as_ref()
+            .is_some_and(|panel| panel.is_self_or_child_focused(app))
             || self.resource_center_view.is_self_or_child_focused(app)
         {
             return FocusRegion::RightPanel;
@@ -5109,7 +5142,9 @@ impl Workspace {
             return;
         }
         if self.current_workspace_state.is_ai_assistant_panel_open {
-            ctx.focus(&self.ai_assistant_panel);
+            if let Some(panel) = &self.ai_assistant_panel {
+                ctx.focus(panel);
+            }
         } else if self.current_workspace_state.is_resource_center_open {
             ctx.focus(&self.resource_center_view);
         }
@@ -5248,13 +5283,18 @@ impl Workspace {
             } else if self.is_theme_chooser_open() {
                 ctx.focus(&self.theme_chooser_view);
             } else if self.current_workspace_state.is_ai_assistant_panel_open {
-                ctx.focus(&self.ai_assistant_panel);
+                if let Some(panel) = &self.ai_assistant_panel {
+                    ctx.focus(panel);
+                }
             } else if self.current_workspace_state.is_resource_center_open {
                 ctx.focus(&self.resource_center_view);
             }
         }
         // Starts from a right panel: AI panel, resource center (keyboard shortcuts page only)
-        else if self.ai_assistant_panel.is_self_or_child_focused(ctx)
+        else if self
+            .ai_assistant_panel
+            .as_ref()
+            .is_some_and(|panel| panel.is_self_or_child_focused(ctx))
             || self.resource_center_view.is_self_or_child_focused(ctx)
         {
             self.focus_active_tab(ctx);
@@ -5264,7 +5304,9 @@ impl Workspace {
             if self.current_workspace_state.is_right_panel_open() {
                 self.set_selected_object(None, ctx);
                 if self.current_workspace_state.is_ai_assistant_panel_open {
-                    ctx.focus(&self.ai_assistant_panel);
+                    if let Some(panel) = &self.ai_assistant_panel {
+                        ctx.focus(panel);
+                    }
                 } else if self.current_workspace_state.is_resource_center_open {
                     ctx.focus(&self.resource_center_view);
                 }
@@ -5276,7 +5318,9 @@ impl Workspace {
         else if self.theme_chooser_view.is_self_or_child_focused(ctx) {
             if self.current_workspace_state.is_right_panel_open() {
                 if self.current_workspace_state.is_ai_assistant_panel_open {
-                    ctx.focus(&self.ai_assistant_panel);
+                    if let Some(panel) = &self.ai_assistant_panel {
+                        ctx.focus(panel);
+                    }
                 } else if self.current_workspace_state.is_resource_center_open {
                     ctx.focus(&self.resource_center_view);
                 }
@@ -5295,7 +5339,9 @@ impl Workspace {
         // Starts from terminal
         if self.active_tab_pane_group().is_self_or_child_focused(ctx) {
             if self.current_workspace_state.is_ai_assistant_panel_open {
-                ctx.focus(&self.ai_assistant_panel);
+                if let Some(panel) = &self.ai_assistant_panel {
+                    ctx.focus(panel);
+                }
             } else if self.current_workspace_state.is_resource_center_open {
                 ctx.focus(&self.resource_center_view);
             } else if self.current_workspace_state.is_warp_drive_open {
@@ -5311,7 +5357,10 @@ impl Workspace {
             self.focus_active_tab(ctx);
         }
         // Starts from a right panel: AI panel, resource center (keyboard shortcuts page only)
-        else if self.ai_assistant_panel.is_self_or_child_focused(ctx)
+        else if self
+            .ai_assistant_panel
+            .as_ref()
+            .is_some_and(|panel| panel.is_self_or_child_focused(ctx))
             || self.resource_center_view.is_self_or_child_focused(ctx)
         {
             if self.current_workspace_state.is_left_panel_open() {
@@ -6795,10 +6844,13 @@ impl Workspace {
                 );
             }
             LeftPanelEvent::SignInRequested => {
+                if cfg!(feature = "local_terminal") || self.auth_state.is_local_session() {
+                    return;
+                }
                 self.open_require_login_modal(AuthViewVariant::RequireLoginCloseable, ctx);
-                self.require_login_modal.update(ctx, |modal, ctx| {
-                    modal.start_sign_in(ctx);
-                });
+                if let Some(modal) = &self.require_login_modal {
+                    modal.update(ctx, |modal, ctx| modal.start_sign_in(ctx));
+                }
             }
         }
     }
@@ -9625,15 +9677,17 @@ impl Workspace {
     /// Sets the visibility state of the agent management view
     /// and updates the AgentConversationsModel to reflect the new state.
     fn set_is_agent_management_view_open(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
+        let Some(view) = &self.agent_management_view else {
+            return;
+        };
         let was_open = self.current_workspace_state.is_agent_management_view_open;
         if was_open == is_open {
             return;
         }
         self.current_workspace_state.is_agent_management_view_open = is_open;
         let window_id = self.window_id;
-        let view_id = self.agent_management_view.id();
-        let team_context_resolver =
-            UserWorkspaces::team_context_resolver(self.agent_management_view.downgrade());
+        let view_id = view.id();
+        let team_context_resolver = UserWorkspaces::team_context_resolver(view.downgrade());
         AgentConversationsModel::handle(ctx).update(ctx, move |model, ctx| {
             if is_open {
                 model.register_view_open(window_id, view_id, team_context_resolver, ctx);
@@ -12037,10 +12091,10 @@ impl Workspace {
                 .unwrap_or(DEFAULT_RIGHT_PANEL_WIDTH)
         });
 
-        let agent_management_filters = Some(
-            self.agent_management_view
-                .read(app, |view, _| view.get_filters()),
-        );
+        let agent_management_filters = self
+            .agent_management_view
+            .as_ref()
+            .map(|view| view.read(app, |view, _| view.get_filters()));
 
         WindowSnapshot {
             tabs,
@@ -14961,13 +15015,18 @@ impl Workspace {
     }
 
     fn open_require_login_modal(&mut self, variant: AuthViewVariant, ctx: &mut ViewContext<Self>) {
-        self.require_login_modal.update(ctx, |modal, ctx| {
-            modal.set_variant(ctx, variant);
-        });
+        if cfg!(feature = "local_terminal") || self.auth_state.is_local_session() {
+            return;
+        }
+
+        let Some(modal) = self.require_login_modal.clone() else {
+            return;
+        };
+        modal.update(ctx, |modal, ctx| modal.set_variant(ctx, variant));
 
         self.close_all_overlays(ctx);
         self.current_workspace_state.is_require_login_modal_open = true;
-        ctx.focus(&self.require_login_modal);
+        ctx.focus(&modal);
         ctx.notify();
     }
 
@@ -14976,12 +15035,15 @@ impl Workspace {
         auth_payload: AuthRedirectPayload,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(modal) = self.auth_override_warning_modal.clone() else {
+            return;
+        };
         self.close_all_overlays(ctx);
-        self.auth_override_warning_modal.update(ctx, |modal, _| {
-            modal.set_interrupted_auth_payload(auth_payload);
+        modal.update(ctx, |modal, _| {
+            modal.set_interrupted_auth_payload(auth_payload)
         });
         self.current_workspace_state.is_auth_override_modal_open = true;
-        ctx.focus(&self.auth_override_warning_modal);
+        ctx.focus(&modal);
         ctx.notify();
     }
 
@@ -18767,7 +18829,9 @@ impl Workspace {
             } else if self.current_workspace_state.is_resource_center_open {
                 ctx.focus(&self.resource_center_view);
             } else if self.current_workspace_state.is_ai_assistant_panel_open {
-                ctx.focus(&self.ai_assistant_panel);
+                if let Some(panel) = &self.ai_assistant_panel {
+                    ctx.focus(panel);
+                }
             } else if self
                 .current_workspace_state
                 .is_close_session_confirmation_dialog_open
@@ -19825,13 +19889,15 @@ impl Workspace {
     }
 
     fn ask_ai_assistant(&mut self, ask_type: &AskAIType, ctx: &mut ViewContext<Self>) {
+        let Some(panel) = self.ai_assistant_panel.clone() else {
+            return;
+        };
         if !self.current_workspace_state.is_ai_assistant_panel_open {
             self.toggle_ai_assistant_panel(ctx);
         }
 
-        ctx.focus(&self.ai_assistant_panel);
-
-        self.ai_assistant_panel.update(ctx, |ai_assistant, ctx| {
+        ctx.focus(&panel);
+        panel.update(ctx, |ai_assistant, ctx| {
             ai_assistant.ask_ai(ask_type, ctx);
         });
 
@@ -22329,8 +22395,9 @@ impl Workspace {
 
         let active_content = if FeatureFlag::AgentManagementView.is_enabled()
             && self.current_workspace_state.is_agent_management_view_open
+            && let Some(view) = &self.agent_management_view
         {
-            ChildView::new(&self.agent_management_view).finish()
+            ChildView::new(view).finish()
         } else {
             ChildView::new(&active_tab_data.pane_group).finish()
         };
@@ -23065,12 +23132,10 @@ impl Workspace {
         if self.current_workspace_state.is_right_panel_open() {
             let right_panel_content = if self.current_workspace_state.is_resource_center_open {
                 Some(self.render_panel(app, self.render_resource_center(), &PanelPosition::Right))
-            } else if self.current_workspace_state.is_ai_assistant_panel_open {
-                Some(self.render_panel(
-                    app,
-                    ChildView::new(&self.ai_assistant_panel).finish(),
-                    &PanelPosition::Right,
-                ))
+            } else if self.current_workspace_state.is_ai_assistant_panel_open
+                && let Some(panel) = &self.ai_assistant_panel
+            {
+                Some(self.render_panel(app, ChildView::new(panel).finish(), &PanelPosition::Right))
             } else {
                 log::warn!(
                     "is_right_panel_open() returned true, but neither the resource center nor AI \
@@ -23911,6 +23976,13 @@ impl Workspace {
         entrypoint: AnonymousUserSignupEntrypoint,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(modal) = &self.require_login_modal else {
+            return;
+        };
+        if self.auth_state.is_local_session() {
+            return;
+        }
+
         if self.auth_state.is_user_anonymous().unwrap_or_default() {
             // User has a Firebase anonymous account — use the linking flow.
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
@@ -23923,9 +23995,7 @@ impl Workspace {
                 ctx.open_url(&sign_up_url);
             });
         }
-        self.require_login_modal.update(ctx, |auth_modal, ctx| {
-            auth_modal.skip_to_browser_open_step(ctx);
-        });
+        modal.update(ctx, |modal, ctx| modal.skip_to_browser_open_step(ctx));
         self.open_require_login_modal(AuthViewVariant::RequireLoginCloseable, ctx);
     }
 
@@ -24070,10 +24140,13 @@ impl Workspace {
     /// Computes the list of available left panel views based on current AI settings and feature flags.
     fn compute_left_panel_views(ctx: &AppContext) -> Vec<ToolPanelView> {
         let mut views = vec![];
+        let is_local_session = cfg!(feature = "local_terminal")
+            || AuthStateProvider::as_ref(ctx).get().is_local_session();
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
+        if !is_local_session
+            && FeatureFlag::AgentViewConversationListView.is_enabled()
             && *AISettings::as_ref(ctx).show_conversation_history
         {
             views.push(ToolPanelView::ConversationListView);
@@ -24086,7 +24159,7 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if *WarpDriveSettings::as_ref(ctx).enable_warp_drive {
+        if !is_local_session && *WarpDriveSettings::as_ref(ctx).enable_warp_drive {
             views.push(ToolPanelView::WarpDrive);
         }
         views
@@ -25202,6 +25275,7 @@ impl TypedActionView for Workspace {
             ToggleAgentManagementView => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
+                    && let Some(panel) = self.agent_management_view.clone()
                 {
                     let is_open = !self.current_workspace_state.is_agent_management_view_open;
                     self.set_is_agent_management_view_open(is_open, ctx);
@@ -25212,7 +25286,7 @@ impl TypedActionView for Workspace {
                     );
 
                     if is_open {
-                        ctx.focus(&self.agent_management_view);
+                        ctx.focus(&panel);
                     } else {
                         self.focus_active_tab(ctx);
                     }
@@ -25223,21 +25297,23 @@ impl TypedActionView for Workspace {
             OpenAgentManagementView => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
+                    && let Some(panel) = self.agent_management_view.clone()
                 {
                     self.set_is_agent_management_view_open(true, ctx);
-                    ctx.focus(&self.agent_management_view);
+                    ctx.focus(&panel);
                     ctx.notify();
                 }
             }
             ViewAgentRunsForEnvironment { environment_id } => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
+                    && let Some(panel) = self.agent_management_view.clone()
                 {
                     self.set_is_agent_management_view_open(true, ctx);
-                    ctx.focus(&self.agent_management_view);
+                    ctx.focus(&panel);
 
                     let environment_id = environment_id.clone();
-                    self.agent_management_view.update(ctx, |view, ctx| {
+                    panel.update(ctx, |view, ctx| {
                         view.apply_environment_filter_from_link(environment_id, ctx);
                     });
 
@@ -25287,10 +25363,11 @@ impl TypedActionView for Workspace {
             OpenCloudAgentSetupGuide => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
+                    && let Some(panel) = self.agent_management_view.clone()
                 {
                     self.set_is_agent_management_view_open(true, ctx);
-                    ctx.focus(&self.agent_management_view);
-                    self.agent_management_view.update(ctx, |view, ctx| {
+                    ctx.focus(&panel);
+                    panel.update(ctx, |view, ctx| {
                         view.show_setup_guide_from_link(ctx);
                     });
                     ctx.notify();
@@ -27581,12 +27658,16 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.ctrl_tab_palette).finish());
         }
 
-        if self.current_workspace_state.is_require_login_modal_open {
-            stack.add_child(ChildView::new(&self.require_login_modal).finish());
+        if self.current_workspace_state.is_require_login_modal_open
+            && let Some(modal) = &self.require_login_modal
+        {
+            stack.add_child(ChildView::new(modal).finish());
         }
 
-        if self.current_workspace_state.is_auth_override_modal_open {
-            stack.add_child(ChildView::new(&self.auth_override_warning_modal).finish());
+        if self.current_workspace_state.is_auth_override_modal_open
+            && let Some(modal) = &self.auth_override_warning_modal
+        {
+            stack.add_child(ChildView::new(modal).finish());
         }
 
         if self.current_workspace_state.is_theme_creator_modal_open {

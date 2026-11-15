@@ -22,6 +22,8 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EnterAgentViewError {
+    #[error("Agent mode is unavailable in the local terminal.")]
+    Unavailable,
     #[error("Already in agent mode.")]
     AlreadyInAgentView,
     #[error("Cannot enter agent mode while a command is running.")]
@@ -781,6 +783,10 @@ impl AgentViewController {
         display_mode: AgentViewDisplayMode,
         ctx: &mut ModelContext<Self>,
     ) -> Result<AIConversationId, EnterAgentViewError> {
+        if cfg!(feature = "local_terminal") {
+            return Err(EnterAgentViewError::Unavailable);
+        }
+
         self.clear_pending_confirmation(ctx);
         match &self.agent_view_state {
             AgentViewState::Active {

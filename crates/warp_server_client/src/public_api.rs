@@ -205,6 +205,6 @@ impl BaseClient {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "local_terminal")))]
 #[path = "public_api_tests.rs"]
 mod tests;

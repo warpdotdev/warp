@@ -35,6 +35,7 @@ pub enum PersistAction {
 /// AuthState holds information about the currently-logged in user.
 /// If you need to access AuthState, you can use the AuthStateProvider singleton model.
 pub struct AuthState {
+    local_session: bool,
     /// The currently logged-in User. None if the user isn't logged in currently.
     user: RwLock<Option<User>>,
 
@@ -52,12 +53,24 @@ pub struct AuthState {
 impl AuthState {
     fn new(ctx: &AppContext) -> Self {
         Self {
+            local_session: false,
             user: RwLock::new(None),
             anonymous_id: get_or_create_anonymous_id(ctx),
             needs_reauth: AtomicBool::new(false),
             credentials: RwLock::new(None),
         }
     }
+    pub fn new_local_session(ctx: &AppContext) -> Self {
+        Self {
+            local_session: true,
+            ..Self::new(ctx)
+        }
+    }
+
+    pub fn is_local_session(&self) -> bool {
+        self.local_session
+    }
+
     #[cfg(any(
         test,
         feature = "integration_tests",
@@ -81,6 +94,7 @@ impl AuthState {
     #[cfg(any(test, feature = "integration_tests", feature = "test-util"))]
     pub fn new_for_test() -> Self {
         Self {
+            local_session: false,
             user: RwLock::new(Some(User::test())),
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
@@ -90,6 +104,7 @@ impl AuthState {
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_logged_out_for_test() -> Self {
         Self {
+            local_session: false,
             user: RwLock::new(None),
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
@@ -101,6 +116,7 @@ impl AuthState {
     pub fn new_anonymous_for_test() -> Self {
         use super::user::AnonymousUserType;
         Self {
+            local_session: false,
             user: RwLock::new(Some(User {
                 anonymous_user_type: Some(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
                 ..User::test()

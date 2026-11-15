@@ -490,6 +490,7 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_surface);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction {
                 conversation_id,
@@ -637,6 +638,7 @@ impl BlocklistAIController {
             });
         });
 
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&conversation_selection, |me, _, event, ctx| {
             let ConversationSelectionEvent::Deactivated {
                 conversation_id,
@@ -666,12 +668,16 @@ impl BlocklistAIController {
         });
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
+        #[cfg(not(feature = "local_terminal"))]
         let svc = OrchestrationEventService::handle(ctx);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&svc, move |me, _, event, ctx| {
             let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
             me.handle_pending_events_ready(*conversation_id, ctx);
         });
+        #[cfg(not(feature = "local_terminal"))]
         let queue = QueuedQueryModel::handle(ctx);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&queue, |me, _, event, ctx| {
             match event {
                 QueuedQueryEvent::Appended {
@@ -734,7 +740,9 @@ impl BlocklistAIController {
                 me.handle_pending_events_ready(*conversation_id, ctx);
             }
         });
+        #[cfg(not(feature = "local_terminal"))]
         let streamer = OrchestrationEventStreamer::handle(ctx);
+        #[cfg(not(feature = "local_terminal"))]
         ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
             OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
                 conversation_id,
@@ -789,6 +797,10 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         // Store the participant who initiated this query before sending
         // so that send_query can use it when creating the exchange.
         if let Some(participant_id) = shared_session_participant_id {
@@ -1869,14 +1881,14 @@ impl BlocklistAIController {
         {
             return;
         }
+        let Some(executor) = self.action_model.as_ref(ctx).shell_command_executor(ctx) else {
+            return;
+        };
         self.commands_interrupted_for_injection
             .insert(conversation_id, block_id.clone());
-        self.action_model
-            .as_ref(ctx)
-            .shell_command_executor(ctx)
-            .update(ctx, |executor, ctx| {
-                executor.interrupt_for_injected_followup(conversation_id, block_id.clone(), ctx);
-            });
+        executor.update(ctx, |executor, ctx| {
+            executor.interrupt_for_injected_followup(conversation_id, block_id.clone(), ctx);
+        });
         // PTY writes are asynchronous; allow SIGINT to finish the command before asking the CLI.
         ctx.spawn(
             Timer::after(AGENT_SHELL_INTERRUPT_GRACE_PERIOD),
@@ -3076,6 +3088,10 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
+        if cfg!(feature = "local_terminal") {
+            anyhow::bail!("Agent requests are unavailable in the local terminal");
+        }
+
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let (
             conversation_id,

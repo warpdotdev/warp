@@ -2892,29 +2892,52 @@ fn read_sqlite_data(
 
     let time_of_next_force_object_refresh = read_time_of_next_force_object_refresh(conn)?;
 
-    // Seed up-arrow prompt history and (optionally) NLD prompt-history matching from a single
-    // SQLite read, deriving both from the same in-memory query vector instead of reading twice.
-    // TODO: Once up-arrow prompt history supports pagination, drop the 100-row up-arrow cap and
-    // serve both up-arrow and NLD matching from one consolidated query list.
-    let recent_ai_queries = read_recent_ai_queries(conn)?;
-    let nld_prompts = if FeatureFlag::NldPromptHistoryMatch.is_enabled() {
-        process_ai_queries_for_nld_history_match(&recent_ai_queries)
+    let (
+        ai_queries,
+        nld_prompts,
+        codebase_indices,
+        multi_agent_conversations,
+        conversation_summary_backfills,
+        project_rules,
+        mcp_server_installations,
+        mcp_servers_to_restore,
+    ) = if cfg!(feature = "local_terminal") {
+        Default::default()
     } else {
-        Vec::new()
-    };
-    let ai_queries = process_ai_queries_for_uparrow_prompt(recent_ai_queries);
+        // Seed up-arrow prompt history and (optionally) NLD prompt-history matching from a single
+        // SQLite read, deriving both from the same in-memory query vector instead of reading twice.
+        // TODO: Once up-arrow prompt history supports pagination, drop the 100-row up-arrow cap and
+        // serve both up-arrow and NLD matching from one consolidated query list.
+        let recent_ai_queries = read_recent_ai_queries(conn)?;
+        let nld_prompts = if FeatureFlag::NldPromptHistoryMatch.is_enabled() {
+            process_ai_queries_for_nld_history_match(&recent_ai_queries)
+        } else {
+            Vec::new()
+        };
+        let ai_queries = process_ai_queries_for_uparrow_prompt(recent_ai_queries);
 
-    let codebase_indices = get_all_codebase_index_metadata(conn)?;
+        let codebase_indices = get_all_codebase_index_metadata(conn)?;
+        // Load conversation metadata only; task payloads are hydrated lazily
+        // per-conversation via `read_agent_conversation_by_id`.
+        let (multi_agent_conversations, conversation_summary_backfills) =
+            read_agent_conversation_metadata(conn)?;
+        let project_rules = get_all_project_rules(conn)?;
+        let mcp_server_installations = get_all_mcp_server_installations(conn)?;
+        let mcp_servers_to_restore = get_mcp_servers_to_restore(conn)?;
+        (
+            ai_queries,
+            nld_prompts,
+            codebase_indices,
+            multi_agent_conversations,
+            conversation_summary_backfills,
+            project_rules,
+            mcp_server_installations,
+            mcp_servers_to_restore,
+        )
+    };
     let workspace_language_servers = get_all_workspace_language_servers_by_workspace(conn)?;
-    // Load conversation metadata only; task payloads are hydrated lazily
-    // per-conversation via `read_agent_conversation_by_id`.
-    let (multi_agent_conversations, conversation_summary_backfills) =
-        read_agent_conversation_metadata(conn)?;
     let projects = get_all_projects(conn)?;
-    let project_rules = get_all_project_rules(conn)?;
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
-    let mcp_server_installations = get_all_mcp_server_installations(conn)?;
-    let mcp_servers_to_restore = get_mcp_servers_to_restore(conn)?;
 
     Ok(PersistedData {
         app_state,

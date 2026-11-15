@@ -3,7 +3,6 @@ use warpui::App;
 use warpui::text_layout::TextStyle;
 
 use crate::appearance::Appearance;
-use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::tests::{
     add_window_with_bootstrapped_terminal, initialize_app, simulate_directory_for_completion,
 };
@@ -53,10 +52,7 @@ fn test_decorations_with_multibyte_chars() {
 
                 // Trigger input decoration computation instead of waiting for the
                 // debounced stream to trigger.
-                input.run_input_background_jobs(
-                    InputBackgroundJobOptions::default().with_command_decoration(),
-                    ctx,
-                );
+                input.update_command_decorations(ctx);
 
                 // Take the future handle from the input to ensure that it doesn't
                 // get cancelled by the debounced decoration update stream.

@@ -2494,6 +2494,7 @@ fn test_on_ambient_agent_execution_ended_inserts_tombstone_without_handoff() {
     });
 }
 
+#[cfg(not(feature = "local_terminal"))]
 #[test]
 fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
     // A link-join viewer of a shared *cloud-agent* session starts with no ambient view model
@@ -2513,6 +2514,8 @@ fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
         // the fix must not over-suppress ordinary shared sessions.
         let suppressed_for_user_viewer = terminal.update(&mut app, |view, ctx| {
             view.passive_suggestions_models
+                .as_ref()
+                .unwrap()
                 .maa
                 .update(ctx, |model, ctx| {
                     model.is_ambient_agent_session_for_test(ctx)
@@ -2532,6 +2535,8 @@ fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
                     "44444444-4444-4444-4444-444444444444".to_string(),
                 )));
             view.passive_suggestions_models
+                .as_ref()
+                .unwrap()
                 .maa
                 .update(ctx, |model, ctx| {
                     model.is_ambient_agent_session_for_test(ctx)

@@ -31,6 +31,20 @@ struct CompletionRequestSnapshot {
 }
 
 impl TuiTerminalSessionView {
+    pub(super) fn handle_input_content_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        let inline_menu_owns_input = active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
+        .is_some_and(|menu| menu.input_ownership(ctx).inline_menu_owns_input());
+        if inline_menu_owns_input {
+            self.abort_shell_completion(ctx);
+        } else {
+            self.handle_completion_editor_changed(ctx);
+        }
+    }
+
     pub(super) fn warm_shell_completion_sources(
         &self,
         session: Arc<Session>,
@@ -96,8 +110,6 @@ impl TuiTerminalSessionView {
             .sessions
             .as_ref(ctx)
             .get_env_vars_for_session(session_id);
-        self.abort_input_detection(ctx);
-
         self.abort_shell_completion(ctx);
         self.completion_request.generation = self.completion_request.generation.wrapping_add(1);
         let generation = self.completion_request.generation;

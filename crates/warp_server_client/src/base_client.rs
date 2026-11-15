@@ -184,6 +184,9 @@ impl BaseClient {
                 owner_type: None,
             }));
         }
+        #[cfg(feature = "local_terminal")]
+        let auth_session = Arc::new(AuthSession);
+        #[cfg(not(feature = "local_terminal"))]
         let auth_session = Arc::new(AuthSession::new(
             client.clone(),
             auth_state.clone(),

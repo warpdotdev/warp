@@ -39,7 +39,6 @@ mod external_secrets;
 mod font_fallback;
 mod global_resource_handles;
 mod gpu_state;
-mod input_classifier;
 mod interval_timer;
 mod linear;
 #[cfg(feature = "local_fs")]
@@ -443,12 +442,14 @@ enum TuiEntryPoint {
 }
 
 enum AuthInitialization {
+    LocalSession,
     Persisted,
     PendingApiKey(String),
 }
 
 impl LaunchMode {
     /// Sets command-line launch flags so standby uses sandbox initialization without a run prompt.
+    #[cfg(any(not(feature = "local_terminal"), test))]
     fn command_line(command: CliCommand, global_options: GlobalOptions, debug: bool) -> Self {
         let (is_sandboxed, computer_use_override) = match &command {
             CliCommand::Agent(AgentCommand::Run(args)) => {
@@ -494,6 +495,12 @@ impl LaunchMode {
     }
 
     fn auth_initialization(&self) -> AuthInitialization {
+        if cfg!(feature = "local_terminal")
+            || (cfg!(not(target_family = "wasm")) && matches!(self, Self::App { .. }))
+        {
+            return AuthInitialization::LocalSession;
+        }
+
         match self.api_key() {
             Some(api_key) => AuthInitialization::PendingApiKey(api_key),
             None => AuthInitialization::Persisted,
@@ -627,6 +634,10 @@ impl LaunchMode {
 
     /// Returns `true` if this process can build and sync codebase indices.
     fn supports_indexing(&self) -> bool {
+        if cfg!(feature = "local_terminal") {
+            return false;
+        }
+
         match self {
             LaunchMode::CommandLine { command, .. } => {
                 // A pre-warmed sandbox indexes its repositories during preparation, so the
@@ -829,6 +840,13 @@ pub fn run() -> Result<()> {
             warp_cli::Command::Completions { shell } => {
                 return warp_cli::completions::generate_to_stdout(*shell);
             }
+            #[cfg(feature = "local_terminal")]
+            warp_cli::Command::CommandLine(_) => {
+                return Err(anyhow!(
+                    "Oz and Warp account commands are unavailable in the local terminal"
+                ));
+            }
+            #[cfg(not(feature = "local_terminal"))]
             warp_cli::Command::CommandLine(cmd) => {
                 #[cfg(not(target_family = "wasm"))]
                 if let CliCommand::EnvironmentCheckout(args) = cmd.as_ref() {
@@ -920,7 +938,11 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             // initialize_app and crash reporting) inside run_daemon_app.
             crate::remote_server::run_daemon(args.identity_key.clone())
         }
-        #[cfg(not(target_family = "wasm"))]
+        #[cfg(all(not(target_family = "wasm"), feature = "local_terminal"))]
+        warp_cli::WorkerCommand::AcpBridge { .. } => Err(anyhow!(
+            "Agent workers are unavailable in the local terminal"
+        )),
+        #[cfg(all(not(target_family = "wasm"), not(feature = "local_terminal")))]
         warp_cli::WorkerCommand::AcpBridge { launch_file } => {
             // Stdout belongs to the agent's protocol stream, so there is no logging and no
             // initialize_app.
@@ -1547,6 +1569,7 @@ pub(crate) fn initialize_app(
     }
 
     let (auth_state, pending_api_key) = match launch_mode.auth_initialization() {
+        AuthInitialization::LocalSession => (AuthState::new_local_session(ctx), None),
         AuthInitialization::Persisted => (AuthState::initialize(ctx), None),
         AuthInitialization::PendingApiKey(api_key) => (
             AuthState::initialize_for_credential_validation(ctx),
@@ -1567,7 +1590,11 @@ pub(crate) fn initialize_app(
     // is handed to both `ServerApi` (for sync reads on the request path) and
     // `IapManager` (which owns refresh logic on the main thread).
     #[cfg(not(target_family = "wasm"))]
-    let iap_state = ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)));
+    let iap_state = if cfg!(feature = "local_terminal") {
+        None
+    } else {
+        ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)))
+    };
     #[cfg(target_family = "wasm")]
     let iap_state: Option<Arc<IapState>> = None;
     #[cfg(not(target_family = "wasm"))]
@@ -1592,8 +1619,9 @@ pub(crate) fn initialize_app(
     // treated as absent everywhere: it identifies no task and must not enable the
     // runner-context IAP WIF mint below.
     #[cfg(not(target_family = "wasm"))]
-    let ambient_agent_task_id: Option<AmbientAgentTaskId> = std::env::var(warp_cli::OZ_RUN_ID_ENV)
-        .ok()
+    let ambient_agent_task_id: Option<AmbientAgentTaskId> = (!cfg!(feature = "local_terminal"))
+        .then(|| std::env::var(warp_cli::OZ_RUN_ID_ENV).ok())
+        .flatten()
         .and_then(|run_id| match run_id.parse() {
             Ok(task_id) => Some(task_id),
             Err(err) => {
@@ -1623,7 +1651,7 @@ pub(crate) fn initialize_app(
         }
     }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(all(not(target_family = "wasm"), not(feature = "local_terminal")))]
     // Refresh starts only after the authenticated server client exists; tracing initialization
     // remains responsible for deciding whether this process opted in to cloud-agent export.
     tracing::start_auth_refresh(
@@ -1635,6 +1663,7 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
 
+    #[cfg(not(feature = "local_terminal"))]
     ctx.add_singleton_model(|ctx| {
         AuthManager::new(
             server_api.clone(),
@@ -1642,6 +1671,8 @@ pub(crate) fn initialize_app(
             ctx,
         )
     });
+    #[cfg(feature = "local_terminal")]
+    ctx.add_singleton_model(|_| AuthManager);
 
     ctx.add_singleton_model(|_ctx| GPUState::new());
 
@@ -1805,6 +1836,9 @@ pub(crate) fn initialize_app(
     });
 
     // Initialize ApiKeyManager after UserWorkspaces so it can subscribe to workspace/settings changes
+    #[cfg(feature = "local_terminal")]
+    ctx.add_singleton_model(|_| ::ai::api_keys::ApiKeyManager::default());
+    #[cfg(not(feature = "local_terminal"))]
     ctx.add_singleton_model(|ctx| {
         #[cfg_attr(target_family = "wasm", allow(unused_mut))]
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
@@ -1840,6 +1874,7 @@ pub(crate) fn initialize_app(
         manager
     });
 
+    #[cfg(not(feature = "local_terminal"))]
     ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, event, ctx| {
         if matches!(
             event,
@@ -1852,6 +1887,7 @@ pub(crate) fn initialize_app(
             });
         }
     });
+    #[cfg(not(feature = "local_terminal"))]
     ctx.subscribe_to_model(
         &::ai::api_keys::ApiKeyManager::handle(ctx),
         |_, event, ctx| {
@@ -1865,14 +1901,17 @@ pub(crate) fn initialize_app(
     if FeatureFlag::ChatGPTSubscription.is_enabled() {
         let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
         ctx.add_singleton_model(|_| ChatGPTSubscriptionModel::new(ai_client));
-        ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| model.refresh(ctx));
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
-            if matches!(event, AuthManagerEvent::AuthComplete) {
-                ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.refresh(ctx);
-                });
-            }
-        });
+        #[cfg(not(feature = "local_terminal"))]
+        {
+            ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| model.refresh(ctx));
+            ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+                if matches!(event, AuthManagerEvent::AuthComplete) {
+                    ChatGPTSubscriptionModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.refresh(ctx);
+                    });
+                }
+            });
+        }
     }
 
     ctx.add_singleton_model(AntivirusInfo::new);
@@ -2147,6 +2186,7 @@ pub(crate) fn initialize_app(
     timer.mark_interval_end("INITIALIZE_TELEMETRY_COLLECTION");
 
     // Register initial keybindings prior to creating menus
+    #[cfg(not(feature = "local_terminal"))]
     ai::init(ctx);
     app_services::init(ctx);
     // // TODO: Temporarily disabling keybindings for WASM builds. Will be implemented in future WASM support.
@@ -2167,28 +2207,33 @@ pub(crate) fn initialize_app(
     themes::theme_deletion_modal::init(ctx);
     root_view::init(ctx);
     voltron::init(ctx);
+    #[cfg(not(feature = "local_terminal"))]
     auth::init(ctx);
     reward_view::init(ctx);
     crate::view_components::find::init(ctx);
     prompt::editor_modal::init(ctx);
+    #[cfg(not(feature = "local_terminal"))]
     ai::blocklist::agent_view::editor::init(ctx);
     undo_close::init(ctx);
     billing::shared_objects_creation_denied_modal::init(ctx);
     tab_configs::new_worktree_modal::init(ctx);
     tab_configs::params_modal::init(ctx);
-    ai::blocklist::init(ctx);
-    ai::blocklist::block::status_bar::init(ctx);
     drive::index::init(ctx);
     drive::sharing::dialog::init(ctx);
-    ai_assistant::panel::init(ctx);
+    #[cfg(not(feature = "local_terminal"))]
+    {
+        ai::blocklist::init(ctx);
+        ai::blocklist::block::status_bar::init(ctx);
+        ai_assistant::panel::init(ctx);
+        ai::agent::todos::popup::init(ctx);
+        terminal::view::init_environment::mode_selector::init(ctx);
+        coding_entrypoints::project_buttons::init(ctx);
+    }
     settings_view::update_environment_form::init(ctx);
     env_vars::env_var_collection_block::init(ctx);
     context_chips::display_menu::init(ctx);
     context_chips::node_version_popup::init(ctx);
     env_vars::view::env_var_collection::init(ctx);
-    ai::agent::todos::popup::init(ctx);
-    terminal::view::init_environment::mode_selector::init(ctx);
-    coding_entrypoints::project_buttons::init(ctx);
     if FeatureFlag::CodeReviewSaveChanges.is_enabled() {
         code_review::init(ctx);
     }
@@ -2327,11 +2372,13 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
-    // The hook runtime reads the registry handle, so the registry is registered first.
-    ctx.add_singleton_model(|_| HookRegistry::new());
-    ctx.add_singleton_model(|ctx| {
-        HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
-    });
+    if !cfg!(feature = "local_terminal") {
+        // The hook runtime reads the registry handle, so the registry is registered first.
+        ctx.add_singleton_model(|_| HookRegistry::new());
+        ctx.add_singleton_model(|ctx| {
+            HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
+        });
+    }
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
@@ -2459,7 +2506,9 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(system::SystemInfo::new);
         // Hook processes want the login shell's PATH, so the runner is installed once
         // `LocalShellState` is available to capture it.
-        HookRuntime::install_command_runner(ctx);
+        if !cfg!(feature = "local_terminal") {
+            HookRuntime::install_command_runner(ctx);
+        }
     }
 
     // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
@@ -2534,7 +2583,9 @@ pub(crate) fn initialize_app(
             .map(StartupUserAuthentication::ApiKey)
             .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser)),
     };
-    if let Some(authentication) = startup_authentication {
+    if !cfg!(feature = "local_terminal")
+        && let Some(authentication) = startup_authentication
+    {
         authenticate_user_after_iap_access(
             authentication,
             startup_auth_is_non_blocking(launch_mode),
@@ -2655,6 +2706,7 @@ pub(crate) fn initialize_app(
 
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so
     // they are available to subsequent agent queries.
+    #[cfg(not(feature = "local_terminal"))]
     ProjectContextModel::handle(ctx).update(ctx, |me, ctx| me.index_global_rules(ctx));
     #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
     {
@@ -2671,7 +2723,6 @@ pub(crate) fn initialize_app(
     });
     ctx.add_singleton_model(move |_| persistence_writer);
 
-    ctx.add_singleton_model(input_classifier::InputClassifierModel::new);
 
     ctx.add_singleton_model(move |_| IgnoredSuggestionsModel::new(persisted_ignored_suggestions));
 
@@ -3189,11 +3240,12 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         // before reaching launch().
         LaunchMode::Tui { .. } => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
-            let should_skip_restore = launch_mode
-                .args()
-                .urls
-                .iter()
-                .any(is_cloud_agent_web_home_launch_url);
+            let should_skip_restore = !cfg!(feature = "local_terminal")
+                && launch_mode
+                    .args()
+                    .urls
+                    .iter()
+                    .any(is_cloud_agent_web_home_launch_url);
             let app_state = if should_skip_restore { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
@@ -3229,6 +3281,11 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 maybe_register_app_as_login_item(ctx);
             }
         }
+        #[cfg(feature = "local_terminal")]
+        LaunchMode::CommandLine { .. } => {
+            unreachable!("account and agent commands are rejected before initialization");
+        }
+        #[cfg(not(feature = "local_terminal"))]
         #[cfg_attr(target_family = "wasm", allow(unused_variables))]
         LaunchMode::CommandLine {
             command,

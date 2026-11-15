@@ -7,7 +7,6 @@ use itertools::Itertools;
 use mio::Interest;
 use parking_lot::Mutex;
 use signal_hook_mio::v1_0::Signals;
-use warp_cli::TerminalServerArgs;
 use warp_errors::report_error;
 
 use super::{RECV_SOCKET_FILENO, SEND_SOCKET_FILENO, api, logging, protocol};
@@ -97,12 +96,10 @@ pub struct EventLoop {
 
 impl EventLoop {
     /// Constructs a new event loop.
-    pub fn new(args: &TerminalServerArgs) -> Self {
+    pub fn new(parent_pid: Option<u32>) -> Self {
         use nix::fcntl;
 
-        let original_parent_pid = args
-            .parent
-            .pid
+        let original_parent_pid = parent_pid
             .expect("terminal server process should be spawned with a --parent-pid argument");
         let original_parent_pid = nix::unistd::Pid::from_raw(original_parent_pid as _);
 

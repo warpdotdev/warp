@@ -3270,7 +3270,7 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
-        } else {
+        } else if let Some(executor) = executor {
             // Register the review view as the action's diff storage: the
             // executor seeds it with the resolved diffs when preprocess
             // completes and drives its save at execute time.
@@ -4270,7 +4270,9 @@ impl AIBlock {
         // Complete the suggest prompt executor with Cancelled so the async action
         // finishes cleanly (the action auto-executes and is no longer in pending_actions).
         self.action_model.update(ctx, |action_model, ctx| {
-            let executor = action_model.suggest_prompt_executor(ctx).clone();
+            let Some(executor) = action_model.suggest_prompt_executor(ctx) else {
+                return;
+            };
             executor.update(ctx, |executor, _ctx| {
                 executor.complete_suggest_prompt_action(SuggestPromptResult::Cancelled);
             });
@@ -4322,7 +4324,9 @@ impl AIBlock {
 
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.execute_action(&action_id, self.client_ids.conversation_id, ctx);
-            let executor = action_model.suggest_prompt_executor(ctx).clone();
+            let Some(executor) = action_model.suggest_prompt_executor(ctx) else {
+                return;
+            };
             executor.update(ctx, |executor, _ctx| {
                 executor.complete_suggest_prompt_action(SuggestPromptResult::Accepted { query });
             });
@@ -4697,8 +4701,9 @@ impl AIBlock {
                                 .action_model
                                 .as_ref(ctx)
                                 .search_codebase_executor(ctx)
-                                .as_ref(ctx)
-                                .root_repo_for_action(action_id)
+                                .and_then(|executor| {
+                                    executor.as_ref(ctx).root_repo_for_action(action_id)
+                                })
                                 .map(Path::to_owned)
                             else {
                                 return;
@@ -6897,14 +6902,14 @@ impl TypedActionView for AIBlock {
                 server_output_id: _,
             } => {
                 self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.suggest_new_conversation_executor(ctx).update(
-                        ctx,
-                        |executor, _| {
-                            executor.complete_suggest_new_conversation_action(
-                                NewConversationDecision::Accept,
-                            );
-                        },
-                    );
+                    let Some(executor) = action_model.suggest_new_conversation_executor(ctx) else {
+                        return;
+                    };
+                    executor.update(ctx, |executor, _| {
+                        executor.complete_suggest_new_conversation_action(
+                            NewConversationDecision::Accept,
+                        );
+                    });
                     action_model.execute_action(action_id, self.client_ids.conversation_id, ctx);
                 });
             }
@@ -6913,14 +6918,14 @@ impl TypedActionView for AIBlock {
                 server_output_id: _,
             } => {
                 self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.suggest_new_conversation_executor(ctx).update(
-                        ctx,
-                        |executor, _| {
-                            executor.complete_suggest_new_conversation_action(
-                                NewConversationDecision::Reject,
-                            );
-                        },
-                    );
+                    let Some(executor) = action_model.suggest_new_conversation_executor(ctx) else {
+                        return;
+                    };
+                    executor.update(ctx, |executor, _| {
+                        executor.complete_suggest_new_conversation_action(
+                            NewConversationDecision::Reject,
+                        );
+                    });
                     action_model.execute_action(action_id, self.client_ids.conversation_id, ctx);
                 });
             }
@@ -7371,7 +7376,10 @@ impl AIBlock {
         let action_id_clone = action_id.clone();
         let request_clone = request.clone();
         let action_model = self.action_model.clone();
-        let run_agents_executor = self.action_model.as_ref(ctx).run_agents_executor(ctx);
+        let Some(run_agents_executor) = self.action_model.as_ref(ctx).run_agents_executor(ctx)
+        else {
+            return;
+        };
         let block_model = self.model.clone();
         let view = ctx.add_typed_action_view(move |ctx_view| {
             RunAgentsCardView::new(

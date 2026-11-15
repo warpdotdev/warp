@@ -654,21 +654,17 @@ fn send_provider_credential_telemetry(
     );
 }
 
-impl ApiKeyManager {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let keys = Self::load_keys_from_secure_storage(ctx);
-        let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
-        let resolved_custom_endpoints = keys.custom_endpoints.clone();
-        let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
+impl Default for ApiKeyManager {
+    fn default() -> Self {
         Self {
-            keys,
+            keys: ApiKeys::default(),
             custom_endpoints: CustomEndpointState {
                 definitions: None,
                 settings_valid: true,
-                keys: custom_endpoint_keys,
-                resolved: resolved_custom_endpoints,
+                keys: Default::default(),
+                resolved: Vec::new(),
             },
-            grok_tokens,
+            grok_tokens: None,
             chatgpt_connection: ChatGPTConnectionStatus::Unknown,
             chatgpt_oauth_pending: false,
             #[cfg(not(target_family = "wasm"))]
@@ -684,6 +680,25 @@ impl ApiKeyManager {
             geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
+        }
+    }
+}
+
+impl ApiKeyManager {
+    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        let keys = Self::load_keys_from_secure_storage(ctx);
+        let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
+        let resolved_custom_endpoints = keys.custom_endpoints.clone();
+        let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
+        Self {
+            keys,
+            custom_endpoints: CustomEndpointState {
+                keys: custom_endpoint_keys,
+                resolved: resolved_custom_endpoints,
+                ..Self::default().custom_endpoints
+            },
+            grok_tokens,
+            ..Self::default()
         }
     }
 

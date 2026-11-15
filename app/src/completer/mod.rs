@@ -33,7 +33,6 @@ lazy_static! {
         file_name: "..".to_owned(),
         file_type: EngineFileType::Directory,
     };
-    static ref EMPTY_COMMAND_REGISTRY: Arc<CommandRegistry> = Arc::new(CommandRegistry::empty());
 }
 
 #[derive(Clone)]
@@ -370,41 +369,6 @@ impl CompletionContext for SessionAgnosticContext {
 
     fn command_registry(&self) -> &CommandRegistry {
         &self.command_registry
-    }
-
-    fn environment_variable_names(&self) -> Option<&HashSet<SmolStr>> {
-        None
-    }
-
-    fn shell_supports_autocd(&self) -> Option<bool> {
-        None
-    }
-
-    fn path_completion_context(&self) -> Option<&dyn PathCompletionContext> {
-        None
-    }
-
-    fn generator_context(&self) -> Option<&dyn GeneratorContext> {
-        None
-    }
-}
-
-/// Empty `CompletionContext` used in places without a live shell session
-/// (i.e. shared session viewers without a real terminal instance).
-#[derive(Clone)]
-pub struct EmptyCompletionContext;
-impl EmptyCompletionContext {
-    pub fn new() -> Self {
-        Self
-    }
-}
-impl CompletionContext for EmptyCompletionContext {
-    fn top_level_commands(&self) -> Box<dyn Iterator<Item = &str> + '_> {
-        Box::new(std::iter::empty())
-    }
-
-    fn command_registry(&self) -> &CommandRegistry {
-        &EMPTY_COMMAND_REGISTRY
     }
 
     fn environment_variable_names(&self) -> Option<&HashSet<SmolStr>> {

@@ -24,7 +24,8 @@ use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
+    Border, ChildAnchor, Empty, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
+    Stack,
 };
 use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::platform::{WindowBounds, WindowStyle};
@@ -350,7 +351,9 @@ pub fn init(app: &mut AppContext) {
         "root_view:maybe_stop_active_voice_input",
         RootView::maybe_stop_active_voice_input,
     );
+    #[cfg(not(feature = "local_terminal"))]
     app.add_action("root_view:log_out", RootView::log_out);
+    #[cfg(not(feature = "local_terminal"))]
     app.add_action(
         "root_view:handle_incoming_auth_url",
         RootView::handle_incoming_auth_url,
@@ -1854,9 +1857,9 @@ enum AuthOnboardingState {
 pub struct RootView {
     auth_onboarding_state: AuthOnboardingState,
     server_time: Option<Arc<ServerTime>>,
-    auth_view: ViewHandle<AuthView>,
-    auth_override_view: ViewHandle<AuthOverrideWarningModal>,
-    needs_sso_link_view: ViewHandle<NeedsSsoLinkView>,
+    auth_view: Option<ViewHandle<AuthView>>,
+    auth_override_view: Option<ViewHandle<AuthOverrideWarningModal>>,
+    needs_sso_link_view: Option<ViewHandle<NeedsSsoLinkView>>,
     #[cfg(target_family = "wasm")]
     web_handoff_view: ViewHandle<WebHandoffView>,
     pub server_api: Arc<ServerApi>,
@@ -1896,28 +1899,39 @@ impl RootView {
         let server_api = server_api_provider.get();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
-            me.handle_auth_manager_event(event, ctx);
-        });
+        #[cfg(not(feature = "local_terminal"))]
+        let (auth_view, auth_override_view, needs_sso_link_view) = {
+            ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
+                me.handle_auth_manager_event(event, ctx);
+            });
 
-        ctx.subscribe_to_model(&CloudPreferencesSyncer::handle(ctx), |me, _, event, ctx| {
-            me.handle_cloud_preferences_syncer_event(event, ctx);
-        });
+            ctx.subscribe_to_model(&CloudPreferencesSyncer::handle(ctx), |me, _, event, ctx| {
+                me.handle_cloud_preferences_syncer_event(event, ctx);
+            });
 
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
-            me.handle_account_first_workspaces_event(event, ctx);
-        });
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+                me.handle_account_first_workspaces_event(event, ctx);
+            });
 
-        let auth_view =
-            ctx.add_typed_action_view(|ctx| AuthView::new(AuthViewVariant::Initial, ctx));
+            let auth_view =
+                ctx.add_typed_action_view(|ctx| AuthView::new(AuthViewVariant::Initial, ctx));
 
-        let auth_override_view: ViewHandle<_> = ctx.add_typed_action_view(|ctx| {
-            AuthOverrideWarningModal::new(ctx, AuthOverrideWarningModalVariant::OnboardingView)
-        });
+            let auth_override_view: ViewHandle<_> = ctx.add_typed_action_view(|ctx| {
+                AuthOverrideWarningModal::new(ctx, AuthOverrideWarningModalVariant::OnboardingView)
+            });
 
-        ctx.subscribe_to_view(&auth_override_view, |me, _, event, ctx| {
-            me.handle_auth_override_warning_modal_event(event, ctx);
-        });
+            ctx.subscribe_to_view(&auth_override_view, |me, _, event, ctx| {
+                me.handle_auth_override_warning_modal_event(event, ctx);
+            });
+            let needs_sso_link_view = ctx.add_typed_action_view(|_| NeedsSsoLinkView::new());
+            (
+                Some(auth_view),
+                Some(auth_override_view),
+                Some(needs_sso_link_view),
+            )
+        };
+        #[cfg(feature = "local_terminal")]
+        let (auth_view, auth_override_view, needs_sso_link_view) = (None, None, None);
 
         let model_event_sender = global_resource_handles.model_event_sender.clone();
         let workspace_args = WorkspaceArgs {
@@ -1926,7 +1940,10 @@ impl RootView {
             workspace_setting,
         };
 
-        let auth_onboarding_state = if auth_state.is_logged_in() {
+        let auth_onboarding_state = if cfg!(feature = "local_terminal")
+            || auth_state.is_local_session()
+            || auth_state.is_logged_in()
+        {
             AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
         } else {
             cfg_if! {
@@ -1960,8 +1977,6 @@ impl RootView {
                 }
             }
         };
-
-        let needs_sso_link_view = ctx.add_typed_action_view(|_| NeedsSsoLinkView::new());
 
         #[cfg(target_family = "wasm")]
         let web_handoff_view = {
@@ -2123,6 +2138,10 @@ impl RootView {
 
     // Switch to Auth Screen while destroying Workspace.
     fn log_out(&mut self, _: &(), ctx: &mut ViewContext<Self>) -> bool {
+        if self.auth_view.is_none() {
+            return false;
+        }
+
         self.pending_account_first_settings_class = None;
         self.pending_account_first_tutorial_after_settings = false;
         self.pending_account_first_sso_login = None;
@@ -2134,7 +2153,10 @@ impl RootView {
     }
 
     fn show_needs_sso_link_view(&mut self, email: String, ctx: &mut ViewContext<Self>) -> bool {
-        self.needs_sso_link_view.update(ctx, |view, _| {
+        let Some(needs_sso_link_view) = &self.needs_sso_link_view else {
+            return false;
+        };
+        needs_sso_link_view.update(ctx, |view, _| {
             view.set_email(email);
         });
 
@@ -3048,6 +3070,12 @@ impl RootView {
 
     #[allow(clippy::ptr_arg)]
     fn handle_incoming_auth_url(&mut self, url: &Url, ctx: &mut ViewContext<Self>) -> bool {
+        if cfg!(feature = "local_terminal")
+            || AuthStateProvider::as_ref(ctx).get().is_local_session()
+        {
+            return true;
+        }
+
         match AuthRedirectPayload::from_url(url.clone()) {
             Ok(redirect_payload) => {
                 AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
@@ -3059,11 +3087,13 @@ impl RootView {
                     safe: ("Unable to parse AuthResult from url"),
                     full: ("Unable to parse AuthResult from url: {error}")
                 );
-                self.auth_view.update(ctx, |view, ctx| {
-                    view.last_login_failure_reason =
-                        Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: false });
-                    ctx.notify()
-                });
+                if let Some(auth_view) = &self.auth_view {
+                    auth_view.update(ctx, |view, ctx| {
+                        view.last_login_failure_reason =
+                            Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: false });
+                        ctx.notify()
+                    });
+                }
             }
         }
         // The web checkout confirmation hands the user back through the same
@@ -3603,9 +3633,11 @@ impl RootView {
                 | AuthOnboardingState::ConfirmIncomingAuth(_) =
                     &self.auth_onboarding_state
                 {
-                    self.auth_view.update(ctx, |auth_view, ctx| {
-                        auth_view.set_variant(ctx, AuthViewVariant::Initial);
-                    });
+                    if let Some(auth_view) = &self.auth_view {
+                        auth_view.update(ctx, |view, ctx| {
+                            view.set_variant(ctx, AuthViewVariant::Initial);
+                        });
+                    }
                     self.auth_onboarding_state
                         .complete_auth_and_create_workspace(ctx);
                     self.start_pending_tutorial(ctx);
@@ -3740,7 +3772,10 @@ impl RootView {
         auth_payload: AuthRedirectPayload,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.auth_override_view.update(ctx, |modal, _| {
+        let Some(auth_override_view) = &self.auth_override_view else {
+            return;
+        };
+        auth_override_view.update(ctx, |modal, _| {
             modal.set_interrupted_auth_payload(auth_payload);
         });
         self.auth_onboarding_state = AuthOnboardingState::ConfirmIncomingAuth(workspace_args);
@@ -3801,17 +3836,23 @@ impl RootView {
         }
         match &self.auth_onboarding_state {
             AuthOnboardingState::Auth(_) => {
-                ctx.focus(&self.auth_view);
+                if let Some(view) = &self.auth_view {
+                    ctx.focus(view);
+                }
             }
             AuthOnboardingState::ConfirmIncomingAuth(_) => {
-                ctx.focus(&self.auth_override_view);
+                if let Some(view) = &self.auth_override_view {
+                    ctx.focus(view);
+                }
             }
             #[cfg(target_family = "wasm")]
             AuthOnboardingState::WebImport(_) => {
                 ctx.focus(&self.web_handoff_view);
             }
             AuthOnboardingState::NeedsSsoLink { .. } => {
-                ctx.focus(&self.needs_sso_link_view);
+                if let Some(view) = &self.needs_sso_link_view {
+                    ctx.focus(view);
+                }
             }
             AuthOnboardingState::Onboarding {
                 onboarding_view, ..
@@ -4009,14 +4050,23 @@ impl View for RootView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let child = match &self.auth_onboarding_state {
-            AuthOnboardingState::Auth(_) => ChildView::new(&self.auth_view).finish(),
+            AuthOnboardingState::Auth(_) => self.auth_view.as_ref().map_or_else(
+                || Empty::new().finish(),
+                |view| ChildView::new(view).finish(),
+            ),
             AuthOnboardingState::ConfirmIncomingAuth(_) => {
-                ChildView::new(&self.auth_override_view).finish()
+                self.auth_override_view.as_ref().map_or_else(
+                    || Empty::new().finish(),
+                    |view| ChildView::new(view).finish(),
+                )
             }
             #[cfg(target_family = "wasm")]
             AuthOnboardingState::WebImport(_) => ChildView::new(&self.web_handoff_view).finish(),
             AuthOnboardingState::NeedsSsoLink { .. } => {
-                ChildView::new(&self.needs_sso_link_view).finish()
+                self.needs_sso_link_view.as_ref().map_or_else(
+                    || Empty::new().finish(),
+                    |view| ChildView::new(view).finish(),
+                )
             }
             AuthOnboardingState::Onboarding {
                 onboarding_view, ..
@@ -4173,6 +4223,10 @@ impl AuthOnboardingState {
     }
 
     fn try_open_onboarding_slides(&mut self, ctx: &mut ViewContext<RootView>) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let target = match self {
             AuthOnboardingState::Auth(args) | AuthOnboardingState::ConfirmIncomingAuth(args) => {
                 if args.workspace_setting.is_content_deep_link() {

@@ -56,7 +56,7 @@ const SEND_SOCKET_FILENO: RawFd = RECV_SOCKET_FILENO + 1;
 /// to minimize the number of resources acquired that could be leaked to a child
 /// process through a fork/exec pair.
 pub fn run_terminal_server(
-    args: &warp_cli::TerminalServerArgs,
+    parent_pid: Option<u32>,
     init_feature_flags: impl FnOnce(),
     init_platform: impl FnOnce() -> anyhow::Result<()>,
 ) {
@@ -64,7 +64,7 @@ pub fn run_terminal_server(
     // server process may need to reference them. User-controlled flags are overridden
     // soon after.
     init_feature_flags();
-    let event_loop = event_loop::EventLoop::new(args);
+    let event_loop = event_loop::EventLoop::new(parent_pid);
     event_loop.run(init_platform)
 }
 
@@ -186,11 +186,11 @@ impl TerminalServer {
                     }
                     Ok(())
                 })
-                .arg(warp_cli::terminal_server_subcommand())
+                .arg(command::worker::TERMINAL_SERVER)
                 // Tell the terminal server process what process ID it should
                 // expect its parent to have.  This allows it to terminate
                 // itself when it detects its parent process to have changed.
-                .arg(warp_cli::parent_flag())
+                .arg(command::worker::parent_pid_flag())
                 .spawn()
                 .context("Failed to spawn terminal server process")?;
 

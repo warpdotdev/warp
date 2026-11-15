@@ -64,7 +64,6 @@ pub enum SlashCommandKind {
     Mcp,
     ViewLogs,
     Voice,
-    NaturalLanguageDetection,
     Theme,
     Exit,
     Logout,

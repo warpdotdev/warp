@@ -126,7 +126,6 @@ impl InputModePolicy for GuiInputModePolicy {
                             is_locked: !is_autodetection_enabled,
                         },
                         decision_source: None,
-                        temporarily_disable_autodetection: is_autodetection_enabled,
                     })
                 }
             }

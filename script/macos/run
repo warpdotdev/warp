@@ -30,12 +30,13 @@ if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
 fi
 
 if [ "$WARP_CHANNEL" = "local" ]; then
-    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpLocal.app"
+    WARP_APP_NAME="WarpLocal"
     WARP_SCHEME_NAME="warplocal"
 else
-    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpOss.app"
+    WARP_APP_NAME="WarpOss"
     WARP_SCHEME_NAME="warposs"
 fi
+BUILD_PROFILE_DIR="debug"
 DONT_OPEN=false
 # Launches the binary with "open", meaning the Warp process is
 # launched by the MacOS application launcher instead of a shell session.
@@ -67,21 +68,16 @@ while (( "$#" )); do
       ;;
     --release)
       echo "Detected release build, pointing at release bundle under ${TARGET_DIR}/release/bundle"
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpLocal.app"
-      else
-          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpOss.app"
-      fi
+      BUILD_PROFILE_DIR="release"
       PARAMS="$PARAMS $1"
       shift
       ;;
     --profile)
       PROFILE="$2"
       shift 2
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpLocal.app"
-      else
-          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpOss.app"
+      BUILD_PROFILE_DIR="$PROFILE"
+      if [ "$PROFILE" = "dev" ]; then
+          BUILD_PROFILE_DIR="debug"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -99,6 +95,8 @@ while (( "$#" )); do
       ;;
   esac
 done
+
+WARP_APP_PATH="${TARGET_DIR}/${BUILD_PROFILE_DIR}/bundle/osx/${WARP_APP_NAME}.app"
 
 rm -rf "$WARP_APP_PATH"
 
@@ -120,13 +118,24 @@ export WARP_SCHEME_NAME
 export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
 ./script/update_plist
 
+# app/build.rs stages the universal plugin in the workspace target directory.
+DOCK_TILE_PLUGIN="WarpDockTilePlugin.docktileplugin"
+DOCK_TILE_PLUGIN_SOURCE="${REPO_ROOT}/target/${BUILD_PROFILE_DIR}/${DOCK_TILE_PLUGIN}"
+DOCK_TILE_PLUGIN_DEST="${WARP_APP_PATH}/Contents/PlugIns/${DOCK_TILE_PLUGIN}"
+echo "Embedding Dock Tile plugin..."
+mkdir -p "${WARP_APP_PATH}/Contents/PlugIns"
+cp -R "$DOCK_TILE_PLUGIN_SOURCE" "$DOCK_TILE_PLUGIN_DEST"
+BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw "$WARP_PLIST_PATH")"
+plutil -insert NSDockTilePlugIn -string "$DOCK_TILE_PLUGIN" "$WARP_PLIST_PATH"
+plutil -insert MainAppBundleIdentifier -string "$BUNDLE_ID" "$DOCK_TILE_PLUGIN_DEST/Contents/Info.plist"
+
 echo "Preparing bundled resources..."
 if [ "${GENERATE_SCHEMA:-false}" != "true" ]; then
   export SKIP_SETTINGS_SCHEMA=1
 else
   export SETTINGS_SCHEMA_EXECUTABLE="$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
 fi
-NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources" "$WARP_CHANNEL"
+NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources"
 
 "${REPO_ROOT}/script/compile_icon" "$WARP_CHANNEL" "$WARP_APP_PATH"
 

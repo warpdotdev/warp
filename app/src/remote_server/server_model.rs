@@ -934,21 +934,38 @@ impl ServerModel {
                     Some(host_scoped_request::Message::DiscardFiles(m)) => {
                         self.handle_discard_files(m, &request_id, ctx)
                     }
+                    #[cfg(feature = "local_terminal")]
+                    Some(
+                        host_scoped_request::Message::IndexCodebase(_)
+                        | host_scoped_request::Message::DropCodebaseIndex(_)
+                        | host_scoped_request::Message::GetFragmentMetadataFromHash(_)
+                        | host_scoped_request::Message::ResyncCodebase(_)
+                        | host_scoped_request::Message::UploadHandoffSnapshot(_)
+                        | host_scoped_request::Message::GitGenerateCommitMessage(_),
+                    ) => HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "Agent services are unavailable in the local terminal".to_owned(),
+                    })),
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::IndexCodebase(m)) => {
                         self.handle_index_codebase(m, &request_id, conn_id, ctx)
                     }
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::DropCodebaseIndex(m)) => {
                         self.handle_drop_codebase_index(m, &request_id, conn_id, ctx)
                     }
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::GetFragmentMetadataFromHash(m)) => {
                         self.handle_get_fragment_metadata_from_hash(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::GetBranches(m)) => {
                         self.handle_get_branches(m, &request_id, conn_id, ctx)
                     }
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::ResyncCodebase(m)) => {
                         self.handle_resync_codebase(m, &request_id, conn_id, ctx)
                     }
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::UploadHandoffSnapshot(m)) => {
                         self.handle_upload_handoff_snapshot(m, &request_id, conn_id, ctx)
                     }
@@ -961,6 +978,7 @@ impl ServerModel {
                     Some(host_scoped_request::Message::GitCreatePr(m)) => {
                         self.handle_create_pr(m, &request_id, conn_id, ctx)
                     }
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(host_scoped_request::Message::GitGenerateCommitMessage(m)) => {
                         self.handle_generate_git_commit_message(m, &request_id, conn_id, ctx)
                     }
@@ -1025,6 +1043,9 @@ impl ServerModel {
                     Some(notification::Message::Abort(m)) => {
                         self.handle_abort(m, &request_id, ctx);
                     }
+                    #[cfg(feature = "local_terminal")]
+                    Some(notification::Message::Authenticate(_)) => {}
+                    #[cfg(not(feature = "local_terminal"))]
                     Some(notification::Message::Authenticate(m)) => {
                         self.handle_authenticate(m);
                     }

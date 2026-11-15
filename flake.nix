@@ -173,7 +173,6 @@
               let
                 installDir = "$out/opt/warpdotdev/warp-terminal-experimental";
                 resourcesDir = "${installDir}/resources";
-                releaseChannel = "oss";
                 libraryPath = lib.makeLibraryPath linuxRuntimeLibraries;
                 executablePath = lib.makeBinPath (with pkgs; [ xdg-utils ]);
               in
@@ -181,13 +180,10 @@
                 install -Dm755 "$out/bin/warp-oss" "${installDir}/warp-oss"
                 rm -f "$out/bin/warp-oss"
 
-                patchShebangs \
-                  ./script/prepare_bundled_resources \
-                  ./script/copy_conditional_skills
+                patchShebangs ./script/prepare_bundled_resources
 
                 SETTINGS_SCHEMA_EXECUTABLE="${installDir}/warp-oss" ./script/prepare_bundled_resources \
-                  "${resourcesDir}" \
-                  "${releaseChannel}"
+                  "${resourcesDir}"
 
                 install -Dm644 \
                   "${resourcesDir}/THIRD_PARTY_LICENSES.txt" \

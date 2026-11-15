@@ -396,6 +396,12 @@ pub(crate) fn harness_kind(
     harness: Harness,
     transport: HarnessTransport,
 ) -> Result<HarnessKind, AgentDriverError> {
+    if cfg!(feature = "local_terminal") {
+        return Err(AgentDriverError::EnvironmentSetupFailed(
+            "Agent harnesses are unavailable in the local terminal".to_owned(),
+        ));
+    }
+
     // The transport only selects how a third-party harness is driven; Oz is Warp's own loop,
     // so it does not consult it, and a harness with a fixed transport ignores it.
     if harness == Harness::Oz {

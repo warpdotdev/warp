@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+local_terminal = []
 standalone = []
 
 [dependencies]

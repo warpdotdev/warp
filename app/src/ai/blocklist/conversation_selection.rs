@@ -8,7 +8,7 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId,
 };
 use crate::ai::agent_conversations_model::AgentConversationListPolicy;
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util", feature = "local_terminal"))]
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationListEntryState,
 };
@@ -120,12 +120,15 @@ impl Entity for Box<dyn ConversationSelection> {
     type Event = ConversationSelectionEvent;
 }
 
-/// Inert [`ConversationSelection`] stub for tests: no selection, no-op writes.
-#[cfg(any(test, feature = "test-util"))]
-pub(crate) struct MockConversationSelection;
+/// Conversation selection for surfaces without any agent views.
+#[cfg(any(test, feature = "test-util", feature = "local_terminal"))]
+pub(crate) struct InactiveConversationSelection;
 
 #[cfg(any(test, feature = "test-util"))]
-impl AgentConversationListPolicy for MockConversationSelection {
+pub(crate) use InactiveConversationSelection as MockConversationSelection;
+
+#[cfg(any(test, feature = "test-util", feature = "local_terminal"))]
+impl AgentConversationListPolicy for InactiveConversationSelection {
     fn classify_entry(
         &self,
         _: &AgentConversationEntry,
@@ -135,8 +138,8 @@ impl AgentConversationListPolicy for MockConversationSelection {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-impl ConversationSelection for MockConversationSelection {
+#[cfg(any(test, feature = "test-util", feature = "local_terminal"))]
+impl ConversationSelection for InactiveConversationSelection {
     fn selected_conversation_id(&self, _: &AppContext) -> Option<AIConversationId> {
         None
     }
@@ -169,7 +172,11 @@ impl ConversationSelection for MockConversationSelection {
         _: AgentViewEntryOrigin,
         _: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Result<AIConversationId, EnterAgentViewError> {
-        Ok(AIConversationId::new())
+        if cfg!(feature = "local_terminal") {
+            Err(EnterAgentViewError::Unavailable)
+        } else {
+            Ok(AIConversationId::new())
+        }
     }
 
     fn pending_query_autoexecute_override(&self, _: &AppContext) -> AIConversationAutoexecuteMode {

@@ -508,7 +508,7 @@ impl BlocklistAIActionExecutor {
         ctx: &mut ModelContext<Self>,
     ) -> BoxFuture<'static, ()> {
         // In view-only mode, we do not need to perform any preprocessing work.
-        if self.is_shared_session_viewer() {
+        if cfg!(feature = "local_terminal") || self.is_shared_session_viewer() {
             return futures::future::ready(()).boxed();
         }
 
@@ -613,6 +613,13 @@ impl BlocklistAIActionExecutor {
         is_user_initiated: bool,
         ctx: &mut ModelContext<Self>,
     ) -> TryExecuteResult {
+        if cfg!(feature = "local_terminal") {
+            return TryExecuteResult::NotExecuted {
+                reason: NotExecutedReason::NotReady,
+                action: Box::new(action),
+            };
+        }
+
         // We should never actually execute actions in view-only mode.
         if self.is_shared_session_viewer() {
             return TryExecuteResult::NotExecuted {

@@ -214,7 +214,8 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
             requires_result: true,
         };
         let action_model = add_test_action_model(&mut app);
-        let run_agents_executor = app.read(|ctx| action_model.as_ref(ctx).run_agents_executor(ctx));
+        let run_agents_executor =
+            app.read(|ctx| action_model.as_ref(ctx).run_agents_executor(ctx).unwrap());
         let other_action_model = action_model.clone();
         let other_run_agents_executor = run_agents_executor.clone();
         let other_incoming = incoming.clone();

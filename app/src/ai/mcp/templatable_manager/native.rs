@@ -275,6 +275,32 @@ impl TemplatableMCPServerManager {
         running_legacy_server_uuids: &[Uuid],
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let mut me = Self {
+            cloud_templatable_mcp_servers: Default::default(),
+            server_states: Default::default(),
+            active_servers: Default::default(),
+            runtime_environment: Default::default(),
+            spawned_servers: Default::default(),
+            reconnectable_ephemeral_installations: Default::default(),
+            server_credentials: Default::default(),
+            file_based_server_credentials: Default::default(),
+            locally_installed_servers: Default::default(),
+            database_connection: None,
+            server_error_messages: Default::default(),
+            spawner: None,
+            pending_reconnections: Default::default(),
+            pending_oauth_csrf: Default::default(),
+            authorization_urls: Default::default(),
+            cli_spawned_server_uuids: Default::default(),
+            builtin_server_uuids: Default::default(),
+            builtin_server_token: Default::default(),
+            server_loggers: Default::default(),
+        };
+
+        if cfg!(feature = "local_terminal") {
+            return me;
+        }
+
         // Subscribe to FileBasedMCPManager events.
         let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
         ctx.subscribe_to_model(&file_based_mcp_manager, |me, _, event, ctx| match event {
@@ -414,7 +440,7 @@ impl TemplatableMCPServerManager {
             });
         }
 
-        let database_connection =
+        me.database_connection =
             database_file_path_for_current_scope()
                 .to_str()
                 .and_then(|db_url| {
@@ -423,27 +449,8 @@ impl TemplatableMCPServerManager {
                         .map(|conn| Arc::new(Mutex::new(conn)))
                 });
 
-        let mut me = Self {
-            cloud_templatable_mcp_servers: Default::default(),
-            server_states: Default::default(),
-            active_servers: Default::default(),
-            runtime_environment: Default::default(),
-            spawned_servers: Default::default(),
-            reconnectable_ephemeral_installations: Default::default(),
-            server_credentials: Default::default(),
-            file_based_server_credentials: Default::default(),
-            locally_installed_servers,
-            database_connection,
-            server_error_messages: Default::default(),
-            spawner: Some(ctx.spawner()),
-            pending_reconnections: Default::default(),
-            pending_oauth_csrf: Default::default(),
-            authorization_urls: Default::default(),
-            cli_spawned_server_uuids: Default::default(),
-            builtin_server_uuids: Default::default(),
-            builtin_server_token: Default::default(),
-            server_loggers: Default::default(),
-        };
+        me.spawner = Some(ctx.spawner());
+        me.locally_installed_servers = locally_installed_servers;
 
         me.fetch_cloud_servers(ctx);
 
@@ -807,6 +814,10 @@ impl TemplatableMCPServerManager {
     /// rotated credentials: the transport keeps the `Authorization` header it
     /// was spawned with.
     pub fn sync_builtin_servers(&mut self, force_respawn: bool, ctx: &mut ModelContext<Self>) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         // Built-ins attach only in interactive clients (GUI and TUI); CLI
@@ -911,6 +922,10 @@ impl TemplatableMCPServerManager {
         mode: SpawnMode,
         ctx: &mut ModelContext<Self>,
     ) {
+        if cfg!(feature = "local_terminal") {
+            return;
+        }
+
         let installation_uuid = installation.uuid();
 
         let resolved_json = resolve_json(&installation);

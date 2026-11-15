@@ -2525,7 +2525,7 @@ pub enum TelemetryEvent {
         action: AgentModeSetupCreateEnvironmentActionType,
     },
     InputBufferSubmitted {
-        input_type: input_classifier::InputType,
+        input_type: crate::ai::blocklist::InputType,
         is_locked: bool,
         input_type_decision_source: Option<InputTypeAutoDetectionSource>,
         was_lock_set_with_empty_buffer: bool,

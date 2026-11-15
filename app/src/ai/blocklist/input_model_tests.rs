@@ -1,20 +1,8 @@
 //! Unit tests for [`BlocklistAIInputModel`] input handling.
 //!
-//! Covers [`resolve_history_match`], which pins down the NLD history-match
-//! decision matrix between command history and agent prompt history, and the
-//! policy-driven mechanism where the initial config, the locked-AI gate, and
-//! the reactive subscriptions all defer to the injected [`InputModePolicy`].
-//!
-//! For [`resolve_history_match`], each [`HistoryMatch`] argument models one
-//! history source: `NoMatch` means the source had no close match, `MatchedAt`
-//! carries the matched entry's timestamp, and `MatchedWithoutTimestamp` is a
-//! match with no timestamp (command-history-file entries may have no timestamp;
-//! agent prompt entries always carry one).
-
 use std::rc::Rc;
 use std::sync::Arc;
 
-use chrono::Duration;
 use parking_lot::FairMutex;
 use settings::Setting as _;
 use warpui::r#async::executor::Background;
@@ -36,127 +24,6 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::TerminalModel;
 use crate::terminal::model::test_utils::block_size;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
-
-/// Returns a timestamp and a strictly-later timestamp, for ordering assertions.
-fn earlier_and_later() -> (DateTime<Local>, DateTime<Local>) {
-    let earlier = Local::now();
-    let later = earlier + Duration::seconds(1);
-    (earlier, later)
-}
-
-const HISTORY_MATCH_AI: Option<(InputType, InputTypeAutoDetectionSource)> =
-    Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch));
-const HISTORY_MATCH_SHELL: Option<(InputType, InputTypeAutoDetectionSource)> =
-    Some((InputType::Shell, InputTypeAutoDetectionSource::HistoryMatch));
-
-#[test]
-fn no_match_from_either_source_is_not_history_match() {
-    // Neither command nor prompt history matched: the caller must fall through
-    // to the classifier, so we cannot report a `HistoryMatch` decision.
-    assert_eq!(
-        resolve_history_match(HistoryMatch::NoMatch, HistoryMatch::NoMatch),
-        None,
-    );
-}
-
-#[test]
-fn prompt_only_match_locks_to_ai_history_match() {
-    let (_, prompt_ts) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(HistoryMatch::NoMatch, HistoryMatch::MatchedAt(prompt_ts)),
-        HISTORY_MATCH_AI,
-    );
-}
-
-#[test]
-fn command_only_match_locks_to_shell_history_match() {
-    let (command_ts, _) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(HistoryMatch::MatchedAt(command_ts), HistoryMatch::NoMatch),
-        HISTORY_MATCH_SHELL,
-    );
-}
-
-#[test]
-fn command_only_match_without_timestamp_locks_to_shell_history_match() {
-    // History-file commands can match without carrying a timestamp.
-    assert_eq!(
-        resolve_history_match(HistoryMatch::MatchedWithoutTimestamp, HistoryMatch::NoMatch),
-        HISTORY_MATCH_SHELL,
-    );
-}
-
-#[test]
-fn both_match_prompt_newer_locks_to_ai() {
-    let (command_ts, prompt_ts) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(
-            HistoryMatch::MatchedAt(command_ts),
-            HistoryMatch::MatchedAt(prompt_ts),
-        ),
-        HISTORY_MATCH_AI,
-    );
-}
-
-#[test]
-fn both_match_command_newer_locks_to_shell() {
-    let (prompt_ts, command_ts) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(
-            HistoryMatch::MatchedAt(command_ts),
-            HistoryMatch::MatchedAt(prompt_ts),
-        ),
-        HISTORY_MATCH_SHELL,
-    );
-}
-
-#[test]
-fn both_match_equal_timestamps_prefer_shell() {
-    // The newer-wins check is strict, so a tie cannot prove the prompt is more
-    // recent and we preserve the Shell short-circuit.
-    let ts = Local::now();
-    assert_eq!(
-        resolve_history_match(HistoryMatch::MatchedAt(ts), HistoryMatch::MatchedAt(ts)),
-        HISTORY_MATCH_SHELL,
-    );
-}
-
-#[test]
-fn both_match_command_without_timestamp_locks_to_ai() {
-    // A timestamped prompt match beats a command match with no timestamp
-    // (e.g. a shell history-file entry): the prompt is the only entry whose
-    // recency we can establish, so it is treated as more recent.
-    let (_, prompt_ts) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(
-            HistoryMatch::MatchedWithoutTimestamp,
-            HistoryMatch::MatchedAt(prompt_ts),
-        ),
-        HISTORY_MATCH_AI,
-    );
-}
-
-#[test]
-fn both_match_prompt_without_timestamp_prefer_shell() {
-    // Without a prompt timestamp we cannot prove the prompt is newer, so we
-    // preserve the Shell short-circuit (prompt entries always carry a timestamp
-    // in practice; this pins the defensive fallback).
-    let (command_ts, _) = earlier_and_later();
-    assert_eq!(
-        resolve_history_match(
-            HistoryMatch::MatchedAt(command_ts),
-            HistoryMatch::MatchedWithoutTimestamp,
-        ),
-        HISTORY_MATCH_SHELL,
-    );
-    assert_eq!(
-        resolve_history_match(
-            HistoryMatch::MatchedWithoutTimestamp,
-            HistoryMatch::MatchedWithoutTimestamp,
-        ),
-        HISTORY_MATCH_SHELL,
-    );
-}
 
 const AI_LOCKED: InputConfig = InputConfig {
     input_type: InputType::AI,

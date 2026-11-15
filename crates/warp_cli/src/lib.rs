@@ -65,7 +65,7 @@ pub struct ParentOpts {
     /// has terminated. Guaranteed to be [`None`] when this is the initial
     /// Warp process, but may also be [`None`] for Warp child processes if the
     /// child process doesn't need to keep track of its parent.
-    #[arg(long = "parent-pid", hide = true)]
+    #[arg(long = command::worker::PARENT_PID_ARG, hide = true)]
     pub pid: Option<u32>,
 
     /// A handle to our parent process.
@@ -498,7 +498,7 @@ impl Args {
 #[derive(Debug, Clone, Subcommand)]
 pub enum WorkerCommand {
     /// Run the terminal server.
-    #[clap(hide = true)]
+    #[clap(hide = true, name = command::worker::TERMINAL_SERVER)]
     #[cfg(unix)]
     TerminalServer(TerminalServerArgs),
 
@@ -537,7 +537,7 @@ pub enum WorkerCommand {
 
     /// Run a headless ripgrep search worker.
     #[cfg(not(target_family = "wasm"))]
-    #[clap(hide = true)]
+    #[clap(hide = true, name = command::worker::RIPGREP_SEARCH)]
     RipgrepSearch {
         #[clap(flatten)]
         parent: ParentOpts,
@@ -750,30 +750,11 @@ impl fmt::Display for RecoveryMechanism {
     }
 }
 
-/// Returns the subcommand name to use for starting the terminal server.
-pub fn terminal_server_subcommand() -> String {
-    <Args as CommandFactory>::command()
-        .find_subcommand("terminal-server")
-        .expect("terminal-server subcommand not found")
-        .get_name()
-        .to_string()
-}
-
 /// Returns the subcommand name to use for starting the installation detection server.
 pub fn installation_detection_server_subcommand() -> String {
     <Args as CommandFactory>::command()
         .find_subcommand("installation-detection-server")
         .expect("installation-detection-server subcommand not found")
-        .get_name()
-        .to_string()
-}
-
-/// Returns the subcommand name to use for starting the ripgrep search worker.
-#[cfg(not(target_family = "wasm"))]
-pub fn ripgrep_search_subcommand() -> String {
-    <Args as CommandFactory>::command()
-        .find_subcommand("ripgrep-search")
-        .expect("ripgrep-search subcommand not found")
         .get_name()
         .to_string()
 }
@@ -799,18 +780,6 @@ pub fn dump_debug_info_flag() -> String {
         .get_long_flag()
         .expect("dump-debug-info flag not found");
     format!("--{flag}")
-}
-
-/// Returns a flag that sets the current process as the parent of a Warp subcommand to spawn.
-pub fn parent_flag() -> String {
-    let command = <Args as CommandFactory>::command();
-    let flag = command
-        .get_arguments()
-        .find(|arg| arg.get_long() == Some("parent-pid"))
-        .expect("parent-pid flag not found")
-        .get_long()
-        .unwrap();
-    format!("--{flag}={}", std::process::id())
 }
 
 /// The name that this binary was invoked as.

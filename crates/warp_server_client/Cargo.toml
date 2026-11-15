@@ -9,6 +9,7 @@ license.workspace = true
 [features]
 agent_mode_evals = ["dep:rand"]
 integration_tests = ["warp_server_auth/integration_tests"]
+local_terminal = []
 skip_login = ["warp_server_auth/skip_login"]
 test-util = ["cloud_object_client/test-util", "cloud_objects/test-util", "dep:mockall"]
 

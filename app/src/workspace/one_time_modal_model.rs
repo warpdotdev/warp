@@ -635,8 +635,7 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_all_modals(&mut self, ctx: &mut ModelContext<Self>) {
-        // Never show one-time modals on WASM.
-        if cfg!(target_family = "wasm") {
+        if cfg!(any(target_family = "wasm", feature = "local_terminal")) {
             return;
         }
 

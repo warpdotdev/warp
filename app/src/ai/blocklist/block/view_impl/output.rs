@@ -1516,8 +1516,7 @@ fn render_search_codebase(
         .action_model
         .as_ref(app)
         .search_codebase_executor(app)
-        .as_ref(app)
-        .root_repo_for_action(id);
+        .and_then(|executor| executor.as_ref(app).root_repo_for_action(id));
 
     let requested_action = match status.as_ref() {
         Some(status) => match status {

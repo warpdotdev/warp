@@ -313,7 +313,7 @@ impl Input {
                 app,
             ));
         }
-        column.add_child(ChildView::new(&self.agent_status_view).finish());
+        column.add_child(self.render_agent_status_bar());
         if let Some(panel) = self.queued_prompts_panel.as_ref()
             && panel.as_ref(app).should_render(app)
         {
@@ -716,7 +716,7 @@ impl Input {
 
         let mut column = Flex::column();
         if show_status_bar {
-            column.add_child(ChildView::new(&self.agent_status_view).finish());
+            column.add_child(self.render_agent_status_bar());
         }
         column.add_child(input);
 

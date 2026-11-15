@@ -516,8 +516,7 @@ elif [[ "$ARTIFACT" == tui ]]; then
     WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
   fi
 elif [[ "$ARTIFACT" == app ]]; then
-  # All channels ship the v3 classifier and v2 heuristic.
-  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
+  FEATURES="$FEATURES,gui"
 fi
 
 # A universal binary always has a native slice, so it is unaffected by the
@@ -707,7 +706,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
       export SETTINGS_SCHEMA_EXECUTABLE="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
     fi
   fi
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR"
 
   "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
 
@@ -818,7 +817,7 @@ elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
       export SETTINGS_SCHEMA_EXECUTABLE="$OUT_DIR/$WARP_BIN"
     fi
   fi
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR"
 
 
   # Set the primary binary path to output.
@@ -852,7 +851,7 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
     echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
     exit 1
   fi
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR"
 
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
 else

@@ -451,7 +451,10 @@ impl CLISubagentController {
     /// Backs the `Check now` affordance surfaced next to the `Last seen by agent ...`
     /// indicator in the warping footer.
     pub fn request_force_refresh(&self, block_id: &BlockId, ctx: &mut ModelContext<Self>) {
-        let executor_handle = self.action_model.as_ref(ctx).shell_command_executor(ctx);
+        let Some(executor_handle) = self.action_model.as_ref(ctx).shell_command_executor(ctx)
+        else {
+            return;
+        };
         let block_id = block_id.clone();
         executor_handle.update(ctx, move |executor, _| {
             executor.force_refresh_block(&block_id);
