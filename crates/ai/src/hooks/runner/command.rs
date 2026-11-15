@@ -110,21 +110,16 @@ impl HostShell {
     /// The shell invocation for `script`.
     fn invoke(&self, script: &str) -> Command {
         let mut command = Command::new_in_job(&self.program);
-        command
-            .args(self.command_args)
-            .arg(format!(
-                "{}{script}{}",
-                self.command_prefix, self.command_suffix
-            ));
+        command.args(self.command_args).arg(format!(
+            "{}{script}{}",
+            self.command_prefix, self.command_suffix
+        ));
         command
     }
 }
 
 impl CommandHookRunner {
-    pub fn new(
-        path_capture: PathCapture,
-        initial_environment: Vec<(OsString, OsString)>,
-    ) -> Self {
+    pub fn new(path_capture: PathCapture, initial_environment: Vec<(OsString, OsString)>) -> Self {
         Self {
             path_capture,
             initial_environment,
