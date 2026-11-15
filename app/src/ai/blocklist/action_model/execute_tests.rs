@@ -687,6 +687,7 @@ mod hooks {
         use crate::ai::blocklist::hooks::HookRuntime;
         use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle, shell_action};
         use crate::features::FeatureFlag;
+        use crate::process_environment::InitialProcessEnvironment;
 
         #[test]
         fn a_real_script_denies_a_real_shell_command() {
@@ -710,6 +711,7 @@ mod hooks {
                 .expect("write hooks.json");
 
                 app.update(|ctx| {
+                    ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
                     HookRuntime::install_command_runner(ctx);
                     HookRegistry::handle(ctx)
                         .update(ctx, |registry, _| {

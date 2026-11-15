@@ -35,6 +35,8 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
+use crate::process_environment::InitialProcessEnvironment;
+#[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 
 /// Process-wide hook state shared by every conversation and surface.
@@ -106,7 +108,11 @@ impl HookRuntime {
     pub fn install_command_runner(ctx: &mut AppContext) {
         let login_shell_path: Arc<Mutex<Option<OsString>>> = Arc::default();
         let captured = login_shell_path.clone();
-        let runner = CommandHookRunner::new(Arc::new(move || captured.lock().clone()));
+        let initial_environment = InitialProcessEnvironment::as_ref(ctx).variables().to_vec();
+        let runner = CommandHookRunner::new(
+            Arc::new(move || captured.lock().clone()),
+            initial_environment,
+        );
         Self::handle(ctx).update(ctx, |runtime, ctx| {
             runtime.set_runner(Arc::new(runner));
             Self::capture_login_shell_path(login_shell_path, ctx);
