@@ -456,3 +456,92 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
 }
+
+#[test]
+fn should_full_reload_for_burst_when_new_files_exceed_threshold() {
+    assert!(LocalDiffStateModel::should_full_reload_for_burst(
+        LocalDiffStateModel::LARGE_FILE_BURST_THRESHOLD + 1,
+        0
+    ));
+}
+
+#[test]
+fn should_full_reload_for_burst_when_backlog_already_saturated() {
+    assert!(LocalDiffStateModel::should_full_reload_for_burst(
+        1,
+        LocalDiffStateModel::LARGE_FILE_BURST_THRESHOLD
+    ));
+}
+
+#[test]
+fn should_not_full_reload_for_small_burst_with_small_backlog() {
+    assert!(!LocalDiffStateModel::should_full_reload_for_burst(1, 0));
+}
+
+#[test]
+fn filter_new_files_for_invalidation_dedupes_repeated_file() {
+    let repo_path = Path::new("/repo");
+    let mut queued = HashSet::new();
+    let file = PathBuf::from("/repo/src/main.rs");
+
+    let first = LocalDiffStateModel::filter_new_files_for_invalidation(
+        repo_path,
+        &mut queued,
+        vec![file.clone()],
+    );
+    let second = LocalDiffStateModel::filter_new_files_for_invalidation(
+        repo_path,
+        &mut queued,
+        vec![file.clone()],
+    );
+
+    assert_eq!(first, vec![file]);
+    assert!(
+        second.is_empty(),
+        "a file with an outstanding invalidation should be filtered out"
+    );
+}
+
+#[test]
+fn filter_new_files_for_invalidation_allows_distinct_files() {
+    let repo_path = Path::new("/repo");
+    let mut queued = HashSet::new();
+    let file_a = PathBuf::from("/repo/a.rs");
+    let file_b = PathBuf::from("/repo/b.rs");
+
+    let result = LocalDiffStateModel::filter_new_files_for_invalidation(
+        repo_path,
+        &mut queued,
+        vec![file_a.clone(), file_b.clone()],
+    );
+
+    assert_eq!(result, vec![file_a, file_b]);
+}
+
+#[test]
+fn filter_new_files_for_invalidation_reallows_file_once_freed() {
+    let repo_path = Path::new("/repo");
+    let mut queued = HashSet::new();
+    let file = PathBuf::from("/repo/src/main.rs");
+
+    let first = LocalDiffStateModel::filter_new_files_for_invalidation(
+        repo_path,
+        &mut queued,
+        vec![file.clone()],
+    );
+    assert_eq!(first, vec![file.clone()]);
+
+    // Simulate the task completing (the broadcast subscriber frees the slot).
+    queued.remove(Path::new("src/main.rs"));
+
+    let second = LocalDiffStateModel::filter_new_files_for_invalidation(
+        repo_path,
+        &mut queued,
+        vec![file.clone()],
+    );
+    assert_eq!(
+        second,
+        vec![file],
+        "a file should be re-enqueueable once its previous task completes"
+    );
+}
