@@ -366,5 +366,5 @@ fn range_view(range: &Range<usize>) -> Value {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
