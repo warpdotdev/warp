@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_lock::Semaphore;
 use async_process::Child;
 use command::r#async::{Command, JobGuard};
 use futures::FutureExt;
@@ -58,7 +59,7 @@ pub struct CommandHookRunner {
     path_capture: PathCapture,
     home: Option<PathBuf>,
     shell: HostShell,
-    permits: Permits,
+    permits: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -124,7 +125,7 @@ impl CommandHookRunner {
             path_capture,
             home: dirs::home_dir(),
             shell: HostShell::for_this_host(),
-            permits: Permits::new(HOOK_MAX_CONCURRENT),
+            permits: Arc::new(Semaphore::new(HOOK_MAX_CONCURRENT)),
         }
     }
 
@@ -179,7 +180,7 @@ fn log_invocation(binding: &HookBindingId, outcome: &HookProcessOutcome) {
 async fn run_once(
     shell: &HostShell,
     runner_env: RunnerEnvironment,
-    permits: &Permits,
+    permits: &Semaphore,
     invocation: HookInvocation,
 ) -> HookProcessOutcome {
     let started = Instant::now();
@@ -195,7 +196,15 @@ async fn run_once(
     if invocation.cancel.load(Ordering::Acquire) {
         return finish(ProcessExit::Cancelled, Captured::default());
     }
-    let _permit = match permits.acquire(deadline, &invocation.cancel).await {
+    let mut permit = Box::pin(permits.acquire().fuse());
+    let mut permit_deadline = Timer::at(deadline).fuse();
+    let mut permit_cancelled = Box::pin(cancelled(invocation.cancel.clone()).fuse());
+    let permit = futures::select_biased! {
+        permit = permit => Ok(permit),
+        _ = permit_cancelled => Err(Interruption::Cancelled),
+        _ = permit_deadline => Err(Interruption::TimedOut),
+    };
+    let _permit = match permit {
         Ok(permit) => permit,
         Err(interrupted) => {
             let why = match interrupted {
@@ -377,53 +386,6 @@ async fn wait_for_collection(child: &mut Child, pid: u32) {
                 "hook process {pid} was killed but was not collected within {COLLECT_WAIT:?}"
             );
         }
-    }
-}
-
-/// Lets at most a fixed number of hooks run at once. A permit is a token taken from a channel
-/// and returned when dropped; a waiter that gives up holds nothing.
-#[derive(Clone)]
-struct Permits {
-    available: async_channel::Receiver<()>,
-    returns: async_channel::Sender<()>,
-}
-
-struct Permit {
-    returns: async_channel::Sender<()>,
-}
-
-impl Permits {
-    fn new(count: usize) -> Self {
-        let (returns, available) = async_channel::bounded(count);
-        for _ in 0..count {
-            returns
-                .try_send(())
-                .expect("the channel holds exactly `count` permits");
-        }
-        Self { available, returns }
-    }
-
-    async fn acquire(
-        &self,
-        deadline: Instant,
-        cancel: &Arc<AtomicBool>,
-    ) -> Result<Permit, Interruption> {
-        let mut taken = Box::pin(self.available.recv().fuse());
-        let mut deadline = Timer::at(deadline).fuse();
-        let mut cancelled = Box::pin(cancelled(cancel.clone()).fuse());
-        futures::select_biased! {
-            _ = taken => Ok(Permit { returns: self.returns.clone() }),
-            _ = cancelled => Err(Interruption::Cancelled),
-            _ = deadline => Err(Interruption::TimedOut),
-        }
-    }
-}
-
-impl Drop for Permit {
-    fn drop(&mut self) {
-        // Only as many permits exist as the channel has room for, so this cannot fail while the
-        // runner lives; a runner that is gone has no one left to wait.
-        let _ = self.returns.try_send(());
     }
 }
 

@@ -120,6 +120,7 @@ ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 async-channel = "2.3.1"
 async-compat = "0.2.5"
 async-io = "2.4.0"
+async-lock = "3.4.0"
 async-process = "2.3.0"
 async-stream = "0.3.5"
 async-task = "4.2.0"
