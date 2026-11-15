@@ -383,8 +383,8 @@ impl Decoder<'_> {
         Ok(effects)
     }
 
-    /// Claude's nested response shape, which Cursor accepts on `preToolUse`, `stop`, and
-    /// `subagentStop`. Elsewhere the key is undocumented and ignored.
+    /// Claude Code's nested response shape, which Cursor explicitly accepts and translates on
+    /// `preToolUse`, `stop`, and `subagentStop`. Elsewhere the key is undocumented and ignored.
     fn claude_output(
         &self,
         output: &Map<String, Value>,
@@ -516,7 +516,9 @@ impl Decoder<'_> {
     }
 }
 
-/// The fields of Claude's `hookSpecificOutput` object that Cursor translates.
+// TODO: Reuse the Claude Code adapter's decoder if Warp adds one instead of maintaining this
+// subset of the same schema here.
+/// The fields of Claude Code's `hookSpecificOutput` object that Cursor translates.
 struct ClaudeOutput {
     permission_decision: Option<String>,
     permission_decision_reason: Option<String>,
