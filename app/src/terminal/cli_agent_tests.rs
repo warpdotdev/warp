@@ -271,6 +271,7 @@ fn test_detect_known_agents() {
                 ("omp", CLIAgent::OhMyPi),
                 ("grok", CLIAgent::Grok),
                 ("muse", CLIAgent::Muse),
+                ("devin", CLIAgent::Devin),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
                 ("./script/run-tui", CLIAgent::WarpTui),
@@ -302,6 +303,11 @@ fn test_detect_with_arguments() {
                 Some(CLIAgent::Muse),
             );
             assert_eq!(CLIAgent::detect("npx muse", None, None, ctx), None);
+            assert_eq!(
+                CLIAgent::detect("devin --help", None, None, ctx),
+                Some(CLIAgent::Devin),
+            );
+            assert_eq!(CLIAgent::detect("npx devin", None, None, ctx), None);
         });
     });
 }
@@ -439,6 +445,19 @@ fn test_muse_public_configuration() {
             SkillProvider::Claude,
             SkillProvider::Codex,
         ]
+    );
+}
+
+#[test]
+fn test_devin_public_configuration() {
+    assert_eq!(CLIAgent::Devin.command_prefix(), "devin");
+    assert_eq!(CLIAgent::Devin.display_name(), "Devin");
+    assert!(!CLIAgent::Devin.supports_bash_mode());
+    assert_eq!(CLIAgent::Devin.skill_command_prefix(), "/");
+    assert_eq!(CLIAgent::Devin.icon(), None);
+    assert_eq!(
+        CLIAgent::Devin.supported_skill_providers(),
+        &[SkillProvider::Agents]
     );
 }
 
