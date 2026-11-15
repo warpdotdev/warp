@@ -77,7 +77,9 @@ impl HookRuntime {
     /// Whether any hook can fire right now: the runtime is installed and at least one binding is
     /// active.
     pub fn is_active(ctx: &AppContext) -> bool {
-        Self::is_installed(ctx) && !Self::as_ref(ctx).registry.as_ref(ctx).snapshot().is_empty()
+        Self::is_installed(ctx)
+            && Self::as_ref(ctx).registry.as_ref(ctx).is_finalized()
+            && !Self::as_ref(ctx).registry.as_ref(ctx).snapshot().is_empty()
     }
 
     pub fn snapshot(&self, ctx: &AppContext) -> Arc<RegistrySnapshot> {

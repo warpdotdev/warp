@@ -12,6 +12,7 @@ pub mod notices;
 pub mod permission;
 pub mod registry;
 pub mod runner;
+pub mod sources;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
 pub mod trust;
@@ -41,4 +42,10 @@ pub use registry::{
 pub use runner::{
     HookInvocation, HookProcessOutcome, HookRunner, PathCapture, ProcessExit, UnavailableRunner,
 };
+pub use sources::{
+    ExplicitHookSource, ExplicitSourceScope, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value,
+    resolve_hook_dirs, sources_for_hook_dirs,
+};
+#[cfg(feature = "local_fs")]
+pub use sources::load_explicit_sources;
 pub use trust::{CommandExecutionPosture, DenyAllTrustPolicy, TrustDecision, TrustPolicy};

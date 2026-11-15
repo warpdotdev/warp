@@ -88,10 +88,10 @@ impl RegistrySnapshot {
     }
 }
 
-/// Holds the current snapshot of active bindings. A loader replaces the snapshot wholesale;
-/// discovery and trust are not wired yet.
+/// Holds the bindings selected for this worker and freezes them before hooks may execute.
 pub struct HookRegistry {
     snapshot: Arc<RegistrySnapshot>,
+    finalized: bool,
 }
 
 impl Default for HookRegistry {
@@ -104,6 +104,7 @@ impl HookRegistry {
     pub fn new() -> Self {
         Self {
             snapshot: Arc::new(RegistrySnapshot::default()),
+            finalized: false,
         }
     }
 
@@ -113,6 +114,23 @@ impl HookRegistry {
 
     pub fn revision(&self) -> u64 {
         self.snapshot.revision
+    }
+
+    /// Whether the resolved source set has been frozen for this worker run.
+    pub fn is_finalized(&self) -> bool {
+        self.finalized
+    }
+
+    /// Freezes the resolved source set. A worker process finalizes exactly once, including when
+    /// the resolved set is empty.
+    pub fn finalize(&mut self) -> Result<u64, HookConfigError> {
+        if self.finalized {
+            return Err(HookConfigError::Invalid(
+                "the resolved hook source set is already finalized".to_owned(),
+            ));
+        }
+        self.finalized = true;
+        Ok(self.snapshot.revision)
     }
 
     pub fn bindings_for(
@@ -137,13 +155,13 @@ impl HookRegistry {
             bindings,
             diagnostics,
         });
+        self.finalized = true;
         revision
     }
 }
 
-/// Loading one named file. This is the one explicit way to activate a source until discovery,
-/// trust, and run-delivered sources arrive; it consults no trust policy and applies the file
-/// everywhere on the local host.
+/// Loading one named file. Explicit sources are selected by the resolved run configuration, so
+/// they require no source-location trust decision and apply everywhere on the local host.
 #[cfg(feature = "local_fs")]
 impl HookRegistry {
     /// Reads `path`, parses it with the adapter for `format`, and publishes a new snapshot in
@@ -155,6 +173,12 @@ impl HookRegistry {
         format: HookFormat,
         kind: HookSourceKind,
     ) -> Result<(), HookConfigError> {
+        if self.finalized {
+            return Err(HookConfigError::Invalid(
+                "explicit hook sources must be loaded before the resolved set is finalized"
+                    .to_owned(),
+            ));
+        }
         let unreadable = |error: std::io::Error| {
             HookConfigError::Unreadable(format!("{}: {error}", path.display()))
         };
@@ -183,6 +207,22 @@ impl HookRegistry {
         Ok(())
     }
 
+    /// Records a source that the resolved configuration named but the loader could not install.
+    pub(crate) fn record_load_failure(
+        &mut self,
+        source: HookSourceId,
+        message: impl Into<String>,
+    ) -> HookDiagnostic {
+        debug_assert!(!self.finalized);
+        let diagnostic = HookDiagnostic {
+            source: source.clone(),
+            severity: DiagnosticSeverity::Error,
+            message: message.into(),
+        };
+        self.replace_source(&source, Vec::new(), vec![diagnostic.clone()]);
+        diagnostic
+    }
+
     /// Publishes a snapshot in which `source`'s bindings and diagnostics are the given ones and
     /// every other source is unchanged.
     fn replace_source(
@@ -192,17 +232,28 @@ impl HookRegistry {
         diagnostics: Vec<HookDiagnostic>,
     ) {
         let previous = &self.snapshot;
+        let existing_priority = previous
+            .bindings
+            .iter()
+            .map(|active| &active.binding.id.source)
+            .chain(previous.diagnostics.iter().map(|diagnostic| &diagnostic.source))
+            .filter(|existing| existing.location == source.location)
+            .map(|existing| existing.kind.priority())
+            .min();
+        if existing_priority.is_some_and(|priority| priority < source.kind.priority()) {
+            return;
+        }
         let mut next_bindings = previous
             .bindings
             .iter()
-            .filter(|active| active.binding.id.source != *source)
+            .filter(|active| active.binding.id.source.location != source.location)
             .cloned()
             .collect::<Vec<_>>();
         next_bindings.extend(bindings);
         let mut next_diagnostics = previous
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.source != *source)
+            .filter(|diagnostic| diagnostic.source.location != source.location)
             .cloned()
             .collect::<Vec<_>>();
         next_diagnostics.extend(diagnostics);
