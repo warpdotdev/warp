@@ -33,12 +33,20 @@ const JSON_RPC_VERSION: &str = "2.0";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
 
-/// A JSON-RPC error returned to the agent for a request it made to us.
+/// Longest rendering of an error's `data` kept in [`RpcError::detail`], in characters.
+const MAX_ERROR_DATA_CHARS: usize = 1000;
+
+/// A JSON-RPC error, either returned by the agent for one of our requests or returned to the
+/// agent for one of its own.
 #[derive(Debug, Deserialize, thiserror::Error)]
-#[error("ACP error {code}: {message}")]
+#[error("ACP error {code}: {}", self.detail())]
 pub(super) struct RpcError {
     pub code: i64,
     pub message: String,
+    /// Agents often put the actual cause here behind a generic `message` such as "Internal
+    /// error".
+    #[serde(default)]
+    pub data: Option<Value>,
 }
 
 impl RpcError {
@@ -46,6 +54,7 @@ impl RpcError {
         Self {
             code: METHOD_NOT_FOUND,
             message: format!("Method {method} not supported"),
+            data: None,
         }
     }
 
@@ -53,7 +62,47 @@ impl RpcError {
         Self {
             code: INTERNAL_ERROR,
             message: error.to_string(),
+            data: None,
         }
+    }
+
+    /// `message`, followed by what `data` adds to it.
+    pub(super) fn detail(&self) -> String {
+        match self.data.as_ref().and_then(error_data_text) {
+            Some(data) if data != self.message => format!("{}: {data}", self.message),
+            _ => self.message.clone(),
+        }
+    }
+}
+
+/// The readable part of a JSON-RPC error's `data`: the value itself when it is a string, its
+/// `message` or `details` when it is an object that has one as a string, and otherwise the
+/// value as compact JSON.
+fn error_data_text(data: &Value) -> Option<String> {
+    let text = match data {
+        Value::Null => return None,
+        Value::String(text) => text.trim().to_owned(),
+        Value::Object(fields) => match ["message", "details"]
+            .iter()
+            .find_map(|key| fields.get(*key).and_then(Value::as_str))
+        {
+            Some(text) => text.trim().to_owned(),
+            None if fields.is_empty() => return None,
+            None => data.to_string(),
+        },
+        Value::Array(items) if items.is_empty() => return None,
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) => data.to_string(),
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(text, MAX_ERROR_DATA_CHARS))
+}
+
+fn truncate_chars(text: String, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text,
     }
 }
 
@@ -517,7 +566,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     (_, Some(error)) => {
                         Err(match serde_json::from_value::<RpcError>(error.clone()) {
                             Ok(error) => anyhow!(error),
-                            Err(_) => anyhow!("Malformed ACP error response"),
+                            Err(_) => anyhow!(
+                                "Malformed ACP error response: {}",
+                                truncate_chars(error.to_string(), MAX_ERROR_DATA_CHARS)
+                            ),
                         })
                     }
                     (Some(result), None) => Ok(result.clone()),

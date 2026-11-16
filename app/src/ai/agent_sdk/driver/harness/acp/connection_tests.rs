@@ -443,6 +443,79 @@ fn error_responses_surface_as_request_errors() {
 }
 
 #[test]
+fn error_data_surfaces_behind_a_generic_message() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/prompt", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {
+                        "code": -32603,
+                        "message": "Internal error",
+                        "data": {
+                            "message": "Quota exceeded. Check your plan and billing details.",
+                            "codexErrorInfo": "usageLimitExceeded",
+                        },
+                    },
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err().context("session/prompt failed");
+        assert_eq!(
+            format!("{error:#}"),
+            "session/prompt failed: ACP error -32603: Internal error: Quota exceeded. Check your \
+             plan and billing details."
+        );
+    });
+}
+
+#[test]
+fn malformed_error_responses_keep_the_error_body() {
+    let (connection, _notifications, mut agent) = connect(rejecting_handler());
+    block_on(async {
+        let request = connection.request::<_, Value>("session/new", json!({}));
+        let agent = async {
+            let message = agent.next_message().await;
+            agent
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": "upstream returned 503",
+                }))
+                .await;
+        };
+        let (response, ()) = join!(request, agent);
+        let error = response.unwrap_err().to_string();
+        assert!(error.contains("upstream returned 503"), "{error}");
+    });
+}
+
+#[test]
+fn error_detail_renders_data_without_a_readable_message_as_json() {
+    let error = RpcError {
+        code: -32603,
+        message: "Internal error".to_owned(),
+        data: Some(json!({"status": 429})),
+    };
+    assert_eq!(error.detail(), r#"Internal error: {"status":429}"#);
+}
+
+#[test]
+fn error_detail_omits_data_that_repeats_the_message() {
+    let error = RpcError {
+        code: -32000,
+        message: "Authentication required".to_owned(),
+        data: Some(json!("Authentication required")),
+    };
+    assert_eq!(error.detail(), "Authentication required");
+}
+
+#[test]
 fn agent_requests_are_answered_through_the_handler() {
     let handler: AgentRequestHandler = Arc::new(|method, params| {
         let answer = match method {

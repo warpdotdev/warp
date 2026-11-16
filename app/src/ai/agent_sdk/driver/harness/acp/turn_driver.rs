@@ -1009,7 +1009,7 @@ impl TurnDriver {
                              follow-ups will cancel the turn instead",
                             protocol::METHOD_SESSION_STEERING,
                             rejection.code,
-                            rejection.message
+                            rejection.detail()
                         );
                         self.steering_supported = false;
                     }
