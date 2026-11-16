@@ -217,7 +217,8 @@ impl AgentDriver {
         repositories: &[SourceRepo],
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
-        if !HookRuntime::is_installed(ctx) {
+        // Without `local_fs` no hook file can be read, so such a build cannot run hooks either.
+        if !HookRuntime::is_installed(ctx) || !cfg!(feature = "local_fs") {
             return if self.hooks.sources.is_empty() {
                 Ok(())
             } else {

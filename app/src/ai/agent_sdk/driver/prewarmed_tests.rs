@@ -499,9 +499,10 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
 }
 
 /// A standby driver takes its assignment in place. Nothing before the claim loads or finalizes
-/// hooks: the standby's own preparation (clones, setup commands, MCP, skills) loads none, the
-/// assignment's sources only reach the driver with the run configuration, and the single load
-/// happens after that, in the setup step the claimed run calls (`run_internal`).
+/// hooks: the standby's own preparation (`prepare_resources`, run here with no repositories, setup
+/// commands, MCP servers, or skills) loads none, the assignment's sources only reach the driver
+/// with the run configuration, and the single load happens after that, in the setup step the
+/// claimed run calls (`run_internal`).
 #[test]
 fn a_standby_loads_hooks_only_after_it_claims_a_task() {
     App::test((), |mut app| async move {

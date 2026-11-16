@@ -345,7 +345,8 @@ fn execution_hook_sources_reach_the_driver_in_order() {
     });
 }
 
-/// A value this client does not know fails the run rather than dropping the entry.
+/// A value this client does not know fails the run rather than dropping the entry, and the
+/// message names the entry counting from 1, as the server does.
 #[test]
 fn an_unknown_hook_value_fails_the_execution() {
     App::test((), |mut app| async move {
@@ -354,7 +355,7 @@ fn an_unknown_hook_value_fails_the_execution() {
             ("level", "TEAM"),
             ("onAsk", "ESCALATE"),
         ] {
-            let mut source = json!({
+            let known = json!({
                 "format": "CURSOR",
                 "repository": null,
                 "path": "/etc/acme/hooks",
@@ -362,14 +363,18 @@ fn an_unknown_hook_value_fails_the_execution() {
                 "strict": false,
                 "onAsk": "DENY"
             });
-            source[field] = json!(value);
-            let Err(error) = options_for(&mut app, execution_config_with_hooks(json!([source])))
-            else {
+            let mut unknown = known.clone();
+            unknown[field] = json!(value);
+            let Err(error) = options_for(
+                &mut app,
+                execution_config_with_hooks(json!([known, unknown])),
+            ) else {
                 panic!("an unknown {field} must fail the execution");
             };
+            let message = format!("{error:#}");
             assert!(
-                format!("{error:#}").contains("does not support"),
-                "{field}: {error:#}"
+                message.contains("Hook entry 2 ") && message.contains("does not support"),
+                "{field}: {message}"
             );
         }
     });
