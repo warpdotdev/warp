@@ -96,11 +96,10 @@ fn not_cancelled() -> Arc<AtomicBool> {
 }
 
 fn dispatch(h: &Harness, envelope: HookEnvelope, bindings: Vec<ActiveBinding>) -> DispatchOutcome {
-    block_on(h.dispatcher.dispatch(
-        envelope,
-        snapshot(bindings),
-        not_cancelled(),
-    ))
+    block_on(
+        h.dispatcher
+            .dispatch(envelope, snapshot(bindings), not_cancelled()),
+    )
 }
 
 #[test]
@@ -279,17 +278,19 @@ fn matching_bindings_run_at_the_same_time_and_merge_in_snapshot_order() {
     }
 
     let started = Instant::now();
-    let outcome = block_on(dispatcher.dispatch(
-        shell_result_envelope(),
-        snapshot(
-            bindings
-                .iter()
-                .cloned()
-                .map(|binding| active_binding(binding, adapter.clone()))
-                .collect(),
+    let outcome = block_on(
+        dispatcher.dispatch(
+            shell_result_envelope(),
+            snapshot(
+                bindings
+                    .iter()
+                    .cloned()
+                    .map(|binding| active_binding(binding, adapter.clone()))
+                    .collect(),
+            ),
+            not_cancelled(),
         ),
-        not_cancelled(),
-    ));
+    );
     let elapsed = started.elapsed();
     assert!(
         elapsed < Duration::from_millis(500),
@@ -496,10 +497,7 @@ fn a_binding_that_asks_to_rewrite_a_pending_action_denies_it() {
     let outcome = dispatch(
         &h,
         shell_envelope(),
-        vec![active_binding(
-            binding.clone(),
-            h.adapter.clone(),
-        )],
+        vec![active_binding(binding.clone(), h.adapter.clone())],
     );
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(outcome.effects.verdict_binding, Some(binding.id.clone()));
@@ -534,10 +532,7 @@ fn a_binding_that_asks_to_rewrite_after_the_fact_is_only_reported() {
     let outcome = dispatch(
         &h,
         shell_result_envelope(),
-        vec![active_binding(
-            binding.clone(),
-            h.adapter.clone(),
-        )],
+        vec![active_binding(binding.clone(), h.adapter.clone())],
     );
     assert_eq!(outcome.effects.verdict, HookVerdict::Allow);
     assert!(outcome.effects.reasons.is_empty());
@@ -562,10 +557,7 @@ fn a_continuation_request_before_a_tool_runs_denies_it() {
     let outcome = dispatch(
         &h,
         shell_envelope(),
-        vec![active_binding(
-            binding,
-            h.adapter.clone(),
-        )],
+        vec![active_binding(binding, h.adapter.clone())],
     );
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert!(
@@ -632,7 +624,10 @@ fn defer_from_a_strict_source_denies_on_an_interactive_surface() {
     envelope.surface = HookSurface::Gui;
     let outcome = block_on(h.dispatcher.dispatch(
         envelope,
-        snapshot(vec![strict(active_binding(binding.clone(), h.adapter.clone()))]),
+        snapshot(vec![strict(active_binding(
+            binding.clone(),
+            h.adapter.clone(),
+        ))]),
         not_cancelled(),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
@@ -657,10 +652,7 @@ fn defer_after_the_fact_is_only_reported_even_when_headless() {
     let outcome = dispatch(
         &h,
         envelope,
-        vec![active_binding(
-            binding,
-            h.adapter.clone(),
-        )],
+        vec![active_binding(binding, h.adapter.clone())],
     );
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(h.messenger.diagnostics().len(), 1);
@@ -706,21 +698,23 @@ mod failure_policy {
 
     fn run(h: &CursorHarness, strict: bool) -> DispatchOutcome {
         let adapter: Arc<dyn HookFormatAdapter> = h.adapter.clone();
-        block_on(h.dispatcher.dispatch(
-            shell_envelope(),
-            snapshot(
-                h.bindings
-                    .iter()
-                    .cloned()
-                    .map(|binding| {
-                        let mut active = active_binding(binding, adapter.clone());
-                        active.policy.strict = strict;
-                        active
-                    })
-                    .collect(),
+        block_on(
+            h.dispatcher.dispatch(
+                shell_envelope(),
+                snapshot(
+                    h.bindings
+                        .iter()
+                        .cloned()
+                        .map(|binding| {
+                            let mut active = active_binding(binding, adapter.clone());
+                            active.policy.strict = strict;
+                            active
+                        })
+                        .collect(),
+                ),
+                not_cancelled(),
             ),
-            not_cancelled(),
-        ))
+        )
     }
 
     const FAIL_OPEN: &str =
@@ -797,13 +791,21 @@ mod failure_policy {
         strict_active.policy.strict = true;
         let outcome = block_on(lax.dispatcher.dispatch(
             shell_envelope(),
-            snapshot(vec![active_binding(lax_binding.clone(), adapter), strict_active]),
+            snapshot(vec![
+                active_binding(lax_binding.clone(), adapter),
+                strict_active,
+            ]),
             not_cancelled(),
         ));
 
         assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
         assert_eq!(outcome.effects.verdict_binding, Some(strict_binding.id));
-        assert_eq!(outcome.effects.reasons.len(), 1, "{:?}", outcome.effects.reasons);
+        assert_eq!(
+            outcome.effects.reasons.len(),
+            1,
+            "{:?}",
+            outcome.effects.reasons
+        );
     }
 
     #[test]
@@ -866,10 +868,7 @@ fn the_invocation_carries_the_identity_variables_for_its_format() {
     dispatch(
         &h,
         envelope,
-        vec![active_binding(
-            binding,
-            h.adapter.clone(),
-        )],
+        vec![active_binding(binding, h.adapter.clone())],
     );
     let env = h.runner.invocations()[0].env.clone();
     let value = |name: &str| {
@@ -912,7 +911,11 @@ fn a_repository_source_names_its_root_as_the_project_on_a_local_run() {
     active.project_dir = Some(PathBuf::from("/work/repo"));
     dispatch(&h, envelope, vec![active]);
     let env = h.runner.invocations()[0].env.clone();
-    for name in ["WARP_PROJECT_DIR", "CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"] {
+    for name in [
+        "WARP_PROJECT_DIR",
+        "CURSOR_PROJECT_DIR",
+        "CLAUDE_PROJECT_DIR",
+    ] {
         assert!(
             env.contains(&(OsString::from(name), OsString::from("/work/repo"))),
             "{name}: {env:?}"

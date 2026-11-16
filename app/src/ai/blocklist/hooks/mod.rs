@@ -22,8 +22,8 @@ use std::sync::atomic::AtomicBool;
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner,
-    RegistrySnapshot, RunMetadata,
+    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, RegistrySnapshot,
+    RunMetadata,
 };
 #[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
@@ -31,8 +31,8 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
-use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::agent::AIAgentActionId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]

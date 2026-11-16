@@ -439,7 +439,10 @@ fn a_changed_command_gets_a_new_dispatch_without_an_explicit_invalidate() {
             harness.conversation_id,
             true,
         ));
-        assert!(old_cancel.load(Ordering::Acquire), "the old entry is stopped");
+        assert!(
+            old_cancel.load(Ordering::Acquire),
+            "the old entry is stopped"
+        );
         let key = app
             .read(|ctx| cached_key(harness.conversation_id, &edited.id, ctx))
             .expect("entry");
@@ -548,7 +551,10 @@ fn approval_carries_over_only_for_the_same_arguments_in_the_same_working_directo
             harness.conversation_id,
             false,
         ));
-        assert!(first.ticket.cancel.load(Ordering::Acquire), "the old check is stopped");
+        assert!(
+            first.ticket.cancel.load(Ordering::Acquire),
+            "the old check is stopped"
+        );
         let outcome = block_on(restarted.future);
         assert_eq!(
             app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
@@ -612,7 +618,10 @@ fn an_ask_on_an_interactive_surface_requires_confirmation() {
                 ctx,
             )
         });
-        let PermissionDecision::RequireConfirmation { reason: Some(reason) } = decision else {
+        let PermissionDecision::RequireConfirmation {
+            reason: Some(reason),
+        } = decision
+        else {
             panic!("expected a confirmation step, got {decision:?}");
         };
         assert_eq!(reason.text, "check first");

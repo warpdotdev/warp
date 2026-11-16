@@ -102,13 +102,7 @@ impl HookDispatcher {
         async move {
             let started = Instant::now();
             let runs = matching.iter().map(|active| {
-                run_binding(
-                    &*runner,
-                    &*messenger,
-                    active,
-                    &envelope,
-                    cancel.clone(),
-                )
+                run_binding(&*runner, &*messenger, active, &envelope, cancel.clone())
             });
             // `join_all` yields results in the order the futures were given, so the reduce input
             // is in snapshot order whatever order the processes finished in.

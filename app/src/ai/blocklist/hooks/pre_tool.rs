@@ -289,11 +289,9 @@ pub(crate) fn begin_or_lookup(
                 confirmation_noticed: false,
             },
         );
-        runtime.dispatcher().dispatch(
-            envelope,
-            snapshot,
-            ticket.cancel.clone(),
-        )
+        runtime
+            .dispatcher()
+            .dispatch(envelope, snapshot, ticket.cancel.clone())
     });
     let mut guard = CancelOnDrop(Some(ticket.cancel.clone()));
     let future = async move {
@@ -364,9 +362,9 @@ pub(crate) fn decide(
             // the run, and only when a hook that asked comes from a source that wants that.
             let ends_the_run = match cause {
                 DenyCause::ApprovalUnavailable => merged.an_asker_fails_the_run(),
-                DenyCause::Hook | DenyCause::RewriteUnsupported | DenyCause::DeferralUnsupported => {
-                    false
-                }
+                DenyCause::Hook
+                | DenyCause::RewriteUnsupported
+                | DenyCause::DeferralUnsupported => false,
             };
             if ends_the_run {
                 let reason = reason.text.clone();
