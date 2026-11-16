@@ -372,7 +372,11 @@ fn repository_and_worker_sources_load_where_the_run_put_them() {
         });
 
         assert!(result.is_ok(), "{result:?}");
-        assert!(messenger.diagnostics().is_empty(), "{:?}", messenger.diagnostics());
+        assert!(
+            messenger.diagnostics().is_empty(),
+            "{:?}",
+            messenger.diagnostics()
+        );
         let bindings = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.clone());
         assert_eq!(bindings.len(), 2);
         let repository = bindings
@@ -380,7 +384,10 @@ fn repository_and_worker_sources_load_where_the_run_put_them() {
             .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryAgent)
             .expect("the repository source loaded");
         assert_eq!(repository.working_directory, working_dir.join("api"));
-        assert_eq!(repository.project_dir.as_deref(), Some(working_dir.join("api").as_path()));
+        assert_eq!(
+            repository.project_dir.as_deref(),
+            Some(working_dir.join("api").as_path())
+        );
         let worker = bindings
             .iter()
             .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryWide)
@@ -465,7 +472,12 @@ fn a_malformed_path_fails_only_its_own_entry() {
         });
 
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(messenger.diagnostics().len(), 3, "{:?}", messenger.diagnostics());
+        assert_eq!(
+            messenger.diagnostics().len(),
+            3,
+            "{:?}",
+            messenger.diagnostics()
+        );
         assert_eq!(
             app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
             1

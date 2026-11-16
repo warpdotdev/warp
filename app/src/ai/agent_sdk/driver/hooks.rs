@@ -229,7 +229,12 @@ impl AgentDriver {
         let strict_failures = failures
             .iter()
             .filter(|failure| failure.strict)
-            .map(|failure| format!("{}: {}", failure.diagnostic.source, failure.diagnostic.message))
+            .map(|failure| {
+                format!(
+                    "{}: {}",
+                    failure.diagnostic.source, failure.diagnostic.message
+                )
+            })
             .collect::<Vec<_>>();
         if !strict_failures.is_empty() {
             return Err(AgentDriverError::HookSourcesUnavailable {

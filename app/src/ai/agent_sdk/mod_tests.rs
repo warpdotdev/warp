@@ -259,12 +259,10 @@ fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
     })
 }
 
-fn options_for(
-    app: &mut App,
-    config: serde_json::Value,
-) -> anyhow::Result<AgentDriverOptions> {
+fn options_for(app: &mut App, config: serde_json::Value) -> anyhow::Result<AgentDriverOptions> {
     let root = tempfile::TempDir::new().unwrap();
-    let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+    let args =
+        parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
     let config = serde_json::from_value(config).unwrap();
     app.update(|ctx| {
         super::build_execution_task_and_options(
@@ -1702,16 +1700,15 @@ fn a_canned_execution_configuration_denies_a_command_through_a_real_hook() {
         };
         assert_eq!(reason.text, "rm is not allowed in this repository");
 
-        let wire = api::request::input::user_inputs::user_input::Input::try_from(
-            AIAgentActionResult {
+        let wire =
+            api::request::input::user_inputs::user_input::Input::try_from(AIAgentActionResult {
                 id: action.id.clone(),
                 task_id: action.task_id.clone(),
                 result: AIAgentActionResultType::DeniedByHook {
                     reason: reason.text.clone(),
                 },
-            },
-        )
-        .expect("a hook denial converts to a tool call result");
+            })
+            .expect("a hook denial converts to a tool call result");
         assert!(
             format!("{wire:?}").contains("rm is not allowed in this repository"),
             "{wire:?}"

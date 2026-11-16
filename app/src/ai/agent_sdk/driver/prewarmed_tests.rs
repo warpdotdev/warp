@@ -526,16 +526,15 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
         assert!(!is_finalized(&app), "a waiting standby has loaded no hooks");
 
         let mut configuration = config();
-        configuration.agent_hook_sources =
-            serde_json::from_value(serde_json::json!([{
-                "format": "CURSOR",
-                "repository": null,
-                "path": hooks_dir.display().to_string(),
-                "level": "AGENT",
-                "strict": true,
-                "onAsk": "DENY"
-            }]))
-            .unwrap();
+        configuration.agent_hook_sources = serde_json::from_value(serde_json::json!([{
+            "format": "CURSOR",
+            "repository": null,
+            "path": hooks_dir.display().to_string(),
+            "level": "AGENT",
+            "strict": true,
+            "onAsk": "DENY"
+        }]))
+        .unwrap();
         let (mut options, ..) = app.update(|ctx| {
             build_execution_task_and_options(
                 None,
@@ -569,7 +568,10 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
         assert!(loaded.is_ok(), "{loaded:?}");
         assert!(is_finalized(&app));
         assert_eq!(
-            app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx).snapshot().bindings.len()),
+            app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx)
+                .snapshot()
+                .bindings
+                .len()),
             1
         );
         assert!(test_hooks.messenger.diagnostics().is_empty());

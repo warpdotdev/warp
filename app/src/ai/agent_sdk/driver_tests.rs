@@ -1939,7 +1939,8 @@ fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
             ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
         );
         app.update(|ctx| {
-            let mut active = ai::hooks::test_util::active_binding(binding, harness.hooks.adapter.clone());
+            let mut active =
+                ai::hooks::test_util::active_binding(binding, harness.hooks.adapter.clone());
             active.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
             HookRegistry::handle(ctx).update(ctx, |registry, _| {
                 registry.install_snapshot_for_test(vec![active], Vec::new());
