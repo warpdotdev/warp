@@ -1511,6 +1511,7 @@ async fn http_client_sends_default_user_agent_unless_configured() {
     let [Some(default), Some(configured)] = user_agents.as_slice() else {
         panic!("expected a User-Agent on every request, got {user_agents:?}");
     };
-    assert!(!default.is_empty());
+    // Must stay identical to warp-server's `managedMCPOutboundUserAgent`.
+    assert_eq!(default, "Warp-MCP-Client/1.0 (+https://www.warp.dev)");
     assert_eq!(configured, "custom-agent/1.0");
 }

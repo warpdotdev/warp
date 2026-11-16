@@ -177,17 +177,12 @@ fn challenge_parameter_names(www_authenticate: &str) -> Vec<&str> {
     names
 }
 
-/// The `User-Agent` sent to remote MCP servers.
+/// The `User-Agent` sent to remote MCP servers. Matches the one warp-server sends on managed MCP
+/// requests, so servers and WAF allowlists see one Warp MCP client identity.
 ///
-/// reqwest sends no `User-Agent` by default, and some servers (e.g. Snowflake's
-/// managed MCP servers) reject such requests with a `400`.
-fn mcp_user_agent() -> String {
-    let app_id = warp_core::channel::ChannelState::app_id();
-    match warp_core::channel::ChannelState::app_version() {
-        Some(version) => format!("{app_id}/{version}"),
-        None => app_id.to_string(),
-    }
-}
+/// reqwest sends no `User-Agent` by default, and some servers (e.g. Snowflake's managed MCP
+/// servers) reject such requests with a `400`.
+const MCP_USER_AGENT: &str = "Warp-MCP-Client/1.0 (+https://www.warp.dev)";
 
 /// Builds a reqwest client with custom headers for MCP HTTP/SSE connections.
 #[allow(clippy::result_large_err)]
@@ -198,7 +193,7 @@ pub fn build_client_with_headers(
 
     reqwest::Client::builder()
         // Set before the configured headers so a user-supplied `User-Agent` wins.
-        .user_agent(mcp_user_agent())
+        .user_agent(MCP_USER_AGENT)
         .default_headers(header_map)
         .build()
         .map_err(|e| {
