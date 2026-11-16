@@ -619,8 +619,8 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
 /// with heavy shell startup files.
 pub(crate) const LOGIN_SHELL_PATH_WAIT: Duration = Duration::from_secs(10);
 
-/// Starts reading the login shell's PATH for hooks when the run has any, so the read overlaps
-/// environment preparation.
+/// Starts reading the login shell's PATH for hooks when the run has any. Call it after environment
+/// preparation, so the PATH includes what the setup commands added to the shell's startup files.
 pub(crate) async fn start_login_shell_path_capture(
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<(), AgentDriverError> {

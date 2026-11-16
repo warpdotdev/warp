@@ -317,7 +317,9 @@ impl HookRuntime {
     }
 
     /// Starts reading the login shell's PATH for the command runner, at most once per process.
-    /// The read starts an interactive shell, so it is only worth its cost when hooks will run.
+    /// The read starts an interactive shell, so it is only worth its cost when hooks will run. It
+    /// is a fresh read rather than the value other features cached earlier in the process, so it
+    /// sees what the environment's setup commands added to the shell's startup files.
     #[cfg(feature = "local_tty")]
     pub(crate) fn start_login_shell_path_capture(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(login_shell_path) = self.login_shell_path.as_mut() else {
@@ -326,14 +328,21 @@ impl HookRuntime {
         let LoginShellPathCapture::NotStarted = login_shell_path.capture else {
             return;
         };
-        let capture = if ctx.has_singleton_model::<LocalShellState>() {
-            LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
-                shell_state.get_interactive_path_env_var(ctx)
-            })
-        } else {
-            futures::future::ready(None).boxed()
-        };
-        login_shell_path.capture = LoginShellPathCapture::Running(capture.shared());
+        if !ctx.has_singleton_model::<LocalShellState>() {
+            login_shell_path.capture =
+                LoginShellPathCapture::Running(futures::future::ready(None).boxed().shared());
+            return;
+        }
+        let read = LocalShellState::as_ref(ctx).read_interactive_path_env_var_now();
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        ctx.spawn(read, move |_, path, _| {
+            let _ = sender.send(path);
+        });
+        login_shell_path.capture = LoginShellPathCapture::Running(
+            async move { receiver.await.ok().flatten() }
+                .boxed()
+                .shared(),
+        );
     }
 
     /// The login-shell PATH capture to wait for before the run's first hook, started if it was

@@ -2387,9 +2387,7 @@ impl AgentDriver {
             // The server rejects hooks on an agent whose harness is not Oz; a run that still has
             // them fails before any setup work rather than running without them.
             match &task.harness {
-                HarnessKind::Oz => {
-                    agent_setup::start_login_shell_path_capture(&foreground).await?;
-                }
+                HarnessKind::Oz => {}
                 HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
                     agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness).await?;
                 }
@@ -2618,6 +2616,9 @@ impl AgentDriver {
             // on one with hooks was refused above.
             match &task.harness {
                 HarnessKind::Oz => {
+                    // After environment preparation, so the login shell's PATH includes what the
+                    // setup commands added to its startup files; it overlaps skill loading.
+                    agent_setup::start_login_shell_path_capture(&foreground).await?;
                     let cloned_repositories = prepared_workspace.repositories.clone();
                     // Load skills from repos synchronously so the initial message includes them.
                     // File trees are ready after prepare_environment and global skill repo
