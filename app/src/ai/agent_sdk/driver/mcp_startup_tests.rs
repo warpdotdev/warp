@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::{FutureExt as _, StreamExt as _};
@@ -29,7 +30,7 @@ use warpui::{App, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, McpStartupMode,
-    attach_builtin_mcp_servers, start_task_and_profile_mcp_servers,
+    ResolvedMcpSpecs, attach_builtin_mcp_servers, start_task_and_profile_mcp_servers,
 };
 use crate::ai::agent_sdk::driver::environment::WorkspaceConfiguration;
 use crate::ai::agent_sdk::driver::harness::HarnessKind;
@@ -475,6 +476,116 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         rendered.installation_ids.keys().collect::<Vec<_>>(),
         vec!["GitHub MCP"]
     );
+}
+
+const PROXY_CONFIG_JSON: &str = r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#;
+
+/// What the server answers for a URL-backed managed server: the proxy config together with the
+/// credential it carries and when that credential expires.
+fn managed_proxy_config_output(
+    authorization_header_value: &str,
+    expires_at: DateTime<Utc>,
+) -> CreateManagedMcpClientConfigOutput {
+    CreateManagedMcpClientConfigOutput {
+        transport_kind: ManagedMcpTransportKind::Url,
+        proxy_url: Some("https://proxy.example/mcp".to_string()),
+        proxy_token: Some("proxy-token".to_string()),
+        authorization_header_name: Some("Authorization".to_string()),
+        authorization_header_value: Some(authorization_header_value.to_string()),
+        expires_at: Some(expires_at.into()),
+        ..managed_client_config_output(PROXY_CONFIG_JSON)
+    }
+}
+
+fn resolve_managed_uuid(
+    uuid: Uuid,
+    output: CreateManagedMcpClientConfigOutput,
+) -> ResolvedMcpSpecs {
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .return_once(move |_| Ok(output));
+    block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap()
+}
+
+#[test]
+fn managed_resolver_leases_the_expiring_credential_of_a_url_server() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    let [lease] = resolved.leases.as_slice() else {
+        panic!("expected one lease, got {:?}", resolved.leases);
+    };
+    assert_eq!(
+        lease.installation_id,
+        resolved.ephemeral_installations[0].uuid()
+    );
+    assert_eq!(lease.server_name, "GitHub MCP");
+    assert_eq!(lease.warp_id, uuid.to_string());
+    assert_eq!(lease.header_name, "Authorization");
+    assert_eq!(lease.credential.header_value, "Bearer proxy-token");
+    assert_eq!(lease.credential.expires_at, expires_at);
+}
+
+#[test]
+fn managed_resolver_leases_nothing_while_credential_refresh_is_disabled() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(false);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer proxy-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+#[test]
+fn managed_resolver_leases_nothing_without_an_expiring_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_client_config_output(
+            r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["-y","github-mcp"]}}}"#,
+        ),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
+}
+
+/// A lease replaces a header on the server's connection, so it only exists when the config
+/// really sends the credential the server says it issued.
+#[test]
+fn managed_resolver_leases_nothing_when_the_config_does_not_send_the_issued_credential() {
+    let _flag = FeatureFlag::ManagedMcpCredentialRefresh.override_enabled(true);
+    let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let expires_at = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+
+    let resolved = resolve_managed_uuid(
+        uuid,
+        managed_proxy_config_output("Bearer some-other-token", expires_at),
+    );
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.leases.is_empty());
 }
 
 #[test]
