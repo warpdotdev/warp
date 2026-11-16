@@ -114,12 +114,8 @@ impl HookDispatcher {
             let mut askers = Vec::new();
             for (active, (record, effects)) in matching.iter().zip(finished) {
                 invocations.extend(record);
-                let effects = refuse_unhonorable_effects(
-                    active,
-                    envelope.boundary(),
-                    is_headless,
-                    effects,
-                );
+                let effects =
+                    refuse_unhonorable_effects(active, envelope.boundary(), is_headless, effects);
                 if effects.verdict == HookVerdict::Ask {
                     askers.push(HookAsker {
                         binding: active.binding.id.clone(),
@@ -442,8 +438,7 @@ fn refuse_unhonorable_effects(
     }
     let refusal = refusal_for(boundary);
     let returned = returned_field_words(&effects.unsupported);
-    let unhonorable =
-        unhonorable_channels(&effects, &refusal, is_headless, active.policy.strict);
+    let unhonorable = unhonorable_channels(&effects, &refusal, is_headless, active.policy.strict);
 
     let reported = effects
         .unsupported

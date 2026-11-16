@@ -29,12 +29,7 @@ pub fn initialize_settings_for_tests_with_mode(
         ExecutionMode::App | ExecutionMode::Tui => false,
         ExecutionMode::Sdk | ExecutionMode::RemoteServerDaemon => true,
     };
-    initialize_settings_for_tests_with_mode_and_headlessness(
-        app,
-        mode,
-        is_sandboxed,
-        is_headless,
-    );
+    initialize_settings_for_tests_with_mode_and_headlessness(app, mode, is_sandboxed, is_headless);
 }
 
 #[cfg(test)]

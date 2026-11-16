@@ -3,9 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_binding_id, test_source_id};
-use ai::hooks::{
-    HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason, HookVerdict,
-};
+use ai::hooks::{HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason, HookVerdict};
 use futures::executor::block_on;
 use warp_core::execution_mode::ExecutionMode;
 use warpui::App;

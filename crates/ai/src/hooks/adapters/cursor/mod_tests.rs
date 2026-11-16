@@ -194,12 +194,8 @@ fn an_undocumented_control_field_reaches_the_messenger_as_a_diagnostic() {
         None,
     ));
 
-    let outcome = block_on(dispatcher.dispatch(
-        envelope,
-        snapshot,
-        false,
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let outcome =
+        block_on(dispatcher.dispatch(envelope, snapshot, false, Arc::new(AtomicBool::new(false))));
     assert_eq!(outcome.effects.verdict, HookVerdict::NoOpinion);
     assert_eq!(outcome.effects.unsupported.len(), 1);
 
