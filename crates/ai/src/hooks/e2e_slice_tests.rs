@@ -34,7 +34,11 @@ use crate::hooks::test_util::{
 
 /// The `hooks.json` in `dir`, as a worker source that runs from `dir`.
 fn source_in(dir: &Path) -> ExplicitHookSource {
-    worker_source(dir, HookSourceKind::FactoryAgent, HookSourcePolicy::default())
+    worker_source(
+        dir,
+        HookSourceKind::FactoryAgent,
+        HookSourcePolicy::default(),
+    )
 }
 
 struct Harness {

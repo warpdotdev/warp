@@ -199,7 +199,10 @@ mod loading {
         );
 
         assert_eq!(
-            failures.iter().map(|failure| failure.strict).collect::<Vec<_>>(),
+            failures
+                .iter()
+                .map(|failure| failure.strict)
+                .collect::<Vec<_>>(),
             vec![true, false],
             "{failures:?}"
         );
