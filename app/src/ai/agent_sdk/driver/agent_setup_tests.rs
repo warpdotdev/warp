@@ -581,7 +581,9 @@ fn only_definite_load_warnings_reach_the_run_output() {
         assert!(
             snapshot.diagnostics.iter().any(|diagnostic| {
                 diagnostic.severity == DiagnosticSeverity::Info
-                    && diagnostic.message.contains("model context is not supported yet")
+                    && diagnostic
+                        .message
+                        .contains("model context is not supported yet")
             }),
             "{:?}",
             snapshot.diagnostics
@@ -590,7 +592,9 @@ fn only_definite_load_warnings_reach_the_run_output() {
         assert_eq!(forwarded.len(), 1, "{forwarded:?}");
         assert_eq!(forwarded[0].severity, DiagnosticSeverity::Warning);
         assert!(
-            forwarded[0].message.contains("matcher is not a valid regex"),
+            forwarded[0]
+                .message
+                .contains("matcher is not a valid regex"),
             "{forwarded:?}"
         );
     });
