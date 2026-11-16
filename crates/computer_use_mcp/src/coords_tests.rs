@@ -42,6 +42,23 @@ fn scale_factor_matches_server() {
 }
 
 #[test]
+fn native_cursor_at_screen_edges_maps_inside_the_actual_image() {
+    let screenshot = Screenshot {
+        width: 1429,
+        height: 804,
+        original_width: 1920,
+        original_height: 1080,
+        data: Vec::new(),
+        mime_type: "image/png".into(),
+    };
+    let geometry = ScreenGeometry::from_screenshot(&screenshot, ImageConstraints::ANTHROPIC);
+    let point = geometry.to_model(Vector2I::new(1919, 1079));
+
+    assert_eq!(point, Point { x: 1428, y: 803 });
+    assert!(geometry.to_native(point).is_ok());
+}
+
+#[test]
 fn downscaled_points_map_back_to_native_pixels() {
     let geometry = geometry(2940, 1912, ImageConstraints::ANTHROPIC);
     let scale = server_scale_factor(2940, 1912, ImageConstraints::ANTHROPIC);

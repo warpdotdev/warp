@@ -1,3 +1,5 @@
+#[cfg(any(macos, test))]
+mod click_sequence;
 #[cfg_attr(macos, path = "mac/mod.rs")]
 #[cfg_attr(linux, path = "linux/mod.rs")]
 #[cfg_attr(windows, path = "windows/mod.rs")]

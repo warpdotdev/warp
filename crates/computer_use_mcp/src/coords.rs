@@ -113,8 +113,10 @@ impl ScreenGeometry {
     /// Maps a native screen pixel into the screenshot image's pixel space.
     pub fn to_model(self, native: Vector2I) -> Point {
         Point {
-            x: (native.x() as f64 * self.scale).round() as i32,
-            y: (native.y() as f64 * self.scale).round() as i32,
+            x: ((native.x() as f64 * self.scale).round() as i32)
+                .clamp(0, self.image_width as i32 - 1),
+            y: ((native.y() as f64 * self.scale).round() as i32)
+                .clamp(0, self.image_height as i32 - 1),
         }
     }
 
