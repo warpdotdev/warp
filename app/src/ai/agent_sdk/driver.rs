@@ -118,6 +118,7 @@ mod failure_output;
 pub(crate) mod git_credentials;
 pub(crate) mod harness;
 mod harness_output_monitor;
+pub(crate) mod managed_mcp_refresh;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
 mod preview_proxy;
@@ -141,20 +142,24 @@ use termination::{Interrupt, InterruptWatch, RunEndCause};
 /// Races `run_future` against optional background credential refresh loops,
 /// dropping the loops automatically when `run_future` resolves.
 ///
-/// Both refresh loops run forever when active; they are dropped when
+/// The refresh loops run forever when active; they are dropped when
 /// `futures::select!` picks the `run_future` arm. This consolidates the
 /// otherwise-repeated 4-arm `match (git, bedrock)` pattern that would
 /// otherwise appear once per harness type.
-async fn with_credential_refreshes<F, T>(
+///
+/// `managed_mcp_refresh` keeps managed MCP credentials valid and must never resolve.
+async fn with_credential_refreshes<F, T, M>(
     run_future: F,
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
     use_factory_repositories: bool,
     bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
+    managed_mcp_refresh: M,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<T, AgentDriverError>
 where
     F: Future<Output = Result<T, AgentDriverError>>,
+    M: Future<Output = ()>,
 {
     let mode = foreground
         .spawn(|me, _| me.github_credential_mode)
@@ -181,8 +186,14 @@ where
     }
     .fuse();
 
+    let managed_mcp_refresh = managed_mcp_refresh.fuse();
     let run_future = run_future.fuse();
-    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::pin_mut!(
+        run_future,
+        git_refresh,
+        bedrock_refresh,
+        managed_mcp_refresh
+    );
     futures::select! {
         result = run_future => result,
         result = git_refresh => {
@@ -190,6 +201,7 @@ where
             Err(AgentDriverError::InvalidRuntimeState)
         },
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+        _ = managed_mcp_refresh => unreachable!("managed MCP credentials refresh loop resolved unexpectedly"),
     }
 }
 
@@ -1148,6 +1160,9 @@ pub struct AgentDriver {
     /// `AgentDriverOptions::harness_transport_fallback`.
     harness_transport_fallback: Option<harness::TransportFallbackReason>,
     sandbox_deadline: Option<SystemTime>,
+    /// The replaceable credentials of the managed MCP servers started for the run, until the
+    /// run takes them to keep them valid.
+    managed_mcp_refresh: Option<managed_mcp_refresh::ManagedMcpRefresh>,
 }
 
 #[derive(Clone)]
@@ -1647,6 +1662,7 @@ impl AgentDriver {
             mcp_startup_timeout: MCP_SERVER_STARTUP_TIMEOUT,
             harness_transport_fallback: None,
             sandbox_deadline: sandbox_deadline(),
+            managed_mcp_refresh: None,
         }
     }
 
@@ -2658,6 +2674,7 @@ impl AgentDriver {
                     ai_client_for_refresh,
                     use_factory_repositories,
                     bedrock_config_for_refresh,
+                    managed_mcp_refresh::keep_run_credentials_valid(&foreground),
                     &foreground,
                 )
                 .await?;
@@ -2728,6 +2745,7 @@ impl AgentDriver {
                     ai_client_for_refresh,
                     use_factory_repositories,
                     bedrock_config_for_refresh,
+                    future::pending(),
                     &foreground,
                 )
                 .await

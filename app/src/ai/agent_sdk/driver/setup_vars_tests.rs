@@ -130,7 +130,7 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
         .unwrap();
         let pending_uuid = pending.uuid();
         TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.spawn_cli_ephemeral_server(pending, ctx);
+            manager.spawn_cli_ephemeral_server(pending, None, ctx);
         });
 
         AgentDriver::read_setup_vars(&foreground, false, true)
@@ -194,7 +194,7 @@ fn cold_setup_metadata_precedes_setup_and_file_values_reach_mcp_processes() {
             .unwrap();
         let uuid = installation.uuid();
         TemplatableMCPServerManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.spawn_cli_ephemeral_server(installation, ctx);
+            manager.spawn_cli_ephemeral_server(installation, None, ctx);
         });
         let deadline = instant::Instant::now() + Duration::from_secs(5);
         let expected = format!("from-cold-setup\n{}\nsetup-home", path.display());
