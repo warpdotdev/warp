@@ -494,6 +494,72 @@ fn a_changed_working_directory_gets_a_new_dispatch() {
     });
 }
 
+/// The user approved a command, and its hook check had to start over. Approval carries over to
+/// the restarted check only when the operation is the same: same arguments in the same working
+/// directory.
+#[test]
+fn approval_carries_over_only_for_the_same_arguments_in_the_same_working_directory() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        install_shell_deny(&harness, &mut app, "no");
+        set_working_directory(&mut app, &harness, Path::new("/work/one"));
+
+        // The approved check died before answering; the same operation keeps the approval.
+        let same = shell_action("a1", "ls");
+        drop(expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &same,
+            harness.conversation_id,
+            true,
+        )));
+        let restarted = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &same,
+            harness.conversation_id,
+            false,
+        ));
+        let outcome = block_on(restarted.future);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: true,
+            })
+        );
+
+        // The shell moved before the verdict arrived; the same command elsewhere is a new
+        // operation and needs a new approval.
+        let moved = shell_action("a2", "ls");
+        let first = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &moved,
+            harness.conversation_id,
+            true,
+        ));
+        set_working_directory(&mut app, &harness, Path::new("/work/two"));
+        let restarted = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &moved,
+            harness.conversation_id,
+            false,
+        ));
+        assert!(first.ticket.cancel.load(Ordering::Acquire), "the old check is stopped");
+        let outcome = block_on(restarted.future);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: false,
+            })
+        );
+    });
+}
+
 fn ask_effects(reason: &str) -> MergedEffects {
     let binding = test_binding_id(test_source_id("s"), "tool.pre", 0);
     MergedEffects {

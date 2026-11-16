@@ -135,10 +135,10 @@ impl PreToolVerdictCache {
                     }
                 );
                 Cached::Outdated {
-                    // Approval covers the arguments the user saw. It carries over when only the
-                    // working directory moved, never to different arguments.
-                    is_user_initiated: entry.is_user_initiated
-                        && entry.key.argument_revision == key.argument_revision,
+                    // Approval covers the operation the user saw: these arguments in this working
+                    // directory. Hooks judge the working directory too, so the same command
+                    // somewhere else is a different operation.
+                    is_user_initiated: entry.is_user_initiated && same_operation,
                 }
             }
             None => Cached::Nothing,
