@@ -171,7 +171,7 @@ pub(crate) struct PendingDispatch {
 }
 
 pub(crate) enum PreToolLookup {
-    /// Hooks are off, or no binding applies to this action. Proceed as if hooks did not exist.
+    /// No binding is active, or none applies to this action. Proceed as if hooks did not exist.
     Inactive,
     /// A verdict is being computed. `dispatch` is present the first time an action is seen.
     Pending {

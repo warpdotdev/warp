@@ -117,8 +117,8 @@ struct PromptDispatch {
 }
 
 /// Starts the turn `prompt` (or an input Warp built, when `None`) begins in `conversation_id`,
-/// and says what the controller must wait for before sending. With hooks off this is one atomic
-/// load and returns [`TurnPreparation::Ready`].
+/// and says what the controller must wait for before sending. With no active binding it returns
+/// [`TurnPreparation::Ready`].
 pub(crate) fn prepare_turn(
     prompt: Option<SubmittedPrompt>,
     conversation_id: AIConversationId,
