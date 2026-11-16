@@ -550,6 +550,52 @@ fn a_file_selected_from_two_locations_is_reported_as_a_warning() {
     });
 }
 
+/// Only load warnings that describe something that already changed what a source does reach the
+/// run's output. A prediction of what a hook might emit (`sessionStart` may return model context,
+/// which is not delivered yet) is recorded as `Info` and stays in the log.
+#[test]
+fn only_definite_load_warnings_reach_the_run_output() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        let dir = working_dir.join("hooks");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("hooks.json"),
+            r#"{"version":1,"hooks":{
+                "sessionStart":[{"command":"./start.sh"}],
+                "beforeShellExecution":[{"command":"./check.sh","matcher":"("}]
+            }}"#,
+        )
+        .unwrap();
+        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_source(&dir.display().to_string(), true)];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        let snapshot = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot());
+        assert!(
+            snapshot.diagnostics.iter().any(|diagnostic| {
+                diagnostic.severity == DiagnosticSeverity::Info
+                    && diagnostic.message.contains("model context is not supported yet")
+            }),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let forwarded = messenger.diagnostics();
+        assert_eq!(forwarded.len(), 1, "{forwarded:?}");
+        assert_eq!(forwarded[0].severity, DiagnosticSeverity::Warning);
+        assert!(
+            forwarded[0].message.contains("matcher is not a valid regex"),
+            "{forwarded:?}"
+        );
+    });
+}
+
 /// A run on a harness other than Oz fails when its execution configuration selected hooks, and
 /// goes on when it selected none.
 #[test]

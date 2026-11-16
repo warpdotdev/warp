@@ -233,15 +233,18 @@ impl AgentDriver {
         for failure in &failures {
             messenger.diagnostic(failure.diagnostic.clone());
         }
-        // Errors were just reported as failures; what remains are warnings such as entries that
-        // disagree on where one file's hooks run, or definitions the adapter skipped.
-        for diagnostic in HookRuntime::as_ref(ctx)
-            .snapshot(ctx)
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity != DiagnosticSeverity::Error)
-        {
-            messenger.diagnostic(diagnostic.clone());
+        // Errors were just reported as failures. Warnings describe something that already changed
+        // what a source does (entries that disagree on where one file's hooks run, a definition
+        // the adapter skipped) and go to the run's output too. Info diagnostics only predict what
+        // a hook might emit, so they stay in the log.
+        for diagnostic in HookRuntime::as_ref(ctx).snapshot(ctx).diagnostics.iter() {
+            match diagnostic.severity {
+                DiagnosticSeverity::Error => {}
+                DiagnosticSeverity::Warning => messenger.diagnostic(diagnostic.clone()),
+                DiagnosticSeverity::Info => {
+                    log::info!("hook source {}: {}", diagnostic.source, diagnostic.message)
+                }
+            }
         }
         let strict_failures = failures
             .iter()
