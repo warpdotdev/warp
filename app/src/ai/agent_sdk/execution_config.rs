@@ -202,31 +202,32 @@ pub(super) fn agent_hook_sources(
         .into_iter()
         .enumerate()
         .map(|(index, source)| {
+            let number = index + 1;
             let format = match source.format {
                 AgentHookFormat::Cursor => HookFormat::Cursor,
                 AgentHookFormat::Unknown => {
-                    bail!("Agent hook source {index} uses a hook format this Warp version does not support")
+                    bail!("Hook entry {number} uses a hook format this Warp version does not support")
                 }
             };
             let kind = match source.level {
                 AgentHookLevel::Agent => HookSourceKind::FactoryAgent,
                 AgentHookLevel::Factory => HookSourceKind::FactoryWide,
                 AgentHookLevel::Unknown => {
-                    bail!("Agent hook source {index} has a level this Warp version does not support")
+                    bail!("Hook entry {number} has a level this Warp version does not support")
                 }
             };
             let on_ask = match source.on_ask {
                 AgentHookOnAsk::Deny => HookOnAsk::Deny,
                 AgentHookOnAsk::FailRun => HookOnAsk::FailRun,
                 AgentHookOnAsk::Unknown => {
-                    bail!("Agent hook source {index} has an onAsk setting this Warp version does not support")
+                    bail!("Hook entry {number} has an onAsk setting this Warp version does not support")
                 }
             };
             let location = match source.repository {
                 Some(repository) => ConfiguredHookLocation::Repository {
                     repo: SourceRepo::new(
                         forge(repository.forge)
-                            .with_context(|| format!("Agent hook source {index}"))?,
+                            .with_context(|| format!("Hook entry {number}"))?,
                         repository.owner,
                         repository.name,
                     ),

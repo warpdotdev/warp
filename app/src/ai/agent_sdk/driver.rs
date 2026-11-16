@@ -1278,6 +1278,8 @@ pub enum AgentDriverError {
         "This run has agent hooks, which only the Oz harness runs, but its harness is {harness}"
     )]
     HooksRequireOzHarness { harness: String },
+    #[error("This run has agent hooks, but this build of Warp cannot run them")]
+    HooksUnsupportedByThisBuild,
     #[error("Failed to start MCP servers: {}", .details.join("; "))]
     MCPStartupFailed {
         /// One line per unavailable server (e.g. "'datadog' failed to start:
@@ -2376,6 +2378,15 @@ impl AgentDriver {
                 })
                 .await?;
 
+            // The server rejects hooks on an agent whose harness is not Oz; a run that still has
+            // them fails before any setup work rather than running without them.
+            match &task.harness {
+                HarnessKind::Oz => {}
+                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
+                    agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness).await?;
+                }
+            }
+
             foreground
                 .spawn(|me, _| me.check_working_dir())
                 .await?
@@ -2595,7 +2606,8 @@ impl AgentDriver {
                 );
             }
 
-            // Skill and hook loading are Oz-only; third-party harnesses have their own.
+            // Skill and hook loading are Oz-only; third-party harnesses have their own, and a run
+            // on one with hooks was refused above.
             match &task.harness {
                 HarnessKind::Oz => {
                     let cloned_repositories = prepared_workspace.repositories.clone();
@@ -2614,11 +2626,7 @@ impl AgentDriver {
                     }
                     agent_setup::setup_hooks_for_run(&foreground, cloned_repositories).await?;
                 }
-                // The server rejects hooks on an agent whose harness is not Oz; a run that still
-                // has them fails rather than running without them.
-                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
-                    agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness).await?;
-                }
+                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {}
             }
 
             let (

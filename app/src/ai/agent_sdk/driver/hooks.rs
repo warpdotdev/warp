@@ -209,14 +209,20 @@ impl AgentDriver {
 
     /// Finds the run's selected hook sources among `repositories` (the ones environment
     /// preparation cloned) and on the worker, then loads and finalizes them in one call. Every
-    /// failure is reported as a diagnostic; a failure of a strict source also fails the run.
+    /// failure and every load warning is reported as a diagnostic; a failure of a strict source
+    /// also fails the run. A build that cannot run hooks fails a run that has any, so the hooks
+    /// are never silently skipped.
     pub(super) fn load_hook_sources_for_run(
         &self,
         repositories: &[SourceRepo],
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
         if !HookRuntime::is_installed(ctx) {
-            return Ok(());
+            return if self.hooks.sources.is_empty() {
+                Ok(())
+            } else {
+                Err(AgentDriverError::HooksUnsupportedByThisBuild)
+            };
         }
         let (sources, mut failures) =
             resolve_sources(&self.hooks.sources, &self.working_dir, repositories);
@@ -225,6 +231,16 @@ impl AgentDriver {
         let messenger = HookRuntime::as_ref(ctx).messenger();
         for failure in &failures {
             messenger.diagnostic(failure.diagnostic.clone());
+        }
+        // Errors were just reported as failures; what remains are warnings such as entries that
+        // disagree on where one file's hooks run, or definitions the adapter skipped.
+        for diagnostic in HookRuntime::as_ref(ctx)
+            .snapshot(ctx)
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity != DiagnosticSeverity::Error)
+        {
+            messenger.diagnostic(diagnostic.clone());
         }
         let strict_failures = failures
             .iter()

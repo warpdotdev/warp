@@ -149,6 +149,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::HooksUnsupportedByThisBuild => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                "This run has hooks, but this build of Warp cannot run hooks. The run was stopped so that its hooks are not skipped.",
+                PlatformErrorCode::InternalError,
+            ),
+        ),
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
