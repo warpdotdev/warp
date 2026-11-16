@@ -18,7 +18,6 @@ use crate::ai::blocklist::hooks::test_utils::{
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
 };
-use crate::features::FeatureFlag;
 
 fn stop_binding(loop_limit: Option<u32>) -> DeclaredBinding {
     let mut binding = test_binding(test_source_id("stop"), HookBoundary::TurnStop, 0, None);
@@ -94,7 +93,6 @@ fn start_turn(app: &mut App, conversation_id: AIConversationId) -> HookTurnId {
 #[test]
 fn a_follow_up_is_queued_behind_a_persons_prompt_with_the_hooks_provenance() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = stop_binding(None);
         harness
@@ -162,7 +160,6 @@ fn a_follow_up_is_queued_behind_a_persons_prompt_with_the_hooks_provenance() {
 #[test]
 fn a_bindings_loop_limit_ends_its_follow_ups_with_a_diagnostic() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = stop_binding(Some(2));
         harness
@@ -209,7 +206,6 @@ fn a_bindings_loop_limit_ends_its_follow_ups_with_a_diagnostic() {
 #[test]
 fn the_host_cap_applies_to_the_whole_chain_across_bindings() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         // Two definitions with no limit of their own. The dispatcher keeps the first binding's
         // continuation, so the two are alternated by turning one off at a time.
@@ -266,7 +262,6 @@ fn the_host_cap_applies_to_the_whole_chain_across_bindings() {
 #[test]
 fn a_stop_hook_without_a_follow_up_finalizes_and_its_verdicts_are_ignored() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = stop_binding(None);
         harness
@@ -293,7 +288,6 @@ fn a_stop_hook_without_a_follow_up_finalizes_and_its_verdicts_are_ignored() {
 #[test]
 fn nothing_is_held_without_a_stop_binding() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         app.update(|ctx| {
             harness.hooks.install_bindings(
@@ -320,7 +314,6 @@ fn nothing_is_held_without_a_stop_binding() {
 #[test]
 fn an_answer_for_a_cancelled_hold_is_dropped() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = stop_binding(None);
         harness
@@ -348,7 +341,6 @@ fn an_answer_for_a_cancelled_hold_is_dropped() {
 #[test]
 fn a_hold_that_times_out_finalizes_without_the_hooks() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let mut binding = stop_binding(None);
         binding.timeout = Duration::from_millis(100);
@@ -372,7 +364,6 @@ fn a_hold_that_times_out_finalizes_without_the_hooks() {
 #[test]
 fn success_is_not_shown_while_the_stop_hooks_run() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let binding = stop_binding(None);
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
@@ -414,7 +405,6 @@ fn success_is_not_shown_while_the_stop_hooks_run() {
 #[test]
 fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -482,7 +472,6 @@ fn a_follow_up_keeps_the_conversation_in_progress_until_its_own_request() {
 #[test]
 fn a_follow_ups_text_is_sent_as_written() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         // A slash command for a person; for a hook, text like any other.
@@ -523,7 +512,6 @@ fn a_follow_ups_text_is_sent_as_written() {
 #[test]
 fn a_turn_that_came_and_went_during_the_hold_leaves_nothing_behind() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -588,7 +576,6 @@ fn a_turn_that_came_and_went_during_the_hold_leaves_nothing_behind() {
 #[test]
 fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         let prompt = test_binding(
@@ -664,7 +651,6 @@ fn success_is_not_shown_while_a_replaced_prompts_successor_still_waits() {
 #[test]
 fn a_follow_up_for_a_conversation_the_surface_left_waits_for_its_drain() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -703,7 +689,6 @@ fn a_follow_up_for_a_conversation_the_surface_left_waits_for_its_drain() {
 #[test]
 fn clearing_the_surface_during_a_hold_settles_the_cleared_turn() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -740,7 +725,6 @@ fn clearing_the_surface_during_a_hold_settles_the_cleared_turn() {
 #[test]
 fn a_persons_prompt_during_the_hold_takes_over_and_the_follow_up_waits_behind_it() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -785,7 +769,6 @@ fn a_persons_prompt_during_the_hold_takes_over_and_the_follow_up_waits_behind_it
 #[test]
 fn cancelling_a_held_turn_settles_it_as_cancelled() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness
@@ -823,7 +806,6 @@ fn cancelling_a_held_turn_settles_it_as_cancelled() {
 #[test]
 fn a_newer_turn_whose_actions_still_run_is_not_finished_under_them() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let stop = stop_binding(None);
         harness

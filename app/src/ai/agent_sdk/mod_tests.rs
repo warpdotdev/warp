@@ -1616,7 +1616,6 @@ fn a_canned_execution_configuration_denies_a_command_through_a_real_hook() {
     use crate::test_util::terminal::add_window_with_terminal;
 
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let root = tempfile::TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();

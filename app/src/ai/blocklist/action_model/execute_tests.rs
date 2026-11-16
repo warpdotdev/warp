@@ -254,7 +254,6 @@ mod hooks {
     };
     use crate::ai::blocklist::hooks::{pre_tool, tool_result};
     use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-    use crate::features::FeatureFlag;
     use crate::terminal::model::terminal_model::TerminalModel;
     use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -369,11 +368,19 @@ mod hooks {
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
     }
 
+    /// Until the run's hook sources are finalized nothing consults them, even bindings already
+    /// staged in the registry.
     #[test]
-    fn with_the_flag_off_hooks_are_never_consulted() {
+    fn hooks_are_never_consulted_before_the_registry_is_finalized() {
         App::test((), |mut app| async move {
             let harness = hook_test_app(&mut app);
-            install_shell_binding(&harness, &mut app, "denied", 2);
+            let binding =
+                test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("Shell"));
+            harness
+                .hooks
+                .runner
+                .script(binding.id.clone(), ScriptedRunner::exit_with(2, "denied"));
+            app.update(|ctx| harness.hooks.stage_bindings(vec![binding], ctx));
             let (executor, events) = build_executor(&mut app, &harness);
 
             let shell = shell_action("id-shell", "ls");
@@ -407,7 +414,7 @@ mod hooks {
     }
 
     #[test]
-    fn with_the_flag_on_and_an_empty_registry_events_match_the_flag_off_run() {
+    fn with_an_empty_registry_events_match_a_run_with_no_hooks() {
         App::test((), |mut app| async move {
             let harness = hook_test_app(&mut app);
             let (executor, events) = build_executor(&mut app, &harness);
@@ -429,7 +436,6 @@ mod hooks {
                 false,
             );
 
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let init_on = init_project_action("id-init-on");
             let shell_on = shell_action("id-shell-on", "ls");
             let init_on_result = try_execute(
@@ -461,7 +467,6 @@ mod hooks {
 
     fn run_scripted_deny(is_user_initiated: bool) {
         App::test((), move |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             install_shell_binding(&harness, &mut app, "rm is not allowed here", 2);
             let (executor, events) = build_executor(&mut app, &harness);
@@ -584,7 +589,6 @@ mod hooks {
                 TryExecuteResult::ExecutedSync
             ));
 
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let source = test_source_id("s");
             let allow_shell = test_binding(source.clone(), HookBoundary::ToolPre, 0, Some("Shell"));
             let silent_all = test_binding(source, HookBoundary::ToolPre, 1, None);
@@ -657,7 +661,6 @@ mod hooks {
     #[test]
     fn a_hook_ask_adds_a_confirmation_step_that_the_users_approval_satisfies() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             let binding = test_binding(
                 test_source_id("s"),
@@ -714,7 +717,6 @@ mod hooks {
     #[test]
     fn a_hook_ask_in_a_headless_launch_is_denied_by_hook_with_approval_unavailable() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             let headless_mode = app.add_model(|ctx| {
                 AppExecutionMode::new_with_headlessness(ExecutionMode::App, false, true, ctx)
@@ -760,7 +762,6 @@ mod hooks {
     #[test]
     fn cancelling_the_conversation_drops_a_verdict_that_arrives_afterwards() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             install_shell_binding(&harness, &mut app, "denied", 2);
             let (executor, events) = build_executor(&mut app, &harness);
@@ -808,13 +809,11 @@ mod hooks {
         use super::{build_executor, reason_of, shapes, try_execute};
         use crate::ai::blocklist::hooks::HookRuntime;
         use crate::ai::blocklist::hooks::test_utils::{hook_test_app, settle, shell_action};
-        use crate::features::FeatureFlag;
         use crate::process_environment::InitialProcessEnvironment;
 
         #[test]
         fn a_real_script_denies_a_real_shell_command() {
             App::test((), |mut app| async move {
-                let _flag = FeatureFlag::AgentHooks.override_enabled(true);
                 let harness = hook_test_app(&mut app);
 
                 let dir = TempDir::new().expect("tempdir");

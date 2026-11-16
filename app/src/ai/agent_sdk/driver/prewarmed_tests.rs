@@ -506,7 +506,6 @@ fn prewarmed_config_conversion_and_state_binding_preserve_run_settings() {
 #[test]
 fn a_standby_loads_hooks_only_after_it_claims_a_task() {
     App::test((), |mut app| async move {
-        let _hooks = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
         app.update(crate::ai::blocklist::hooks::test_utils::install_test_hooks);
         let root = tempfile::tempdir().unwrap();

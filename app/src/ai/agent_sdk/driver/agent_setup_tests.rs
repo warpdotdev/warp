@@ -20,8 +20,8 @@ use super::super::environment::WorkspaceConfiguration;
 use super::super::hooks::{ConfiguredHookLocation, ConfiguredHookSource};
 use super::super::terminal::TerminalDriver;
 use super::*;
-use crate::ai::blocklist::hooks::RunSurface;
 use crate::ai::blocklist::hooks::test_utils::install_test_hooks;
+use crate::ai::blocklist::hooks::{HookRuntime, RunSurface};
 use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspace::view::tests::initialize_app as initialize_workspace_test_app;
@@ -425,7 +425,6 @@ fn cloned(repo: &str) -> SourceRepo {
 #[test]
 fn repository_and_worker_sources_load_where_the_run_put_them() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         write_hooks_file(&working_dir.join("api/.cursor"));
@@ -473,7 +472,6 @@ fn repository_and_worker_sources_load_where_the_run_put_them() {
 #[test]
 fn only_a_strict_source_that_cannot_load_fails_the_run() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
@@ -507,7 +505,6 @@ fn only_a_strict_source_that_cannot_load_fails_the_run() {
 #[test]
 fn a_source_that_is_not_strict_is_reported_and_the_run_goes_on() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
@@ -526,7 +523,6 @@ fn a_source_that_is_not_strict_is_reported_and_the_run_goes_on() {
 #[test]
 fn a_malformed_path_fails_only_its_own_entry() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         write_hooks_file(&working_dir.join("api/.cursor"));
@@ -556,14 +552,19 @@ fn a_malformed_path_fails_only_its_own_entry() {
     });
 }
 
-/// A build that cannot run hooks fails a run that has any, strict or not, rather than running
-/// without them. A run with none goes on.
+/// A process with no hook runtime cannot run hooks, so it fails a run that has any, strict or not,
+/// rather than running without them. A run with none goes on.
 #[test]
-fn a_build_that_cannot_run_hooks_fails_a_run_that_has_them() {
+fn a_process_without_the_hook_runtime_fails_a_run_that_has_hooks() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+        assert!(!app.read(|ctx| ctx.has_singleton_model::<HookRuntime>()));
         let root = TempDir::new().unwrap();
-        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
+        let terminal = add_window_with_terminal(&mut app, None);
+        let driver = app.add_model(|ctx| {
+            let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
+            AgentDriver::new_for_test(root.path().to_path_buf(), terminal_driver, ctx)
+        });
         for strict in [true, false] {
             let result = driver.update(&mut app, |driver, ctx| {
                 driver.hooks.sources = vec![worker_source("/no/such/hook/dir", strict)];
@@ -579,7 +580,49 @@ fn a_build_that_cannot_run_hooks_fails_a_run_that_has_them() {
             driver.load_hook_sources_for_run(&[], ctx)
         });
         assert!(result.is_ok(), "{result:?}");
-        assert!(messenger.diagnostics().is_empty());
+    });
+}
+
+/// Installing the command runner starts nothing; the login-shell PATH capture starts when a run
+/// loads hooks, and not when it loads none.
+#[cfg(feature = "local_tty")]
+#[test]
+fn the_login_shell_path_capture_starts_only_when_hooks_load() {
+    use crate::process_environment::InitialProcessEnvironment;
+
+    App::test((), |mut app| async move {
+        let root = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(root.path()).unwrap();
+        write_hooks_file(&working_dir.join("hooks"));
+        let (driver, _) = driver_with_test_hooks(&mut app, &working_dir);
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| InitialProcessEnvironment::capture());
+            HookRuntime::install_command_runner(ctx);
+        });
+        let pending = |app: &App| {
+            app.read(|ctx| HookRuntime::as_ref(ctx).login_shell_path_capture_is_pending())
+        };
+        assert!(pending(&app), "installing the runner starts no capture");
+
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(result.is_ok(), "{result:?}");
+        assert!(pending(&app), "a run with no hooks starts no capture");
+
+        // A second worker process would load its own list; reset the registry to stand in for it.
+        app.update(|ctx| {
+            HookRegistry::handle(ctx).update(ctx, |registry, _| *registry = HookRegistry::new());
+        });
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.hooks.sources = vec![worker_source(
+                &working_dir.join("hooks").display().to_string(),
+                true,
+            )];
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!pending(&app), "loading hooks starts the capture");
     });
 }
 
@@ -588,7 +631,6 @@ fn a_build_that_cannot_run_hooks_fails_a_run_that_has_them() {
 #[test]
 fn a_file_selected_from_two_locations_is_reported_as_a_warning() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         let cursor_dir = working_dir.join("api/.cursor");
@@ -701,7 +743,6 @@ fn hooks_on_another_harness_fail_the_run() {
 #[test]
 fn setup_hooks_for_run_loads_the_runs_sources() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
         write_hooks_file(&working_dir.join("api/.cursor"));
@@ -726,7 +767,6 @@ fn setup_hooks_for_run_loads_the_runs_sources() {
 #[test]
 fn setup_hooks_for_run_fails_when_a_strict_source_cannot_load() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let (driver, _) = driver_with_test_hooks(&mut app, root.path());
         let foreground = driver.update(&mut app, |driver, ctx| {
@@ -748,7 +788,6 @@ fn setup_hooks_for_run_fails_when_a_strict_source_cannot_load() {
 #[test]
 fn an_empty_hook_source_list_finalizes_the_registry() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 

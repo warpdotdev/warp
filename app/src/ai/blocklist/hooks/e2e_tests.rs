@@ -61,7 +61,6 @@ use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel};
 use crate::ai::cloud_environments::SourceRepo;
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::features::FeatureFlag;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::event::BlockMetadataReceivedEvent;
@@ -385,7 +384,6 @@ fn is_denylisted(result: &AIAgentActionResultType) -> bool {
 #[test]
 fn permission_matrix_run_to_completion() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
         move_session(&mut app, &harness, &work);
@@ -500,7 +498,6 @@ esac"#,
 #[test]
 fn batch_denial_with_cwd_changes() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let outer = sandbox.dir("outer");
         let nested = outer.join("nested");
@@ -628,7 +625,6 @@ fn worker_entry(dir: &Path, kind: HookSourceKind, strict: bool) -> ConfiguredHoo
 #[test]
 fn stop_versus_idle_exit() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
@@ -692,7 +688,6 @@ fi"#,
 #[test]
 fn duplicate_session_start() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
@@ -812,7 +807,6 @@ fn reasoning_message(task_id: &str, text: &str) -> Message {
 #[test]
 fn once_per_message_response_observations() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
@@ -891,7 +885,6 @@ printf '%s\n' "$input" >> "$PWD/audit.log""#;
 #[test]
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
         move_session(&mut app, &harness, &work);
@@ -1022,7 +1015,6 @@ impl HookMessenger for NdjsonRecords {
 #[test]
 fn oz_messenger_output() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
@@ -1299,7 +1291,6 @@ fn denied_by_hook_on_the_wire(result: AIAgentActionResult) -> Option<String> {
 #[test]
 fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let run = FactoryRun::new(&mut app);
         let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
         let _run_exit = started.expect("every declared source loads");
@@ -1341,7 +1332,6 @@ fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
 #[test]
 fn a_missing_strict_entry_stops_the_run() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let run = FactoryRun::new(&mut app);
         let mut sources = FactoryRun::declared_sources();
         sources.push(repository_entry(
@@ -1369,7 +1359,6 @@ fn a_missing_strict_entry_stops_the_run() {
 #[test]
 fn a_missing_entry_that_is_not_strict_is_reported_and_the_run_goes_on() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let run = FactoryRun::new(&mut app);
         let missing = run.sandbox.base.join("not-on-this-worker");
         let mut sources = FactoryRun::declared_sources();
@@ -1401,7 +1390,6 @@ fn a_missing_entry_that_is_not_strict_is_reported_and_the_run_goes_on() {
 #[test]
 fn an_ask_from_a_fail_run_entry_ends_the_factory_run() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let run = FactoryRun::new(&mut app);
         let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
         let _run_exit = started.expect("every declared source loads");

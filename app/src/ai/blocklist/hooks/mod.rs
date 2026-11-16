@@ -44,7 +44,6 @@ use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
-use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::process_environment::InitialProcessEnvironment;
 #[cfg(feature = "local_tty")]
@@ -113,6 +112,10 @@ pub struct HookRuntime {
     turn_stops: TurnStops,
     pending_prompts: PendingPrompts,
     shell_completions: ShellCompletions,
+    /// Where the command runner reads the login shell's PATH, until the capture that fills it in
+    /// has been started.
+    #[cfg(feature = "local_tty")]
+    login_shell_path: Option<Arc<Mutex<Option<OsString>>>>,
     #[cfg(test)]
     observed_terminal_results: Vec<tool_result::ObservedTerminalResult>,
 }
@@ -136,6 +139,8 @@ impl HookRuntime {
             turn_stops: TurnStops::default(),
             pending_prompts: PendingPrompts::default(),
             shell_completions: ShellCompletions::default(),
+            #[cfg(feature = "local_tty")]
+            login_shell_path: None,
             #[cfg(test)]
             observed_terminal_results: Vec::new(),
         }
@@ -234,9 +239,9 @@ impl HookRuntime {
         AppExecutionMode::as_ref(ctx).is_headless()
     }
 
-    /// Whether the flag is on and the runtime is registered. True even when no binding is active.
+    /// Whether the runtime is registered. True even when no binding is active.
     pub fn is_installed(ctx: &AppContext) -> bool {
-        FeatureFlag::AgentHooks.is_enabled() && ctx.has_singleton_model::<HookRuntime>()
+        ctx.has_singleton_model::<HookRuntime>()
     }
 
     /// Whether any hook can fire right now: the runtime is installed and at least one binding is
@@ -269,8 +274,9 @@ impl HookRuntime {
         self.dispatcher = Arc::new(HookDispatcher::new(runner, self.messenger.clone()));
     }
 
-    /// Installs the runner that spawns hook processes. Hooks get the login shell's PATH once it
-    /// has been captured; until then they inherit this process's PATH.
+    /// Installs the runner that spawns hook processes. Hooks get the login shell's PATH once
+    /// [`Self::capture_login_shell_path`] has captured it; until then they inherit this
+    /// process's PATH. Installing starts nothing, so a launch that never loads hooks pays nothing.
     #[cfg(feature = "local_tty")]
     pub fn install_command_runner(ctx: &mut AppContext) {
         let login_shell_path: Arc<Mutex<Option<OsString>>> = Arc::default();
@@ -280,19 +286,21 @@ impl HookRuntime {
             Arc::new(move || captured.lock().clone()),
             initial_environment,
         );
-        Self::handle(ctx).update(ctx, |runtime, ctx| {
+        Self::handle(ctx).update(ctx, |runtime, _| {
             runtime.set_runner(Arc::new(runner));
-            Self::capture_login_shell_path(login_shell_path, ctx);
+            runtime.login_shell_path = Some(login_shell_path);
         });
     }
 
-    /// Starts the interactive shell capture, which is only worth its cost when hooks can run.
+    /// Starts capturing the login shell's PATH for the command runner, once per process. Called
+    /// when hooks are loaded, because the capture starts an interactive shell and is only worth
+    /// its cost when hooks will run.
     #[cfg(feature = "local_tty")]
-    fn capture_login_shell_path(
-        login_shell_path: Arc<Mutex<Option<OsString>>>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if !FeatureFlag::AgentHooks.is_enabled() || !ctx.has_singleton_model::<LocalShellState>() {
+    pub(crate) fn capture_login_shell_path(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(login_shell_path) = self.login_shell_path.take() else {
+            return;
+        };
+        if !ctx.has_singleton_model::<LocalShellState>() {
             return;
         }
         let capture = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
@@ -301,6 +309,12 @@ impl HookRuntime {
         ctx.spawn(capture, move |_, path, _| {
             *login_shell_path.lock() = path.map(OsString::from);
         });
+    }
+
+    /// Whether the command runner is installed and its login-shell PATH capture has not started.
+    #[cfg(all(test, feature = "local_tty"))]
+    pub(crate) fn login_shell_path_capture_is_pending(&self) -> bool {
+        self.login_shell_path.is_some()
     }
 
     /// Records the run this process belongs to. Envelopes built afterwards carry it and report

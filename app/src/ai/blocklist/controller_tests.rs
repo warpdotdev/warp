@@ -1082,7 +1082,6 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
 mod hooks {
     use ai::hooks::test_util::{test_binding, test_source_id};
     use ai::hooks::{FollowUpChainId, HookBoundary, HookPayload, PromptProvenance, TurnStopStatus};
-    use warp_core::features::FeatureFlag;
     use warpui::{App, SingletonEntity};
 
     use super::{register_mock_response_stream, stream_init_event};
@@ -1145,7 +1144,6 @@ mod hooks {
     #[test]
     fn a_typed_prompt_fires_prompt_submit_and_a_custom_input_does_not() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             initialize_app_for_terminal_view(&mut app);
             let hooks = install_controller_hooks(&mut app);
             let terminal = add_window_with_terminal(&mut app, None);
@@ -1190,7 +1188,6 @@ mod hooks {
     #[test]
     fn a_clean_stream_end_with_no_actions_fires_response_complete_and_turn_stop() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             initialize_app_for_terminal_view(&mut app);
             let hooks = install_controller_hooks(&mut app);
             let terminal = add_window_with_terminal(&mut app, None);
@@ -1226,7 +1223,6 @@ mod hooks {
     #[test]
     fn a_stream_that_queues_a_tool_call_does_not_fire_turn_stop() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             initialize_app_for_terminal_view(&mut app);
             let hooks = install_controller_hooks(&mut app);
             let terminal = add_window_with_terminal(&mut app, None);
@@ -1265,7 +1261,6 @@ mod hooks {
     #[test]
     fn a_hook_follow_up_at_the_queue_head_is_not_steered_into_a_running_turn() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             initialize_app_for_terminal_view(&mut app);
             let hooks = install_controller_hooks(&mut app);
             let terminal = add_window_with_terminal(&mut app, None);

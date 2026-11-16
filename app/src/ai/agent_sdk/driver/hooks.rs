@@ -228,6 +228,12 @@ impl AgentDriver {
         let (sources, mut failures) =
             resolve_sources(&self.hooks.sources, &self.working_dir, repositories);
         failures.extend(load_into_registry(&sources, ctx)?);
+        #[cfg(feature = "local_tty")]
+        if HookRuntime::is_active(ctx) {
+            HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
+                runtime.capture_login_shell_path(ctx);
+            });
+        }
 
         let messenger = HookRuntime::as_ref(ctx).messenger();
         for failure in &failures {

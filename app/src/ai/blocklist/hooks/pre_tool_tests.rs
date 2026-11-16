@@ -14,7 +14,6 @@ use crate::ai::blocklist::hooks::test_utils::{
     HookTestApp, add_child_conversation, hook_test_app, install_test_hooks, set_working_directory,
     shell_action,
 };
-use crate::features::FeatureFlag;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 
 fn install_shell_deny(harness: &HookTestApp, app: &mut App, reason: &str) {
@@ -55,10 +54,15 @@ fn expect_dispatch(lookup: PreToolLookup) -> PendingDispatch {
 }
 
 #[test]
-fn lookup_is_inactive_when_the_flag_is_off() {
+fn lookup_is_inactive_before_the_registry_is_finalized() {
     App::test((), |mut app| async move {
         let harness = hook_test_app(&mut app);
-        install_shell_deny(&harness, &mut app, "no");
+        let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("Shell"));
+        harness
+            .hooks
+            .runner
+            .script(binding.id.clone(), ScriptedRunner::deny_with("no"));
+        app.update(|ctx| harness.hooks.stage_bindings(vec![binding], ctx));
         let action = shell_action("a1", "ls");
         let result = lookup(&mut app, &harness, &action, harness.conversation_id, false);
         assert!(matches!(result, PreToolLookup::Inactive));
@@ -73,7 +77,6 @@ fn lookup_is_inactive_when_the_flag_is_off() {
 #[test]
 fn lookup_is_inactive_when_no_binding_matches_the_action() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("Read"));
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
@@ -90,7 +93,6 @@ fn lookup_is_inactive_when_no_binding_matches_the_action() {
 #[test]
 fn lookup_skips_the_envelope_when_no_pre_tool_binding_exists() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let binding = test_binding(test_source_id("s"), HookBoundary::ToolResult, 0, None);
         app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
@@ -116,7 +118,6 @@ fn lookup_skips_the_envelope_when_no_pre_tool_binding_exists() {
 #[test]
 fn first_lookup_starts_a_dispatch_and_later_lookups_wait_on_it() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "blocked by policy");
         let action = shell_action("a1", "ls");
@@ -167,7 +168,6 @@ fn first_lookup_starts_a_dispatch_and_later_lookups_wait_on_it() {
 #[test]
 fn invalidation_stops_the_dispatch_and_drops_a_late_verdict() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let action = shell_action("a1", "ls");
@@ -204,7 +204,6 @@ fn invalidation_stops_the_dispatch_and_drops_a_late_verdict() {
 #[test]
 fn a_replaced_dispatch_cannot_resolve_the_entry_that_replaced_it() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let hold = harness.hooks.runner.hold();
@@ -256,7 +255,6 @@ fn a_replaced_dispatch_cannot_resolve_the_entry_that_replaced_it() {
 #[test]
 fn the_same_action_id_in_two_conversations_gets_two_entries() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let hold = harness.hooks.runner.hold();
@@ -317,7 +315,6 @@ fn the_same_action_id_in_two_conversations_gets_two_entries() {
 #[test]
 fn dropping_an_unfinished_dispatch_sets_its_cancel_flag() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let action = shell_action("a1", "ls");
@@ -360,7 +357,6 @@ fn dropping_an_unfinished_dispatch_sets_its_cancel_flag() {
 #[test]
 fn a_lookup_after_a_dropped_dispatch_starts_over() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let action = shell_action("a1", "ls");
@@ -422,7 +418,6 @@ fn resolve(app: &mut App, harness: &HookTestApp, action: &AIAgentAction) {
 #[test]
 fn a_changed_command_gets_a_new_dispatch_without_an_explicit_invalidate() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         resolve(&mut app, &harness, &shell_action("a1", "ls"));
@@ -459,7 +454,6 @@ fn a_changed_command_gets_a_new_dispatch_without_an_explicit_invalidate() {
 #[test]
 fn a_changed_working_directory_gets_a_new_dispatch() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let action = shell_action("a1", "ls");
@@ -503,7 +497,6 @@ fn a_changed_working_directory_gets_a_new_dispatch() {
 #[test]
 fn approval_carries_over_only_for_the_same_arguments_in_the_same_working_directory() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         set_working_directory(&mut app, &harness, Path::new("/work/one"));
@@ -631,7 +624,6 @@ fn record_run_events(app: &mut App) -> Rc<RefCell<Vec<(AIAgentActionId, String)>
 #[test]
 fn an_ask_on_an_interactive_surface_requires_confirmation() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let action = shell_action("a1", "ls");
         let decision = app.update(|ctx| {
@@ -664,7 +656,6 @@ fn an_ask_on_an_interactive_surface_requires_confirmation() {
 #[test]
 fn a_fail_run_asker_with_someone_to_answer_requires_confirmation_and_ends_nothing() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let events = record_run_events(&mut app);
         let action = shell_action("a1", "ls");
@@ -698,7 +689,6 @@ fn a_fail_run_asker_with_someone_to_answer_requires_confirmation_and_ends_nothin
 #[test]
 fn the_ask_notice_goes_out_once_per_verdict() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "unused");
         let action = shell_action("a1", "ls");
@@ -729,7 +719,6 @@ fn the_ask_notice_goes_out_once_per_verdict() {
 #[test]
 fn an_ask_for_a_local_child_requires_confirmation() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let child = add_child_conversation(&mut app, &harness);
         let events = record_run_events(&mut app);
@@ -767,7 +756,6 @@ fn an_ask_for_a_local_child_requires_confirmation() {
 #[test]
 fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
         let hooks = app.update(install_test_hooks);
         let conversation_id = AIConversationId::new();
@@ -821,7 +809,6 @@ fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies()
 #[test]
 fn cancelling_a_conversation_clears_only_its_entries() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         install_shell_deny(&harness, &mut app, "no");
         let mine = shell_action("mine", "ls");
@@ -907,7 +894,6 @@ mod floors {
     #[test]
     fn a_relative_path_to_a_protected_file_carries_the_protected_write_floor() {
         App::test((), |mut app| async move {
-            let _flag = FeatureFlag::AgentHooks.override_enabled(true);
             let harness = hook_test_app(&mut app);
             let (_project, root) = project(&mut app, &harness);
 
