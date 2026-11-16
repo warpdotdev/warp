@@ -1246,7 +1246,7 @@ impl FactoryRun {
         })
         .await;
         model.read(app, |model, _| {
-            AIAgentActionResult::clone(&model.get_action_result(&id).expect("a result"))
+            AIAgentActionResult::clone(model.get_action_result(&id).expect("a result"))
         })
     }
 
@@ -1255,6 +1255,15 @@ impl FactoryRun {
             .records()
             .into_iter()
             .filter(|record| record["type"] == kind)
+            .collect()
+    }
+
+    /// The `hook_diagnostic` records for sources that failed. The sample's `sessionStart` hook
+    /// also produces a warning, since model context is not supported yet.
+    fn load_errors(&self) -> Vec<Value> {
+        self.records_of("hook_diagnostic")
+            .into_iter()
+            .filter(|record| record["severity"] == "error")
             .collect()
     }
 }
@@ -1282,7 +1291,7 @@ fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
         let run = FactoryRun::new(&mut app);
         let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
         let _run_exit = started.expect("every declared source loads");
-        assert!(run.records_of("hook_diagnostic").is_empty());
+        assert!(run.load_errors().is_empty(), "{:?}", run.load_errors());
 
         run.stream_shell_call(&mut app, "rm-call", "rm -rf build");
         let result = run.result_for(&mut app, "rm-call").await;
@@ -1334,7 +1343,7 @@ fn a_missing_strict_entry_stops_the_run() {
         };
         assert_eq!(details.len(), 1, "{details:?}");
         assert!(details[0].contains("agents/missing/hooks"), "{details:?}");
-        let diagnostics = run.records_of("hook_diagnostic");
+        let diagnostics = run.load_errors();
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     });
 }
@@ -1349,7 +1358,7 @@ fn a_missing_entry_that_is_not_strict_is_reported_and_the_run_goes_on() {
         sources.push(worker_entry(&missing, HookSourceKind::FactoryWide, false));
         let (_driver, started) = run.start(&mut app, sources);
         let _run_exit = started.expect("a missing lenient entry does not stop the run");
-        let diagnostics = run.records_of("hook_diagnostic");
+        let diagnostics = run.load_errors();
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_eq!(diagnostics[0]["severity"], "error");
         assert!(
