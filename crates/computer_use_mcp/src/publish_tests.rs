@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::json;
 
@@ -78,7 +78,7 @@ async fn saving_to_a_directory_moves_the_video() {
 /// Writes an executable that stands in for the Warp CLI: it records its arguments next to itself
 /// and then runs `body`.
 #[cfg(unix)]
-fn fake_cli(directory: &Path, body: &str) -> PathBuf {
+fn fake_cli(directory: &Path, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
 
     let cli = directory.join("oz");
