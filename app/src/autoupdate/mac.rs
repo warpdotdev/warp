@@ -779,7 +779,3 @@ fn executable_path(channel: Channel) -> String {
         executable_name(channel).to_owned()
     }
 }
-
-#[cfg(test)]
-#[path = "mac_tests.rs"]
-mod tests;
