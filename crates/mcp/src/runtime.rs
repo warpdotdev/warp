@@ -177,6 +177,18 @@ fn challenge_parameter_names(www_authenticate: &str) -> Vec<&str> {
     names
 }
 
+/// The `User-Agent` sent to remote MCP servers.
+///
+/// reqwest sends no `User-Agent` by default, and some servers (e.g. Snowflake's
+/// managed MCP servers) reject such requests with a `400`.
+fn mcp_user_agent() -> String {
+    let app_id = warp_core::channel::ChannelState::app_id();
+    match warp_core::channel::ChannelState::app_version() {
+        Some(version) => format!("{app_id}/{version}"),
+        None => app_id.to_string(),
+    }
+}
+
 /// Builds a reqwest client with custom headers for MCP HTTP/SSE connections.
 #[allow(clippy::result_large_err)]
 pub fn build_client_with_headers(
@@ -185,6 +197,8 @@ pub fn build_client_with_headers(
     let header_map = build_header_map(headers);
 
     reqwest::Client::builder()
+        // Set before the configured headers so a user-supplied `User-Agent` wins.
+        .user_agent(mcp_user_agent())
         .default_headers(header_map)
         .build()
         .map_err(|e| {
@@ -385,19 +399,12 @@ pub async fn spawn_server(
                         );
                         serve_streamable_http(transport, &protocol, &logger).await
                     } else {
-                        let transport = if headers.is_empty() {
-                            rmcp::transport::StreamableHttpClientTransport::from_uri(
+                        let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+                            build_client_with_headers(&headers)?,
+                            rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
                                 sse_server.url.clone(),
-                            )
-                        } else {
-                            let client = build_client_with_headers(&headers)?;
-                            rmcp::transport::StreamableHttpClientTransport::with_client(
-                                client,
-                                rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
-                                    sse_server.url.clone(),
-                                ),
-                            )
-                        };
+                            ),
+                        );
                         serve_streamable_http(transport, &protocol, &logger).await
                     }
                 }
@@ -426,24 +433,15 @@ pub async fn spawn_server(
                 }
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
-                    let transport = if headers.is_empty() {
-                        crate::sse_transport::SseClientTransport::start(sse_server.url.clone())
-                            .await
-                            .map_err(|e| {
-                                rmcp::RmcpError::transport_creation::<ReqwestSseTransport>(e)
-                            })?
-                    } else {
-                        let client = build_client_with_headers(&headers)?;
-                        crate::sse_transport::SseClientTransport::start_with_client(
-                            client,
-                            crate::sse_transport::SseClientConfig {
-                                sse_endpoint: sse_server.url.clone().into(),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                        .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?
-                    };
+                    let transport = crate::sse_transport::SseClientTransport::start_with_client(
+                        build_client_with_headers(&headers)?,
+                        crate::sse_transport::SseClientConfig {
+                            sse_endpoint: sse_server.url.clone().into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?;
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
