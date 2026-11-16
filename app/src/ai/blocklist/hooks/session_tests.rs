@@ -220,13 +220,7 @@ fn a_conversation_with_exchanges_is_not_a_new_session() {
             });
         });
 
-        let wait = app.update(|ctx| {
-            barrier(
-                harness.conversation_id,
-                &harness.active_session,
-                ctx,
-            )
-        });
+        let wait = app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx));
         assert!(wait.is_none());
         let_background_work_settle(&mut app).await;
         assert_eq!(harness.hooks.adapter.encoded_count(), 0);
@@ -277,22 +271,10 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
         let hold = harness.hooks.runner.hold();
 
         let first = app
-            .update(|ctx| {
-                barrier(
-                    harness.conversation_id,
-                    &harness.active_session,
-                    ctx,
-                )
-            })
+            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
             .expect("the first request waits");
         let second = app
-            .update(|ctx| {
-                barrier(
-                    harness.conversation_id,
-                    &harness.active_session,
-                    ctx,
-                )
-            })
+            .update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx))
             .expect("the second request waits on the same hooks");
         settle(&mut app, |_| harness.hooks.runner.invocation_count() == 1).await;
         assert!(app.read(|ctx| {
@@ -314,12 +296,8 @@ fn a_second_request_while_the_hooks_run_waits_on_the_same_firing() {
         .await;
         assert_eq!(harness.hooks.runner.invocation_count(), 1);
         assert!(
-            app.update(|ctx| barrier(
-                harness.conversation_id,
-                &harness.active_session,
-                ctx,
-            ))
-            .is_none(),
+            app.update(|ctx| barrier(harness.conversation_id, &harness.active_session, ctx,))
+                .is_none(),
             "a conversation whose session started does not start it again"
         );
     });
@@ -397,13 +375,7 @@ fn viewer_and_transcript_conversations_do_not_fire_session_start() {
             })
         });
         for conversation_id in [viewer, transcript] {
-            let wait = app.update(|ctx| {
-                barrier(
-                    conversation_id,
-                    &harness.active_session,
-                    ctx,
-                )
-            });
+            let wait = app.update(|ctx| barrier(conversation_id, &harness.active_session, ctx));
             assert!(wait.is_none());
         }
         let_background_work_settle(&mut app).await;

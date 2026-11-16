@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::hooks::{
-    HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice,
-    HookNoticeKind, HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
+    HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice, HookNoticeKind,
+    HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;

@@ -143,11 +143,10 @@ pub(crate) fn barrier(
             conversation_id,
             SessionStartState::InFlight { done, sender },
         );
-        let dispatch = runtime.dispatcher().dispatch(
-            envelope,
-            snapshot,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let dispatch =
+            runtime
+                .dispatcher()
+                .dispatch(envelope, snapshot, Arc::new(AtomicBool::new(false)));
         ctx.spawn(dispatch, move |runtime, outcome, _| {
             let env = if outcome.cancelled {
                 Vec::new()

@@ -40,8 +40,8 @@ use self::tool_result::ShellCompletions;
 use self::turn::TurnStops;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
-use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::process_environment::InitialProcessEnvironment;
