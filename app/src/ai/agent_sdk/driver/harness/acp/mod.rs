@@ -595,7 +595,7 @@ impl AcpHarnessRunner {
                 {
                     return AgentDriverError::HarnessAuthCheckFailed {
                         harness: self.harness.to_string(),
-                        detail: rpc_error.message.clone(),
+                        detail: rpc_error.detail(),
                     };
                 }
                 let reason = format!("{error:#}");
