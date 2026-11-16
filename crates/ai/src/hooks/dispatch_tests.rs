@@ -15,7 +15,8 @@ use crate::agent::action_result::{AIAgentActionResultType, RequestCommandOutputR
 use crate::hooks::adapters::HookFormatAdapter;
 use crate::hooks::adapters::cursor::CursorAdapter;
 use crate::hooks::model::{
-    HookBoundary, HookPayload, HookSourceKind, HookSurface, HookVerdict, RunMetadata,
+    HookAsker, HookBoundary, HookOnAsk, HookPayload, HookSourceKind, HookSurface, HookVerdict,
+    RunMetadata,
 };
 use crate::hooks::notices::HookNoticeKind;
 use crate::hooks::test_util::{
@@ -84,6 +85,12 @@ fn snapshot(bindings: Vec<ActiveBinding>) -> Arc<RegistrySnapshot> {
     })
 }
 
+/// `active` with its source marked strict.
+fn strict(mut active: ActiveBinding) -> ActiveBinding {
+    active.policy.strict = true;
+    active
+}
+
 fn not_cancelled() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
@@ -92,7 +99,6 @@ fn dispatch(h: &Harness, envelope: HookEnvelope, bindings: Vec<ActiveBinding>) -
     block_on(h.dispatcher.dispatch(
         envelope,
         snapshot(bindings),
-        DispatchPolicy::default(),
         not_cancelled(),
     ))
 }
@@ -165,16 +171,12 @@ fn one_deny_binding_denies_with_its_reason() {
 }
 
 #[test]
-fn the_strict_policy_reaches_the_adapter() {
+fn a_strict_sources_setting_reaches_the_adapter() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
     block_on(h.dispatcher.dispatch(
         shell_envelope(),
-        snapshot(vec![active_binding(
-            binding,
-            h.adapter.clone(),
-        )]),
-        DispatchPolicy { strict: true },
+        snapshot(vec![strict(active_binding(binding, h.adapter.clone()))]),
         not_cancelled(),
     ));
     assert_eq!(
@@ -286,7 +288,6 @@ fn matching_bindings_run_at_the_same_time_and_merge_in_snapshot_order() {
                 .map(|binding| active_binding(binding, adapter.clone()))
                 .collect(),
         ),
-        DispatchPolicy::default(),
         not_cancelled(),
     ));
     let elapsed = started.elapsed();
@@ -358,7 +359,6 @@ fn cancelling_a_running_dispatch_discards_the_partial_result() {
                 .map(|binding| active_binding(binding, adapter.clone()))
                 .collect(),
         ),
-        DispatchPolicy::default(),
         cancel.clone(),
     );
     let trigger = cancel.clone();
@@ -396,6 +396,73 @@ fn cancelling_a_running_dispatch_discards_the_partial_result() {
     assert!(messenger.notices().is_empty(), "nothing partial was routed");
 }
 
+/// Every hook that asked is recorded with its own source's on-ask setting, whichever verdict
+/// won the merge.
+#[test]
+fn every_hook_that_asked_is_recorded_with_its_sources_on_ask_setting() {
+    let h = harness();
+    let source = test_source_id("s");
+    let bindings = (0..3)
+        .map(|index| test_binding(source.clone(), HookBoundary::ToolPre, index, None))
+        .collect::<Vec<_>>();
+    h.runner.script(
+        bindings[0].id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"ask"}"#),
+    );
+    h.runner.script(
+        bindings[1].id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"allow"}"#),
+    );
+    h.runner.script(
+        bindings[2].id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"ask"}"#),
+    );
+    let mut fail_run = active_binding(bindings[2].clone(), h.adapter.clone());
+    fail_run.policy.on_ask = HookOnAsk::FailRun;
+    let outcome = dispatch(
+        &h,
+        shell_envelope(),
+        vec![
+            active_binding(bindings[0].clone(), h.adapter.clone()),
+            active_binding(bindings[1].clone(), h.adapter.clone()),
+            fail_run,
+        ],
+    );
+
+    assert_eq!(outcome.effects.verdict, HookVerdict::Ask);
+    assert_eq!(
+        outcome.effects.askers,
+        vec![
+            HookAsker {
+                binding: bindings[0].id.clone(),
+                on_ask: HookOnAsk::Deny,
+            },
+            HookAsker {
+                binding: bindings[2].id.clone(),
+                on_ask: HookOnAsk::FailRun,
+            },
+        ]
+    );
+    assert!(outcome.effects.an_asker_fails_the_run());
+}
+
+#[test]
+fn askers_that_only_deny_do_not_fail_the_run() {
+    let h = harness();
+    let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    h.runner.script(
+        binding.id.clone(),
+        ScriptedRunner::exit_with(0, r#"{"verdict":"ask"}"#),
+    );
+    let outcome = dispatch(
+        &h,
+        shell_envelope(),
+        vec![active_binding(binding, h.adapter.clone())],
+    );
+    assert_eq!(outcome.effects.askers.len(), 1);
+    assert!(!outcome.effects.an_asker_fails_the_run());
+}
+
 #[test]
 fn a_cancel_flag_set_before_dispatch_runs_nothing() {
     let h = harness();
@@ -406,7 +473,6 @@ fn a_cancel_flag_set_before_dispatch_runs_nothing() {
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
         snapshot(vec![active_binding(binding, h.adapter.clone())]),
-        DispatchPolicy::default(),
         cancel.clone(),
     ));
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
@@ -555,7 +621,7 @@ fn defer_is_ignored_with_a_diagnostic_on_an_interactive_surface() {
 }
 
 #[test]
-fn defer_denies_under_the_strict_policy_on_an_interactive_surface() {
+fn defer_from_a_strict_source_denies_on_an_interactive_surface() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
     h.runner.script(
@@ -566,11 +632,7 @@ fn defer_denies_under_the_strict_policy_on_an_interactive_surface() {
     envelope.surface = HookSurface::Gui;
     let outcome = block_on(h.dispatcher.dispatch(
         envelope,
-        snapshot(vec![active_binding(
-            binding.clone(),
-            h.adapter.clone(),
-        )]),
-        DispatchPolicy { strict: true },
+        snapshot(vec![strict(active_binding(binding.clone(), h.adapter.clone()))]),
         not_cancelled(),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
@@ -650,10 +712,13 @@ mod failure_policy {
                 h.bindings
                     .iter()
                     .cloned()
-                    .map(|binding| active_binding(binding, adapter.clone()))
+                    .map(|binding| {
+                        let mut active = active_binding(binding, adapter.clone());
+                        active.policy.strict = strict;
+                        active
+                    })
                     .collect(),
             ),
-            DispatchPolicy { strict },
             not_cancelled(),
         ))
     }
@@ -711,6 +776,34 @@ mod failure_policy {
         );
         assert_eq!(run(&h, false).effects.verdict, HookVerdict::NoOpinion);
         assert_eq!(run(&h, true).effects.verdict, HookVerdict::Ask);
+    }
+
+    /// Two sources time out on the same command. Only the strict one's hook denies; the other
+    /// fails open as Cursor documents, whatever the strict source does.
+    #[test]
+    fn each_hook_is_judged_by_its_own_sources_strict_setting() {
+        let lax = cursor_harness(FAIL_OPEN);
+        let adapter: Arc<dyn HookFormatAdapter> = lax.adapter.clone();
+        let strict_config = lax
+            .adapter
+            .parse(FAIL_OPEN.as_bytes(), &test_source_id("strict/hooks.json"))
+            .expect("parses");
+        let strict_binding = lax.adapter.bindings(&strict_config).remove(0);
+        let lax_binding = lax.bindings[0].clone();
+        lax.runner.script(lax_binding.id.clone(), timed_out());
+        lax.runner.script(strict_binding.id.clone(), timed_out());
+
+        let mut strict_active = active_binding(strict_binding.clone(), adapter.clone());
+        strict_active.policy.strict = true;
+        let outcome = block_on(lax.dispatcher.dispatch(
+            shell_envelope(),
+            snapshot(vec![active_binding(lax_binding.clone(), adapter), strict_active]),
+            not_cancelled(),
+        ));
+
+        assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+        assert_eq!(outcome.effects.verdict_binding, Some(strict_binding.id));
+        assert_eq!(outcome.effects.reasons.len(), 1, "{:?}", outcome.effects.reasons);
     }
 
     #[test]

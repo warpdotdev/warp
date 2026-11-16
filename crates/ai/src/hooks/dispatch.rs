@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::hooks::adapters::{DeclaredBinding, DecodePolicy};
 use crate::hooks::model::{
-    DiagnosticSeverity, EffectKind, FailurePolicy, HookBindingId, HookBoundary, HookDiagnostic,
-    HookEffects, HookEnvelope, HookReason, HookSurface, HookVerdict, MergedEffects,
+    DiagnosticSeverity, EffectKind, FailurePolicy, HookAsker, HookBindingId, HookBoundary,
+    HookDiagnostic, HookEffects, HookEnvelope, HookReason, HookSurface, HookVerdict, MergedEffects,
     UnsupportedEffect, reduce_effects,
 };
 use crate::hooks::notices::{HookMessenger, HookNotice, HookNoticeKind};
@@ -26,15 +26,6 @@ const STDERR_TAIL_LOG_LIMIT: usize = 500;
 /// Reason reported when a fail-closed hook could not be given its input.
 pub const INPUT_NOT_ENCODABLE_DENY_REASON: &str =
     "The hook's input could not be prepared, so the hook did not run.";
-
-/// Run-wide choices the caller makes for every dispatch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DispatchPolicy {
-    /// The strict hook policy: every evaluation failure of a hook that runs before an operation
-    /// denies the operation, and schema-accepted `ask` values the vendor would ignore are
-    /// honored.
-    pub strict: bool,
-}
 
 /// What one hook process did, kept for logs and later diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +79,6 @@ impl HookDispatcher {
         &self,
         envelope: HookEnvelope,
         snapshot: Arc<RegistrySnapshot>,
-        policy: DispatchPolicy,
         cancel: Arc<AtomicBool>,
     ) -> BoxFuture<'static, DispatchOutcome> {
         let matching = snapshot
@@ -117,7 +107,6 @@ impl HookDispatcher {
                     &*messenger,
                     active,
                     &envelope,
-                    policy,
                     cancel.clone(),
                 )
             });
@@ -127,18 +116,22 @@ impl HookDispatcher {
 
             let mut invocations = Vec::with_capacity(matching.len());
             let mut ordered = Vec::with_capacity(matching.len());
+            let mut askers = Vec::new();
             for (active, (record, effects)) in matching.iter().zip(finished) {
                 invocations.extend(record);
-                ordered.push((
-                    active.binding.id.clone(),
-                    refuse_unhonorable_effects(
-                        &active.binding,
-                        envelope.boundary(),
-                        envelope.surface,
-                        policy,
-                        effects,
-                    ),
-                ));
+                let effects = refuse_unhonorable_effects(
+                    active,
+                    envelope.boundary(),
+                    envelope.surface,
+                    effects,
+                );
+                if effects.verdict == HookVerdict::Ask {
+                    askers.push(HookAsker {
+                        binding: active.binding.id.clone(),
+                        on_ask: active.policy.on_ask,
+                    });
+                }
+                ordered.push((active.binding.id.clone(), effects));
             }
 
             if cancel.load(Ordering::Acquire) {
@@ -156,7 +149,8 @@ impl HookDispatcher {
                 };
             }
 
-            let effects = reduce_effects(ordered);
+            let mut effects = reduce_effects(ordered);
+            effects.askers = askers;
             route_notices(&*messenger, &envelope, &effects);
             log::info!(
                 "hook dispatch: event={} action={} matched={} verdict={:?} halt={} duration_ms={}",
@@ -218,7 +212,6 @@ async fn run_binding(
     messenger: &dyn HookMessenger,
     active: &ActiveBinding,
     envelope: &HookEnvelope,
-    policy: DispatchPolicy,
     cancel: Arc<AtomicBool>,
 ) -> (Option<InvocationRecord>, HookEffects) {
     if cancel.load(Ordering::Acquire) {
@@ -265,7 +258,7 @@ async fn run_binding(
         &active.binding,
         &outcome,
         &DecodePolicy {
-            strict: policy.strict,
+            strict: active.policy.strict,
         },
     );
     let record = InvocationRecord {
@@ -397,7 +390,7 @@ fn unhonorable_channels(
     effects: &HookEffects,
     refusal: &Refusal,
     surface: HookSurface,
-    policy: DispatchPolicy,
+    strict: bool,
 ) -> Vec<(EffectKind, &'static str)> {
     let mut unhonorable = Vec::new();
     if effects.replacement_input.is_some() {
@@ -424,10 +417,10 @@ fn unhonorable_channels(
     }
     // `reduce_effects` reports a deferral it ignores, which is the vendor's "warn and ignore"
     // behavior for an interactive surface. On a headless surface nobody could resume the action
-    // later, and under the strict policy every unsupported control output denies, so before an
-    // operation the deferral is refused instead.
+    // later, and a strict source turns every unsupported control output into a denial, so before
+    // an operation the deferral is refused instead.
     if effects.verdict == HookVerdict::Defer
-        && (surface.is_headless() || policy.strict)
+        && (surface.is_headless() || strict)
         && !matches!(refusal, Refusal::ReportOnly)
     {
         unhonorable.push((EffectKind::Verdict, "defer the action for later"));
@@ -440,12 +433,12 @@ fn unhonorable_channels(
 /// that names the binding and the effect; afterwards it is reported. Model context, which this
 /// phase cannot deliver, is observational and only logged.
 fn refuse_unhonorable_effects(
-    binding: &DeclaredBinding,
+    active: &ActiveBinding,
     boundary: HookBoundary,
     surface: HookSurface,
-    policy: DispatchPolicy,
     mut effects: HookEffects,
 ) -> HookEffects {
+    let binding = &active.binding;
     if !effects.model_context.is_empty() {
         log::info!(
             "hook {} returned model context, which cannot be delivered yet; it was dropped",
@@ -454,7 +447,7 @@ fn refuse_unhonorable_effects(
     }
     let refusal = refusal_for(boundary);
     let returned = returned_field_words(&effects.unsupported);
-    let unhonorable = unhonorable_channels(&effects, &refusal, surface, policy);
+    let unhonorable = unhonorable_channels(&effects, &refusal, surface, active.policy.strict);
 
     let reported = effects
         .unsupported

@@ -49,8 +49,6 @@ pub struct RunFacts {
     /// No one can answer a confirmation request: an Oz run, a command-line run, or a hidden
     /// local child.
     pub is_headless: bool,
-    /// The strict hook policy is on for this run.
-    pub is_strict: bool,
 }
 
 /// Limits a hook can never loosen. Each one is a fact Warp's own permission check already
@@ -155,19 +153,14 @@ impl HookPermissionPolicy {
                 HookVerdict::Ask => {
                     Self::compose_ask(merged, run, warp.is_user_initiated, warp_alone.clone())
                 }
-                HookVerdict::Defer => {
-                    // Interactive surfaces follow the vendor's "warn and ignore" rule for a
-                    // deferral, unless the strict policy turns every unsupported control output
-                    // into a denial.
-                    if run.is_headless || run.is_strict {
-                        PermissionDecision::Deny {
-                            reason: default_reason(merged, DEFERRAL_UNSUPPORTED_DENY_REASON),
-                            cause: DenyCause::DeferralUnsupported,
-                        }
-                    } else {
-                        warp_alone.clone()
-                    }
-                }
+                // The dispatcher already applies each hook's own source settings to a deferral, and
+                // `reduce_effects` never merges one, so effects that came through it never reach
+                // this branch. It is a backstop: no source settings are known here, so a deferral
+                // that did arrive is denied rather than ignored.
+                HookVerdict::Defer => PermissionDecision::Deny {
+                    reason: default_reason(merged, DEFERRAL_UNSUPPORTED_DENY_REASON),
+                    cause: DenyCause::DeferralUnsupported,
+                },
                 HookVerdict::NoOpinion | HookVerdict::Allow => warp_alone.clone(),
             }
         };

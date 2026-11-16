@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_binding_id, test_source_id};
 use ai::hooks::{
-    APPROVAL_UNAVAILABLE_PREFIX, HookBoundary, HookNoticeKind, HookReason, HookVerdict,
+    APPROVAL_UNAVAILABLE_PREFIX, HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason,
+    HookVerdict,
 };
 use futures::executor::block_on;
 use warpui::App;
@@ -627,21 +628,21 @@ fn an_ask_for_a_hidden_child_denies_with_the_approval_unavailable_reason() {
 }
 
 #[test]
-fn fail_run_announces_an_unanswerable_ask_and_still_denies() {
+fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
         let child = add_child_conversation(&mut app, &harness);
-        app.update(|ctx| {
-            HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-                runtime.set_headless_ask_behavior(HeadlessAskBehavior::FailRun);
-            });
-        });
         let events = record_run_events(&mut app);
         let action = shell_action("a1", "ls");
+        let mut ask = ask_effects("check first");
+        ask.askers = vec![HookAsker {
+            binding: test_binding_id(test_source_id("s"), "tool.pre", 0),
+            on_ask: HookOnAsk::FailRun,
+        }];
         let decision = app.update(|ctx| {
             decide(
-                &ask_effects("check first"),
+                &ask,
                 warp_would_run(),
                 PermissionFloors::default(),
                 &action,
@@ -661,8 +662,9 @@ fn fail_run_announces_an_unanswerable_ask_and_still_denies() {
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].kind, HookNoticeKind::Denied);
 
-        // A hook's own deny is not an unanswerable ask; the run is not told to end.
-        let mut deny = ask_effects("no");
+        // An outright deny outranks the ask, so the run is not told to end even though a hook
+        // that asked wanted that.
+        let mut deny = ask.clone();
         deny.verdict = HookVerdict::Deny;
         app.update(|ctx| {
             decide(

@@ -16,7 +16,7 @@ use warp_util::path::ShellFamily;
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::envelope::{EnvelopeSite, envelope_for_tool_pre};
-use super::{HeadlessAskBehavior, HookRuntime, HookRuntimeEvent};
+use super::{HookRuntime, HookRuntimeEvent};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
 use crate::ai::blocklist::BlocklistAIPermissions;
@@ -292,7 +292,6 @@ pub(crate) fn begin_or_lookup(
         runtime.dispatcher().dispatch(
             envelope,
             snapshot,
-            runtime.dispatch_policy(),
             ticket.cancel.clone(),
         )
     });
@@ -349,9 +348,7 @@ pub(crate) fn decide(
     let runtime = HookRuntime::as_ref(ctx);
     let run = RunFacts {
         is_headless: runtime.is_headless_for(conversation_id, ctx),
-        is_strict: runtime.strict_policy().enabled,
     };
-    let headless_ask_behavior = runtime.headless_ask_behavior();
     let messenger = runtime.messenger();
 
     let decision = HookPermissionPolicy::compose(merged, warp, &floors, run);
@@ -363,15 +360,13 @@ pub(crate) fn decide(
                 kind: HookNoticeKind::Denied,
                 text: reason.text.clone(),
             });
-            let ends_the_run = match (cause, headless_ask_behavior) {
-                (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::FailRun) => true,
-                (DenyCause::ApprovalUnavailable, HeadlessAskBehavior::DenyWithReason)
-                | (
-                    DenyCause::Hook
-                    | DenyCause::RewriteUnsupported
-                    | DenyCause::DeferralUnsupported,
-                    HeadlessAskBehavior::DenyWithReason | HeadlessAskBehavior::FailRun,
-                ) => false,
+            // An outright deny outranks an ask, so only a denial for an unanswerable ask can end
+            // the run, and only when a hook that asked comes from a source that wants that.
+            let ends_the_run = match cause {
+                DenyCause::ApprovalUnavailable => merged.an_asker_fails_the_run(),
+                DenyCause::Hook | DenyCause::RewriteUnsupported | DenyCause::DeferralUnsupported => {
+                    false
+                }
             };
             if ends_the_run {
                 let reason = reason.text.clone();

@@ -563,11 +563,29 @@ pub struct MergedEffects {
     pub continuation_binding: Option<HookBindingId>,
     pub conflicts: Vec<String>,
     pub unsupported: Vec<UnsupportedEffect>,
+    /// Every hook whose own verdict was `ask`, in merge order, with its source's on-ask setting.
+    /// The dispatcher fills this in; [`reduce_effects`] leaves it empty because it does not see
+    /// sources.
+    pub askers: Vec<HookAsker>,
+}
+
+/// A hook that asked for approval, and what its source wants done when nobody can answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookAsker {
+    pub binding: HookBindingId,
+    pub on_ask: HookOnAsk,
 }
 
 impl MergedEffects {
     pub fn no_opinion() -> Self {
         Self::default()
+    }
+
+    /// Whether a hook that asked belongs to a source that ends the run when nobody can answer.
+    pub fn an_asker_fails_the_run(&self) -> bool {
+        self.askers
+            .iter()
+            .any(|asker| asker.on_ask == HookOnAsk::FailRun)
     }
 }
 

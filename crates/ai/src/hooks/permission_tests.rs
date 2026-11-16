@@ -56,12 +56,7 @@ fn all_floors() -> Vec<PermissionFloors> {
 fn all_runs() -> Vec<RunFacts> {
     let mut runs = Vec::new();
     for is_headless in [false, true] {
-        for is_strict in [false, true] {
-            runs.push(RunFacts {
-                is_headless,
-                is_strict,
-            });
-        }
+        runs.push(RunFacts { is_headless });
     }
     runs
 }
@@ -79,10 +74,7 @@ fn interactive() -> RunFacts {
 }
 
 fn headless() -> RunFacts {
-    RunFacts {
-        is_headless: true,
-        is_strict: false,
-    }
+    RunFacts { is_headless: true }
 }
 
 fn warp(can_auto_execute: bool, is_user_initiated: bool) -> WarpPermissionResult {
@@ -93,7 +85,7 @@ fn warp(can_auto_execute: bool, is_user_initiated: bool) -> WarpPermissionResult
     }
 }
 
-/// The whole matrix: verdict x Warp's three facts x headless x strict x floors. The invariants
+/// The whole matrix: verdict x Warp's three facts x headless x floors. The invariants
 /// hold in every cell; the hand-written tests below pin the interesting corners.
 #[test]
 fn the_policy_only_ever_tightens_warps_decision() {
@@ -152,23 +144,19 @@ fn the_policy_only_ever_tightens_warps_decision() {
                             ),
                         }
                     }
-                    // Defer: denied where nobody can resume it or under the strict policy,
-                    // ignored otherwise.
+                    // A deferral that reaches the policy is denied: the dispatcher already applied
+                    // each hook's source settings, so this is only a backstop.
                     if verdict == HookVerdict::Defer {
-                        if run.is_headless || run.is_strict {
-                            assert!(
-                                matches!(
-                                    decision,
-                                    PermissionDecision::Deny {
-                                        cause: DenyCause::DeferralUnsupported,
-                                        ..
-                                    }
-                                ),
-                                "{cell} -> {decision:?}"
-                            );
-                        } else {
-                            assert_eq!(decision, baseline, "{cell}");
-                        }
+                        assert!(
+                            matches!(
+                                decision,
+                                PermissionDecision::Deny {
+                                    cause: DenyCause::DeferralUnsupported,
+                                    ..
+                                }
+                            ),
+                            "{cell} -> {decision:?}"
+                        );
                     }
                 }
             }
@@ -362,24 +350,9 @@ fn ask_denies_on_a_headless_surface_even_for_a_user_initiated_revision() {
 }
 
 #[test]
-fn defer_is_ignored_interactively_and_denied_headless_or_under_the_strict_policy() {
+fn a_deferral_that_reaches_the_policy_is_denied_on_every_surface() {
     let effects = merged(HookVerdict::Defer, vec!["later"]);
-    assert_eq!(
-        HookPermissionPolicy::compose(
-            &effects,
-            warp(true, false),
-            &PermissionFloors::default(),
-            interactive()
-        ),
-        PermissionDecision::Execute
-    );
-    for run in [
-        headless(),
-        RunFacts {
-            is_headless: false,
-            is_strict: true,
-        },
-    ] {
+    for run in [interactive(), headless()] {
         let PermissionDecision::Deny { reason, cause } = HookPermissionPolicy::compose(
             &effects,
             warp(true, false),

@@ -20,11 +20,11 @@ pub use adapters::{
     DeclaredBinding, DecodePolicy, HookConfigError, HookDirectory, HookFormatAdapter,
     HookSourceLayout, ParsedHookConfig, source_layout,
 };
-pub use dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher, InvocationRecord};
+pub use dispatch::{DispatchOutcome, HookDispatcher, InvocationRecord};
 pub use model::{
     BindingCapabilities, CapabilityWarning, ContinuationRequest, DiagnosticSeverity,
     ENVELOPE_SCHEMA_VERSION, EffectKind, EmptyOutputPolicy, FailurePolicy, FollowUpChainId,
-    HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookBindingId, HookBoundary,
+    HOOK_FOLLOW_UP_CAP, HOOK_PROTOCOL_VERSION, HandlerKind, HookAsker, HookBindingId, HookBoundary,
     HookDiagnostic, HookEffects, HookEnvelope, HookExecutionHost, HookFormat, HookOnAsk,
     HookPayload, HookReason, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy,
     HookSurface, HookTurnId, HookVerdict, MalformedOutputPolicy, MatcherTarget, MergedEffects,

@@ -9,7 +9,6 @@ pub(crate) mod pre_tool;
 pub(crate) mod prompt;
 pub(crate) mod session;
 pub(crate) mod stream;
-pub(crate) mod strict_policy;
 #[cfg(test)]
 pub(crate) mod test_utils;
 pub(crate) mod tool_result;
@@ -23,7 +22,7 @@ use std::sync::atomic::AtomicBool;
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    DispatchPolicy, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner,
+    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner,
     RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_tty")]
@@ -32,7 +31,6 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
 use self::stream::StreamObserverState;
-use self::strict_policy::StrictHookPolicy;
 use crate::ai::agent::conversation::{AIConversationId, ConversationDriver};
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -42,28 +40,14 @@ use crate::process_environment::InitialProcessEnvironment;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 
-/// What a hook's `ask` does on a surface with no one to ask. Like [`StrictHookPolicy`], it is
-/// run configuration a launcher sets on the runtime; there is no setting for it.
-// Only the run's launcher, which is later work, selects anything but the default.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum HeadlessAskBehavior {
-    /// The action is denied with a reason that tells the model approval was unavailable.
-    #[default]
-    DenyWithReason,
-    /// The action is denied the same way, and the runtime also announces the refusal so the
-    /// run's owner can end the run.
-    FailRun,
-}
-
 /// Something the hook runtime did that the owner of the run may want to act on.
 // No production subscriber yet: the run driver that ends a run on an unanswerable `ask` is
 // later work.
 #[allow(dead_code)]
 pub enum HookRuntimeEvent {
-    /// A hook asked for confirmation on a surface with no one to ask, and the run asked to end
-    /// when that happens. The action was already denied with a reason the model can read; the
-    /// run's owner decides whether the run goes on.
+    /// A hook asked for confirmation on a surface with no one to ask, and a hook that asked
+    /// comes from a source set to end the run when that happens. The action was already denied
+    /// with a reason the model can read; the run's owner ends the run.
     ApprovalUnavailable {
         conversation_id: AIConversationId,
         action_id: AIAgentActionId,
@@ -77,8 +61,6 @@ pub struct HookRuntime {
     dispatcher: Arc<HookDispatcher>,
     messenger: Arc<dyn HookMessenger>,
     run_metadata: Option<RunMetadata>,
-    strict_policy: StrictHookPolicy,
-    headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
     #[cfg(test)]
@@ -96,8 +78,6 @@ impl HookRuntime {
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
             messenger,
             run_metadata: None,
-            strict_policy: StrictHookPolicy::default(),
-            headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
             #[cfg(test)]
@@ -110,14 +90,6 @@ impl HookRuntime {
     pub fn is_headless_for(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
         envelope::surface_for_conversation(conversation_id, self.run_metadata.is_some(), ctx)
             .is_headless()
-    }
-
-    pub fn strict_policy(&self) -> StrictHookPolicy {
-        self.strict_policy
-    }
-
-    pub fn headless_ask_behavior(&self) -> HeadlessAskBehavior {
-        self.headless_ask_behavior
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
@@ -198,18 +170,6 @@ impl HookRuntime {
         self.run_metadata = run_metadata;
     }
 
-    /// Turns the strict hook policy on or off for every dispatch from now on.
-    #[allow(dead_code)]
-    pub fn set_strict_policy(&mut self, policy: StrictHookPolicy) {
-        self.strict_policy = policy;
-    }
-
-    /// Chooses what a hook's `ask` does on a surface with no one to ask.
-    #[allow(dead_code)]
-    pub fn set_headless_ask_behavior(&mut self, behavior: HeadlessAskBehavior) {
-        self.headless_ask_behavior = behavior;
-    }
-
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.
     #[allow(dead_code)]
     pub fn set_messenger(&mut self, messenger: Arc<dyn HookMessenger>) {
@@ -220,17 +180,11 @@ impl HookRuntime {
         self.messenger = messenger;
     }
 
-    /// The run-wide choices every dispatch is made under.
-    pub(crate) fn dispatch_policy(&self) -> DispatchPolicy {
-        self.strict_policy.dispatch_policy()
-    }
-
     /// Starts a dispatch on the background executor and detaches its future.
     pub(crate) fn dispatch_detached(&self, envelope: HookEnvelope, ctx: &AppContext) {
         let future = self.dispatcher.dispatch(
             envelope,
             self.snapshot(ctx),
-            self.dispatch_policy(),
             Arc::new(AtomicBool::new(false)),
         );
         ctx.background_executor()

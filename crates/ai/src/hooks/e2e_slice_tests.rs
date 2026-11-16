@@ -20,7 +20,7 @@ use tempfile::TempDir;
 
 use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::HookConfigError;
-use crate::hooks::dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher};
+use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
 use crate::hooks::model::{
     HookBoundary, HookEnvelope, HookPayload, HookSourceKind, HookSourcePolicy, HookVerdict,
 };
@@ -94,7 +94,6 @@ impl Harness {
         block_on(self.dispatcher.dispatch(
             shell_envelope(command, self.dir.path()),
             self.registry.snapshot(),
-            DispatchPolicy::default(),
             Arc::new(AtomicBool::new(false)),
         ))
     }
@@ -287,7 +286,6 @@ fn a_repository_hook_runs_from_the_repository_root() {
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("git push", repo.path()),
         registry.snapshot(),
-        DispatchPolicy::default(),
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
