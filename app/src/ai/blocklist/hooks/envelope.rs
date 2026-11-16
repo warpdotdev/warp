@@ -114,7 +114,7 @@ pub(super) fn surface(has_run_metadata: bool, ctx: &AppContext) -> HookSurface {
         return HookSurface::CliRun;
     }
     let mode = AppExecutionMode::as_ref(ctx);
-    if mode.is_autonomous() {
+    if mode.is_headless() {
         if has_run_metadata {
             HookSurface::OzRun
         } else {
@@ -128,9 +128,8 @@ pub(super) fn surface(has_run_metadata: bool, ctx: &AppContext) -> HookSurface {
 }
 
 /// The surface `conversation_id` fires boundaries from. A child agent conversation in a desktop
-/// or TUI process is a hidden local child: nobody can see or approve its actions, even though
-/// the process itself is interactive. Runs keep their process surface, since a remote child is
-/// an Oz run of its own.
+/// or TUI process is a local child even when its pane is currently hidden. Runs keep their
+/// process surface, since a remote child is an Oz run of its own.
 pub(super) fn surface_for_conversation(
     conversation_id: AIConversationId,
     has_run_metadata: bool,

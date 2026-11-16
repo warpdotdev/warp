@@ -94,6 +94,7 @@ impl Harness {
         block_on(self.dispatcher.dispatch(
             shell_envelope(command, self.dir.path()),
             self.registry.snapshot(),
+            false,
             Arc::new(AtomicBool::new(false)),
         ))
     }
@@ -286,6 +287,7 @@ fn a_repository_hook_runs_from_the_repository_root() {
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("git push", repo.path()),
         registry.snapshot(),
+        false,
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);

@@ -79,6 +79,7 @@ impl HookDispatcher {
         &self,
         envelope: HookEnvelope,
         snapshot: Arc<RegistrySnapshot>,
+        is_headless: bool,
         cancel: Arc<AtomicBool>,
     ) -> BoxFuture<'static, DispatchOutcome> {
         let matching = snapshot
@@ -116,7 +117,7 @@ impl HookDispatcher {
                 let effects = refuse_unhonorable_effects(
                     active,
                     envelope.boundary(),
-                    envelope.surface,
+                    is_headless,
                     effects,
                 );
                 if effects.verdict == HookVerdict::Ask {
@@ -383,7 +384,7 @@ fn returned_field_words(adapter_unsupported: &[UnsupportedEffect]) -> Vec<&'stat
 fn unhonorable_channels(
     effects: &HookEffects,
     refusal: &Refusal,
-    surface: HookSurface,
+    is_headless: bool,
     strict: bool,
 ) -> Vec<(EffectKind, &'static str)> {
     let mut unhonorable = Vec::new();
@@ -414,7 +415,7 @@ fn unhonorable_channels(
     // later, and a strict source turns every unsupported control output into a denial, so before
     // an operation the deferral is refused instead.
     if effects.verdict == HookVerdict::Defer
-        && (surface.is_headless() || strict)
+        && (is_headless || strict)
         && !matches!(refusal, Refusal::ReportOnly)
     {
         unhonorable.push((EffectKind::Verdict, "defer the action for later"));
@@ -429,7 +430,7 @@ fn unhonorable_channels(
 fn refuse_unhonorable_effects(
     active: &ActiveBinding,
     boundary: HookBoundary,
-    surface: HookSurface,
+    is_headless: bool,
     mut effects: HookEffects,
 ) -> HookEffects {
     let binding = &active.binding;
@@ -441,7 +442,8 @@ fn refuse_unhonorable_effects(
     }
     let refusal = refusal_for(boundary);
     let returned = returned_field_words(&effects.unsupported);
-    let unhonorable = unhonorable_channels(&effects, &refusal, surface, active.policy.strict);
+    let unhonorable =
+        unhonorable_channels(&effects, &refusal, is_headless, active.policy.strict);
 
     let reported = effects
         .unsupported

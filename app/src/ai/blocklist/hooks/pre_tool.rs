@@ -278,6 +278,7 @@ pub(crate) fn begin_or_lookup(
         action_id: action.id.clone(),
         cancel: Arc::new(AtomicBool::new(false)),
     };
+    let is_headless = runtime.as_ref(ctx).is_headless(ctx);
     let dispatch = runtime.update(ctx, |runtime, _| {
         runtime.pre_tool_verdicts.entries.insert(
             action_key,
@@ -291,7 +292,7 @@ pub(crate) fn begin_or_lookup(
         );
         runtime
             .dispatcher()
-            .dispatch(envelope, snapshot, ticket.cancel.clone())
+            .dispatch(envelope, snapshot, is_headless, ticket.cancel.clone())
     });
     let mut guard = CancelOnDrop(Some(ticket.cancel.clone()));
     let future = async move {
@@ -345,7 +346,7 @@ pub(crate) fn decide(
 ) -> PermissionDecision {
     let runtime = HookRuntime::as_ref(ctx);
     let run = RunFacts {
-        is_headless: runtime.is_headless_for(conversation_id, ctx),
+        is_headless: runtime.is_headless(ctx),
     };
     let messenger = runtime.messenger();
 

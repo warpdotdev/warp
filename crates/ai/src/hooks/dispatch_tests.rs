@@ -96,9 +96,18 @@ fn not_cancelled() -> Arc<AtomicBool> {
 }
 
 fn dispatch(h: &Harness, envelope: HookEnvelope, bindings: Vec<ActiveBinding>) -> DispatchOutcome {
+    dispatch_with_headlessness(h, envelope, bindings, false)
+}
+
+fn dispatch_with_headlessness(
+    h: &Harness,
+    envelope: HookEnvelope,
+    bindings: Vec<ActiveBinding>,
+    is_headless: bool,
+) -> DispatchOutcome {
     block_on(
         h.dispatcher
-            .dispatch(envelope, snapshot(bindings), not_cancelled()),
+            .dispatch(envelope, snapshot(bindings), is_headless, not_cancelled()),
     )
 }
 
@@ -176,6 +185,7 @@ fn a_strict_sources_setting_reaches_the_adapter() {
     block_on(h.dispatcher.dispatch(
         shell_envelope(),
         snapshot(vec![strict(active_binding(binding, h.adapter.clone()))]),
+        false,
         not_cancelled(),
     ));
     assert_eq!(
@@ -288,6 +298,7 @@ fn matching_bindings_run_at_the_same_time_and_merge_in_snapshot_order() {
                     .map(|binding| active_binding(binding, adapter.clone()))
                     .collect(),
             ),
+            false,
             not_cancelled(),
         ),
     );
@@ -360,6 +371,7 @@ fn cancelling_a_running_dispatch_discards_the_partial_result() {
                 .map(|binding| active_binding(binding, adapter.clone()))
                 .collect(),
         ),
+        false,
         cancel.clone(),
     );
     let trigger = cancel.clone();
@@ -474,6 +486,7 @@ fn a_cancel_flag_set_before_dispatch_runs_nothing() {
     let outcome = block_on(h.dispatcher.dispatch(
         shell_envelope(),
         snapshot(vec![active_binding(binding, h.adapter.clone())]),
+        false,
         cancel.clone(),
     ));
     assert_eq!(outcome.effects, MergedEffects::no_opinion());
@@ -568,7 +581,7 @@ fn a_continuation_request_before_a_tool_runs_denies_it() {
 }
 
 #[test]
-fn defer_denies_on_a_headless_surface_before_a_tool_runs() {
+fn defer_denies_in_a_headless_process_before_a_tool_runs() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
     h.runner.script(
@@ -577,10 +590,11 @@ fn defer_denies_on_a_headless_surface_before_a_tool_runs() {
     );
     let mut envelope = shell_envelope();
     envelope.surface = HookSurface::OzRun;
-    let outcome = dispatch(
+    let outcome = dispatch_with_headlessness(
         &h,
         envelope,
         vec![active_binding(binding.clone(), h.adapter.clone())],
+        true,
     );
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
     assert_eq!(outcome.effects.verdict_binding, Some(binding.id));
@@ -593,7 +607,7 @@ fn defer_denies_on_a_headless_surface_before_a_tool_runs() {
 }
 
 #[test]
-fn defer_is_ignored_with_a_diagnostic_on_an_interactive_surface() {
+fn defer_is_ignored_with_a_diagnostic_for_an_interactive_local_child() {
     let h = harness();
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
     h.runner.script(
@@ -601,7 +615,7 @@ fn defer_is_ignored_with_a_diagnostic_on_an_interactive_surface() {
         ScriptedRunner::exit_with(0, r#"{"verdict":"defer"}"#),
     );
     let mut envelope = shell_envelope();
-    envelope.surface = HookSurface::Gui;
+    envelope.surface = HookSurface::LocalChild;
     let outcome = dispatch(
         &h,
         envelope,
@@ -628,6 +642,7 @@ fn defer_from_a_strict_source_denies_on_an_interactive_surface() {
             binding.clone(),
             h.adapter.clone(),
         ))]),
+        false,
         not_cancelled(),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
@@ -712,6 +727,7 @@ mod failure_policy {
                         })
                         .collect(),
                 ),
+                false,
                 not_cancelled(),
             ),
         )
@@ -799,6 +815,7 @@ mod failure_policy {
                 active_binding(lax_binding.clone(), adapter),
                 strict_active,
             ]),
+            false,
             not_cancelled(),
         ));
 

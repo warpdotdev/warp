@@ -27,6 +27,7 @@ use ai::hooks::{
 };
 #[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
+use warp_core::execution_mode::AppExecutionMode;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use self::pre_tool::PreToolVerdictCache;
@@ -85,11 +86,9 @@ impl HookRuntime {
         }
     }
 
-    /// Whether nobody can answer a confirmation request for `conversation_id`: the process is a
-    /// run, or the conversation is a hidden local child.
-    pub fn is_headless_for(&self, conversation_id: AIConversationId, ctx: &AppContext) -> bool {
-        envelope::surface_for_conversation(conversation_id, self.run_metadata.is_some(), ctx)
-            .is_headless()
+    /// Whether this process has no interactive surface where a user can respond.
+    pub fn is_headless(&self, ctx: &AppContext) -> bool {
+        AppExecutionMode::as_ref(ctx).is_headless()
     }
 
     /// Whether the flag is on and the runtime is registered. True even when no binding is active.
@@ -185,6 +184,7 @@ impl HookRuntime {
         let future = self.dispatcher.dispatch(
             envelope,
             self.snapshot(ctx),
+            self.is_headless(ctx),
             Arc::new(AtomicBool::new(false)),
         );
         ctx.background_executor()

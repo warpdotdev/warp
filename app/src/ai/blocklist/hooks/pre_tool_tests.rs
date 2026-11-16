@@ -4,18 +4,20 @@ use std::rc::Rc;
 
 use ai::hooks::test_util::{ScriptedRunner, test_binding, test_binding_id, test_source_id};
 use ai::hooks::{
-    APPROVAL_UNAVAILABLE_PREFIX, HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason,
-    HookVerdict,
+    HookAsker, HookBoundary, HookNoticeKind, HookOnAsk, HookReason, HookVerdict,
 };
 use futures::executor::block_on;
+use warp_core::execution_mode::ExecutionMode;
 use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::hooks::test_utils::{
-    HookTestApp, add_child_conversation, hook_test_app, set_working_directory, shell_action,
+    HookTestApp, add_child_conversation, hook_test_app, install_test_hooks, set_working_directory,
+    shell_action,
 };
 use crate::features::FeatureFlag;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 
 fn install_shell_deny(harness: &HookTestApp, app: &mut App, reason: &str) {
     let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, Some("Shell"));
@@ -727,7 +729,7 @@ fn the_ask_notice_goes_out_once_per_verdict() {
 }
 
 #[test]
-fn an_ask_for_a_hidden_child_denies_with_the_approval_unavailable_reason() {
+fn an_ask_for_a_local_child_requires_confirmation() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = hook_test_app(&mut app);
@@ -744,21 +746,22 @@ fn an_ask_for_a_hidden_child_denies_with_the_approval_unavailable_reason() {
                 ctx,
             )
         });
-        let PermissionDecision::Deny { reason, cause } = decision else {
-            panic!("expected a denial, got {decision:?}");
+        let PermissionDecision::RequireConfirmation {
+            reason: Some(reason),
+        } = decision
+        else {
+            panic!("expected a confirmation step, got {decision:?}");
         };
-        assert_eq!(cause, DenyCause::ApprovalUnavailable);
-        assert!(reason.text.starts_with(APPROVAL_UNAVAILABLE_PREFIX));
-        assert!(reason.text.contains("check first"));
+        assert_eq!(reason.text, "check first");
 
         let notices = harness.hooks.messenger.notices();
         assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0].kind, HookNoticeKind::Denied);
+        assert_eq!(notices[0].kind, HookNoticeKind::Warning);
         assert_eq!(notices[0].conversation_id, child);
         assert_eq!(notices[0].text, reason.text);
         assert!(
             events.borrow().is_empty(),
-            "denying with a reason does not announce anything to the run"
+            "requiring confirmation does not announce anything to the run"
         );
     });
 }
@@ -767,8 +770,9 @@ fn an_ask_for_a_hidden_child_denies_with_the_approval_unavailable_reason() {
 fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let harness = hook_test_app(&mut app);
-        let child = add_child_conversation(&mut app, &harness);
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::Sdk, false);
+        let hooks = app.update(install_test_hooks);
+        let conversation_id = AIConversationId::new();
         let events = record_run_events(&mut app);
         let action = shell_action("a1", "ls");
         let mut ask = ask_effects("check first");
@@ -782,7 +786,7 @@ fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies()
                 warp_would_run(),
                 PermissionFloors::default(),
                 &action,
-                child,
+                conversation_id,
                 ctx,
             )
         });
@@ -794,7 +798,7 @@ fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies()
             events.borrow().as_slice(),
             &[(action.id.clone(), reason.text.clone())]
         );
-        let notices = harness.hooks.messenger.notices();
+        let notices = hooks.messenger.notices();
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].kind, HookNoticeKind::Denied);
 
@@ -808,7 +812,7 @@ fn an_asker_set_to_fail_the_run_announces_an_unanswerable_ask_and_still_denies()
                 warp_would_run(),
                 PermissionFloors::default(),
                 &action,
-                child,
+                conversation_id,
                 ctx,
             )
         });
