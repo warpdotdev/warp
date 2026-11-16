@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::hooks::{
-    DispatchPolicy, HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice,
+    HookBoundary, HookDispatcher, HookEnvelope, HookMessenger, HookNotice,
     HookNoticeKind, HookVerdict, MergedEffects, PromptProvenance, RegistrySnapshot,
 };
 use futures::FutureExt;
@@ -113,7 +113,6 @@ struct PromptDispatch {
     envelope: HookEnvelope,
     dispatcher: Arc<HookDispatcher>,
     snapshot: Arc<RegistrySnapshot>,
-    policy: DispatchPolicy,
     messenger: Arc<dyn HookMessenger>,
 }
 
@@ -194,7 +193,6 @@ fn prompt_dispatch(
         envelope,
         dispatcher: runtime.dispatcher(),
         snapshot,
-        policy: runtime.dispatch_policy(),
         messenger: runtime.messenger(),
     })
 }
@@ -210,14 +208,13 @@ async fn run_prompt_dispatch(
         mut envelope,
         dispatcher,
         snapshot,
-        policy,
         messenger,
     } = dispatch;
     if let Some(env) = session_env {
         envelope.session_env = env;
     }
     let outcome = dispatcher
-        .dispatch(envelope, snapshot, policy, cancel.clone())
+        .dispatch(envelope, snapshot, cancel.clone())
         .await;
     if outcome.cancelled || cancel.load(Ordering::Acquire) {
         return PromptDecision::Cancelled;

@@ -202,13 +202,12 @@ pub(crate) fn start_turn_stop(
     }
     HookRuntime::handle(ctx).update(ctx, |runtime, ctx| {
         let snapshot = runtime.snapshot(ctx);
-        let policy = runtime.dispatch_policy();
         let held = runtime.turn_stops.held.get_mut(&conversation_id)?;
         let PendingTurnStop { envelope, timeout } = held.pending.take()?;
         let ticket = held.cancel.clone();
         let dispatch = runtime
             .dispatcher()
-            .dispatch(envelope, snapshot, policy, ticket.clone());
+            .dispatch(envelope, snapshot, ticket.clone());
         Some(
             async move {
                 let outcome = futures::select_biased! {

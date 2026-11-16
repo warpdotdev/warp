@@ -82,7 +82,6 @@ impl SessionStarts {
 /// hooks finish or the longest matching timeout passes, whichever comes first. `None` means there
 /// is nothing to wait for: hooks are off, no session hook applies, the hooks already ran, or the
 /// conversation is not new.
-///
 pub(crate) fn barrier(
     conversation_id: AIConversationId,
     active_session: &ModelHandle<ActiveSession>,
@@ -147,7 +146,6 @@ pub(crate) fn barrier(
         let dispatch = runtime.dispatcher().dispatch(
             envelope,
             snapshot,
-            runtime.dispatch_policy(),
             Arc::new(AtomicBool::new(false)),
         );
         ctx.spawn(dispatch, move |runtime, outcome, _| {
