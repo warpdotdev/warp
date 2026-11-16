@@ -563,6 +563,32 @@ fn approval_carries_over_only_for_the_same_arguments_in_the_same_working_directo
                 is_user_initiated: false,
             })
         );
+
+        // The command changed before the verdict arrived; it needs a new approval too.
+        let approved = shell_action("a3", "ls");
+        drop(expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &approved,
+            harness.conversation_id,
+            true,
+        )));
+        let edited = shell_action("a3", "ls -la");
+        let restarted = expect_dispatch(lookup(
+            &mut app,
+            &harness,
+            &edited,
+            harness.conversation_id,
+            false,
+        ));
+        let outcome = block_on(restarted.future);
+        assert_eq!(
+            app.update(|ctx| on_resolved(&restarted.ticket, outcome, ctx)),
+            Some(Resumption {
+                conversation_id: harness.conversation_id,
+                is_user_initiated: false,
+            })
+        );
     });
 }
 
@@ -630,6 +656,41 @@ fn an_ask_on_an_interactive_surface_requires_confirmation() {
         assert_eq!(notices[0].kind, HookNoticeKind::Warning);
         assert_eq!(notices[0].text, "check first");
         assert_eq!(notices[0].action_id, Some(action.id.clone()));
+    });
+}
+
+/// Where someone can answer, a hook that asked from a `fail_run` source still gets a
+/// confirmation step, and nothing tells the run to end.
+#[test]
+fn a_fail_run_asker_with_someone_to_answer_requires_confirmation_and_ends_nothing() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let harness = hook_test_app(&mut app);
+        let events = record_run_events(&mut app);
+        let action = shell_action("a1", "ls");
+        let mut ask = ask_effects("check first");
+        ask.askers = vec![HookAsker {
+            binding: test_binding_id(test_source_id("s"), "tool.pre", 0),
+            on_ask: HookOnAsk::FailRun,
+        }];
+        let decision = app.update(|ctx| {
+            decide(
+                &ask,
+                warp_would_run(),
+                PermissionFloors::default(),
+                &action,
+                harness.conversation_id,
+                ctx,
+            )
+        });
+        assert!(
+            matches!(
+                decision,
+                PermissionDecision::RequireConfirmation { reason: Some(_) }
+            ),
+            "{decision:?}"
+        );
+        assert!(events.borrow().is_empty());
     });
 }
 

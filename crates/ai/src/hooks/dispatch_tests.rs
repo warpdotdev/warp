@@ -759,6 +759,10 @@ mod failure_policy {
         let outcome = run(&h, true);
         assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
         assert!(outcome.effects.reasons[0].text.contains("timed out"));
+        assert!(
+            outcome.effects.askers.is_empty(),
+            "a strict hook that timed out denies; it did not ask"
+        );
     }
 
     #[test]
