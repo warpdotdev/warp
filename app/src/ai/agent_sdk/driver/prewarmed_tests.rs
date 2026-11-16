@@ -525,10 +525,11 @@ fn a_standby_loads_hooks_only_after_it_claims_a_task() {
         let is_finalized =
             |app: &App| app.read(|ctx| ai::hooks::HookRegistry::as_ref(ctx).is_finalized());
         let foreground = driver.update(&mut app, |_, ctx| ctx.spawner());
-        let setup_events = crate::ai::agent_sdk::setup_observability::SetupClientEventReporter::standby(
-            std::sync::Arc::new(MockAIClient::new()),
-            app.background_executor(),
-        );
+        let setup_events =
+            crate::ai::agent_sdk::setup_observability::SetupClientEventReporter::standby(
+                std::sync::Arc::new(MockAIClient::new()),
+                app.background_executor(),
+            );
         AgentDriver::prepare_resources(
             &foreground,
             warp_cli::agent::Harness::Oz,
