@@ -1414,7 +1414,6 @@ fn an_ask_from_a_fail_run_entry_ends_the_factory_run() {
 #[test]
 fn an_ask_from_a_deny_entry_is_denied_and_the_run_goes_on() {
     App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let run = FactoryRun::new(&mut app);
         let (_driver, started) =
             run.start(&mut app, FactoryRun::declared_sources_with(HookOnAsk::Deny));

@@ -1889,6 +1889,7 @@ fn hook_setup_records_the_run_and_its_surface() {
                 driver.task_id = Some(task_id);
                 driver.parent_run_id = Some("parent-run".to_owned());
                 driver.hooks.surface = surface;
+                driver.hooks.sources = vec![worker_hook_source(temp.path())];
                 driver.prepare_hooks_for_run(ctx);
             });
             app.read(|ctx| {
@@ -1900,6 +1901,29 @@ fn hook_setup_records_the_run_and_its_surface() {
                 assert_eq!(runtime.run_surface(), Some(surface));
             });
         }
+    });
+}
+
+/// A run with no hooks records nothing on the hook runtime and keeps its messenger, so it adds no
+/// subscription and writes nothing to the run's output.
+#[test]
+fn hook_setup_does_nothing_for_a_run_with_no_hooks() {
+    App::test((), |mut app| async move {
+        let temp = TempDir::new().unwrap();
+        let (driver, _terminal, hooks) = driver_with_hooks(&mut app, temp.path());
+        driver.update(&mut app, |driver, ctx| {
+            driver.task_id = Some(HOOK_TASK_ID.parse().unwrap());
+            driver.hooks.surface = RunSurface::Oz;
+            driver.prepare_hooks_for_run(ctx);
+        });
+        app.read(|ctx| {
+            let runtime = HookRuntime::as_ref(ctx);
+            assert!(runtime.run_metadata().is_none());
+            assert!(std::ptr::addr_eq(
+                Arc::as_ptr(&runtime.messenger()),
+                Arc::as_ptr(&hooks.messenger),
+            ));
+        });
     });
 }
 

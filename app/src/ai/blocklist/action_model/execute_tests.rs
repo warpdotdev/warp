@@ -414,50 +414,58 @@ mod hooks {
     }
 
     #[test]
-    fn with_an_empty_registry_events_match_a_run_with_no_hooks() {
+    fn a_finalized_empty_registry_behaves_like_one_never_finalized() {
         App::test((), |mut app| async move {
             let harness = hook_test_app(&mut app);
             let (executor, events) = build_executor(&mut app, &harness);
 
-            let init_off = init_project_action("id-init-off");
-            let shell_off = shell_action("id-shell-off", "ls");
-            let init_off_result = try_execute(
+            let init_never_finalized = init_project_action("id-init-never-finalized");
+            let shell_never_finalized = shell_action("id-shell-never-finalized", "ls");
+            let init_never_finalized_result = try_execute(
                 &mut app,
                 &executor,
-                &init_off,
+                &init_never_finalized,
                 harness.conversation_id,
                 false,
             );
-            let shell_off_result = try_execute(
+            let shell_never_finalized_result = try_execute(
                 &mut app,
                 &executor,
-                &shell_off,
-                harness.conversation_id,
-                false,
-            );
-
-            let init_on = init_project_action("id-init-on");
-            let shell_on = shell_action("id-shell-on", "ls");
-            let init_on_result = try_execute(
-                &mut app,
-                &executor,
-                &init_on,
-                harness.conversation_id,
-                false,
-            );
-            let shell_on_result = try_execute(
-                &mut app,
-                &executor,
-                &shell_on,
+                &shell_never_finalized,
                 harness.conversation_id,
                 false,
             );
 
-            assert!(matches!(init_off_result, TryExecuteResult::ExecutedSync));
-            assert!(matches!(init_on_result, TryExecuteResult::ExecutedSync));
-            assert_eq!(shapes(&events, &init_off), shapes(&events, &init_on));
-            assert_eq!(reason_of(&shell_off_result), reason_of(&shell_on_result));
-            assert_eq!(shapes(&events, &shell_off), shapes(&events, &shell_on));
+            // A run with no hooks finalizes an empty registry; a process that never runs one
+            // (the GUI, the TUI) never finalizes it. Both must behave as if hooks did not exist.
+            app.update(|ctx| {
+                use warpui::SingletonEntity as _;
+                ai::hooks::HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                    registry.finalize().expect("finalizes once");
+                })
+            });
+            let init_finalized_empty = init_project_action("id-init-finalized-empty");
+            let shell_finalized_empty = shell_action("id-shell-finalized-empty", "ls");
+            let init_finalized_empty_result = try_execute(
+                &mut app,
+                &executor,
+                &init_finalized_empty,
+                harness.conversation_id,
+                false,
+            );
+            let shell_finalized_empty_result = try_execute(
+                &mut app,
+                &executor,
+                &shell_finalized_empty,
+                harness.conversation_id,
+                false,
+            );
+
+            assert!(matches!(init_never_finalized_result, TryExecuteResult::ExecutedSync));
+            assert!(matches!(init_finalized_empty_result, TryExecuteResult::ExecutedSync));
+            assert_eq!(shapes(&events, &init_never_finalized), shapes(&events, &init_finalized_empty));
+            assert_eq!(reason_of(&shell_never_finalized_result), reason_of(&shell_finalized_empty_result));
+            assert_eq!(shapes(&events, &shell_never_finalized), shapes(&events, &shell_finalized_empty));
 
             let_background_work_settle(&mut app).await;
             assert_eq!(harness.hooks.adapter.encoded_count(), 0);
