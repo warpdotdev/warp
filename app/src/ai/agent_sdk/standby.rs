@@ -91,6 +91,9 @@ async fn prepare_and_wait(
     foreground: ModelSpawner<AgentDriverRunner>,
     sandbox_id: String,
 ) -> anyhow::Result<()> {
+    let supports_deferred_repositories = foreground
+        .spawn(|_, _| FeatureFlag::FactoryDeferredRepositories.is_enabled())
+        .await?;
     let api = foreground
         .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_prewarmed_sandbox_client())
         .await?;
@@ -101,7 +104,9 @@ async fn prepare_and_wait(
         })
         .await?;
 
-    let config = api.fetch_configuration(&sandbox_id).await?;
+    let config = api
+        .fetch_configuration(&sandbox_id, supports_deferred_repositories)
+        .await?;
     anyhow::ensure!(
         config.sandbox_id == sandbox_id,
         "Standby configuration sandbox ID does not match"
@@ -141,7 +146,13 @@ async fn prepare_and_wait(
                 api.as_ref(),
                 &sandbox_id,
                 &generation,
-                prepare(&foreground, config, &setup_events).await,
+                prepare(
+                    &foreground,
+                    config,
+                    supports_deferred_repositories,
+                    &setup_events,
+                )
+                .await,
             )
             .await
         },
@@ -159,7 +170,7 @@ async fn prepare_and_wait(
         },
         |driver_spawner, assignment| {
             *assigned_driver.lock().unwrap() = Some(driver_spawner.clone());
-            graduate_sandbox(driver_spawner, assignment).boxed()
+            graduate_sandbox(driver_spawner, assignment, supports_deferred_repositories).boxed()
         },
         |(spawner, task, credentials)| {
             async move {
@@ -173,7 +184,14 @@ async fn prepare_and_wait(
         &clock,
         async {
             if mode == GitHubCredentialMode::RestrictedInstallation {
-                renew_standby_credentials(api.as_ref(), &owner, expires_at, &clock).await
+                renew_standby_credentials(
+                    api.as_ref(),
+                    &owner,
+                    expires_at,
+                    supports_deferred_repositories,
+                    &clock,
+                )
+                .await
             } else {
                 future::pending().await
             }
@@ -195,6 +213,7 @@ pub(super) async fn renew_standby_credentials(
     api: &dyn PrewarmedSandboxClient,
     owner: &ManagedStoreOwner,
     expires_at: DateTime<Utc>,
+    supports_deferred_repositories: bool,
     clock: &StandbyClock,
 ) -> anyhow::Result<()> {
     let ManagedStoreOwner::Standby {
@@ -213,7 +232,10 @@ pub(super) async fn renew_standby_credentials(
         for attempt in 0..=3 {
             let fetched = restricted::with_expiry(
                 owner,
-                bounded_control(clock, api.fetch_configuration(sandbox_id)),
+                bounded_control(
+                    clock,
+                    api.fetch_configuration(sandbox_id, supports_deferred_repositories),
+                ),
             )
             .await?;
             let fetched = fetched.and_then(|result| result);
@@ -601,6 +623,7 @@ async fn run_lifecycle<'a, P, R>(
 async fn graduate_sandbox(
     driver_spawner: ModelSpawner<AgentDriver>,
     assignment: Assignment,
+    supports_deferred_repositories: bool,
 ) -> anyhow::Result<(ModelSpawner<AgentDriver>, Task, CredentialStoreGuard)> {
     let credentials = CredentialStoreGuard::new(ManagedStoreOwner::Task(
         assignment.execution_config.task_id.inner().to_owned(),
@@ -611,6 +634,7 @@ async fn graduate_sandbox(
         assignment.runtime_env,
         assignment.api_key,
         assignment.expires_at,
+        supports_deferred_repositories,
     )
     .await
     .context("Failed to prepare pre-warmed sandbox assignment")?;
@@ -630,9 +654,15 @@ fn wait_window(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
 async fn prepare(
     foreground: &ModelSpawner<AgentDriverRunner>,
     config: PrewarmedSandboxConfiguration,
+    supports_deferred_repositories: bool,
     setup_events: &SetupClientEventReporter,
 ) -> Result<ModelSpawner<AgentDriver>, AgentDriverError> {
     let preparation = config.preparation;
+    if !supports_deferred_repositories && !preparation.deferred_repositories.is_empty() {
+        return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+            "Pre-warmed preparation has deferred repositories this client cannot prepare"
+        )));
+    }
     let harness = Harness::from_config_name(&preparation.harness)
         .with_context(|| {
             format!(

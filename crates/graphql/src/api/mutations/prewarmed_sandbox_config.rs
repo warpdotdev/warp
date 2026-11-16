@@ -20,6 +20,7 @@ pub struct PrewarmedSandboxConfigVariables {
 pub struct PrewarmedSandboxConfigInput {
     pub sandbox_id: cynic::Id,
     pub github_credential_contract_version: Option<i32>,
+    pub supports_deferred_repositories: Option<bool>,
 }
 
 #[derive(cynic::QueryFragment)]
