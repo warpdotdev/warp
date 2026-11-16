@@ -297,13 +297,14 @@ fn hook_identity(active: &ActiveBinding, envelope: &HookEnvelope) -> HookIdentit
     }
 }
 
-/// The project a hook is told it runs for: the project the operation is in, else the working
-/// directory, else the directory the hook runs in.
+/// The project a hook is told it runs for: the one its source fixes (a repository's root), else
+/// the project the operation is in, else the working directory, else the directory the hook runs
+/// in.
 fn project_dir(active: &ActiveBinding, envelope: &HookEnvelope) -> PathBuf {
-    envelope
-        .roots
-        .first()
-        .cloned()
+    active
+        .project_dir
+        .clone()
+        .or_else(|| envelope.roots.first().cloned())
         .or_else(|| envelope.cwd.clone())
         .unwrap_or_else(|| active.working_directory.clone())
 }

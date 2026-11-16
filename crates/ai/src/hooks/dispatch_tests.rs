@@ -805,6 +805,29 @@ fn the_invocation_carries_the_identity_variables_for_its_format() {
     );
 }
 
+/// A source inside a repository tells its hooks that repository is the project, wherever the
+/// operation runs, and a run started on this machine is not marked remote.
+#[test]
+fn a_repository_source_names_its_root_as_the_project_on_a_local_run() {
+    let h = harness();
+    let binding = test_binding(test_source_id("s"), HookBoundary::ToolPre, 0, None);
+    let mut envelope = shell_envelope();
+    envelope.surface = HookSurface::CliRun;
+    envelope.roots = vec![PathBuf::from("/work/other")];
+    envelope.cwd = Some(PathBuf::from("/work/other/src"));
+    let mut active = active_binding(binding, h.adapter.clone());
+    active.project_dir = Some(PathBuf::from("/work/repo"));
+    dispatch(&h, envelope, vec![active]);
+    let env = h.runner.invocations()[0].env.clone();
+    for name in ["WARP_PROJECT_DIR", "CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"] {
+        assert!(
+            env.contains(&(OsString::from(name), OsString::from("/work/repo"))),
+            "{name}: {env:?}"
+        );
+    }
+    assert!(!env.iter().any(|(key, _)| key == "WARP_CODE_REMOTE"));
+}
+
 #[test]
 fn stderr_tail_is_cut_on_a_character_boundary() {
     let text = "é".repeat(300);

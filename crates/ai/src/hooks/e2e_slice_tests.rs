@@ -287,6 +287,7 @@ fn a_repository_hook_runs_from_the_repository_root() {
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("git push", repo.path()),
         registry.snapshot(),
+        DispatchPolicy::default(),
         Arc::new(AtomicBool::new(false)),
     ));
     assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
