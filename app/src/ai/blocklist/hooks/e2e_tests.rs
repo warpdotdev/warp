@@ -195,7 +195,10 @@ fn load_worker_hooks(app: &mut App, hooks_file: &Path) {
     let source = ExplicitHookSource::from_directory(
         HookFormat::Cursor,
         &HookDirectory::Worker {
-            directory: hooks_file.parent().expect("hooks.json has a parent").to_path_buf(),
+            directory: hooks_file
+                .parent()
+                .expect("hooks.json has a parent")
+                .to_path_buf(),
         },
         HookSourceKind::FactoryAgent,
         HookSourcePolicy::default(),
@@ -1108,9 +1111,11 @@ fn copy_fixture(name: &str, to: &Path) {
                 copy_tree(&entry.path(), &target);
             } else {
                 fs::copy(entry.path(), &target).expect("copy fixture file");
-                if target.extension().is_some_and(|extension| extension == "sh") {
-                    fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
-                        .expect("chmod");
+                if target
+                    .extension()
+                    .is_some_and(|extension| extension == "sh")
+                {
+                    fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).expect("chmod");
                 }
             }
         }
@@ -1228,7 +1233,8 @@ impl FactoryRun {
         }
         stream.update(app, |stream, ctx| {
             stream.emit_response_event_for_test(stream_init_event(), ctx);
-            stream.emit_response_event_for_test(create_task_with_messages(&task_id, vec![call]), ctx);
+            stream
+                .emit_response_event_for_test(create_task_with_messages(&task_id, vec![call]), ctx);
             stream.emit_response_event_for_test(done_event(), ctx);
             stream.emit_after_stream_finished_for_test(ctx);
         });

@@ -174,14 +174,21 @@ fn worker_source(hooks_file: &Path, kind: HookSourceKind) -> ExplicitHookSource 
     ExplicitHookSource::from_directory(
         HookFormat::Cursor,
         &HookDirectory::Worker {
-            directory: hooks_file.parent().expect("hooks.json has a parent").to_path_buf(),
+            directory: hooks_file
+                .parent()
+                .expect("hooks.json has a parent")
+                .to_path_buf(),
         },
         kind,
         HookSourcePolicy::default(),
     )
 }
 
-fn with_policy(mut source: ExplicitHookSource, strict: bool, on_ask: HookOnAsk) -> ExplicitHookSource {
+fn with_policy(
+    mut source: ExplicitHookSource,
+    strict: bool,
+    on_ask: HookOnAsk,
+) -> ExplicitHookSource {
     source.policy = HookSourcePolicy { strict, on_ask };
     source
 }
@@ -1273,12 +1280,18 @@ mod factory_layout {
             .collect::<Vec<_>>();
         assert_eq!(strict, vec![true, false], "{failures:?}");
         assert!(
-            failures[0].diagnostic.message.contains("agents/missing/hooks"),
+            failures[0]
+                .diagnostic
+                .message
+                .contains("agents/missing/hooks"),
             "{failures:?}"
         );
         assert!(registry.is_finalized());
         assert_eq!(
-            layout.dispatch(&registry, "deploy production").effects.verdict,
+            layout
+                .dispatch(&registry, "deploy production")
+                .effects
+                .verdict,
             HookVerdict::Deny
         );
     }
