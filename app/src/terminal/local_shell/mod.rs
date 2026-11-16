@@ -152,7 +152,12 @@ impl LocalShellState {
         };
         let shell_type = local_shell.shell_type;
         let shell_path = local_shell.shell_path.clone();
-        async move { capture_interactive_shell_env(shell_type, shell_path).await.ok() }.boxed()
+        async move {
+            capture_interactive_shell_env(shell_type, shell_path)
+                .await
+                .ok()
+        }
+        .boxed()
     }
 
     /// Returns a future that will yield the PATH from an interactive login shell.
