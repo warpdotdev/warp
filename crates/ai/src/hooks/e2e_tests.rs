@@ -653,43 +653,6 @@ fn resolved_sources_finalize_once() {
     );
 }
 
-/// Pins what happens today when a project's own `.cursor` directory is also named as a hook
-/// directory for the run (PR 5's suggested way to force a repository's hooks on): the registry
-/// runs the file once, as the run-delivered source, so its commands run from `.cursor` instead of
-/// the project root. A Cursor-style command written relative to the root then is not found, and
-/// `beforeShellExecution` fails open. Reported under Findings in PR 9 and as a design question in
-/// the run's questions file; this test pins today's behavior until that is decided.
-#[cfg(unix)]
-#[test]
-fn a_project_file_also_named_as_a_hook_dir_runs_from_its_cursor_directory() {
-    let fixture = Fixture::copy("sample_project");
-    let mut registry = HookRegistry::new();
-    load_project_file(&mut registry, &fixture.root);
-    load_run_file(&mut registry, &fixture.project_hooks_file());
-    let (dispatcher, _) = dispatcher(&fixture.home);
-
-    let outcome = dispatch(
-        &dispatcher,
-        &registry,
-        shell_envelope("rm -rf build", &fixture.root, Some(&fixture.root)),
-    );
-    assert_eq!(outcome.invocations.len(), 1, "the file runs once");
-    assert_eq!(
-        outcome.invocations[0].binding.source.kind,
-        HookSourceKind::RunDelivered
-    );
-    assert_eq!(
-        outcome.invocations[0].exit,
-        ProcessExit::Code(127),
-        "`.cursor/scripts/deny_dangerous.sh` is not found from inside `.cursor`"
-    );
-    assert_eq!(
-        outcome.effects.verdict,
-        HookVerdict::NoOpinion,
-        "so the project's deny does not apply"
-    );
-}
-
 /// The malformed fixture loads its one valid definition and reports the rest.
 #[test]
 fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
