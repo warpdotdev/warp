@@ -1,14 +1,13 @@
-use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ai::hooks::{
-    DiagnosticSeverity, ExplicitHookSource, ExplicitSourceScope, HookDiagnostic, HookFormat,
-    HookNotice, HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation,
+    DiagnosticSeverity, HookDiagnostic, HookFormat, HookNotice, HookNoticeKind, HookSourceId,
+    HookSourceKind, HookSourceLocation, HookSourcePolicy,
 };
 use ai_types::{AIAgentActionId, AIConversationId};
+use cloud_object_models::CodeForge;
 use serde_json::Value;
-use warp_cli::agent::{HooksOnAsk, OutputFormat};
+use warp_cli::agent::OutputFormat;
 
 use super::*;
 
@@ -24,7 +23,7 @@ fn denial(conversation_id: AIConversationId) -> HookNotice {
 fn malformed_source() -> HookDiagnostic {
     HookDiagnostic {
         source: HookSourceId {
-            kind: HookSourceKind::RunDelivered,
+            kind: HookSourceKind::FactoryWide,
             location: HookSourceLocation::CanonicalPath(PathBuf::from("/hooks/hooks.json")),
         },
         severity: DiagnosticSeverity::Error,
@@ -112,65 +111,116 @@ fn only_a_dispatched_task_is_an_oz_run() {
     assert_eq!(run_surface_for(false), RunSurface::CommandLine);
 }
 
-#[test]
-fn on_ask_maps_to_the_headless_ask_behavior() {
-    assert_eq!(
-        headless_ask_behavior(HooksOnAsk::Deny),
-        HeadlessAskBehavior::DenyWithReason
-    );
-    assert_eq!(
-        headless_ask_behavior(HooksOnAsk::FailRun),
-        HeadlessAskBehavior::FailRun
-    );
-}
-
-#[test]
-fn hook_dir_flags_are_added_after_the_environment_entries() {
-    assert_eq!(
-        hook_dirs(Some(" /a , ,b ,"), &[PathBuf::from("c")]),
-        vec![PathBuf::from("/a"), PathBuf::from("b"), PathBuf::from("c")]
-    );
-    assert_eq!(hook_dirs(None, &[]), Vec::<PathBuf>::new());
-}
-
-#[test]
-fn hook_directories_resolve_against_the_working_directory_and_config_sources_follow() {
-    let configured = ExplicitHookSource {
-        path: PathBuf::from("/config/hooks/hooks.json"),
+fn source(location: ConfiguredHookLocation, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
         format: HookFormat::Cursor,
-        scope: ExplicitSourceScope::FactoryAgent,
-    };
-    let sources = explicit_sources(
+        location,
+        kind: HookSourceKind::FactoryAgent,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
+}
+
+fn repo(owner: &str, name: &str) -> SourceRepo {
+    SourceRepo::new(CodeForge::GitHub, owner.to_owned(), name.to_owned())
+}
+
+#[test]
+fn a_repository_source_is_found_in_its_clone_by_forge_owner_and_name() {
+    let (sources, failures) = resolve_sources(
+        &[source(
+            ConfiguredHookLocation::Repository {
+                repo: repo("Acme", "API"),
+                path: ".cursor".to_owned(),
+            },
+            false,
+        )],
         Path::new("/work"),
-        &[PathBuf::from("/abs"), PathBuf::from("rel")],
-        std::slice::from_ref(&configured),
+        &[repo("acme", "web"), repo("acme", "api")],
     );
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(sources.len(), 1);
     assert_eq!(
-        sources,
-        vec![
-            ExplicitHookSource {
-                path: PathBuf::from("/abs/hooks.json"),
-                format: HookFormat::Cursor,
-                scope: ExplicitSourceScope::Run,
+        sources[0].config_file,
+        PathBuf::from("/work/api/.cursor/hooks.json")
+    );
+    assert_eq!(sources[0].working_directory, PathBuf::from("/work/api"));
+    assert_eq!(sources[0].project_dir, Some(PathBuf::from("/work/api")));
+}
+
+#[test]
+fn the_repository_root_itself_is_a_hook_directory() {
+    let (sources, failures) = resolve_sources(
+        &[source(
+            ConfiguredHookLocation::Repository {
+                repo: repo("acme", "api"),
+                path: ".".to_owned(),
             },
-            ExplicitHookSource {
-                path: PathBuf::from("/work/rel/hooks.json"),
-                format: HookFormat::Cursor,
-                scope: ExplicitSourceScope::Run,
+            false,
+        )],
+        Path::new("/work"),
+        &[repo("acme", "api")],
+    );
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(sources[0].working_directory, PathBuf::from("/work/api"));
+    assert!(sources[0].config_file.ends_with("hooks.json"));
+}
+
+#[test]
+fn a_repository_on_another_forge_is_not_the_same_repository() {
+    let (sources, failures) = resolve_sources(
+        &[source(
+            ConfiguredHookLocation::Repository {
+                repo: repo("acme", "api"),
+                path: ".cursor".to_owned(),
             },
-            configured,
-        ]
+            true,
+        )],
+        Path::new("/work"),
+        &[SourceRepo::new(
+            CodeForge::GitLab,
+            "acme".to_owned(),
+            "api".to_owned(),
+        )],
+    );
+    assert!(sources.is_empty());
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].strict);
+    assert!(
+        failures[0].diagnostic.message.contains("not checked out"),
+        "{:?}",
+        failures[0]
     );
 }
 
 #[test]
-fn the_sessions_hook_dirs_value_comes_before_the_process_environment() {
-    let session = HashMap::from([(
-        OsString::from("WARP_HOOK_DIRS"),
-        OsString::from("/from/session"),
-    )]);
-    assert_eq!(
-        hook_dirs_env_value(&session).as_deref(),
-        Some("/from/session")
+fn a_worker_source_must_be_absolute() {
+    let (sources, failures) = resolve_sources(
+        &[
+            source(
+                ConfiguredHookLocation::Worker {
+                    path: "/etc/acme/hooks".to_owned(),
+                },
+                false,
+            ),
+            source(
+                ConfiguredHookLocation::Worker {
+                    path: "etc/acme/hooks".to_owned(),
+                },
+                false,
+            ),
+        ],
+        Path::new("/work"),
+        &[],
     );
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        sources[0].working_directory,
+        PathBuf::from("/etc/acme/hooks")
+    );
+    assert_eq!(sources[0].project_dir, None);
+    assert_eq!(failures.len(), 1);
+    assert!(!failures[0].strict);
 }

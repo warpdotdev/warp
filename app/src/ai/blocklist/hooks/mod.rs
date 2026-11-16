@@ -24,8 +24,8 @@ use std::time::Duration;
 #[cfg(feature = "local_tty")]
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    DispatchPolicy, ExplicitHookSource, HookDispatcher, HookEnvelope, HookMessenger, HookRegistry,
-    HookRunner, HookSurface, HookTurnId, RegistrySnapshot, RunMetadata,
+    HookDispatcher, HookEnvelope, HookMessenger, HookRegistry, HookRunner, HookSurface, HookTurnId,
+    RegistrySnapshot, RunMetadata,
 };
 #[cfg(feature = "local_tty")]
 use parking_lot::Mutex;
@@ -47,18 +47,6 @@ use crate::features::FeatureFlag;
 use crate::process_environment::InitialProcessEnvironment;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
-
-/// What a hook's `ask` does on a surface with no one to ask. Like [`StrictHookPolicy`], it is
-/// run configuration a launcher sets on the runtime; there is no setting for it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum HeadlessAskBehavior {
-    /// The action is denied with a reason that tells the model approval was unavailable.
-    #[default]
-    DenyWithReason,
-    /// The action is denied the same way, and the runtime also announces the refusal so the
-    /// run's owner can end the run.
-    FailRun,
-}
 
 /// Which kind of headless run this process is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -104,10 +92,6 @@ pub struct HookRuntime {
     dispatcher: Arc<HookDispatcher>,
     messenger: Arc<dyn HookMessenger>,
     run: Option<RunIdentity>,
-    /// The explicit sources the run was configured with, whether or not each one loaded.
-    delivered_sources: Vec<ExplicitHookSource>,
-    strict_policy: StrictHookPolicy,
-    headless_ask_behavior: HeadlessAskBehavior,
     pre_tool_verdicts: PreToolVerdictCache,
     stream_observer: StreamObserverState,
     /// The turn each conversation is in, allocated when a prompt starts a turn.
@@ -132,9 +116,6 @@ impl HookRuntime {
             dispatcher: Arc::new(HookDispatcher::new(runner, messenger.clone())),
             messenger,
             run: None,
-            delivered_sources: Vec::new(),
-            strict_policy: StrictHookPolicy::default(),
-            headless_ask_behavior: HeadlessAskBehavior::default(),
             pre_tool_verdicts: PreToolVerdictCache::default(),
             stream_observer: StreamObserverState::default(),
             turn_ids: HashMap::new(),
@@ -269,10 +250,6 @@ impl HookRuntime {
         self.run.as_ref().map(|run| &run.metadata)
     }
 
-    pub(crate) fn delivered_sources(&self) -> &[ExplicitHookSource] {
-        &self.delivered_sources
-    }
-
     /// Replaces the runner. Dispatches already in flight keep the runner they started with.
     #[cfg(any(feature = "local_tty", test))]
     pub fn set_runner(&mut self, runner: Arc<dyn HookRunner>) {
@@ -317,20 +294,6 @@ impl HookRuntime {
     /// its surface.
     pub(crate) fn set_run(&mut self, run: Option<RunIdentity>) {
         self.run = run;
-    }
-
-    pub(crate) fn set_delivered_sources(&mut self, sources: Vec<ExplicitHookSource>) {
-        self.delivered_sources = sources;
-    }
-
-    /// Turns the strict hook policy on or off for every dispatch from now on.
-    pub fn set_strict_policy(&mut self, policy: StrictHookPolicy) {
-        self.strict_policy = policy;
-    }
-
-    /// Chooses what a hook's `ask` does on a surface with no one to ask.
-    pub(crate) fn set_headless_ask_behavior(&mut self, behavior: HeadlessAskBehavior) {
-        self.headless_ask_behavior = behavior;
     }
 
     /// Replaces the messenger for notices and diagnostics, including those the dispatcher routes.

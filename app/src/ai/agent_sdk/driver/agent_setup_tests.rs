@@ -5,10 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ai::hooks::test_util::RecordingMessenger;
-use ai::hooks::{
-    DiagnosticSeverity, ExplicitHookSource, ExplicitSourceScope, HookFormat, HookRegistry,
-    HookSourceKind,
-};
+use ai::hooks::{DiagnosticSeverity, HookFormat, HookRegistry, HookSourceKind, HookSourcePolicy};
+use cloud_object_models::CodeForge;
 use tempfile::TempDir;
 use warpui::{App, ModelHandle};
 
@@ -17,9 +15,9 @@ use super::super::cloud_provider::{
     CloudProvider, CloudProviderSetupError, Result as ProviderResult,
 };
 use super::super::environment::WorkspaceConfiguration;
+use super::super::hooks::{ConfiguredHookLocation, ConfiguredHookSource};
 use super::super::terminal::TerminalDriver;
 use super::*;
-use crate::ai::blocklist::hooks::HookRuntime;
 use crate::ai::blocklist::hooks::test_utils::install_test_hooks;
 use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -318,152 +316,160 @@ fn driver_with_test_hooks(
     (driver, hooks.messenger)
 }
 
-fn loaded_hook_sources(app: &App) -> Vec<(HookSourceKind, String)> {
-    app.read(|ctx| {
-        HookRegistry::as_ref(ctx)
-            .snapshot()
-            .bindings
-            .iter()
-            .map(|active| {
-                let source = &active.binding.id.source;
-                (source.kind, source.to_string())
-            })
-            .collect()
-    })
+fn repository_source(repo: &str, path: &str, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Repository {
+            repo: SourceRepo::new(CodeForge::GitHub, "acme".to_owned(), repo.to_owned()),
+            path: path.to_owned(),
+        },
+        kind: HookSourceKind::FactoryAgent,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
 }
 
+fn worker_source(path: &str, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Worker {
+            path: path.to_owned(),
+        },
+        kind: HookSourceKind::FactoryWide,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
+}
+
+fn cloned(repo: &str) -> SourceRepo {
+    SourceRepo::new(CodeForge::GitHub, "acme".to_owned(), repo.to_owned())
+}
+
+/// A repository source is found in its clone at `working_dir/<name>` and runs from the clone's
+/// root; a worker source runs from its own directory. Agent entries come before factory entries.
 #[test]
-fn hook_directories_load_as_run_delivered_sources() {
+fn repository_and_worker_sources_load_where_the_run_put_them() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
+        write_hooks_file(&working_dir.join("api/.cursor"));
         let outside = TempDir::new().unwrap();
-        let absolute = dunce::canonicalize(outside.path()).unwrap().join("abs");
-        write_hooks_file(&absolute);
-        write_hooks_file(&working_dir.join("rel"));
+        let worker_dir = dunce::canonicalize(outside.path()).unwrap().join("hooks");
+        write_hooks_file(&worker_dir);
         let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![absolute.clone(), PathBuf::from("rel")];
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![
+                worker_source(&worker_dir.display().to_string(), true),
+                repository_source("API", ".cursor", true),
+            ];
+            driver.load_hook_sources_for_run(&[cloned("api")], ctx)
         });
 
         assert!(result.is_ok(), "{result:?}");
-        assert!(messenger.diagnostics().is_empty());
-        assert_eq!(
-            loaded_hook_sources(&app),
-            vec![
-                (
-                    HookSourceKind::RunDelivered,
-                    absolute.join("hooks.json").display().to_string()
-                ),
-                (
-                    HookSourceKind::RunDelivered,
-                    working_dir.join("rel/hooks.json").display().to_string()
-                ),
-            ]
-        );
-        let delivered = app.read(|ctx| HookRuntime::as_ref(ctx).delivered_sources().len());
-        assert_eq!(delivered, 2);
+        assert!(messenger.diagnostics().is_empty(), "{:?}", messenger.diagnostics());
+        let bindings = app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.clone());
+        assert_eq!(bindings.len(), 2);
+        let repository = bindings
+            .iter()
+            .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryAgent)
+            .expect("the repository source loaded");
+        assert_eq!(repository.working_directory, working_dir.join("api"));
+        assert_eq!(repository.project_dir.as_deref(), Some(working_dir.join("api").as_path()));
+        let worker = bindings
+            .iter()
+            .find(|active| active.binding.id.source.kind == HookSourceKind::FactoryWide)
+            .expect("the worker source loaded");
+        assert_eq!(worker.working_directory, worker_dir);
+        assert_eq!(worker.project_dir, None);
     });
 }
 
+/// A source that cannot be found or loaded is reported. Only a strict one fails the run, and the
+/// failure names only the strict sources.
 #[test]
-fn a_missing_hook_directory_is_a_diagnostic_and_the_run_goes_on() {
+fn only_a_strict_source_that_cannot_load_fails_the_run() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![
+                repository_source("not-cloned", ".cursor", false),
+                worker_source("/no/such/hook/dir", true),
+            ];
+            driver.load_hook_sources_for_run(&[], ctx)
         });
 
-        assert!(result.is_ok(), "{result:?}");
+        let Err(AgentDriverError::HookSourcesUnavailable { details }) = result else {
+            panic!("expected the strict source to fail the run, got {result:?}");
+        };
+        assert_eq!(details.len(), 1, "{details:?}");
+        assert!(details[0].contains("/no/such/hook/dir"), "{details:?}");
         let diagnostics = messenger.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert!(
-            diagnostics[0]
-                .source
-                .to_string()
-                .contains("/no/such/hook/dir")
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        );
+        assert!(
+            diagnostics[0].message.contains("not checked out"),
+            "{diagnostics:?}"
         );
     });
 }
 
 #[test]
-fn a_missing_hook_directory_fails_a_strict_run_before_it_starts() {
+fn a_source_that_is_not_strict_is_reported_and_the_run_goes_on() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
-        let (driver, _messenger) = driver_with_test_hooks(&mut app, root.path());
+        let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
-            driver.hook_options.strict = true;
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![worker_source("/no/such/hook/dir", false)];
+            driver.load_hook_sources_for_run(&[], ctx)
         });
 
-        let Err(AgentDriverError::HookSourcesUnavailable { details }) = result else {
-            panic!("expected the strict run to fail, got {result:?}");
-        };
-        assert_eq!(details.len(), 1);
-        assert!(details[0].contains("/no/such/hook/dir"), "{details:?}");
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(messenger.diagnostics().len(), 1);
+        assert!(app.read(|ctx| HookRegistry::as_ref(ctx).is_finalized()));
     });
 }
 
+/// A path the server should never send is a failure of that entry alone, under its own `strict`.
 #[test]
-fn a_configured_source_inside_a_repository_loads_as_an_explicit_source() {
+fn a_malformed_path_fails_only_its_own_entry() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let root = TempDir::new().unwrap();
         let working_dir = dunce::canonicalize(root.path()).unwrap();
-        let repo = working_dir.join("repo");
-        write_hooks_file(&repo.join("hooks"));
-        let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
-        let configured = ExplicitHookSource {
-            path: repo.join("hooks/hooks.json"),
-            format: HookFormat::Cursor,
-            scope: ExplicitSourceScope::Run,
-        };
-
-        let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.configured_sources = vec![configured];
-            driver.load_hook_sources_for_run(ctx)
-        });
-        assert!(result.is_ok(), "{result:?}");
-        assert!(messenger.diagnostics().is_empty());
-        assert_eq!(loaded_hook_sources(&app).len(), 1);
-    });
-}
-
-#[test]
-fn a_source_named_by_a_hook_directory_and_config_loads_once() {
-    App::test((), |mut app| async move {
-        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let root = TempDir::new().unwrap();
-        let working_dir = dunce::canonicalize(root.path()).unwrap();
-        let repo = working_dir.join("repo");
-        write_hooks_file(&repo.join("hooks"));
+        write_hooks_file(&working_dir.join("api/.cursor"));
         let (driver, messenger) = driver_with_test_hooks(&mut app, &working_dir);
 
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![repo.join("hooks")];
-            driver.hook_options.configured_sources = vec![ExplicitHookSource {
-                path: repo.join("hooks/hooks.json"),
-                format: HookFormat::Cursor,
-                scope: ExplicitSourceScope::Run,
-            }];
-            driver.hook_options.strict = true;
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![
+                repository_source("api", "../outside", false),
+                repository_source("api", "/etc", false),
+                worker_source("relative/hooks", false),
+                repository_source("api", ".cursor", false),
+            ];
+            driver.load_hook_sources_for_run(&[cloned("api")], ctx)
         });
 
         assert!(result.is_ok(), "{result:?}");
-        assert!(messenger.diagnostics().is_empty());
-        assert_eq!(loaded_hook_sources(&app).len(), 1);
+        assert_eq!(messenger.diagnostics().len(), 3, "{:?}", messenger.diagnostics());
+        assert_eq!(
+            app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
+            1
+        );
     });
 }
 
@@ -474,9 +480,8 @@ fn hook_sources_are_not_loaded_when_hooks_are_off() {
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
         let result = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![PathBuf::from("/no/such/hook/dir")];
-            driver.hook_options.strict = true;
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![worker_source("/no/such/hook/dir", true)];
+            driver.load_hook_sources_for_run(&[], ctx)
         });
         assert!(result.is_ok());
         assert!(messenger.diagnostics().is_empty());
@@ -490,8 +495,9 @@ fn an_empty_hook_source_list_finalizes_the_registry() {
         let root = TempDir::new().unwrap();
         let (driver, messenger) = driver_with_test_hooks(&mut app, root.path());
 
-        let result =
-            driver.update(&mut app, |driver, ctx| driver.load_hook_sources_for_run(ctx));
+        let result = driver.update(&mut app, |driver, ctx| {
+            driver.load_hook_sources_for_run(&[], ctx)
+        });
 
         assert!(result.is_ok(), "{result:?}");
         assert!(messenger.diagnostics().is_empty());

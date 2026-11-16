@@ -97,7 +97,7 @@ fn paired_execution_launch_keeps_inventory_separate_from_eager_membership() {
                     "expectedSha": sha, "preserveOrigin": true,
                 }],
                 "setupCommands": ["prepare-workspace"], "sessionSharingAcls": [],
-                "skipInitialTurn": true, "snapshotDisabled": true,
+                "skipInitialTurn": true, "snapshotDisabled": true, "agentHookSources": [],
             }))
             .unwrap();
             let (options, _, _, _) = app.update(|ctx| {
@@ -222,7 +222,7 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
                 "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
                 "setupCommands": [], "sessionSharingAcls": [],
-                "skipInitialTurn": false, "snapshotDisabled": false,
+                "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
             }))
             .unwrap();
             let result = app.update(|ctx| {
@@ -241,6 +241,138 @@ fn paired_execution_rejects_a_different_task_or_execution() {
                 )
             });
             assert!(result.is_err());
+        }
+    });
+}
+
+fn execution_config_with_hooks(hooks: serde_json::Value) -> serde_json::Value {
+    json!({
+        "taskId": TASK_ID, "executionId": "42", "harness": "OZ",
+        "conversationId": null, "parentRunId": null, "teamId": null, "modelId": null,
+        "reasoningLevel": null, "profileId": null, "computerUseModelId": null,
+        "inferenceProviders": null, "providers": null,
+        "idleOnCompleteSeconds": null, "idleOnFailSeconds": null,
+        "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
+        "computerUseEnabled": false, "repositories": [], "deferredRepositories": [],
+        "setupCommands": [], "sessionSharingAcls": [],
+        "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": hooks,
+    })
+}
+
+fn options_for(
+    app: &mut App,
+    config: serde_json::Value,
+) -> anyhow::Result<AgentDriverOptions> {
+    let root = tempfile::TempDir::new().unwrap();
+    let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID, "--execution-id", "42"]);
+    let config = serde_json::from_value(config).unwrap();
+    app.update(|ctx| {
+        super::build_execution_task_and_options(
+            Some(&args),
+            args.harness_transport.unwrap_or_default(),
+            config,
+            super::RepositoryContract {
+                supports_deferred_repositories: true,
+                use_factory_repositories: false,
+            },
+            root.path().to_owned(),
+            None,
+            Vec::new(),
+            ctx,
+        )
+    })
+    .map(|(options, ..)| options)
+}
+
+/// The execution configuration's hook sources reach the driver in the order the server sent them,
+/// with each entry's own settings, and a dispatched run reports itself as an Oz run.
+#[test]
+fn execution_hook_sources_reach_the_driver_in_order() {
+    App::test((), |mut app| async move {
+        let options = options_for(
+            &mut app,
+            execution_config_with_hooks(json!([
+                {
+                    "format": "CURSOR",
+                    "repository": { "forge": "GITHUB", "owner": "acme", "name": "api" },
+                    "path": ".cursor",
+                    "level": "AGENT",
+                    "strict": true,
+                    "onAsk": "FAIL_RUN"
+                },
+                {
+                    "format": "CURSOR",
+                    "repository": null,
+                    "path": "/etc/acme/hooks",
+                    "level": "FACTORY",
+                    "strict": false,
+                    "onAsk": "DENY"
+                }
+            ])),
+        )
+        .expect("builds");
+        assert_eq!(
+            options.hooks.surface,
+            crate::ai::blocklist::hooks::RunSurface::Oz
+        );
+        assert_eq!(
+            options.hooks.sources,
+            vec![
+                super::driver::hooks::ConfiguredHookSource {
+                    format: ai::hooks::HookFormat::Cursor,
+                    location: super::driver::hooks::ConfiguredHookLocation::Repository {
+                        repo: SourceRepo::new(
+                            CodeForge::GitHub,
+                            "acme".to_owned(),
+                            "api".to_owned(),
+                        ),
+                        path: ".cursor".to_owned(),
+                    },
+                    kind: ai::hooks::HookSourceKind::FactoryAgent,
+                    policy: ai::hooks::HookSourcePolicy {
+                        strict: true,
+                        on_ask: ai::hooks::HookOnAsk::FailRun,
+                    },
+                },
+                super::driver::hooks::ConfiguredHookSource {
+                    format: ai::hooks::HookFormat::Cursor,
+                    location: super::driver::hooks::ConfiguredHookLocation::Worker {
+                        path: "/etc/acme/hooks".to_owned(),
+                    },
+                    kind: ai::hooks::HookSourceKind::FactoryWide,
+                    policy: ai::hooks::HookSourcePolicy::default(),
+                },
+            ]
+        );
+    });
+}
+
+/// A value this client does not know fails the run rather than dropping the entry.
+#[test]
+fn an_unknown_hook_value_fails_the_execution() {
+    App::test((), |mut app| async move {
+        for (field, value) in [
+            ("format", "CLAUDE_CODE"),
+            ("level", "TEAM"),
+            ("onAsk", "ESCALATE"),
+        ] {
+            let mut source = json!({
+                "format": "CURSOR",
+                "repository": null,
+                "path": "/etc/acme/hooks",
+                "level": "AGENT",
+                "strict": false,
+                "onAsk": "DENY"
+            });
+            source[field] = json!(value);
+            let Err(error) = options_for(&mut app, execution_config_with_hooks(json!([source])))
+            else {
+                panic!("an unknown {field} must fail the execution");
+            };
+            assert!(
+                format!("{error:#}").contains("does not support"),
+                "{field}: {error:#}"
+            );
         }
     });
 }
@@ -308,7 +440,7 @@ fn deferred_capability_bootstrap_subprocess() {
         "mcpServersJson": "{}", "skills": [], "factorySkillDirs": [],
         "computerUseEnabled": false, "repositories": eager,
         "setupCommands": [], "sessionSharingAcls": [],
-        "skipInitialTurn": false, "snapshotDisabled": false,
+        "skipInitialTurn": false, "snapshotDisabled": false, "agentHookSources": [],
     });
     if supports_deferred_repositories && scenario != "missing" {
         config["deferredRepositories"] = deferred;

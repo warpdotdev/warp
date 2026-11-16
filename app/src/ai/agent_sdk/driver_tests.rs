@@ -19,7 +19,7 @@ use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, Repo
 use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 use tempfile::TempDir;
-use warp_cli::agent::{Harness, HarnessTransport, HooksOnAsk};
+use warp_cli::agent::{Harness, HarnessTransport};
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
@@ -54,10 +54,11 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::driver::environment::PrepareEnvironmentError;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
+use crate::ai::agent_sdk::driver::hooks;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::hooks::test_utils::{self as testing, TestHooks, install_test_hooks};
-use crate::ai::blocklist::hooks::{HeadlessAskBehavior, HookRuntime, RunSurface};
+use crate::ai::blocklist::hooks::test_utils::{self, TestHooks, install_test_hooks};
+use crate::ai::blocklist::hooks::{HookRuntime, RunSurface};
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -1796,33 +1797,18 @@ fn driver_with_hooks(
 }
 
 #[test]
-fn hook_setup_records_the_run_its_surface_and_its_policies() {
+fn hook_setup_records_the_run_and_its_surface() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
         let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, temp.path());
         let task_id: AmbientAgentTaskId = HOOK_TASK_ID.parse().unwrap();
 
-        for (surface, strict, on_ask, behavior) in [
-            (
-                RunSurface::Oz,
-                true,
-                HooksOnAsk::FailRun,
-                HeadlessAskBehavior::FailRun,
-            ),
-            (
-                RunSurface::CommandLine,
-                false,
-                HooksOnAsk::Deny,
-                HeadlessAskBehavior::DenyWithReason,
-            ),
-        ] {
+        for surface in [RunSurface::Oz, RunSurface::CommandLine] {
             driver.update(&mut app, |driver, ctx| {
                 driver.task_id = Some(task_id);
                 driver.parent_run_id = Some("parent-run".to_owned());
-                driver.hook_options.surface = surface;
-                driver.hook_options.strict = strict;
-                driver.hook_options.on_ask = on_ask;
+                driver.hooks.surface = surface;
                 driver.prepare_hooks_for_run(ctx);
             });
             app.read(|ctx| {
@@ -1832,15 +1818,25 @@ fn hook_setup_records_the_run_its_surface_and_its_policies() {
                 assert_eq!(run.task_id.as_deref(), Some(HOOK_TASK_ID));
                 assert_eq!(run.parent_run_id.as_deref(), Some("parent-run"));
                 assert_eq!(runtime.run_surface(), Some(surface));
-                assert_eq!(runtime.strict_policy().enabled, strict);
-                assert_eq!(runtime.headless_ask_behavior(), behavior);
             });
         }
     });
 }
 
+/// A worker-form source in `dir`, as the execution configuration would name it.
+fn worker_hook_source(dir: &Path) -> hooks::ConfiguredHookSource {
+    hooks::ConfiguredHookSource {
+        format: ai::hooks::HookFormat::Cursor,
+        location: hooks::ConfiguredHookLocation::Worker {
+            path: dir.display().to_string(),
+        },
+        kind: ai::hooks::HookSourceKind::FactoryAgent,
+        policy: ai::hooks::HookSourcePolicy::default(),
+    }
+}
+
 #[test]
-fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
+fn hook_sources_finalize_once_and_a_second_load_fails() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let temp = TempDir::new().unwrap();
@@ -1853,11 +1849,11 @@ fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
             )
             .unwrap();
         }
-        let (driver, _terminal, hooks) = driver_with_hooks(&mut app, &working_dir);
+        let (driver, _terminal, _hooks) = driver_with_hooks(&mut app, &working_dir);
 
         let loaded = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![PathBuf::from("early")];
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![worker_hook_source(&working_dir.join("early"))];
+            driver.load_hook_sources_for_run(&[], ctx)
         });
         assert!(loaded.is_ok(), "{loaded:?}");
         app.read(|ctx| {
@@ -1870,31 +1866,25 @@ fn explicit_sources_finalize_once_and_later_ones_cannot_join() {
             driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
         });
         app.read(|ctx| {
-            let registry = HookRegistry::as_ref(ctx);
             assert_eq!(
-                registry.snapshot().bindings.len(),
+                HookRegistry::as_ref(ctx).snapshot().bindings.len(),
                 1,
                 "the finalized source stays active"
             );
         });
 
         let late = driver.update(&mut app, |driver, ctx| {
-            driver.hook_options.hook_dirs = vec![PathBuf::from("late")];
-            driver.load_hook_sources_for_run(ctx)
+            driver.hooks.sources = vec![worker_hook_source(&working_dir.join("late"))];
+            driver.load_hook_sources_for_run(&[], ctx)
         });
-        assert!(late.is_ok());
+        assert!(
+            matches!(late, Err(AgentDriverError::InvalidRuntimeState)),
+            "{late:?}"
+        );
         assert_eq!(
             app.read(|ctx| HookRegistry::as_ref(ctx).snapshot().bindings.len()),
             1,
             "a source loaded after finalization does not activate"
-        );
-        assert!(
-            hooks
-                .messenger
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("already finalized")),
-            "the second load attempt is reported"
         );
     });
 }
@@ -1931,10 +1921,10 @@ fn execute_run_does_not_fire_session_start() {
 }
 
 /// The whole path from a hook's `ask` to the end of the run: the model asks for a shell command,
-/// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the run is set to
-/// fail in that case.
+/// the pre-tool hook answers `ask` through the runner, nobody can answer it, and the hook's source
+/// is set to fail the run in that case.
 #[test]
-fn a_scripted_ask_in_a_fail_run_run_ends_the_run_with_the_hook_reason() {
+fn a_scripted_ask_from_a_fail_run_source_ends_the_run_with_the_hook_reason() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
         let harness = test_utils::controller_harness(&mut app);
@@ -1948,9 +1938,12 @@ fn a_scripted_ask_in_a_fail_run_run_ends_the_run_with_the_hook_reason() {
             binding.id.clone(),
             ScriptedRunner::exit_with(0, r#"{"verdict":"ask","reason":"needs a human"}"#),
         );
-        app.update(|ctx| harness.hooks.install_bindings(vec![binding], ctx));
-        HookRuntime::handle(&app).update(&mut app, |runtime, _| {
-            runtime.set_headless_ask_behavior(HeadlessAskBehavior::FailRun);
+        app.update(|ctx| {
+            let mut active = ai::hooks::test_util::active_binding(binding, harness.hooks.adapter.clone());
+            active.policy.on_ask = ai::hooks::HookOnAsk::FailRun;
+            HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                registry.install_snapshot_for_test(vec![active], Vec::new());
+            });
         });
         // A hidden child conversation has nobody to answer an `ask` even in a desktop test
         // process, the way a run has nobody.

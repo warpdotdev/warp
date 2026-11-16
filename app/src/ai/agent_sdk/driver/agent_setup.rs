@@ -24,6 +24,7 @@ use super::environment::{
     FACTORY_REPO_CLONE_URL_ENV_VAR, FACTORY_REPO_DIR_ENV_VAR,
     prepend_factory_definition_clone_for_values,
 };
+use super::harness::HarnessKind;
 use super::harness::acp::sidecar_launch_file_roots;
 use super::harness::launch_warmup::LaunchFileWarmup;
 use super::{
@@ -581,19 +582,36 @@ pub(crate) async fn load_skills_dirs(foreground: &ModelSpawner<AgentDriver>) {
     }
 }
 
-/// Prepares the run's agent hooks before its first request: records how hooks behave in the run
-/// and loads the explicit sources from `WARP_HOOK_DIRS`, `--hook-dir`, and the configuration file.
-/// Fails only when a source cannot be loaded and the run uses the strict hook policy; otherwise
-/// each problem is a diagnostic.
+/// Prepares the run's agent hooks before its first request: records the run on the hook runtime
+/// and loads the sources its execution configuration selected, once, finding repository sources
+/// among `cloned_repositories`. Fails when a strict source cannot be loaded; any other problem is a
+/// diagnostic.
 pub(crate) async fn setup_hooks_for_run(
     foreground: &ModelSpawner<AgentDriver>,
+    cloned_repositories: Vec<SourceRepo>,
 ) -> Result<(), AgentDriverError> {
     foreground
         .spawn(|me, ctx| me.prepare_hooks_for_run(ctx))
         .await?;
     foreground
-        .spawn(|me, ctx| me.load_hook_sources_for_run(ctx))
+        .spawn(move |me, ctx| me.load_hook_sources_for_run(&cloned_repositories, ctx))
         .await?
+}
+
+/// Fails a run whose execution configuration selected hooks for a harness that does not run them.
+pub(crate) async fn refuse_hooks_for_other_harness(
+    foreground: &ModelSpawner<AgentDriver>,
+    harness: &HarnessKind,
+) -> Result<(), AgentDriverError> {
+    let has_hooks = foreground
+        .spawn(|me, _| !me.hooks.sources.is_empty())
+        .await?;
+    if has_hooks {
+        return Err(AgentDriverError::HooksRequireOzHarness {
+            harness: format!("{harness:?}"),
+        });
+    }
+    Ok(())
 }
 
 /// Loads the bundled instructions that let an active Factory run discover and clone deferred repos.

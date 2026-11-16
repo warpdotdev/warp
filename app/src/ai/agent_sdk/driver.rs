@@ -779,8 +779,8 @@ pub struct AgentDriverOptions {
     pub strict_mcp_startup: bool,
     /// MCP server startup timeout override.
     pub mcp_startup_timeout: Option<Duration>,
-    /// Agent hook settings for the run.
-    pub(crate) hooks: hooks::HookRunOptions,
+    /// The agent hooks the run's execution configuration selected.
+    pub(crate) hooks: hooks::RunHooks,
 }
 
 /// Terminal setup for a new session or a pre-warmed assignment.
@@ -813,7 +813,7 @@ struct RunConfiguration {
     workspace: environment::WorkspaceConfiguration,
     skill_dirs: Vec<PathBuf>,
     skill_reference_dirs: Vec<PathBuf>,
-    hook_options: hooks::HookRunOptions,
+    hooks: hooks::RunHooks,
     computer_use_config: Option<(bool, Option<LLMId>)>,
     third_party_harness_model_config: Option<HarnessModelConfig>,
     team_scope: Option<HeadlessTeamScope>,
@@ -867,7 +867,7 @@ fn split_run_options(
         skip_initial_turn,
         strict_mcp_startup,
         mcp_startup_timeout,
-        hooks: mut hook_options,
+        hooks,
     } = options;
     if !working_dir.is_absolute() {
         return Err(AgentDriverError::ConfigBuildFailed(anyhow!(
@@ -977,10 +977,6 @@ fn split_run_options(
         .definition_skill_dirs
         .clone()
         .unwrap_or_else(|| skill_dirs.clone());
-    hook_options.hook_dirs = hooks::hook_dirs(
-        hooks::hook_dirs_env_value(&env_vars).as_deref(),
-        &hook_options.hook_dirs,
-    );
     Ok((
         TerminalLaunchInputs {
             should_share,
@@ -1009,7 +1005,7 @@ fn split_run_options(
             workspace,
             skill_dirs,
             skill_reference_dirs,
-            hook_options,
+            hooks,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1126,7 +1122,7 @@ pub struct AgentDriver {
     /// Whether a skill name in an earlier `skill_dirs` entry hides the same name in later ones.
     /// Set once skill references add generated folders, which rely on folder order.
     skill_dirs_first_name_wins: bool,
-    hook_options: hooks::HookRunOptions,
+    hooks: hooks::RunHooks,
     factory_repository_contract: bool,
     computer_use_configured: bool,
 
@@ -1273,14 +1269,15 @@ pub enum AgentDriverError {
     MCPServerNotFound(uuid::Uuid),
     #[error("Failed to resolve managed MCP server {uid}: {message}")]
     ManagedMcpResolutionFailed { uid: Uuid, message: String },
-    #[error(
-        "Agent hook sources could not be loaded, and the run uses the strict hook policy: {}",
-        .details.join("; ")
-    )]
+    #[error("Strict agent hook sources could not be loaded: {}", .details.join("; "))]
     HookSourcesUnavailable {
-        /// One line per source that could not take part in the run.
+        /// One line per strict source that could not take part in the run.
         details: Vec<String>,
     },
+    #[error(
+        "This run has agent hooks, which only the Oz harness runs, but its harness is {harness}"
+    )]
+    HooksRequireOzHarness { harness: String },
     #[error("Failed to start MCP servers: {}", .details.join("; "))]
     MCPStartupFailed {
         /// One line per unavailable server (e.g. "'datadog' failed to start:
@@ -1666,13 +1663,7 @@ impl AgentDriver {
             skill_dirs: parse_skills_dirs_env(),
             skill_reference_dirs: Vec::new(),
             skill_dirs_first_name_wins: false,
-            hook_options: hooks::HookRunOptions {
-                hook_dirs: hooks::hook_dirs(
-                    hooks::hook_dirs_env_value(&HashMap::new()).as_deref(),
-                    &[],
-                ),
-                ..Default::default()
-            },
+            hooks: hooks::RunHooks::default(),
             factory_repository_contract: false,
             computer_use_configured: false,
             snapshot_disabled: false,
@@ -1720,7 +1711,7 @@ impl AgentDriver {
             workspace,
             skill_dirs,
             skill_reference_dirs,
-            hook_options,
+            hooks,
             computer_use_config,
             third_party_harness_model_config,
             team_scope,
@@ -1775,7 +1766,7 @@ impl AgentDriver {
         self.skill_dirs = skill_dirs;
         self.skill_reference_dirs = skill_reference_dirs;
         self.skill_dirs_first_name_wins = false;
-        self.hook_options = hook_options;
+        self.hooks = hooks;
         self.third_party_harness_model_config = third_party_harness_model_config;
         self.team_scope = team_scope;
         self.bedrock_oidc_credentials = bedrock_oidc_credentials;
@@ -2605,20 +2596,30 @@ impl AgentDriver {
             }
 
             // Skill and hook loading are Oz-only; third-party harnesses have their own.
-            if matches!(&task.harness, HarnessKind::Oz) {
-                // Load skills from repos synchronously so the initial message includes them.
-                // File trees are ready after prepare_environment and global skill repo cloning above.
-                agent_setup::load_skills(
-                    &foreground,
-                    prepared_workspace.repositories,
-                    global_skill_resolution,
-                    &setup_events,
-                )
-                .await;
-                if factory_repository_contract {
-                    agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
+            match &task.harness {
+                HarnessKind::Oz => {
+                    let cloned_repositories = prepared_workspace.repositories.clone();
+                    // Load skills from repos synchronously so the initial message includes them.
+                    // File trees are ready after prepare_environment and global skill repo
+                    // cloning above.
+                    agent_setup::load_skills(
+                        &foreground,
+                        prepared_workspace.repositories,
+                        global_skill_resolution,
+                        &setup_events,
+                    )
+                    .await;
+                    if factory_repository_contract {
+                        agent_setup::load_factory_deferred_repositories_skill(&foreground).await;
+                    }
+                    agent_setup::setup_hooks_for_run(&foreground, cloned_repositories).await?;
                 }
-                agent_setup::setup_hooks_for_run(&foreground).await?;
+                // The server rejects hooks on an agent whose harness is not Oz; a run that still
+                // has them fails rather than running without them.
+                HarnessKind::ThirdParty(_) | HarnessKind::Unsupported(_) => {
+                    agent_setup::refuse_hooks_for_other_harness(&foreground, &task.harness)
+                        .await?;
+                }
             }
 
             let (

@@ -1,45 +1,63 @@
-//! Agent hooks in `warp agent run` and Oz runs: the hook settings a run was launched with, the
-//! explicit sources they name, and the messenger that writes hook notices and diagnostics to the
-//! run's structured output.
+//! Agent hooks in Oz runs: the hook sources a run's execution configuration selected, how they
+//! are found on disk and loaded once, and the messenger that writes hook notices and diagnostics
+//! to the run's structured output.
 
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ai::hooks::{
-    DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookMessenger, HookNotice,
-    HookNoticeKind, LogOnlyMessenger, RunMetadata, WARP_HOOK_DIRS_ENV, parse_hook_dirs_value,
-    resolve_hook_dirs, sources_for_hook_dirs,
+    DiagnosticSeverity, ExplicitHookSource, HookDiagnostic, HookDirectory, HookFormat,
+    HookMessenger, HookNotice, HookNoticeKind, HookSourceId, HookSourceKind, HookSourceLocation,
+    HookSourcePolicy, LogOnlyMessenger, RunMetadata, SourceLoadFailure,
 };
-#[cfg(not(feature = "local_fs"))]
-use ai::hooks::{HookSourceId, HookSourceLocation};
 use anyhow::Context as _;
-use warp_cli::agent::{HooksOnAsk, OutputFormat};
+use warp_cli::agent::OutputFormat;
 use warp_errors::report_if_error;
 use warpui::{AppContext, ModelContext, SingletonEntity as _};
 
 use super::{AgentDriver, AgentDriverError, output};
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::hooks::strict_policy::StrictHookPolicy;
-use crate::ai::blocklist::hooks::{
-    HeadlessAskBehavior, HookRuntime, HookRuntimeEvent, RunIdentity, RunSurface,
-};
+use crate::ai::blocklist::hooks::{HookRuntime, HookRuntimeEvent, RunIdentity, RunSurface};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::cloud_environments::SourceRepo;
 
-/// The hook sources and policy settings for one agent run.
+/// The hooks a run's execution configuration selected, and the kind of run it is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HookRunOptions {
-    /// Hook directories: the run's `WARP_HOOK_DIRS` entries, then `--hook-dir` entries. Relative
-    /// entries are resolved against the run's working directory when the sources load.
-    pub hook_dirs: Vec<PathBuf>,
-    /// Sources the configuration file named, already resolved against the file's directory.
-    pub configured_sources: Vec<ExplicitHookSource>,
-    pub strict: bool,
-    pub on_ask: HooksOnAsk,
+pub(crate) struct RunHooks {
+    /// Agent entries first, then factory entries, each in declared order.
+    pub sources: Vec<ConfiguredHookSource>,
     pub surface: RunSurface,
+}
+
+/// One hook directory the execution configuration selected, before it is found on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfiguredHookSource {
+    pub format: HookFormat,
+    pub location: ConfiguredHookLocation,
+    pub kind: HookSourceKind,
+    pub policy: HookSourcePolicy,
+}
+
+/// Where a selected hook directory is, as the server described it. The path is checked when the
+/// source is found on disk, so a malformed one is a failure of that entry alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfiguredHookLocation {
+    /// A directory relative to the root of one of the run's repositories.
+    Repository { repo: SourceRepo, path: String },
+    /// An absolute directory on the worker.
+    Worker { path: String },
+}
+
+impl ConfiguredHookLocation {
+    fn describe(&self) -> String {
+        match self {
+            Self::Repository { repo, path } => format!("{}/{}:{path}", repo.owner, repo.repo),
+            Self::Worker { path } => path.clone(),
+        }
+    }
 }
 
 /// Whether the server dispatched the run (`--task-id` was passed), which makes it an Oz run. A
@@ -52,40 +70,75 @@ pub(crate) fn run_surface_for(dispatched_task: bool) -> RunSurface {
     }
 }
 
-pub(crate) fn headless_ask_behavior(on_ask: HooksOnAsk) -> HeadlessAskBehavior {
-    match on_ask {
-        HooksOnAsk::Deny => HeadlessAskBehavior::DenyWithReason,
-        HooksOnAsk::FailRun => HeadlessAskBehavior::FailRun,
+/// Finds each selected hook directory on disk. A repository source is looked up among the
+/// repositories the run cloned, each at `working_dir/<name>`; a source whose repository was not
+/// cloned, or whose path is malformed, becomes a failure of that entry under its own `strict`.
+pub(crate) fn resolve_sources(
+    configured: &[ConfiguredHookSource],
+    working_dir: &Path,
+    repositories: &[SourceRepo],
+) -> (Vec<ExplicitHookSource>, Vec<SourceLoadFailure>) {
+    let mut sources = Vec::with_capacity(configured.len());
+    let mut failures = Vec::new();
+    for source in configured {
+        match hook_directory(&source.location, working_dir, repositories) {
+            Ok(directory) => sources.push(ExplicitHookSource::from_directory(
+                source.format,
+                &directory,
+                source.kind,
+                source.policy,
+            )),
+            Err(error) => failures.push(SourceLoadFailure {
+                diagnostic: HookDiagnostic {
+                    source: HookSourceId {
+                        kind: source.kind,
+                        location: HookSourceLocation::Named(source.location.describe()),
+                    },
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("could not find configured hook source: {error:#}"),
+                },
+                strict: source.policy.strict,
+            }),
+        }
+    }
+    (sources, failures)
+}
+
+fn hook_directory(
+    location: &ConfiguredHookLocation,
+    working_dir: &Path,
+    repositories: &[SourceRepo],
+) -> anyhow::Result<HookDirectory> {
+    match location {
+        ConfiguredHookLocation::Repository { repo, path } => {
+            let relative = crate::ai::agent_sdk::execution_config::hook_repository_path(path)?;
+            let cloned = repositories
+                .iter()
+                .find(|candidate| same_repository(candidate, repo))
+                .with_context(|| {
+                    format!(
+                        "repository {}/{} is not checked out for this run",
+                        repo.owner, repo.repo
+                    )
+                })?;
+            let root = working_dir.join(&cloned.repo);
+            Ok(HookDirectory::Repository {
+                directory: root.join(relative),
+                root,
+            })
+        }
+        ConfiguredHookLocation::Worker { path } => Ok(HookDirectory::Worker {
+            directory: crate::ai::agent_sdk::execution_config::hook_worker_path(path)?,
+        }),
     }
 }
 
-/// The `WARP_HOOK_DIRS` entries in `env_value`, then `flag_dirs`.
-pub(crate) fn hook_dirs(env_value: Option<&str>, flag_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let mut dirs = env_value.map(parse_hook_dirs_value).unwrap_or_default();
-    dirs.extend(flag_dirs.iter().cloned());
-    dirs
-}
-
-/// The run's `WARP_HOOK_DIRS` value: the one the run hands its terminal session (the execution's
-/// environment variables, managed secrets, and task variables) when it sets one, else the
-/// process environment's.
-pub(crate) fn hook_dirs_env_value(session_env: &HashMap<OsString, OsString>) -> Option<String> {
-    session_env
-        .get(OsStr::new(WARP_HOOK_DIRS_ENV))
-        .map(|value| value.to_string_lossy().into_owned())
-        .or_else(|| std::env::var(WARP_HOOK_DIRS_ENV).ok())
-}
-
-/// Every explicit source the run names: one `hooks.json` per hook directory, resolved against
-/// `working_dir`, then the configuration file's sources.
-pub(crate) fn explicit_sources(
-    working_dir: &Path,
-    hook_dirs: &[PathBuf],
-    configured: &[ExplicitHookSource],
-) -> Vec<ExplicitHookSource> {
-    let mut sources = sources_for_hook_dirs(&resolve_hook_dirs(working_dir, hook_dirs.to_vec()));
-    sources.extend(configured.iter().cloned());
-    sources
+/// Repository identity as environment preparation compares it: the forge, and the owner and name
+/// without regard to case.
+fn same_repository(a: &SourceRepo, b: &SourceRepo) -> bool {
+    a.code_forge == b.code_forge
+        && a.owner.eq_ignore_ascii_case(&b.owner)
+        && a.repo.eq_ignore_ascii_case(&b.repo)
 }
 
 /// The server token of each conversation in this process, by local id, so a record names a
@@ -115,23 +168,9 @@ impl ConversationTokens {
     }
 }
 
-/// Why a named hook source could not take part in the run. These are what a strict run refuses
-/// to start with.
-#[cfg(not(feature = "local_fs"))]
-fn unavailable_source(source: &ExplicitHookSource, message: String) -> HookDiagnostic {
-    HookDiagnostic {
-        source: HookSourceId {
-            kind: source.scope.source_kind(),
-            location: HookSourceLocation::Named(source.path.display().to_string()),
-        },
-        severity: DiagnosticSeverity::Error,
-        message,
-    }
-}
-
 impl AgentDriver {
-    /// Records how hooks behave in this run (its identity and surface, the strict policy, what
-    /// an unanswerable `ask` does) and installs the messenger that writes to the run's output.
+    /// Records the run this process belongs to and installs the messenger that writes to the
+    /// run's output.
     pub(super) fn prepare_hooks_for_run(&self, ctx: &mut ModelContext<Self>) {
         if !HookRuntime::is_installed(ctx) {
             return;
@@ -142,12 +181,8 @@ impl AgentDriver {
                 parent_run_id: self.parent_run_id.clone(),
                 task_id: Some(task_id.to_string()),
             },
-            surface: self.hook_options.surface,
+            surface: self.hooks.surface,
         });
-        let strict = StrictHookPolicy {
-            enabled: self.hook_options.strict,
-        };
-        let ask_behavior = headless_ask_behavior(self.hook_options.on_ask);
         let tokens = ConversationTokens::default();
         let history = BlocklistAIHistoryModel::handle(ctx);
         for (_, conversation) in history.as_ref(ctx).all_live_conversations() {
@@ -168,41 +203,37 @@ impl AgentDriver {
         let messenger = Arc::new(OzHookMessenger::new(self.output_format, tokens));
         HookRuntime::handle(ctx).update(ctx, |runtime, _| {
             runtime.set_run(run);
-            runtime.set_strict_policy(strict);
-            runtime.set_headless_ask_behavior(ask_behavior);
             runtime.set_messenger(messenger);
         });
     }
 
-    /// Loads and finalizes every explicit hook source the run names. In a strict run, any source
-    /// that is missing, unreadable, or invalid fails the run.
+    /// Finds the run's selected hook sources among `repositories` (the ones environment
+    /// preparation cloned) and on the worker, then loads and finalizes them in one call. Every
+    /// failure is reported as a diagnostic; a failure of a strict source also fails the run.
     pub(super) fn load_hook_sources_for_run(
         &self,
+        repositories: &[SourceRepo],
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
         if !HookRuntime::is_installed(ctx) {
             return Ok(());
         }
-        let sources = explicit_sources(
-            &self.working_dir,
-            &self.hook_options.hook_dirs,
-            &self.hook_options.configured_sources,
-        );
-        HookRuntime::handle(ctx).update(ctx, |runtime, _| {
-            runtime.set_delivered_sources(sources.clone());
-        });
-        let problems = load_into_registry(&sources, ctx);
+        let (sources, mut failures) =
+            resolve_sources(&self.hooks.sources, &self.working_dir, repositories);
+        failures.extend(load_into_registry(&sources, ctx)?);
 
         let messenger = HookRuntime::as_ref(ctx).messenger();
-        for problem in &problems {
-            messenger.diagnostic(problem.clone());
+        for failure in &failures {
+            messenger.diagnostic(failure.diagnostic.clone());
         }
-        if self.hook_options.strict && !problems.is_empty() {
+        let strict_failures = failures
+            .iter()
+            .filter(|failure| failure.strict)
+            .map(|failure| format!("{}: {}", failure.diagnostic.source, failure.diagnostic.message))
+            .collect::<Vec<_>>();
+        if !strict_failures.is_empty() {
             return Err(AgentDriverError::HookSourcesUnavailable {
-                details: problems
-                    .iter()
-                    .map(|problem| format!("{}: {}", problem.source, problem.message))
-                    .collect(),
+                details: strict_failures,
             });
         }
         Ok(())
@@ -257,26 +288,41 @@ impl AgentDriver {
     }
 }
 
-/// Loads `sources` into the registry and returns the errors it recorded for them.
+/// Loads `sources` into the registry, finalizing it, and returns the sources that failed.
 #[cfg(feature = "local_fs")]
-fn load_into_registry(sources: &[ExplicitHookSource], ctx: &mut AppContext) -> Vec<HookDiagnostic> {
+fn load_into_registry(
+    sources: &[ExplicitHookSource],
+    ctx: &mut AppContext,
+) -> Result<Vec<SourceLoadFailure>, AgentDriverError> {
     use ai::hooks::{HookRegistry, load_explicit_sources};
 
-    let mut failures = Vec::new();
-    HookRegistry::handle(ctx).update(ctx, |registry, _| {
-        failures = load_explicit_sources(sources, registry);
-    });
-    failures
+    HookRegistry::handle(ctx)
+        .update(ctx, |registry, _| load_explicit_sources(sources, registry))
+        .map_err(|error| {
+            log::error!("agent hook sources were loaded twice in one run: {error}");
+            AgentDriverError::InvalidRuntimeState
+        })
 }
 
 #[cfg(not(feature = "local_fs"))]
-fn load_into_registry(sources: &[ExplicitHookSource], _: &mut AppContext) -> Vec<HookDiagnostic> {
-    sources
+fn load_into_registry(
+    sources: &[ExplicitHookSource],
+    _: &mut AppContext,
+) -> Result<Vec<SourceLoadFailure>, AgentDriverError> {
+    Ok(sources
         .iter()
-        .map(|source| {
-            unavailable_source(source, "hook files cannot be read in this build".to_owned())
+        .map(|source| SourceLoadFailure {
+            diagnostic: HookDiagnostic {
+                source: HookSourceId {
+                    kind: source.kind,
+                    location: HookSourceLocation::Named(source.config_file.display().to_string()),
+                },
+                severity: DiagnosticSeverity::Error,
+                message: "hook files cannot be read in this build".to_owned(),
+            },
+            strict: source.policy.strict,
         })
-        .collect()
+        .collect())
 }
 
 /// Writes hook notices and diagnostics to the run's standard output in the run's output format,

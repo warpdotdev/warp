@@ -259,6 +259,7 @@ struct PrewarmedSandboxStatusInput {
 pub enum PrewarmedSandboxControlEvent {
     Assignment {
         generation: String,
+        #[serde(deserialize_with = "assignment_execution_config")]
         execution_config: Box<ExecutionConfiguration>,
         runtime_env: HashMap<String, String>,
         api_key: String,
@@ -269,6 +270,24 @@ pub enum PrewarmedSandboxControlEvent {
     /// A message type this client does not know, which it ignores so the server can add types.
     #[serde(other)]
     Unknown,
+}
+
+/// Decodes an assignment's execution configuration. A server that predates agent hooks sends no
+/// `agentHookSources`; it has none to send, so the run gets an empty list rather than failing to
+/// claim the assignment.
+fn assignment_execution_config<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Box<ExecutionConfiguration>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut value = serde_json::Value::deserialize(deserializer)?;
+    if let Some(config) = value.as_object_mut() {
+        config
+            .entry("agentHookSources")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    }
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl fmt::Debug for PrewarmedSandboxControlEvent {

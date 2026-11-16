@@ -134,12 +134,21 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
                     format!(
-                        "One or more agent hook sources could not be loaded, and this run uses the strict hook policy:\n\n{source_lines}\n\nCheck that each hook directory exists on the machine running the agent and holds a valid hooks.json."
+                        "One or more agent hook sources marked strict could not be loaded:\n\n{source_lines}\n\nCheck that each hook directory is in a repository attached to the factory, or exists on the machine running the agent, and holds a valid hooks.json."
                     ),
                     PlatformErrorCode::EnvironmentSetupFailed,
                 ),
             )
         }
+        AgentDriverError::HooksRequireOzHarness { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "This run's agent has hooks, but its harness ({harness}) does not run Warp agent hooks. Use the Oz harness or remove the hooks."
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

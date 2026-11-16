@@ -131,3 +131,21 @@ fn execution_factory_skill_directories_are_relative_and_unambiguous() {
     assert!(factory_skill_dirs(vec!["../other/skills".into()]).is_err());
     assert!(factory_skill_dirs(vec!["~/skills".into()]).is_err());
 }
+
+#[test]
+fn a_repository_hook_path_stays_inside_its_repository() {
+    for valid in [".", ".cursor", "tools/hooks", "./hooks"] {
+        assert!(hook_repository_path(valid).is_ok(), "{valid}");
+    }
+    for invalid in ["", " .cursor", "../hooks", "hooks/../../x", "/etc/hooks"] {
+        assert!(hook_repository_path(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn a_worker_hook_path_is_absolute() {
+    assert!(hook_worker_path("/etc/acme/hooks").is_ok());
+    for invalid in ["", "etc/hooks", "./hooks", " /etc/hooks"] {
+        assert!(hook_worker_path(invalid).is_err(), "{invalid:?}");
+    }
+}
