@@ -126,6 +126,7 @@ fn verify_standby_bootstrap() {
                         "__typename": "PrewarmedSandboxConfiguration",
                         "sandboxId": "bootstrap-test",
                         "fingerprint": "bootstrap-generation",
+                        "githubCredentialMode": "LEGACY",
                         "spec": {
                             "harness": "oz",
                             "repositories": [],

@@ -69,7 +69,7 @@ use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your team's shared credit pool.";
-const ADDON_USAGE_DESCRIPTION: &str = "Usage rolls over each billing cycle and expires after one year. Once your base plan usage is depleted, any additional purchased usage will be consumed.";
+const ADDON_USAGE_DESCRIPTION: &str = "Usage rolls over each billing cycle and expires after one year. Once your included usage is depleted, any additional purchased usage will be consumed.";
 const ADDITIONAL_ADDON_USAGE_DESCRIPTION_FOR_TEAM: &str =
     "Purchased usage is added to your team's shared pool.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
@@ -963,7 +963,7 @@ impl BillingAndUsagePageV2View {
                     render_balance_card(
                         appearance,
                         BASE_CREDITS_DOT_COLOR,
-                        &base_remaining.pool_label("Base"),
+                        &base_remaining.pool_label("Included personal"),
                         &reset_str,
                         base_remaining,
                         base_limit,

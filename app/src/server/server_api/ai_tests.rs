@@ -17,8 +17,8 @@ use super::{
     CONNECTED_SELF_HOSTED_WORKERS_PATH, ConnectedSelfHostedWorker, CreateAgentRequest,
     ExecutionLocation, ForkConversationResponse, ListConnectedSelfHostedWorkersResponse,
     ListRunsResponse, PrepareAttachmentUploadsResponse, ReadAgentMessageResponse,
-    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskGitCredentialsError,
-    TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SendAgentMessageRequest, SpawnAgentRequest,
+    TaskGitCredentialsError, TaskListFilter, TaskStatusUpdate, UploadFieldValue, UserQueryMode,
     agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
     build_run_followup_url, is_unknown_git_credential_schema_error,
 };
@@ -33,7 +33,7 @@ fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
 }
 
 #[test]
-fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
+fn list_run_previews_uses_ambient_run_auth_and_reads_app_ports() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let request = {
         let mut server = warp_core::channel::ChannelState::mock_server();
@@ -49,6 +49,7 @@ fn list_run_previews_uses_ambient_run_auth_and_ignores_preview_details() {
     let response = block_on(api.list_run_previews(&task_id)).unwrap();
     assert_eq!(response.execution_id, Some(42));
     assert_eq!(response.previews.len(), 1);
+    assert_eq!(response.previews[0].port, 3000);
     request.assert();
 }
 
@@ -670,8 +671,33 @@ fn list_agent_runs_omits_team_header_for_teamless_scope() {
 }
 
 #[test]
+fn send_message_serialization_distinguishes_empty_and_absent_github_attribution() {
+    let mut request = SendAgentMessageRequest {
+        delegated_github_coauthor_user_uid: Some("delegated-human".to_string()),
+        to: vec!["child".to_string()],
+        subject: "Follow-up".to_string(),
+        body: "Continue".to_string(),
+        sender_run_id: "parent-run".to_string(),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        value["delegated_github_coauthor_user_uid"],
+        "delegated-human"
+    );
+
+    request.delegated_github_coauthor_user_uid = Some(String::new());
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["delegated_github_coauthor_user_uid"], "");
+
+    request.delegated_github_coauthor_user_uid = None;
+    let value = serde_json::to_value(&request).unwrap();
+    assert!(value.get("delegated_github_coauthor_user_uid").is_none());
+}
+
+#[test]
 fn spawn_agent_request_serializes_explicit_personal_ownership() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
@@ -700,6 +726,7 @@ fn spawn_agent_request_serializes_explicit_personal_ownership() {
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
@@ -800,6 +827,7 @@ fn deserialize_connected_self_hosted_workers_response() {
 #[test]
 fn spawn_agent_request_omits_prompt_when_none() {
     let request = SpawnAgentRequest {
+        delegated_github_coauthor_user_uid: None,
         metadata: Default::default(),
         prompt: None,
         mode: UserQueryMode::Normal,

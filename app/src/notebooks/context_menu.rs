@@ -269,17 +269,17 @@ where
 
     #[cfg(test)]
     /// List out the context menu items by name.
-    pub fn item_names<'a>(&self, ctx: &'a impl warpui::ViewAsRef) -> Vec<&'a str> {
+    pub fn item_names(&self, ctx: &impl warpui::ViewAsRef) -> Vec<String> {
         self.menu
             .as_ref(ctx)
             .items()
             .iter()
             .map(|item| match item {
-                MenuItem::Item(item) => item.label(),
-                MenuItem::Separator => "----",
+                MenuItem::Item(item) => item.label().to_string(),
+                MenuItem::Separator => "----".to_string(),
                 MenuItem::ItemsRow { .. } => panic!("ItemsRow not supported"),
-                MenuItem::Submenu { fields, .. } => fields.label(),
-                MenuItem::Header { fields, .. } => fields.label(),
+                MenuItem::Submenu { fields, .. } => fields.label().to_string(),
+                MenuItem::Header { fields, .. } => fields.label().to_string(),
             })
             .collect()
     }

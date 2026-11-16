@@ -2,7 +2,7 @@ use std::io;
 
 use ai::LLMProvider;
 use clap::Parser;
-use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::tui_export::{AuthStateProvider, register_tui_session_view_test_singletons};
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::App;
@@ -10,10 +10,26 @@ use warpui_core::runtime::TuiDriverStartupError;
 
 use super::{
     TuiArgs, ensure_terminal_session, handle_tui_driver_startup_error, parse_resume_token,
+    read_cached_git_jwt,
 };
 use crate::root_view::RootTuiView;
 use crate::session_registry::TuiSessions;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
+
+#[test]
+fn signed_out_saved_identity_cannot_use_cached_git_token() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.update(|ctx| {
+            let auth = AuthStateProvider::as_ref(ctx).get();
+            assert!(auth.user_id().is_some());
+            auth.set_credentials(None);
+
+            // No secure-storage model is registered, so this also checks the early rejection.
+            assert!(read_cached_git_jwt(ctx, "factory-id").is_none());
+        });
+    });
+}
 
 #[test]
 fn parses_provider_api_key_setup_flag() {

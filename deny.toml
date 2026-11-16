@@ -1,5 +1,4 @@
 [advisories]
-git-fetch-with-cli = true
 ignore = [
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained, but considered to be complete." },
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; we should try to find an alternative." },

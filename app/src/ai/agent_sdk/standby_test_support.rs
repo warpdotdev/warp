@@ -277,6 +277,25 @@ pub(super) async fn drive(
     hooks: &Hooks,
     standby_seconds: i64,
 ) -> anyhow::Result<()> {
+    drive_with_renewal(
+        preparation,
+        connections,
+        clock,
+        hooks,
+        standby_seconds,
+        future::pending(),
+    )
+    .await
+}
+
+pub(super) async fn drive_with_renewal(
+    preparation: impl Future<Output = anyhow::Result<usize>>,
+    connections: async_channel::Receiver<ConnectionAttempt>,
+    clock: &TestClock,
+    hooks: &Hooks,
+    standby_seconds: i64,
+    renewal: impl Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<()> {
     run_lifecycle(
         "abc123",
         clock.now() + TimeDelta::seconds(standby_seconds),
@@ -314,6 +333,7 @@ pub(super) async fn drive(
             .boxed()
         },
         &clock.clock(),
+        renewal,
     )
     .await
 }

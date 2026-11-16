@@ -4,6 +4,7 @@
       "__typename": "PrewarmedSandboxConfiguration",
       "sandboxId": "11111111-2222-3333-4444-555555555555",
       "fingerprint": "abc123",
+      "githubCredentialMode": "LEGACY",
       "spec": {
         "harness": "oz",
         "repositories": [
@@ -36,7 +37,7 @@
       },
       "environmentVariables": [{ "name": "WARP_FACTORY_REPO_DIR", "value": "factory" }],
       "gitCredentials": [
-        { "host": "github.com", "username": "x-access-token", "token": "ghs_secret", "email": null }
+        { "host": "github.com", "username": "x-access-token", "token": "ghs_secret", "email": null, "expiresAt": null, "repositoryScope": null }
       ],
       "managedSecrets": [
         {

@@ -154,6 +154,60 @@ fn resume_request_names_the_session_cwd_and_servers() {
 }
 
 #[test]
+fn load_request_names_the_session_cwd_and_servers() {
+    assert_eq!(METHOD_SESSION_LOAD, "session/load");
+    let params = serde_json::to_value(LoadSessionParams {
+        session_id: "prior-session".to_owned(),
+        cwd: "/workspace".to_owned(),
+        mcp_servers: vec![McpServer::Remote {
+            kind: "http",
+            name: "docs".to_owned(),
+            url: "https://example.com/mcp".to_owned(),
+            headers: Vec::new(),
+        }],
+    })
+    .unwrap();
+
+    assert_eq!(
+        params,
+        json!({
+            "sessionId": "prior-session",
+            "cwd": "/workspace",
+            "mcpServers": [{
+                "type": "http",
+                "name": "docs",
+                "url": "https://example.com/mcp",
+                "headers": [],
+            }],
+        })
+    );
+}
+
+#[test]
+fn load_response_becomes_the_session_it_reopened() {
+    let response: Option<LoadSessionResponse> = serde_json::from_value(json!({
+        "configOptions": [{ "id": "model", "category": "model", "type": "select", "options": [] }],
+        "modes": { "currentModeId": "default", "availableModes": [] },
+        "_meta": { "adapter": "data" },
+    }))
+    .unwrap();
+
+    let session = response
+        .unwrap_or_default()
+        .into_session("prior-session".to_owned());
+
+    assert_eq!(session.session_id, "prior-session");
+    assert_eq!(session.config_options.len(), 1);
+    assert_eq!(session.meta["adapter"], "data");
+
+    // Agents on the original `session/load` answer with `null`.
+    let null: Option<LoadSessionResponse> = serde_json::from_value(json!(null)).unwrap();
+    let session = null.unwrap_or_default().into_session("s".to_owned());
+    assert_eq!(session.session_id, "s");
+    assert!(session.config_options.is_empty());
+}
+
+#[test]
 fn steering_is_read_from_the_initialize_meta() {
     let advertised: InitializeResponse = serde_json::from_value(json!({
         "protocolVersion": 1,

@@ -4,6 +4,8 @@ use chrono::TimeDelta;
 use futures::channel::oneshot;
 use futures::future;
 use warp_core::features::FeatureFlag;
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::execution_config::CodeForge as ConfigCodeForge;
 use warpui::App;
 
@@ -11,7 +13,7 @@ use self::support::*;
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::auth::user::{PrincipalType, User};
-use crate::server::server_api::ai::MockAIClient;
+use crate::server::server_api::ai::{MockAIClient, TaskGitCredentialsError};
 use crate::server::server_api::prewarmed_sandbox::tests::parse_configuration;
 
 #[path = "standby_test_support.rs"]
@@ -641,4 +643,45 @@ fn stalled_connection_times_out_without_losing_preparation() {
     )
     .unwrap();
     assert_eq!(hooks.count(Call::Install), 1);
+}
+
+#[test]
+fn config_gone_does_not_fail_a_committed_assignment() {
+    let clock = TestClock::new();
+    let hooks = Hooks::default();
+    let (connections, incoming) = async_channel::unbounded();
+    let (standby_connection, standby) = connection();
+    let (assigned_connection, assigned) = connection();
+    connections.try_send(standby_connection).unwrap();
+    connections.try_send(assigned_connection).unwrap();
+    let (gone_tx, gone_rx) = oneshot::channel();
+    let mut info = PlatformErrorInfo::new(PlatformErrorCode::OperationNotSupported, false);
+    info.http_status = Some(410);
+    info.metadata
+        .insert("reason".into(), "prewarmed_sandbox_unavailable".into());
+    let error = TaskGitCredentialsError::Platform {
+        message: "Standby configuration is unavailable".into(),
+        detail: None,
+        info: Box::new(info),
+    };
+    let result = exercise(
+        drive_with_renewal(async { Ok(7) }, incoming, &clock, &hooks, 600, async {
+            gone_rx.await.unwrap();
+            wait_after_standby_config_rejection(error.into()).await
+        }),
+        async {
+            hooks.expect(Call::Connected).await;
+            gone_tx.send(()).unwrap();
+            clock.advance(HEARTBEAT_INTERVAL.as_secs() as i64).await;
+            standby.expect_heartbeat("abc123").await;
+            standby.send(assignment("42", &clock));
+            hooks.expect(Call::Install).await;
+            hooks.expect(Call::Connected).await;
+            assigned.send(assignment("42", &clock));
+            hooks.expect(Call::Run).await;
+        },
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(hooks.count(Call::Install), 1);
+    assert_eq!(hooks.count(Call::Run), 1);
 }

@@ -6,7 +6,6 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -16,7 +15,6 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_info;
 use warp_errors::report_error;
-use warp_harness_usage::{CaptureDiagnostics, JsonlReadStatus, extract_codex};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -24,18 +22,17 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::codex_transcript::{
     CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
-    parse_session_meta, rehydrate_codex_transcript,
+    rehydrate_codex_transcript,
 };
+use super::codex_usage::capture_transcript_with_usage;
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
 use super::json_utils::read_json_file_or_default;
 use super::skill_dirs_publish::HarnessSupportSkills;
 use super::transcript_persistence::{
-    CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
-    needs_capture_retry, read_jsonl_capture, upload_captured_transcript,
+    UploadedTranscriptUsage, capture_transcript_with_retry, upload_captured_transcript,
 };
-use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessRunner, JSONMCPServer, ResolvedMCPServers, ResumePayload, SavePoint, ThirdPartyHarness,
     install_docs_url, write_temp_file,
@@ -533,44 +530,6 @@ impl HarnessRunner for CodexHarnessRunner {
         )
         .await
     }
-}
-
-pub(super) fn capture_transcript_with_usage(
-    session_id: Uuid,
-    transcript_path: &Path,
-    is_final: bool,
-    identity: Option<CaptureIdentity>,
-) -> Result<CapturedTranscript> {
-    let captured_at = Utc::now();
-    let capture = read_jsonl_capture(transcript_path)?;
-    if (is_final || identity.is_some()) && capture.diagnostics.status == JsonlReadStatus::Missing {
-        anyhow::bail!("Codex transcript disappeared before final save");
-    }
-    if capture.diagnostics.status == JsonlReadStatus::Unreadable && capture.entries.is_empty() {
-        anyhow::bail!("Codex transcript could not be read");
-    }
-    if identity.is_some() && capture.entries.is_empty() && !capture.diagnostics.is_complete() {
-        anyhow::bail!("Codex transcript has no complete readable records");
-    }
-    let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
-    let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
-    let transcript_body =
-        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")?;
-    let diagnostics = CaptureDiagnostics {
-        root: capture.diagnostics,
-        ..Default::default()
-    };
-    let usage_request = identity.and_then(|identity| {
-        identity.build_usage_request(
-            captured_at,
-            extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
-        )
-    });
-    Ok(CapturedTranscript {
-        transcript_body,
-        usage_request,
-        needs_retry: needs_capture_retry(&diagnostics),
-    })
 }
 
 const CODEX_CONFIG_DIR: &str = ".codex";

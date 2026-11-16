@@ -528,7 +528,7 @@ impl ServerApi {
 
         Self::new_with_parts(
             client,
-            Arc::new(http_client::Client::new_external()),
+            Arc::new(http_client::Client::new_external_for_test()),
             auth_state,
             tx,
             None,
@@ -548,7 +548,7 @@ impl ServerApi {
         }
         Self::new_with_parts(
             Arc::new(http_client::Client::new_for_test()),
-            Arc::new(http_client::Client::new_external()),
+            Arc::new(http_client::Client::new_external_for_test()),
             auth_state,
             event_sender,
             None,

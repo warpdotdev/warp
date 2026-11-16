@@ -7,6 +7,7 @@ use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelSpawner};
 
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::git_credentials::restricted::active_restricted_child_environment;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
@@ -23,7 +24,9 @@ pub(crate) async fn resolve_skill<H: Entity + 'static>(
     if clone_repository && let (Some(org), Some(repo)) = (&spec.org, &spec.repo) {
         setup_events
             .record_result(SetupStep::SkillRepoClone, async {
-                clone_repo_for_skill(org, repo, working_dir)
+                let environment = active_restricted_child_environment()
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
+                clone_repo_for_skill(org, repo, working_dir, &environment)
                     .await
                     .map_err(|error| {
                         AgentDriverError::SkillResolutionFailed(format_skill_resolution_error(

@@ -532,13 +532,6 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
 /// Writes content from structured tool call results.
 fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType) {
     match result {
-        ToolCallResultType::DeniedByHook(denied) => {
-            out.push_str("status: denied_by_hook\n");
-            out.push_str(&format!(
-                "reason: \"{}\"\n",
-                escape_yaml_string(&denied.reason)
-            ));
-        }
         ToolCallResultType::RunAgentsResult(r) => match &r.outcome {
             Some(api::run_agents_result::Outcome::Launched(launched)) => {
                 out.push_str("status: launched\n");
@@ -1075,6 +1068,11 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
         }
         ToolCallResultType::Cancel(_) => {
             out.push_str("status: cancelled\n");
+        }
+        ToolCallResultType::DeniedByHook(denied) => {
+            out.push_str("status: denied_by_hook\n");
+            out.push_str("reason: |\n");
+            write_block_scalar_with_indent(out, &denied.reason, 2);
         }
         // No structured content worth serializing.
         ToolCallResultType::Server(_)

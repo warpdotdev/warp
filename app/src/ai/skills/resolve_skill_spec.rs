@@ -11,6 +11,8 @@
 //! - Applies consistent skill-directory precedence (e.g. `.claude/` vs `.codex/`, etc.).
 //! - Falls back to scanning disk when the manager cache has not warmed yet.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
@@ -146,6 +148,7 @@ pub async fn clone_repo_for_skill(
     org: &str,
     repo: &str,
     working_dir: &Path,
+    environment: &HashMap<OsString, OsString>,
 ) -> Result<(), ResolveSkillError> {
     let repo_url = format!("https://github.com/{org}/{repo}.git");
     let target_dir = working_dir.join(repo);
@@ -178,6 +181,7 @@ pub async fn clone_repo_for_skill(
     );
 
     let output = AsyncCommand::new("git")
+        .envs(environment)
         .arg("clone")
         .arg(&repo_url)
         .arg(&target_dir)

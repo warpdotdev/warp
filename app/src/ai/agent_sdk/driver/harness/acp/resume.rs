@@ -3,15 +3,19 @@
 //! The CLI behind an ACP adapter persists its session as the same transcript its terminal runner
 //! resumes from, and the run uploads it (see [`super::cli_transcript`]). A run that continues a
 //! restored conversation writes that transcript back where the CLI looks for it and asks the
-//! adapter to `session/resume` it, so the agent keeps its memory of earlier turns the way
-//! `claude --resume` and `codex resume` do on the terminal transport. `session/load` is not used:
-//! it replays the whole history as `session/update`s, which would be applied to the restored
-//! native conversation a second time.
+//! adapter to reopen it, so the agent keeps its memory of earlier turns the way
+//! `claude --resume` and `codex resume` do on the terminal transport.
 //!
-//! The run opens a fresh session, as every run did before, when there is nothing to resume: the
-//! harness has no restorable transcript, the previous run never uploaded one, or the agent does
-//! not take (or refuses) `session/resume`. A transcript that exists but cannot be downloaded or
-//! written back fails the run instead, as it does on the terminal transport.
+//! ACP has two methods for reopening a session, and what the agent announces at `initialize`
+//! decides which one is sent. `session/resume` is preferred: the agent restores the session and
+//! answers. An agent that only takes `session/load` replays the whole history as
+//! `session/update`s before it answers; the native conversation was already restored from the
+//! server, so that replay is discarded rather than applied to it a second time.
+//!
+//! The run opens a fresh session, as every run did before, when there is nothing to reopen: the
+//! harness has no restorable transcript, the previous run never uploaded one, or the agent takes
+//! neither method or refuses the one it was sent. A transcript that exists but cannot be
+//! downloaded or written back fails the run instead, as it does on the terminal transport.
 //!
 //! Known limitation: when claude-agent-acp restarts a session after a plan is approved, the
 //! transcript upload stops at the restart (see [`super::cli_transcript`]), so a resumed session
@@ -34,21 +38,61 @@ use super::super::fetch_transcript_envelope;
 use super::cli_transcript::CliTranscriptKind;
 use super::connection::{AcpConnection, RpcError};
 use super::protocol::{
-    self, McpServer, NewSessionParams, NewSessionResponse, ResumeSessionParams,
-    ResumeSessionResponse, SessionCapabilities,
+    self, AgentCapabilities, LoadSessionParams, LoadSessionResponse, McpServer, NewSessionParams,
+    NewSessionResponse, ResumeSessionParams, ResumeSessionResponse,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::driver::{AgentDriverError, HarnessSetupStage};
 use crate::server::server_api::harness_support::HarnessSupportClient;
+
+/// The ACP method that reopens a session the agent persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReopenMethod {
+    /// `session/resume`: the agent restores the session and answers.
+    Resume,
+    /// `session/load`: the agent replays the session's history as notifications before it
+    /// answers, and the replay is discarded.
+    Load,
+}
+
+impl ReopenMethod {
+    /// The method an agent with these capabilities is asked to reopen a session through, or
+    /// `None` when it announces neither. `session/resume` wins when both are announced, since
+    /// it spares the replay.
+    pub(super) fn for_agent(capabilities: &AgentCapabilities) -> Option<Self> {
+        if capabilities.session_capabilities.supports_resume() {
+            Some(Self::Resume)
+        } else if capabilities.load_session {
+            Some(Self::Load)
+        } else {
+            None
+        }
+    }
+
+    fn wire_method(self) -> &'static str {
+        match self {
+            Self::Resume => protocol::METHOD_SESSION_RESUME,
+            Self::Load => protocol::METHOD_SESSION_LOAD,
+        }
+    }
+}
+
+impl std::fmt::Display for ReopenMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.wire_method())
+    }
+}
 
 /// Where the run's ACP session came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionOrigin {
     /// The run started a new conversation.
     New,
-    /// The restored conversation's agent session was resumed.
-    Resumed,
-    /// The restored conversation's agent session could not be resumed, so a fresh one was opened.
+    /// The restored conversation's agent session was reopened through this method, so the agent
+    /// remembers its earlier turns.
+    Resumed(ReopenMethod),
+    /// The restored conversation's agent session could not be reopened, so a fresh one was
+    /// opened.
     ResumeMissed(ResumeMiss),
 }
 
@@ -57,13 +101,14 @@ impl SessionOrigin {
     pub(super) fn metric_label(&self) -> &'static str {
         match self {
             Self::New => "new",
-            Self::Resumed => "resumed",
+            Self::Resumed(ReopenMethod::Resume) => "resumed",
+            Self::Resumed(ReopenMethod::Load) => "loaded",
             Self::ResumeMissed(miss) => miss.metric_label(),
         }
     }
 }
 
-/// Why a restored conversation's agent session was not resumed. None of these fail the run.
+/// Why a restored conversation's agent session was not reopened. None of these fail the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResumeMiss {
     /// This client cannot restore the harness's session transcript.
@@ -73,10 +118,10 @@ pub(super) enum ResumeMiss {
     TranscriptRootUnresolved(CliTranscriptKind),
     /// The previous run never uploaded a session transcript.
     NoTranscript,
-    /// The agent does not announce `session/resume`.
-    AgentCannotResume,
-    /// The agent answered `session/resume` with an error.
-    Rejected(String),
+    /// The agent announces neither `session/resume` nor `session/load`.
+    AgentCannotReopen,
+    /// The agent answered the reopening request with an error.
+    Rejected { method: ReopenMethod, error: String },
 }
 
 impl ResumeMiss {
@@ -86,8 +131,15 @@ impl ResumeMiss {
             Self::Unsupported => "resume_missed_unsupported",
             Self::TranscriptRootUnresolved(_) => "resume_missed_transcript_root_unresolved",
             Self::NoTranscript => "resume_missed_no_transcript",
-            Self::AgentCannotResume => "resume_missed_agent_cannot_resume",
-            Self::Rejected(_) => "resume_missed_rejected",
+            Self::AgentCannotReopen => "resume_missed_agent_cannot_reopen",
+            Self::Rejected {
+                method: ReopenMethod::Resume,
+                ..
+            } => "resume_missed_rejected",
+            Self::Rejected {
+                method: ReopenMethod::Load,
+                ..
+            } => "resume_missed_load_rejected",
         }
     }
 }
@@ -102,8 +154,13 @@ impl std::fmt::Display for ResumeMiss {
                  {kind:?} transcripts\" warning logged when the run was prepared)"
             ),
             Self::NoTranscript => write!(f, "no session transcript was saved"),
-            Self::AgentCannotResume => write!(f, "the agent does not support session/resume"),
-            Self::Rejected(error) => write!(f, "the agent refused session/resume: {error}"),
+            Self::AgentCannotReopen => write!(
+                f,
+                "the agent supports neither {} nor {}",
+                ReopenMethod::Resume,
+                ReopenMethod::Load
+            ),
+            Self::Rejected { method, error } => write!(f, "the agent refused {method}: {error}"),
         }
     }
 }
@@ -240,31 +297,34 @@ impl Drop for PendingRehydration {
 pub(super) enum SessionPlan {
     /// Start a new session.
     New,
-    /// Resume the CLI session with this id, which has been put back on disk.
-    Resume(String),
-    /// Start a new session because the restored conversation's could not be resumed.
+    /// Reopen the CLI session with this id, which has been put back on disk.
+    Reopen {
+        method: ReopenMethod,
+        session_id: String,
+    },
+    /// Start a new session because the restored conversation's could not be reopened.
     Missed(ResumeMiss),
 }
 
 /// Decides the session plan once `initialize` has said what the agent supports. `rehydration` is
 /// `None` when the run does not continue a restored conversation; otherwise the transcript being
-/// put back, or why it is not. The download is waited for only when the agent can resume, and
-/// abandoned otherwise.
+/// put back, or why it is not. The download is waited for only when the agent can reopen a
+/// session, and abandoned otherwise.
 pub(super) async fn plan_session(
     rehydration: Option<Result<PendingRehydration, ResumeMiss>>,
-    capabilities: &SessionCapabilities,
+    capabilities: &AgentCapabilities,
 ) -> Result<SessionPlan, AgentDriverError> {
     let pending = match rehydration {
         None => return Ok(SessionPlan::New),
         Some(Err(miss)) => return Ok(SessionPlan::Missed(miss)),
         Some(Ok(pending)) => pending,
     };
-    if !capabilities.supports_resume() {
+    let Some(method) = ReopenMethod::for_agent(capabilities) else {
         drop(pending);
-        return Ok(SessionPlan::Missed(ResumeMiss::AgentCannotResume));
-    }
+        return Ok(SessionPlan::Missed(ResumeMiss::AgentCannotReopen));
+    };
     match pending.wait().await {
-        Ok(session_id) => Ok(SessionPlan::Resume(session_id)),
+        Ok(session_id) => Ok(SessionPlan::Reopen { method, session_id }),
         Err(RehydrateError::Missed(miss)) => Ok(SessionPlan::Missed(miss)),
         Err(RehydrateError::Failed(error)) => Err(error),
     }
@@ -272,7 +332,7 @@ pub(super) async fn plan_session(
 
 /// The handshake's deadline, counted from the start of its current phase. Restarting it at a
 /// phase boundary gives the next phase the full budget, so a `session/new` that follows a slow,
-/// refused `session/resume` is not cut short by the time the refusal took.
+/// refused reopening is not cut short by the time the refusal took.
 #[derive(Clone)]
 pub(super) struct PhaseClock(Arc<Mutex<Phase>>);
 
@@ -321,13 +381,15 @@ impl PhaseClock {
     }
 }
 
-/// The phase a refused `session/resume` moves the handshake into.
-pub(super) const FALLBACK_SESSION_PHASE: &str = "opening a new session after refusing to resume";
+/// The phase a refused reopening moves the handshake into.
+pub(super) const FALLBACK_SESSION_PHASE: &str =
+    "opening a new session after refusing to reopen its earlier one";
 
-/// Opens the run's ACP session according to `plan`. A `session/resume` the agent answers with an
-/// error falls back to `session/new` with a fresh phase on `clock`; a request that fails for any
-/// other reason (the agent went away, the connection broke) is the handshake's error, since the
-/// same connection cannot open a session either.
+/// Opens the run's ACP session according to `plan`. A reopening the agent answers with an error
+/// falls back to `session/new` with a fresh phase on `clock`; a request that fails for any other
+/// reason (the agent went away, the connection broke) is the handshake's error, since the same
+/// connection cannot open a session either. What a `session/load` replays is discarded whether
+/// the agent then answers with the session or with an error.
 pub(super) async fn open_session(
     connection: &AcpConnection,
     plan: SessionPlan,
@@ -338,28 +400,47 @@ pub(super) async fn open_session(
     let origin = match plan {
         SessionPlan::New => SessionOrigin::New,
         SessionPlan::Missed(miss) => SessionOrigin::ResumeMissed(miss),
-        SessionPlan::Resume(session_id) => {
-            let resumed = connection
-                .request::<_, Option<ResumeSessionResponse>>(
-                    protocol::METHOD_SESSION_RESUME,
-                    ResumeSessionParams {
-                        session_id: session_id.clone(),
-                        cwd: cwd.clone(),
-                        mcp_servers: mcp_servers.clone(),
-                    },
-                )
-                .await;
-            match resumed {
-                Ok(resumed) => {
-                    let session = resumed.unwrap_or_default().into_session(session_id);
-                    return Ok((session, SessionOrigin::Resumed));
+        SessionPlan::Reopen { method, session_id } => {
+            let reopened = match method {
+                ReopenMethod::Resume => {
+                    connection
+                        .request::<_, Option<ResumeSessionResponse>>(
+                            protocol::METHOD_SESSION_RESUME,
+                            ResumeSessionParams {
+                                session_id: session_id.clone(),
+                                cwd: cwd.clone(),
+                                mcp_servers: mcp_servers.clone(),
+                            },
+                        )
+                        .await
+                }
+                ReopenMethod::Load => {
+                    connection
+                        .request_discarding_replay::<_, Option<LoadSessionResponse>>(
+                            protocol::METHOD_SESSION_LOAD,
+                            LoadSessionParams {
+                                session_id: session_id.clone(),
+                                cwd: cwd.clone(),
+                                mcp_servers: mcp_servers.clone(),
+                            },
+                        )
+                        .await
+                }
+            };
+            match reopened {
+                Ok(reopened) => {
+                    let session = reopened.unwrap_or_default().into_session(session_id);
+                    return Ok((session, SessionOrigin::Resumed(method)));
                 }
                 Err(error) => match error.downcast::<RpcError>() {
                     Ok(refusal) => {
                         clock.restart(HarnessSetupStage::SessionOpen, FALLBACK_SESSION_PHASE);
-                        SessionOrigin::ResumeMissed(ResumeMiss::Rejected(refusal.to_string()))
+                        SessionOrigin::ResumeMissed(ResumeMiss::Rejected {
+                            method,
+                            error: refusal.to_string(),
+                        })
                     }
-                    Err(error) => return Err(error.context("session/resume failed")),
+                    Err(error) => return Err(error.context(format!("{method} failed"))),
                 },
             }
         }

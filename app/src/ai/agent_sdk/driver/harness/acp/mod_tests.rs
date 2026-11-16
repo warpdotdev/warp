@@ -12,7 +12,7 @@ use warpui::r#async::FutureExt as _;
 
 use super::attachments::ResolvedFile;
 use super::protocol::{ContentBlock, PromptCapabilities};
-use super::resume::ResumeMiss;
+use super::resume::{ReopenMethod, ResumeMiss};
 use super::*;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::server::server_api::ServerApiProvider;
@@ -321,13 +321,19 @@ fn initial_prompt_without_files_keeps_the_existing_text() {
 fn a_resumed_session_is_not_sent_the_system_prompt_again() {
     let harness = AcpHarness::new(Harness::Claude).unwrap();
 
-    let resumed = harness.initial_prompt_text(
-        "inspect these",
-        Some("system"),
-        Some("recovery"),
-        Some("context"),
-        &SessionOrigin::Resumed,
-    );
+    for method in [ReopenMethod::Resume, ReopenMethod::Load] {
+        let resumed = harness.initial_prompt_text(
+            "inspect these",
+            Some("system"),
+            Some("recovery"),
+            Some("context"),
+            &SessionOrigin::Resumed(method),
+        );
+        assert_eq!(
+            resumed, "recovery\n\ncontext\n\ninspect these",
+            "{method:?}"
+        );
+    }
     let fresh = harness.initial_prompt_text(
         "inspect these",
         Some("system"),
@@ -336,6 +342,5 @@ fn a_resumed_session_is_not_sent_the_system_prompt_again() {
         &SessionOrigin::ResumeMissed(ResumeMiss::NoTranscript),
     );
 
-    assert_eq!(resumed, "recovery\n\ncontext\n\ninspect these");
     assert_eq!(fresh, "recovery\n\ncontext\n\nsystem\n\ninspect these");
 }

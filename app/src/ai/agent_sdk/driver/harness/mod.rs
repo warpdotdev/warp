@@ -44,14 +44,18 @@ use crate::util::path::resolve_executable;
 pub(crate) mod acp;
 pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
+mod claude_usage;
 mod codex;
 pub(crate) mod codex_transcript;
+mod codex_usage;
 pub(crate) mod exit_escalation;
 mod gemini;
 mod harness_persistence;
 mod json_utils;
+pub(crate) mod launch_warmup;
 mod pi;
 mod pi_transcript;
+mod pi_usage;
 pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
@@ -218,6 +222,12 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// harness that is not driven over ACP, which never falls back.
     fn acp_adapter(&self) -> Option<AcpAdapter> {
         None
+    }
+
+    /// Directories holding the files this harness loads when it launches, for reading ahead of
+    /// the launch. Empty when they are not known.
+    fn launch_file_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     /// Whether the harness runs as an interactive CLI agent in the terminal whose progress is

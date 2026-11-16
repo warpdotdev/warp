@@ -26,6 +26,7 @@ fn pi_remote_child_forwards_auth_and_model_without_computer_use() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
@@ -102,6 +103,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            delegated_github_coauthor_user_uid: Some("delegated-human".to_string()),
             metadata: [("ticket_id".to_string(), "ENG-42".to_string())].into(),
             id: Default::default(),
             name: "  researcher  ".to_string(),
@@ -159,6 +161,10 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
             );
             assert_eq!(prepared.spawn_request.team, Some(true));
             let wire = serde_json::to_value(&prepared.spawn_request).unwrap();
+            assert_eq!(
+                wire["delegated_github_coauthor_user_uid"],
+                "delegated-human"
+            );
             assert_eq!(wire["metadata"]["ticket_id"], "ENG-42");
             let config = prepared.spawn_request.config.unwrap();
             assert_eq!(config.environment_id.as_deref(), Some("env-1"));
@@ -210,6 +216,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             SkillReference::BundledSkillId("bundled-test".to_string()),
         ];
         let request = StartAgentRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),
@@ -263,6 +270,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
     App::test((), |mut app| async move {
         crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
         let request = StartAgentRequest {
+            delegated_github_coauthor_user_uid: None,
             metadata: Default::default(),
             id: Default::default(),
             name: "child".to_string(),

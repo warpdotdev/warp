@@ -1,6 +1,51 @@
 use clap::Parser as _;
 
 use super::*;
+#[cfg(feature = "tui")]
+use crate::ai::agent_sdk::authenticate_then_execute;
+#[cfg(feature = "tui")]
+use crate::auth::credentials::Credentials;
+
+#[cfg(feature = "tui")]
+fn initialize_tui_command_auth(app: &mut App) {
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.update(|ctx| {
+        AuthStateProvider::as_ref(ctx)
+            .get()
+            .set_credentials(Some(Credentials::Bearer("test-bearer".to_owned())));
+    });
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|ctx| {
+        IapManager::new(None, Box::new(|_| Box::pin(async { None })), None, ctx)
+    });
+}
+
+#[cfg(feature = "tui")]
+#[test]
+fn command_auth_gate_waits_before_executing() {
+    App::test((), |mut app| async move {
+        initialize_tui_command_auth(&mut app);
+        let (executed, mut completion) = futures::channel::oneshot::channel();
+        app.update(|ctx| {
+            authenticate_then_execute(None, "", ctx, move |_| {
+                executed.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+
+        assert_eq!(completion.try_recv().unwrap(), None);
+
+        AuthManager::handle(&app).update(&mut app, |_, ctx| {
+            ctx.emit(AuthManagerEvent::AuthComplete);
+            ctx.emit(AuthManagerEvent::AuthComplete);
+        });
+
+        completion.await.unwrap();
+        assert!(app.termination_result().is_none());
+    });
+}
 
 fn command_line_launch_mode(arguments: &[&str]) -> LaunchMode {
     let args =

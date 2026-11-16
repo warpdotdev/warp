@@ -183,6 +183,7 @@ pub enum AIAgentActionType {
         addresses: Vec<String>,
         subject: String,
         message: String,
+        delegated_github_coauthor_user_uid: Option<String>,
     },
     /// Transfer control of a running shell command to the user.
     TransferShellCommandControlToUser {
@@ -222,6 +223,7 @@ pub enum AIAgentActionType {
 /// fully-resolved instance only.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunAgentsRequest {
+    pub delegated_github_coauthor_user_uid: Option<String>,
     pub metadata: HashMap<String, String>,
     pub summary: String,
     pub base_prompt: String,
