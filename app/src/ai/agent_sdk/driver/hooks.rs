@@ -458,7 +458,7 @@ pub(crate) fn write_diagnostic<W: Write>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix, feature = "local_fs"))]
 impl AgentDriver {
     /// Gives the driver `hooks` and loads them, as a claimed run does after environment
     /// preparation.
