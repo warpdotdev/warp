@@ -154,8 +154,10 @@ impl HookRegistry {
 impl HookRegistry {
     /// Reads `source`'s configuration file, parses it with the adapter for its format, and
     /// publishes a new snapshot in which this file's bindings replace any loaded from the same
-    /// file before. The bindings run in the source's working directory under its policy.
-    pub fn install_explicit_source(
+    /// file before. The bindings run in the source's working directory under its policy. This
+    /// neither merges duplicate selections nor finalizes; production code loads through
+    /// [`crate::hooks::load_explicit_sources`].
+    pub(crate) fn install_explicit_source(
         &mut self,
         source: &ExplicitHookSource,
     ) -> Result<(), HookConfigError> {

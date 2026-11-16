@@ -234,7 +234,7 @@ fn the_script_receives_cursor_shaped_json_on_stdin() {
 }
 
 #[test]
-fn the_hook_runs_in_the_directory_that_holds_the_file() {
+fn a_worker_hook_runs_from_its_hook_directory() {
     let harness = Harness::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#);
     harness.dispatch("ls");
     let recorded = fs::read_to_string(harness.dir.path().join("cwd.txt")).expect("cwd file");

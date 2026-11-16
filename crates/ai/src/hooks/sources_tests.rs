@@ -215,6 +215,82 @@ mod loading {
         );
     }
 
+    /// One source failing does not stop the others: the valid one still loads, each failure
+    /// carries its own source's `strict`, and the set is finalized.
+    #[test]
+    fn a_valid_source_loads_between_failing_ones() {
+        let missing_dir = TempDir::new().expect("tempdir");
+        let valid = hook_dir(VALID);
+        let invalid = hook_dir("{ not json");
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[
+                worker_source(missing_dir.path(), HookSourceKind::FactoryAgent, strict()),
+                worker_source(
+                    valid.path(),
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(
+                    invalid.path(),
+                    HookSourceKind::FactoryWide,
+                    HookSourcePolicy::default(),
+                ),
+            ],
+            &mut registry,
+        );
+
+        assert_eq!(
+            failures
+                .iter()
+                .map(|failure| failure.strict)
+                .collect::<Vec<_>>(),
+            vec![true, false],
+            "{failures:?}"
+        );
+        assert!(registry.is_finalized());
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.bindings.len(), 1);
+        assert_eq!(
+            snapshot.bindings[0].binding.id.source.location,
+            crate::hooks::model::HookSourceLocation::CanonicalPath(canonical(
+                &valid.path().join("hooks.json")
+            ))
+        );
+    }
+
+    /// A file that cannot be resolved has no canonical identity, so two entries naming it are not
+    /// merged: each reports its own failure with its own `strict`. A strict copy still fails the
+    /// run, which is the stricter-wins outcome; the cost is a repeated diagnostic.
+    #[test]
+    fn two_entries_for_one_missing_file_each_report_a_failure() {
+        let missing_dir = TempDir::new().expect("tempdir");
+        let mut registry = HookRegistry::new();
+
+        let failures = load(
+            &[
+                worker_source(
+                    missing_dir.path(),
+                    HookSourceKind::FactoryAgent,
+                    HookSourcePolicy::default(),
+                ),
+                worker_source(missing_dir.path(), HookSourceKind::FactoryWide, strict()),
+            ],
+            &mut registry,
+        );
+
+        assert_eq!(
+            failures
+                .iter()
+                .map(|failure| failure.strict)
+                .collect::<Vec<_>>(),
+            vec![false, true],
+            "{failures:?}"
+        );
+        assert!(registry.is_finalized());
+    }
+
     #[test]
     fn a_rejected_definition_is_a_failure_of_its_source() {
         let dir = hook_dir(
