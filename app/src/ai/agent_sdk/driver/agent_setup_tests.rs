@@ -647,6 +647,7 @@ async fn run_shell_hook(app: &mut App) {
         runtime.dispatcher().dispatch(
             envelope,
             runtime.snapshot(ctx),
+            true,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
     });

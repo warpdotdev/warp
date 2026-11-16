@@ -399,7 +399,7 @@ impl HookRuntime {
     }
 
     /// Replaces the capture with `capture`, for tests that control when and how it finishes.
-    #[cfg(all(test, feature = "local_tty"))]
+    #[cfg(all(test, unix, feature = "local_tty"))]
     pub(crate) fn set_login_shell_path_capture_for_test(
         &mut self,
         capture: BoxFuture<'static, Option<String>>,
@@ -410,7 +410,7 @@ impl HookRuntime {
     }
 
     /// The PATH the command runner gives hooks, when it is not this process's own.
-    #[cfg(all(test, feature = "local_tty"))]
+    #[cfg(all(test, unix, feature = "local_tty"))]
     pub(crate) fn login_shell_path_for_test(&self) -> Option<OsString> {
         self.login_shell_path
             .as_ref()
