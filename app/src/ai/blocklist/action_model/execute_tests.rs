@@ -234,11 +234,11 @@ mod hooks {
     use std::sync::Arc;
 
     use ai::hooks::test_util::{ScriptedRunner, test_binding, test_source_id};
-    use ai::hooks::{APPROVAL_UNAVAILABLE_PREFIX, HookBoundary, HookNoticeKind};
+    use ai::hooks::{APPROVAL_UNAVAILABLE_PREFIX, HookBoundary, HookNoticeKind, HookRegistry};
     use parking_lot::FairMutex;
     use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
     use warp_multi_agent_api::{self as api};
-    use warpui::{App, ModelHandle, SingletonEntity};
+    use warpui::{App, ModelHandle, SingletonEntity as _};
 
     use super::super::{
         BlocklistAIActionExecutor, BlocklistAIActionExecutorEvent, NotExecutedReason,
@@ -439,8 +439,7 @@ mod hooks {
             // A run with no hooks finalizes an empty registry; a process that never runs one
             // (the GUI, the TUI) never finalizes it. Both must behave as if hooks did not exist.
             app.update(|ctx| {
-                use warpui::SingletonEntity as _;
-                ai::hooks::HookRegistry::handle(ctx).update(ctx, |registry, _| {
+                HookRegistry::handle(ctx).update(ctx, |registry, _| {
                     registry.finalize().expect("finalizes once");
                 })
             });
