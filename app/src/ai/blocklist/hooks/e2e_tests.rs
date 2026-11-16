@@ -18,10 +18,11 @@ use std::time::{Duration, SystemTime};
 use ai::agent::action_result::RequestCommandOutputResult;
 use ai::hooks::runner::command::CommandHookRunner;
 use ai::hooks::{
-    APPROVAL_UNAVAILABLE_PREFIX, ExplicitHookSource, ExplicitSourceScope, HookDiagnostic,
-    HookFormat, HookMessenger, HookNotice, HookNoticeKind, HookRegistry, RunMetadata,
-    load_explicit_sources,
+    APPROVAL_UNAVAILABLE_PREFIX, ExplicitHookSource, HookDiagnostic, HookDirectory, HookFormat,
+    HookMessenger, HookNotice, HookNoticeKind, HookOnAsk, HookRegistry, HookSourceKind,
+    HookSourcePolicy, RunMetadata, load_explicit_sources,
 };
+use cloud_object_models::CodeForge;
 use instant::Instant;
 use serde_json::{Value, json};
 use warp_cli::agent::OutputFormat;
@@ -47,10 +48,13 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId, Conversat
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResult, AIAgentActionResultType, CancellationReason,
 };
-use crate::ai::agent_sdk::driver::hooks::{HookRunOptions, write_diagnostic, write_notice};
+use crate::ai::agent_sdk::driver::hooks::{
+    ConfiguredHookLocation, ConfiguredHookSource, RunHooks, write_diagnostic, write_notice,
+};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
-use crate::ai::agent_sdk::driver::{AgentDriver, SDKConversationOutputStatus};
+use crate::ai::agent_sdk::driver::{AgentDriver, AgentDriverError, SDKConversationOutputStatus};
 use crate::ai::blocklist::{BlocklistAIActionModel, BlocklistAIHistoryModel};
+use crate::ai::cloud_environments::SourceRepo;
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::features::FeatureFlag;
@@ -136,8 +140,8 @@ fn install_real_runner(app: &mut App, home: &Path) {
     });
 }
 
-/// Records the process as a `warp agent run` from a command line.
-fn record_command_line_run(app: &mut App) {
+/// Records the process as an Oz run the server dispatched, the only kind of run that loads hooks.
+fn record_oz_run(app: &mut App) {
     AppExecutionMode::handle(app).update(app, |mode, ctx| {
         *mode = AppExecutionMode::new(ExecutionMode::Sdk, false, ctx);
     });
@@ -146,9 +150,9 @@ fn record_command_line_run(app: &mut App) {
             metadata: RunMetadata {
                 run_id: "e2e-run".to_owned(),
                 parent_run_id: None,
-                task_id: None,
+                task_id: Some("e2e-run".to_owned()),
             },
-            surface: RunSurface::CommandLine,
+            surface: RunSurface::Oz,
         }));
     });
 }
@@ -185,29 +189,32 @@ fn set_execute_commands(app: &mut App, terminal_view_id: EntityId, setting: Acti
     });
 }
 
-fn load_hook_dir(app: &mut App, hooks_file: &Path) {
-    let source = ExplicitHookSource {
-        path: hooks_file.to_path_buf(),
-        format: HookFormat::Cursor,
-        scope: ExplicitSourceScope::Run,
-    };
-    let failures = app.update(|ctx| {
-        let mut failures = Vec::new();
-        HookRegistry::handle(ctx).update(ctx, |registry, _| {
-            failures = load_explicit_sources(std::slice::from_ref(&source), registry);
-        });
-        failures
-    });
+/// Loads the hook directory holding `hooks_file` as a worker-form source, straight into the
+/// registry, for tests that drive the action model without a driver.
+fn load_worker_hooks(app: &mut App, hooks_file: &Path) {
+    let source = ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Worker {
+            directory: hooks_file.parent().expect("hooks.json has a parent").to_path_buf(),
+        },
+        HookSourceKind::FactoryAgent,
+        HookSourcePolicy::default(),
+    );
+    let failures = HookRegistry::handle(app)
+        .update(app, |registry, _| {
+            load_explicit_sources(std::slice::from_ref(&source), registry)
+        })
+        .expect("the registry was not finalized yet");
     assert!(failures.is_empty(), "the hook file loads: {failures:?}");
 }
 
-/// A command-line run in a test app with a real hook runner.
-fn command_line_run(app: &mut App, setting: ActionPermission) -> (Sandbox, HookTestApp) {
+/// An Oz run in a test app with a real hook runner.
+fn oz_run(app: &mut App, setting: ActionPermission) -> (Sandbox, HookTestApp) {
     let harness = hook_test_app(app);
     give_session_a_shell(app, &harness);
     let sandbox = Sandbox::new();
     install_real_runner(app, &sandbox.home);
-    record_command_line_run(app);
+    record_oz_run(app);
     app.add_window(WindowStyle::NotStealFocus, |_| TestRootView);
     set_execute_commands(app, harness.terminal_view_id, setting);
     (sandbox, harness)
@@ -372,11 +379,11 @@ fn is_denylisted(result: &AIAgentActionResultType) -> bool {
 fn permission_matrix_run_to_completion() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
+        let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
         move_session(&mut app, &harness, &work);
         let policy = sandbox.dir("run-policy");
-        load_hook_dir(
+        load_worker_hooks(
             &mut app,
             &write_hook_dir(
                 &policy,
@@ -487,13 +494,13 @@ esac"#,
 fn batch_denial_with_cwd_changes() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
+        let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let outer = sandbox.dir("outer");
         let nested = outer.join("nested");
         fs::create_dir_all(&nested).expect("mkdir nested");
         move_session(&mut app, &harness, &outer);
         let policy = sandbox.dir("run-policy");
-        load_hook_dir(
+        load_worker_hooks(
             &mut app,
             &write_hook_dir(
                 &policy,
@@ -546,36 +553,66 @@ esac"#,
     });
 }
 
-/// A driver started on `harness`'s terminal with `hook_dirs` as its run's hook directories, after
-/// the hook sources load. Returns the driver, which must stay alive for the run to, and the run's
-/// exit receiver.
-fn start_driver(
+type RunExit = futures::channel::oneshot::Receiver<SDKConversationOutputStatus>;
+
+/// A driver started on `harness`'s terminal as an Oz run whose execution configuration selected
+/// `sources`, with `repositories` cloned under `working_dir`. Returns the driver, which must stay
+/// alive for the run to, and the run's exit receiver, or why the run did not start.
+fn try_start_driver(
     app: &mut App,
     harness: &ControllerHarness,
     working_dir: &Path,
-    hook_dirs: Vec<PathBuf>,
-) -> (
-    ModelHandle<AgentDriver>,
-    futures::channel::oneshot::Receiver<SDKConversationOutputStatus>,
-) {
+    sources: Vec<ConfiguredHookSource>,
+    repositories: &[SourceRepo],
+) -> (ModelHandle<AgentDriver>, Result<RunExit, AgentDriverError>) {
     let working_dir = working_dir.to_path_buf();
     let terminal = harness.terminal.clone();
     let driver = app.add_model(|ctx| {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal, ctx);
         AgentDriver::new_for_test(working_dir, terminal_driver, ctx)
     });
-    let run_exit = driver
-        .update(app, |driver, ctx| {
-            driver.start_run_with_hooks_for_test(
-                HookRunOptions {
-                    hook_dirs,
-                    ..Default::default()
-                },
-                ctx,
-            )
-        })
-        .expect("the run's hook sources load");
+    let run_exit = driver.update(app, |driver, ctx| {
+        driver.start_run_with_hooks_for_test(
+            RunHooks {
+                sources,
+                surface: RunSurface::Oz,
+            },
+            repositories,
+            ctx,
+        )
+    });
     (driver, run_exit)
+}
+
+/// [`try_start_driver`] with hook directories on the worker and no repositories, for a run whose
+/// sources all load.
+fn start_driver(
+    app: &mut App,
+    harness: &ControllerHarness,
+    working_dir: &Path,
+    hook_dirs: Vec<PathBuf>,
+) -> (ModelHandle<AgentDriver>, RunExit) {
+    let sources = hook_dirs
+        .iter()
+        .map(|dir| worker_entry(dir, HookSourceKind::FactoryAgent, false))
+        .collect();
+    let (driver, run_exit) = try_start_driver(app, harness, working_dir, sources, &[]);
+    (driver, run_exit.expect("the run's hook sources load"))
+}
+
+/// A worker-form entry, as the execution configuration names one.
+fn worker_entry(dir: &Path, kind: HookSourceKind, strict: bool) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Worker {
+            path: dir.display().to_string(),
+        },
+        kind,
+        policy: HookSourcePolicy {
+            strict,
+            ..Default::default()
+        },
+    }
 }
 
 /// §11 "stop versus Oz idle exit", through the agent driver's own completion logic: a stop hook
@@ -588,7 +625,7 @@ fn stop_versus_idle_exit() {
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
-        record_command_line_run(&mut app);
+        record_oz_run(&mut app);
         let stop_dir = sandbox.dir("stop-hooks");
         write_hook_dir(
             &stop_dir,
@@ -652,7 +689,7 @@ fn duplicate_session_start() {
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
-        record_command_line_run(&mut app);
+        record_oz_run(&mut app);
         let session_dir = sandbox.dir("session-hooks");
         write_hook_dir(
             &session_dir,
@@ -775,7 +812,7 @@ fn once_per_message_response_observations() {
         let hooks = sandbox.dir("observers");
         let audit = r#"input=$(cat)
 printf '%s\n' "$input" >> "$PWD/audit.log""#;
-        load_hook_dir(
+        load_worker_hooks(
             &mut app,
             &write_hook_dir(
                 &hooks,
@@ -848,10 +885,10 @@ printf '%s\n' "$input" >> "$PWD/audit.log""#;
 fn deny_reason_reaches_the_wire() {
     App::test((), |mut app| async move {
         let _flag = FeatureFlag::AgentHooks.override_enabled(true);
-        let (sandbox, harness) = command_line_run(&mut app, ActionPermission::AlwaysAllow);
+        let (sandbox, harness) = oz_run(&mut app, ActionPermission::AlwaysAllow);
         let work = sandbox.dir("work");
         move_session(&mut app, &harness, &work);
-        load_hook_dir(
+        load_worker_hooks(
             &mut app,
             &write_hook_dir(
                 &sandbox.dir("tool-policy"),
@@ -982,7 +1019,7 @@ fn oz_messenger_output() {
         let harness = controller_harness(&mut app);
         let sandbox = Sandbox::new();
         install_real_runner(&mut app, &sandbox.home);
-        record_command_line_run(&mut app);
+        record_oz_run(&mut app);
         let records = Arc::new(NdjsonRecords::default());
         let messenger: Arc<dyn HookMessenger> = records.clone();
         HookRuntime::handle(&app).update(&mut app, |runtime, _| {
@@ -1049,5 +1086,310 @@ exit 2"#,
                 .is_some_and(|source| source.contains("broken")),
             "{records:?}"
         );
+    });
+}
+
+const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../crates/ai/src/hooks/fixtures"
+);
+
+const REVIEWER_DEPLOY_REASON: &str =
+    "Reviewers do not deploy. Hand the change to the release agent.";
+
+/// Copies checked-in fixture `name` to `to`, with its scripts executable.
+fn copy_fixture(name: &str, to: &Path) {
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).expect("mkdir");
+        for entry in fs::read_dir(from).expect("read fixture dir") {
+            let entry = entry.expect("dir entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("file type").is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).expect("copy fixture file");
+                if target.extension().is_some_and(|extension| extension == "sh") {
+                    fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+                        .expect("chmod");
+                }
+            }
+        }
+    }
+    copy_tree(&Path::new(FIXTURES).join(name), to);
+}
+
+fn acme_repo(name: &str) -> SourceRepo {
+    SourceRepo::new(CodeForge::GitHub, "acme".to_owned(), name.to_owned())
+}
+
+/// A repository-form entry for `acme/<repo>`, as the execution configuration names one.
+fn repository_entry(
+    repo: &str,
+    path: &str,
+    kind: HookSourceKind,
+    policy: HookSourcePolicy,
+) -> ConfiguredHookSource {
+    ConfiguredHookSource {
+        format: HookFormat::Cursor,
+        location: ConfiguredHookLocation::Repository {
+            repo: acme_repo(repo),
+            path: path.to_owned(),
+        },
+        kind,
+        policy,
+    }
+}
+
+/// The factory layout fixture checked out the way a run clones its repositories: the factory
+/// definition repository and the `api` repository side by side in the run's working directory.
+struct FactoryRun {
+    harness: ControllerHarness,
+    sandbox: Sandbox,
+    records: Arc<NdjsonRecords>,
+    working_dir: PathBuf,
+}
+
+impl FactoryRun {
+    fn new(app: &mut App) -> Self {
+        let harness = controller_harness(app);
+        let sandbox = Sandbox::new();
+        install_real_runner(app, &sandbox.home);
+        record_oz_run(app);
+        let records = Arc::new(NdjsonRecords::default());
+        let messenger: Arc<dyn HookMessenger> = records.clone();
+        HookRuntime::handle(app).update(app, |runtime, _| runtime.set_messenger(messenger));
+        let working_dir = sandbox.dir("work");
+        copy_fixture(
+            "factory_layout/acme-factory",
+            &working_dir.join("acme-factory"),
+        );
+        copy_fixture("sample_project", &working_dir.join("api"));
+        Self {
+            harness,
+            sandbox,
+            records,
+            working_dir,
+        }
+    }
+
+    /// The hook list `factory.yaml` and `agents/reviewer/agent.md` declare, as the server sends
+    /// it: the agent's entries first, then the factory's.
+    fn declared_sources() -> Vec<ConfiguredHookSource> {
+        vec![
+            repository_entry(
+                "api",
+                ".cursor",
+                HookSourceKind::FactoryAgent,
+                HookSourcePolicy::default(),
+            ),
+            repository_entry(
+                "acme-factory",
+                "agents/reviewer/hooks",
+                HookSourceKind::FactoryAgent,
+                HookSourcePolicy {
+                    strict: false,
+                    on_ask: HookOnAsk::FailRun,
+                },
+            ),
+            repository_entry(
+                "acme-factory",
+                "hooks",
+                HookSourceKind::FactoryWide,
+                HookSourcePolicy {
+                    strict: true,
+                    on_ask: HookOnAsk::Deny,
+                },
+            ),
+        ]
+    }
+
+    fn start(
+        &self,
+        app: &mut App,
+        sources: Vec<ConfiguredHookSource>,
+    ) -> (ModelHandle<AgentDriver>, Result<RunExit, AgentDriverError>) {
+        try_start_driver(
+            app,
+            &self.harness,
+            &self.working_dir,
+            sources,
+            &[acme_repo("acme-factory"), acme_repo("api")],
+        )
+    }
+
+    /// Streams one shell tool call with id `call_id` into a new conversation and returns the
+    /// conversation.
+    fn stream_shell_call(&self, app: &mut App, call_id: &str, command: &str) -> AIConversationId {
+        let (conversation_id, stream) = self.harness.mock_stream(app);
+        let task_id = root_task_id(app, conversation_id);
+        let mut call = shell_tool_call_message(&task_id, command);
+        if let Some(MessageKind::ToolCall(tool_call)) = &mut call.message {
+            tool_call.tool_call_id = call_id.to_owned();
+        }
+        stream.update(app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event(), ctx);
+            stream.emit_response_event_for_test(create_task_with_messages(&task_id, vec![call]), ctx);
+            stream.emit_response_event_for_test(done_event(), ctx);
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        conversation_id
+    }
+
+    async fn result_for(&self, app: &mut App, call_id: &str) -> AIAgentActionResult {
+        let model = self
+            .harness
+            .terminal
+            .read(app, |view, _| view.ai_action_model().clone());
+        let id = crate::ai::agent::AIAgentActionId::from(call_id.to_owned());
+        wait_for(app, &format!("a result for {call_id}"), |app| {
+            model.read(app, |model, _| model.get_action_result(&id).is_some())
+        })
+        .await;
+        model.read(app, |model, _| {
+            AIAgentActionResult::clone(&model.get_action_result(&id).expect("a result"))
+        })
+    }
+
+    fn records_of(&self, kind: &str) -> Vec<Value> {
+        self.records
+            .records()
+            .into_iter()
+            .filter(|record| record["type"] == kind)
+            .collect()
+    }
+}
+
+fn denied_by_hook_on_the_wire(result: AIAgentActionResult) -> Option<String> {
+    let api::request::input::user_inputs::user_input::Input::ToolCallResult(wire) =
+        api::request::input::user_inputs::user_input::Input::try_from(result).ok()?
+    else {
+        return None;
+    };
+    match wire.result? {
+        api::request::input::tool_call_result::Result::DeniedByHook(denied) => Some(denied.reason),
+        _ => None,
+    }
+}
+
+/// Rung 4 of the testing ladder with the factory layout: an execution configuration that names
+/// a factory definition repository's hook directories and a second repository's unchanged
+/// `.cursor` directory. The second repository's root-relative hook really runs and denies, its
+/// reason reaches the wire as `denied_by_hook`, and the factory's own hook runs as well.
+#[test]
+fn a_factory_run_denies_through_another_repositorys_cursor_hooks() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let run = FactoryRun::new(&mut app);
+        let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
+        let _run_exit = started.expect("every declared source loads");
+        assert!(run.records_of("hook_diagnostic").is_empty());
+
+        run.stream_shell_call(&mut app, "rm-call", "rm -rf build");
+        let result = run.result_for(&mut app, "rm-call").await;
+        assert_eq!(
+            denied_by_hook_on_the_wire(result).as_deref(),
+            Some(SAMPLE_RM_REASON)
+        );
+        let denials = run
+            .records_of("hook_notice")
+            .into_iter()
+            .filter(|record| record["kind"] == "denied")
+            .collect::<Vec<_>>();
+        assert_eq!(denials.len(), 1, "{denials:?}");
+        assert_eq!(denials[0]["text"], SAMPLE_RM_REASON);
+        let factory_log =
+            fs::read_to_string(run.working_dir.join("acme-factory/.factory-shell.log"))
+                .expect("the factory's hook ran from its repository root");
+        assert!(factory_log.contains("rm -rf build"), "{factory_log}");
+
+        run.stream_shell_call(&mut app, "deploy-call", "deploy production");
+        let result = run.result_for(&mut app, "deploy-call").await;
+        assert_eq!(
+            denied_by_hook_on_the_wire(result).as_deref(),
+            Some(REVIEWER_DEPLOY_REASON)
+        );
+    });
+}
+
+/// A strict entry that cannot be found stops the run before it starts; an entry that is not
+/// strict is reported as a `hook_diagnostic` record and the run goes on without it.
+#[test]
+fn a_missing_strict_entry_stops_the_run() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let run = FactoryRun::new(&mut app);
+        let mut sources = FactoryRun::declared_sources();
+        sources.push(repository_entry(
+            "acme-factory",
+            "agents/missing/hooks",
+            HookSourceKind::FactoryWide,
+            HookSourcePolicy {
+                strict: true,
+                on_ask: HookOnAsk::Deny,
+            },
+        ));
+        let (_driver, started) = run.start(&mut app, sources);
+        let Err(AgentDriverError::HookSourcesUnavailable { details }) = started else {
+            panic!("the missing strict entry should stop the run");
+        };
+        assert_eq!(details.len(), 1, "{details:?}");
+        assert!(details[0].contains("agents/missing/hooks"), "{details:?}");
+        let diagnostics = run.records_of("hook_diagnostic");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    });
+}
+
+#[test]
+fn a_missing_entry_that_is_not_strict_is_reported_and_the_run_goes_on() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let run = FactoryRun::new(&mut app);
+        let missing = run.sandbox.base.join("not-on-this-worker");
+        let mut sources = FactoryRun::declared_sources();
+        sources.push(worker_entry(&missing, HookSourceKind::FactoryWide, false));
+        let (_driver, started) = run.start(&mut app, sources);
+        let _run_exit = started.expect("a missing lenient entry does not stop the run");
+        let diagnostics = run.records_of("hook_diagnostic");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0]["severity"], "error");
+        assert!(
+            diagnostics[0]["source"]
+                .as_str()
+                .is_some_and(|source| source.contains("not-on-this-worker")),
+            "{diagnostics:?}"
+        );
+
+        run.stream_shell_call(&mut app, "rm-call", "rm -rf build");
+        let result = run.result_for(&mut app, "rm-call").await;
+        assert_eq!(
+            denied_by_hook_on_the_wire(result).as_deref(),
+            Some(SAMPLE_RM_REASON),
+            "the entries that loaded still apply"
+        );
+    });
+}
+
+/// The reviewer's own entry is set to `fail_run`, so when its hook asks before a publish and
+/// nobody can answer, the action is denied and the run's conversation fails.
+#[test]
+fn an_ask_from_a_fail_run_entry_ends_the_factory_run() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::AgentHooks.override_enabled(true);
+        let run = FactoryRun::new(&mut app);
+        let (_driver, started) = run.start(&mut app, FactoryRun::declared_sources());
+        let _run_exit = started.expect("every declared source loads");
+
+        let conversation_id = run.stream_shell_call(&mut app, "publish-call", "publish v2");
+        let result = run.result_for(&mut app, "publish-call").await;
+        let reason = denied_by_hook_on_the_wire(result).expect("the ask became a denial");
+        assert!(reason.starts_with(APPROVAL_UNAVAILABLE_PREFIX), "{reason}");
+        assert!(
+            reason.contains("Publishing needs a person to approve it."),
+            "{reason}"
+        );
+        wait_for(&mut app, "the run's conversation to fail", |app| {
+            conversation_status(app, conversation_id) == Some(ConversationStatus::Error)
+        })
+        .await;
     });
 }
