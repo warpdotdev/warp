@@ -3,7 +3,7 @@ mod recording_messenger;
 mod scripted_runner;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ai_types::AIConversationId;
@@ -12,35 +12,55 @@ pub use recording_messenger::RecordingMessenger;
 pub use scripted_runner::{RunnerHold, ScriptedRunner};
 use uuid::Uuid;
 
-use crate::hooks::adapters::{DeclaredBinding, HookFormatAdapter};
+use crate::hooks::adapters::{DeclaredBinding, HookDirectory, HookFormatAdapter};
 use crate::hooks::model::{
     BindingCapabilities, EffectKind, EmptyOutputPolicy, FailurePolicy, HOOK_PROTOCOL_VERSION,
-    HandlerKind, HookBindingId, HookBoundary, HookEnvelope, HookExecutionHost, HookPayload,
-    HookSourceId, HookSourceKind, HookSourceLocation, HookSurface, MalformedOutputPolicy,
-    MatcherTarget, PermissionFacts,
+    HandlerKind, HookBindingId, HookBoundary, HookEnvelope, HookExecutionHost, HookFormat,
+    HookPayload, HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy, HookSurface,
+    MalformedOutputPolicy, MatcherTarget, PermissionFacts,
 };
-use crate::hooks::registry::{ActiveBinding, BindingScope};
-use crate::hooks::trust::{CommandExecutionPosture, TrustDecision, TrustPolicy};
-
-/// A trust policy that returns the same decision for every source.
-pub struct StaticTrust(pub TrustDecision);
-
-impl TrustPolicy for StaticTrust {
-    fn may_activate(
-        &self,
-        _source: &HookSourceId,
-        _surface: HookSurface,
-        _posture: CommandExecutionPosture,
-    ) -> TrustDecision {
-        self.0.clone()
-    }
-}
+use crate::hooks::registry::ActiveBinding;
+use crate::hooks::sources::ExplicitHookSource;
 
 pub fn test_source_id(name: &str) -> HookSourceId {
     HookSourceId {
-        kind: HookSourceKind::RunDelivered,
+        kind: HookSourceKind::FactoryAgent,
         location: HookSourceLocation::Named(name.to_owned()),
     }
+}
+
+/// A Cursor source in `directory` on the worker, outside any repository.
+pub fn worker_source(
+    directory: &Path,
+    kind: HookSourceKind,
+    policy: HookSourcePolicy,
+) -> ExplicitHookSource {
+    ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Worker {
+            directory: directory.to_path_buf(),
+        },
+        kind,
+        policy,
+    )
+}
+
+/// A Cursor source in `directory` inside the repository checked out at `root`.
+pub fn repository_source(
+    root: &Path,
+    directory: &Path,
+    kind: HookSourceKind,
+    policy: HookSourcePolicy,
+) -> ExplicitHookSource {
+    ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Repository {
+            root: root.to_path_buf(),
+            directory: directory.to_path_buf(),
+        },
+        kind,
+        policy,
+    )
 }
 
 pub fn test_source_id_of_kind(name: &str, kind: HookSourceKind) -> HookSourceId {
@@ -91,14 +111,14 @@ pub fn test_binding(
 pub fn active_binding(
     binding: DeclaredBinding,
     adapter: Arc<dyn HookFormatAdapter>,
-    scope: BindingScope,
 ) -> ActiveBinding {
     ActiveBinding {
         binding,
         adapter,
-        scope,
         host: HookExecutionHost::Local,
         working_directory: PathBuf::from("/"),
+        project_dir: None,
+        policy: HookSourcePolicy::default(),
     }
 }
 

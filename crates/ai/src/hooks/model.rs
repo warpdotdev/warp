@@ -152,12 +152,12 @@ impl Display for HookBoundary {
     }
 }
 
-/// Where a hook configuration came from.
+/// Which part of the factory configuration selected a hook source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HookSourceKind {
-    ProjectCursorFile,
-    RunDelivered,
+    /// The agent's own definition.
     FactoryAgent,
+    /// The factory's top-level definition, shared by its agents.
     FactoryWide,
 }
 
@@ -167,8 +167,41 @@ impl HookSourceKind {
         match self {
             Self::FactoryAgent => 0,
             Self::FactoryWide => 1,
-            Self::RunDelivered => 2,
-            Self::ProjectCursorFile => 3,
+        }
+    }
+}
+
+/// What a run with nobody to answer does after one of a source's hooks asks for approval. The
+/// tool call is denied either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HookOnAsk {
+    /// The run continues.
+    #[default]
+    Deny,
+    /// The run ends as failed.
+    FailRun,
+}
+
+/// The settings the configuration chose for one hook source. They are frozen with the source's
+/// bindings when the registry is finalized.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct HookSourcePolicy {
+    /// The source must load, and a hook from it that crashes, times out, or prints empty or
+    /// malformed output denies instead of letting the action through.
+    pub strict: bool,
+    pub on_ask: HookOnAsk,
+}
+
+impl HookSourcePolicy {
+    /// The stricter of each setting, for a source selected more than once.
+    pub fn stricter(self, other: Self) -> Self {
+        let on_ask = match (self.on_ask, other.on_ask) {
+            (HookOnAsk::FailRun, _) | (_, HookOnAsk::FailRun) => HookOnAsk::FailRun,
+            (HookOnAsk::Deny, HookOnAsk::Deny) => HookOnAsk::Deny,
+        };
+        Self {
+            strict: self.strict || other.strict,
+            on_ask,
         }
     }
 }
@@ -176,7 +209,7 @@ impl HookSourceKind {
 /// Where a resolved hook source lives.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HookSourceLocation {
-    /// Canonical file path for a file discovered on disk.
+    /// Canonical file path for a configured source on disk.
     CanonicalPath(PathBuf),
     /// Name an explicit source was delivered under.
     Named(String),

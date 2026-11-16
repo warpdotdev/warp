@@ -22,12 +22,24 @@ use crate::agent::action::AIAgentActionType;
 use crate::hooks::adapters::HookConfigError;
 use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
 use crate::hooks::model::{
-    HookBoundary, HookEnvelope, HookFormat, HookPayload, HookSourceKind, HookVerdict,
+    HookBoundary, HookEnvelope, HookPayload, HookSourceKind, HookSourcePolicy, HookVerdict,
 };
 use crate::hooks::registry::HookRegistry;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::runner::command::CommandHookRunner;
-use crate::hooks::test_util::{RecordingMessenger, test_envelope};
+use crate::hooks::sources::ExplicitHookSource;
+use crate::hooks::test_util::{
+    RecordingMessenger, repository_source, test_envelope, worker_source,
+};
+
+/// The `hooks.json` in `dir`, as a worker source that runs from `dir`.
+fn source_in(dir: &Path) -> ExplicitHookSource {
+    worker_source(
+        dir,
+        HookSourceKind::FactoryAgent,
+        HookSourcePolicy::default(),
+    )
+}
 
 struct Harness {
     dir: TempDir,
@@ -59,11 +71,7 @@ impl Harness {
 
         let mut registry = HookRegistry::new();
         registry
-            .install_explicit_source(
-                &hooks_json,
-                HookFormat::Cursor,
-                HookSourceKind::RunDelivered,
-            )
+            .install_explicit_source(&source_in(dir.path()))
             .expect("the file loads");
 
         let messenger = Arc::new(RecordingMessenger::new());
@@ -226,7 +234,7 @@ fn the_script_receives_cursor_shaped_json_on_stdin() {
 }
 
 #[test]
-fn the_hook_runs_in_the_directory_that_holds_the_file() {
+fn a_worker_hook_runs_from_its_hook_directory() {
     let harness = Harness::new(r#"pwd > "$PWD/cwd.txt"; printf '{"permission":"allow"}'"#);
     harness.dispatch("ls");
     let recorded = fs::read_to_string(harness.dir.path().join("cwd.txt")).expect("cwd file");
@@ -234,6 +242,55 @@ fn the_hook_runs_in_the_directory_that_holds_the_file() {
         PathBuf::from(recorded.trim()).canonicalize().expect("cwd"),
         harness.dir.path().canonicalize().expect("tempdir")
     );
+}
+
+/// A repository's unchanged `.cursor` directory names its scripts relative to the repository
+/// root, as Cursor runs them.
+#[test]
+fn a_repository_hook_runs_from_the_repository_root() {
+    let repo = TempDir::new().expect("tempdir");
+    let cursor = repo.path().join(".cursor");
+    fs::create_dir_all(cursor.join("hooks")).expect("mkdir");
+    let script = cursor.join("hooks").join("check.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nprintf '{\"permission\":\"deny\",\"agent_message\":\"blocked by the repo\"}'\n",
+    )
+    .expect("write script");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+    fs::write(
+        cursor.join("hooks.json"),
+        json!({ "version": 1, "hooks": { "beforeShellExecution": [
+            { "command": ".cursor/hooks/check.sh" }
+        ] } })
+        .to_string(),
+    )
+    .expect("write hooks.json");
+
+    let mut registry = HookRegistry::new();
+    registry
+        .install_explicit_source(&repository_source(
+            repo.path(),
+            &cursor,
+            HookSourceKind::FactoryAgent,
+            HookSourcePolicy::default(),
+        ))
+        .expect("the file loads");
+    let dispatcher = HookDispatcher::new(
+        Arc::new(CommandHookRunner::new(
+            Arc::new(|| None),
+            std::env::vars_os().collect(),
+        )),
+        Arc::new(RecordingMessenger::new()),
+    );
+
+    let outcome = block_on(dispatcher.dispatch(
+        shell_envelope("git push", repo.path()),
+        registry.snapshot(),
+        Arc::new(AtomicBool::new(false)),
+    ));
+    assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+    assert_eq!(reasons(&outcome), vec!["blocked by the repo"]);
 }
 
 #[test]
@@ -300,8 +357,8 @@ fn loading_the_same_file_again_replaces_its_bindings() {
     .expect("rewrite hooks.json");
     harness
         .registry
-        .install_explicit_source(&path, HookFormat::Cursor, HookSourceKind::RunDelivered)
-        .expect("reloads");
+        .install_explicit_source(&source_in(harness.dir.path()))
+        .expect("replaces before finalization");
     let snapshot = harness.registry.snapshot();
     assert_eq!(snapshot.revision, 2);
     assert_eq!(snapshot.bindings.len(), 2);
@@ -314,13 +371,13 @@ fn a_missing_or_invalid_file_is_an_error_and_changes_nothing() {
     let mut registry = HookRegistry::new();
     let missing = dir.path().join("hooks.json");
     let error = registry
-        .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
+        .install_explicit_source(&source_in(dir.path()))
         .expect_err("missing file");
     assert!(matches!(error, HookConfigError::Unreadable(_)));
 
     fs::write(&missing, "{ not json").expect("write");
     let error = registry
-        .install_explicit_source(&missing, HookFormat::Cursor, HookSourceKind::RunDelivered)
+        .install_explicit_source(&source_in(dir.path()))
         .expect_err("invalid file");
     assert!(matches!(error, HookConfigError::Parse(_)));
     assert_eq!(registry.revision(), 0);

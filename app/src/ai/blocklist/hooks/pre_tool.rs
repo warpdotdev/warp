@@ -142,11 +142,7 @@ pub(crate) fn begin_or_lookup(
     let site = EnvelopeSite::new(conversation_id, active_session);
     let envelope = envelope_for_tool_pre(action, &site, ctx);
     let has_matching_binding = snapshot
-        .bindings_for(
-            HookBoundary::ToolPre,
-            envelope.cwd.as_deref(),
-            HookExecutionHost::Local,
-        )
+        .bindings_for(HookBoundary::ToolPre, HookExecutionHost::Local)
         .iter()
         .any(|active| active.adapter.matches(&active.binding, &envelope));
     if !has_matching_binding {

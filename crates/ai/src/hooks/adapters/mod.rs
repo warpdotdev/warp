@@ -1,5 +1,6 @@
 pub mod cursor;
 
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -106,6 +107,39 @@ pub static HOOK_ADAPTER_DEFINITIONS: LazyLock<Vec<HookAdapterDefinition>> = Lazy
         adapter: Arc::new(CursorAdapter::new()),
     }]
 });
+
+/// A hook directory the configuration selected, resolved to a location on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookDirectory {
+    /// A directory inside a repository checkout.
+    Repository {
+        /// The checkout's root directory.
+        root: PathBuf,
+        /// The hook directory, inside `root`.
+        directory: PathBuf,
+    },
+    /// A directory on the worker that is not part of a repository.
+    Worker { directory: PathBuf },
+}
+
+/// The paths a format derives from a hook directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookSourceLayout {
+    /// The configuration file inside the directory.
+    pub config_file: PathBuf,
+    /// The directory the source's commands run in and resolve relative paths against.
+    pub working_directory: PathBuf,
+    /// The project directory the source's hooks are told they run for, when the format fixes one.
+    pub project_dir: Option<PathBuf>,
+}
+
+/// Where `format` reads its configuration from `directory` and where that configuration's
+/// commands run.
+pub fn source_layout(format: HookFormat, directory: &HookDirectory) -> HookSourceLayout {
+    match format {
+        HookFormat::Cursor => cursor::source_layout(directory),
+    }
+}
 
 /// The adapter for `format`, if one is registered.
 pub fn adapter_for(format: HookFormat) -> Option<Arc<dyn HookFormatAdapter>> {
