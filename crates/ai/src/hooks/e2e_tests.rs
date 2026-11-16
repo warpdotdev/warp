@@ -23,16 +23,17 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::agent::action::AIAgentActionType;
-use crate::hooks::adapters::adapter_for;
-use crate::hooks::dispatch::{DispatchOutcome, DispatchPolicy, HookDispatcher};
+use crate::hooks::adapters::{HookDirectory, adapter_for};
+use crate::hooks::dispatch::{DispatchOutcome, HookDispatcher};
 use crate::hooks::model::{
-    DiagnosticSeverity, HookBoundary, HookEnvelope, HookFormat, HookPayload, HookSourceId,
-    HookSourceKind, HookSourceLocation, HookVerdict, PromptProvenance,
+    DiagnosticSeverity, HookBoundary, HookEnvelope, HookFormat, HookOnAsk, HookPayload,
+    HookSourceId, HookSourceKind, HookSourceLocation, HookSourcePolicy, HookVerdict,
+    PromptProvenance,
 };
 use crate::hooks::registry::HookRegistry;
 use crate::hooks::runner::ProcessExit;
 use crate::hooks::runner::command::CommandHookRunner;
-use crate::hooks::sources::{ExplicitHookSource, ExplicitSourceScope, load_explicit_sources};
+use crate::hooks::sources::{ExplicitHookSource, SourceLoadFailure, load_explicit_sources};
 use crate::hooks::test_util::{RecordingMessenger, test_envelope};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hooks/fixtures");
@@ -67,19 +68,29 @@ impl Fixture {
         }
     }
 
-    /// An empty directory next to the copy, for a source delivered with the run.
+    /// An empty directory next to the copy, for a source on the worker outside any repository.
     fn sibling(&self, name: &str) -> PathBuf {
         let path = self.root.parent().expect("parent").join(name);
         fs::create_dir_all(&path).expect("mkdir");
         path
     }
 
+    /// Copies checked-in fixture `name` next to this one as `as_name`, as a second repository
+    /// checked out beside the first. Returns its canonical root.
+    fn copy_beside(&self, name: &str, as_name: &str) -> PathBuf {
+        let root = self.root.parent().expect("parent").join(as_name);
+        copy_tree(&Path::new(FIXTURES).join(name), &root);
+        make_scripts_executable(&root);
+        root
+    }
+
     fn cursor_hooks_file(&self) -> PathBuf {
         self.root.join(CURSOR_HOOKS_PATH)
     }
 
-    fn runnable_hooks_file(&self) -> PathBuf {
-        self.root.join("run_hooks/hooks.json")
+    /// The fixture's unchanged `.cursor` directory, selected as a repository source.
+    fn cursor_source(&self) -> ExplicitHookSource {
+        repository_source(&self.root, ".cursor", HookSourceKind::FactoryAgent)
     }
 
     fn read(&self, relative: &str) -> String {
@@ -134,34 +145,61 @@ fn dispatcher(home: &Path) -> (HookDispatcher, Arc<RecordingMessenger>) {
     )
 }
 
-fn source_id(hooks_file: &Path, scope: ExplicitSourceScope) -> HookSourceId {
+fn source_id(hooks_file: &Path, kind: HookSourceKind) -> HookSourceId {
     HookSourceId {
-        kind: scope.source_kind(),
+        kind,
         location: HookSourceLocation::CanonicalPath(
             dunce::canonicalize(hooks_file).expect("canonical hook source"),
         ),
     }
 }
 
-fn source(hooks_file: &Path, scope: ExplicitSourceScope) -> ExplicitHookSource {
-    ExplicitHookSource {
-        path: hooks_file.to_path_buf(),
-        format: HookFormat::Cursor,
-        scope,
-    }
+/// The hook directory `directory` inside the repository checked out at `root`, as a factory entry
+/// with `repo` and a relative `path` selects it. Its commands run from `root`.
+fn repository_source(root: &Path, directory: &str, kind: HookSourceKind) -> ExplicitHookSource {
+    ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Repository {
+            root: root.to_path_buf(),
+            directory: root.join(directory),
+        },
+        kind,
+        HookSourcePolicy::default(),
+    )
 }
 
-fn run_source(hooks_file: &Path) -> ExplicitHookSource {
-    source(hooks_file, ExplicitSourceScope::Run)
+/// The directory holding `hooks_file`, as a factory entry with an absolute `path` and no `repo`
+/// selects it. Its commands run from that directory.
+fn worker_source(hooks_file: &Path, kind: HookSourceKind) -> ExplicitHookSource {
+    ExplicitHookSource::from_directory(
+        HookFormat::Cursor,
+        &HookDirectory::Worker {
+            directory: hooks_file.parent().expect("hooks.json has a parent").to_path_buf(),
+        },
+        kind,
+        HookSourcePolicy::default(),
+    )
+}
+
+fn with_policy(mut source: ExplicitHookSource, strict: bool, on_ask: HookOnAsk) -> ExplicitHookSource {
+    source.policy = HookSourcePolicy { strict, on_ask };
+    source
+}
+
+fn try_load(registry: &mut HookRegistry, sources: &[ExplicitHookSource]) -> Vec<SourceLoadFailure> {
+    load_explicit_sources(sources, registry).expect("the registry was not finalized yet")
 }
 
 fn load_sources(registry: &mut HookRegistry, sources: &[ExplicitHookSource]) {
-    let failures = load_explicit_sources(sources, registry);
+    let failures = try_load(registry, sources);
     assert!(failures.is_empty(), "the files load: {failures:?}");
 }
 
-fn load_run_file(registry: &mut HookRegistry, hooks_file: &Path) {
-    load_sources(registry, &[run_source(hooks_file)]);
+fn load_worker_file(registry: &mut HookRegistry, hooks_file: &Path) {
+    load_sources(
+        registry,
+        &[worker_source(hooks_file, HookSourceKind::FactoryAgent)],
+    );
 }
 
 /// Writes `body` as an executable `sh` script.
@@ -172,10 +210,10 @@ fn write_script(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
 }
 
-/// A hook directory delivered with the run: `hooks.json` with one `definition` for `event`, whose
-/// command runs `./hook.sh` with `body`.
+/// A hook directory on the worker: `hooks.json` with one `definition` for `event`, whose command
+/// runs `./hook.sh` with `body`.
 #[cfg(unix)]
-fn write_run_hooks(
+fn write_worker_hooks(
     dir: &Path,
     event: &str,
     body: &str,
@@ -235,7 +273,6 @@ fn dispatch(
     block_on(dispatcher.dispatch(
         envelope,
         registry.snapshot(),
-        DispatchPolicy::default(),
         Arc::new(AtomicBool::new(false)),
     ))
 }
@@ -297,7 +334,7 @@ fn adapter_and_reducer_fixtures() {
     let fixture = Fixture::copy("sample_project");
     let adapter = adapter_for(HookFormat::Cursor).expect("the Cursor adapter is registered");
     let cursor_hooks_file = fixture.cursor_hooks_file();
-    let parsed_source = source_id(&cursor_hooks_file, ExplicitSourceScope::FactoryAgent);
+    let parsed_source = source_id(&cursor_hooks_file, HookSourceKind::FactoryAgent);
     let config = adapter
         .parse(&fs::read(cursor_hooks_file).expect("read"), &parsed_source)
         .expect("the sample parses");
@@ -339,24 +376,21 @@ fn adapter_and_reducer_fixtures() {
         ]
     );
 
-    // A run-delivered policy that also denies, beside the factory agent's explicit source.
-    let run_dir = fixture.sibling("run-policy");
-    let run_hooks = write_run_hooks(
-        &run_dir,
+    // A factory-wide policy on the worker that also denies, beside the agent's own source.
+    let factory_dir = fixture.sibling("factory-policy");
+    let factory_hooks = write_worker_hooks(
+        &factory_dir,
         "beforeShellExecution",
         r#"cat > /dev/null
-printf '{"permission":"deny","agent_message":"The run policy forbids deleting directories."}'"#,
+printf '{"permission":"deny","agent_message":"The factory policy forbids deleting directories."}'"#,
         json!({ "matcher": "rm " }),
     );
     let mut registry = HookRegistry::new();
     load_sources(
         &mut registry,
         &[
-            source(
-                &fixture.runnable_hooks_file(),
-                ExplicitSourceScope::FactoryAgent,
-            ),
-            run_source(&run_hooks),
+            fixture.cursor_source(),
+            worker_source(&factory_hooks, HookSourceKind::FactoryWide),
         ],
     );
 
@@ -371,9 +405,9 @@ printf '{"permission":"deny","agent_message":"The run policy forbids deleting di
         reasons(&outcome),
         vec![
             SAMPLE_RM_REASON,
-            "The run policy forbids deleting directories."
+            "The factory policy forbids deleting directories."
         ],
-        "the factory-agent source ranks above the run source, and both reasons are kept"
+        "the agent's source ranks above the factory's, and both reasons are kept"
     );
     assert_eq!(
         outcome
@@ -390,7 +424,7 @@ printf '{"permission":"deny","agent_message":"The run policy forbids deleting di
         .collect::<Vec<_>>();
     assert_eq!(
         ran,
-        vec![HookSourceKind::FactoryAgent, HookSourceKind::RunDelivered]
+        vec![HookSourceKind::FactoryAgent, HookSourceKind::FactoryWide]
     );
 }
 
@@ -403,7 +437,7 @@ fn real_subprocess_stdin() {
     let cwd = fixture.root.join("src");
     fs::create_dir_all(&cwd).expect("mkdir");
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &fixture.runnable_hooks_file());
+    load_sources(&mut registry, &[fixture.cursor_source()]);
     let (dispatcher, _) = dispatcher(&fixture.home);
 
     let outcome = dispatch(
@@ -450,14 +484,14 @@ fn malformed_and_empty_output() {
         (silence, true, true),
     ] {
         let dir = TempDir::new().expect("tempdir");
-        let hooks = write_run_hooks(
+        let hooks = write_worker_hooks(
             dir.path(),
             "beforeShellExecution",
             body,
             json!({ "failClosed": fail_closed }),
         );
         let mut registry = HookRegistry::new();
-        load_run_file(&mut registry, &hooks);
+        load_worker_file(&mut registry, &hooks);
         let outcome = dispatch(
             &dispatcher,
             &registry,
@@ -483,14 +517,14 @@ fn malformed_and_empty_output() {
         (silence, true),
     ] {
         let dir = TempDir::new().expect("tempdir");
-        let hooks = write_run_hooks(
+        let hooks = write_worker_hooks(
             dir.path(),
             "beforeSubmitPrompt",
             body,
             json!({ "failClosed": fail_closed }),
         );
         let mut registry = HookRegistry::new();
-        load_run_file(&mut registry, &hooks);
+        load_worker_file(&mut registry, &hooks);
         let outcome = dispatch(
             &dispatcher,
             &registry,
@@ -518,14 +552,14 @@ printf '{"permission":"deny"}'"#;
 
     // Timeout: fails open, as Cursor documents, and the process is gone.
     let dir = TempDir::new().expect("tempdir");
-    let hooks = write_run_hooks(
+    let hooks = write_worker_hooks(
         dir.path(),
         "beforeShellExecution",
         sleeper,
         json!({ "timeout": 5 }),
     );
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks);
+    load_worker_file(&mut registry, &hooks);
     let started = Instant::now();
     let outcome = dispatch(
         &dispatcher,
@@ -543,9 +577,9 @@ printf '{"permission":"deny"}'"#;
 
     // Cancellation: the flag is set once the script is running.
     let dir = TempDir::new().expect("tempdir");
-    let hooks = write_run_hooks(dir.path(), "beforeShellExecution", sleeper, json!({}));
+    let hooks = write_worker_hooks(dir.path(), "beforeShellExecution", sleeper, json!({}));
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks);
+    load_worker_file(&mut registry, &hooks);
     let cancel = Arc::new(AtomicBool::new(false));
     let pid_file = dir.path().join("pid");
     let canceller = {
@@ -561,7 +595,6 @@ printf '{"permission":"deny"}'"#;
     let outcome = block_on(dispatcher.dispatch(
         shell_envelope("ls", &fixture.root, Some(&fixture.root)),
         registry.snapshot(),
-        DispatchPolicy::default(),
         cancel,
     ));
     assert!(
@@ -579,7 +612,7 @@ printf '{"permission":"deny"}'"#;
 
     // Output limit: valid JSON padded with 2 MiB of spaces is cut at 1 MiB and denied.
     let dir = TempDir::new().expect("tempdir");
-    let hooks = write_run_hooks(
+    let hooks = write_worker_hooks(
         dir.path(),
         "beforeShellExecution",
         r#"cat > /dev/null
@@ -588,7 +621,7 @@ dd if=/dev/zero bs=1024 count=2048 2>/dev/null | tr '\000' ' '"#,
         json!({}),
     );
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks);
+    load_worker_file(&mut registry, &hooks);
     let outcome = dispatch(
         &dispatcher,
         &registry,
@@ -607,9 +640,9 @@ dd if=/dev/zero bs=1024 count=2048 2>/dev/null | tr '\000' ' '"#,
 #[test]
 fn resolved_sources_finalize_once() {
     let fixture = Fixture::copy("sample_project");
-    let hooks_file = fixture.runnable_hooks_file();
+    let hooks_file = fixture.cursor_hooks_file();
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks_file);
+    load_sources(&mut registry, &[fixture.cursor_source()]);
     assert!(registry.is_finalized());
     let snapshot = registry.snapshot();
     let revision = snapshot.revision;
@@ -629,9 +662,9 @@ fn resolved_sources_finalize_once() {
         ] } }"#,
     )
     .expect("rewrite hooks.json");
-    let failures = load_explicit_sources(&[run_source(&hooks_file)], &mut registry);
-    assert_eq!(failures.len(), 1);
-    assert!(failures[0].message.contains("already finalized"));
+    let error = load_explicit_sources(&[fixture.cursor_source()], &mut registry)
+        .expect_err("a second load is refused");
+    assert!(error.to_string().contains("already finalized"), "{error}");
     let snapshot = registry.snapshot();
     assert_eq!(snapshot.revision, revision);
     assert_eq!(
@@ -650,7 +683,7 @@ fn resolved_sources_finalize_once() {
 fn the_malformed_fixture_loads_what_it_can_and_reports_the_rest() {
     let fixture = Fixture::copy("malformed");
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &fixture.cursor_hooks_file());
+    load_sources(&mut registry, &[fixture.cursor_source()]);
     let snapshot = registry.snapshot();
     let active = snapshot
         .bindings
@@ -691,7 +724,7 @@ fn no_orphans_after_timeout() {
     let fixture = Fixture::copy("sample_project");
     let (dispatcher, _) = dispatcher(&fixture.home);
     let dir = TempDir::new().expect("tempdir");
-    let hooks = write_run_hooks(
+    let hooks = write_worker_hooks(
         dir.path(),
         "beforeShellExecution",
         r#"cat > /dev/null
@@ -703,7 +736,7 @@ sleep 60"#,
         json!({ "timeout": 5 }),
     );
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks);
+    load_worker_file(&mut registry, &hooks);
     let outcome = dispatch(
         &dispatcher,
         &registry,
@@ -745,7 +778,7 @@ fn no_orphans_after_timeout() {
     )
     .expect("write hooks.json");
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &hooks);
+    load_worker_file(&mut registry, &hooks);
     let outcome = dispatch(
         &dispatcher,
         &registry,
@@ -775,7 +808,7 @@ fn no_orphans_after_timeout() {
 fn a_trivial_hook_adds_under_two_seconds() {
     let fixture = Fixture::copy("sample_project");
     let mut registry = HookRegistry::new();
-    load_run_file(&mut registry, &fixture.runnable_hooks_file());
+    load_sources(&mut registry, &[fixture.cursor_source()]);
     let (dispatcher, _) = dispatcher(&fixture.home);
     // The first run of a script written a moment ago pays for the operating system loading it
     // (and, on machines with endpoint scanning, for the scan), which is not what a hook adds to
@@ -822,9 +855,9 @@ mod shell_slice {
             let fixture = Fixture::copy("sample_project");
             let dir = TempDir::new().expect("tempdir");
             let hooks =
-                write_run_hooks(dir.path(), "beforeShellExecution", script_body, definition);
+                write_worker_hooks(dir.path(), "beforeShellExecution", script_body, definition);
             let mut registry = HookRegistry::new();
-            load_run_file(&mut registry, &hooks);
+            load_worker_file(&mut registry, &hooks);
             assert!(!registry.snapshot().is_empty(), "the file loads");
             let (dispatcher, messenger) = dispatcher(&fixture.home);
             Self {
@@ -1001,9 +1034,12 @@ exit 2"#,
             ] } }"#,
         )
         .expect("rewrite hooks.json");
-        let failures = load_explicit_sources(&[run_source(&path)], &mut harness.registry);
-        assert_eq!(failures.len(), 1);
-        assert!(failures[0].message.contains("already finalized"));
+        let error = load_explicit_sources(
+            &[worker_source(&path, HookSourceKind::FactoryAgent)],
+            &mut harness.registry,
+        )
+        .expect_err("a second load is refused");
+        assert!(error.to_string().contains("already finalized"), "{error}");
         let snapshot = harness.registry.snapshot();
         assert_eq!(snapshot.bindings.len(), 1);
         assert!(snapshot.has_bindings_for(HookBoundary::ToolPre));
@@ -1014,18 +1050,20 @@ exit 2"#,
         let dir = TempDir::new().expect("tempdir");
         let mut registry = HookRegistry::new();
         let missing = dir.path().join("hooks.json");
-        let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
+        let source = worker_source(&missing, HookSourceKind::FactoryAgent);
+        let failures = try_load(&mut registry, std::slice::from_ref(&source));
         assert_eq!(
             failures.len(),
             1,
             "a missing file is a failure the caller sees"
         );
-        assert_eq!(failures[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(failures[0].diagnostic.severity, DiagnosticSeverity::Error);
+        assert!(!failures[0].strict);
         assert!(registry.snapshot().is_empty());
 
         fs::write(&missing, "{ not json").expect("write");
         let mut registry = HookRegistry::new();
-        let failures = load_explicit_sources(&[run_source(&missing)], &mut registry);
+        let failures = try_load(&mut registry, &[source]);
         assert_eq!(
             failures.len(),
             1,
@@ -1033,6 +1071,7 @@ exit 2"#,
         );
         assert!(
             failures[0]
+                .diagnostic
                 .message
                 .contains("could not load configured hook source")
         );
@@ -1043,5 +1082,292 @@ exit 2"#,
                     .message
                     .contains("could not load configured hook source")
         }));
+    }
+}
+
+/// A factory's hook list as the execution configuration delivers it, against a factory definition
+/// repository and a second repository checked out side by side (see `fixtures/README.md`).
+#[cfg(unix)]
+mod factory_layout {
+    use super::*;
+
+    const DEPLOY_REASON: &str = "Reviewers do not deploy. Hand the change to the release agent.";
+
+    struct Layout {
+        /// The factory definition repository, `acme-factory`.
+        factory: Fixture,
+        /// The `api` repository, a copy of the sample project with its `.cursor` unchanged.
+        api: PathBuf,
+    }
+
+    impl Layout {
+        fn new() -> Self {
+            let factory = Fixture::copy("factory_layout/acme-factory");
+            let api = factory.copy_beside("sample_project", "api");
+            Self { factory, api }
+        }
+
+        fn root(&self) -> &Path {
+            &self.factory.root
+        }
+
+        /// `factory.yaml`'s entry: the definition repository's `hooks`, strict.
+        fn factory_hooks(&self) -> ExplicitHookSource {
+            with_policy(
+                repository_source(self.root(), "hooks", HookSourceKind::FactoryWide),
+                true,
+                HookOnAsk::Deny,
+            )
+        }
+
+        /// `agent.md`'s entry for the reviewer's own policy, which ends the run on an ask.
+        fn reviewer_hooks(&self) -> ExplicitHookSource {
+            with_policy(
+                repository_source(
+                    self.root(),
+                    "agents/reviewer/hooks",
+                    HookSourceKind::FactoryAgent,
+                ),
+                false,
+                HookOnAsk::FailRun,
+            )
+        }
+
+        /// `agent.md`'s entry for the `api` repository's `.cursor` directory.
+        fn api_cursor(&self) -> ExplicitHookSource {
+            repository_source(&self.api, ".cursor", HookSourceKind::FactoryAgent)
+        }
+
+        /// The list as the server sends it: the agent's entries, then the factory's.
+        fn run_sources(&self) -> Vec<ExplicitHookSource> {
+            vec![
+                self.api_cursor(),
+                self.reviewer_hooks(),
+                self.factory_hooks(),
+            ]
+        }
+
+        /// A shell command the agent runs from the definition repository.
+        fn shell(&self, command: &str) -> HookEnvelope {
+            let mut envelope = shell_envelope(command, self.root(), Some(self.root()));
+            envelope.roots.push(self.api.clone());
+            envelope
+        }
+
+        fn dispatch(&self, registry: &HookRegistry, command: &str) -> DispatchOutcome {
+            let (dispatcher, _) = dispatcher(&self.factory.home);
+            dispatch(&dispatcher, registry, self.shell(command))
+        }
+    }
+
+    fn ran_from(outcome: &DispatchOutcome) -> Vec<PathBuf> {
+        outcome
+            .invocations
+            .iter()
+            .map(|invocation| match &invocation.binding.source.location {
+                HookSourceLocation::CanonicalPath(path) => path.clone(),
+                HookSourceLocation::Named(name) => PathBuf::from(name),
+            })
+            .collect()
+    }
+
+    /// The `api` repository's `.cursor` commands name their scripts from the repository root.
+    /// Selected as a repository source they run from that root and really deny, wherever the
+    /// agent is working. Run from the hook directory instead, the script is not found and the
+    /// command goes through.
+    #[test]
+    fn an_unchanged_cursor_directory_in_another_repository_denies() {
+        let layout = Layout::new();
+        let mut registry = HookRegistry::new();
+        load_sources(&mut registry, &layout.run_sources());
+        let outcome = layout.dispatch(&registry, "rm -rf build");
+        assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+        assert_eq!(reasons(&outcome), vec![SAMPLE_RM_REASON]);
+        assert!(
+            layout.api.join(".hook-last-shell-input.json").exists(),
+            "the script ran with the api repository as its project directory"
+        );
+
+        let mut from_hook_directory = HookRegistry::new();
+        load_worker_file(
+            &mut from_hook_directory,
+            &layout.api.join(CURSOR_HOOKS_PATH),
+        );
+        let outcome = layout.dispatch(&from_hook_directory, "rm -rf build");
+        assert_eq!(
+            outcome.effects.verdict,
+            HookVerdict::NoOpinion,
+            "from .cursor itself, .cursor/scripts/deny_dangerous.sh does not exist"
+        );
+    }
+
+    /// The agent's entries run before the factory's even when the list names the factory's
+    /// first, and every matching hook runs.
+    #[test]
+    fn agent_entries_run_before_factory_entries() {
+        let layout = Layout::new();
+        let mut registry = HookRegistry::new();
+        load_sources(
+            &mut registry,
+            &[
+                layout.factory_hooks(),
+                layout.reviewer_hooks(),
+                layout.api_cursor(),
+            ],
+        );
+        let outcome = layout.dispatch(&registry, "deploy production");
+
+        assert_eq!(outcome.effects.verdict, HookVerdict::Deny);
+        assert_eq!(reasons(&outcome), vec![DEPLOY_REASON]);
+        let canonical = |path: PathBuf| dunce::canonicalize(path).expect("canonical");
+        assert_eq!(
+            ran_from(&outcome),
+            vec![
+                canonical(layout.root().join("agents/reviewer/hooks/hooks.json")),
+                canonical(layout.api.join(CURSOR_HOOKS_PATH)),
+                canonical(layout.root().join("hooks/hooks.json")),
+            ]
+        );
+        assert!(
+            layout
+                .factory
+                .read(".factory-shell.log")
+                .contains("deploy production"),
+            "the factory's hook ran too"
+        );
+    }
+
+    /// Each entry's own `strict` decides what its failure means: a strict entry that cannot
+    /// load is a failure that ends the run, and one that is not strict is only reported. The
+    /// entries that did load stay active.
+    #[test]
+    fn each_entry_is_strict_or_not_on_its_own() {
+        let layout = Layout::new();
+        let missing_strict = with_policy(
+            repository_source(
+                layout.root(),
+                "agents/missing/hooks",
+                HookSourceKind::FactoryAgent,
+            ),
+            true,
+            HookOnAsk::Deny,
+        );
+        let missing_lenient = worker_source(
+            &layout.factory.sibling("empty").join("hooks.json"),
+            HookSourceKind::FactoryWide,
+        );
+        let mut registry = HookRegistry::new();
+        let failures = try_load(
+            &mut registry,
+            &[
+                layout.api_cursor(),
+                missing_strict,
+                layout.reviewer_hooks(),
+                missing_lenient,
+            ],
+        );
+
+        let strict = failures
+            .iter()
+            .map(|failure| failure.strict)
+            .collect::<Vec<_>>();
+        assert_eq!(strict, vec![true, false], "{failures:?}");
+        assert!(
+            failures[0].diagnostic.message.contains("agents/missing/hooks"),
+            "{failures:?}"
+        );
+        assert!(registry.is_finalized());
+        assert_eq!(
+            layout.dispatch(&registry, "deploy production").effects.verdict,
+            HookVerdict::Deny
+        );
+    }
+
+    /// A hooks file two entries select loads once, from the first entry's location, with the
+    /// stricter of each setting.
+    #[test]
+    fn a_file_selected_twice_takes_the_stricter_settings() {
+        let layout = Layout::new();
+        // The agent selects the factory's directory too, with default settings, before the
+        // factory's own strict entry.
+        let from_agent = repository_source(layout.root(), "hooks", HookSourceKind::FactoryAgent);
+        let from_factory = with_policy(layout.factory_hooks(), true, HookOnAsk::FailRun);
+        let mut registry = HookRegistry::new();
+        load_sources(&mut registry, &[from_agent.clone(), from_factory]);
+
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.bindings.len(), 1, "{:?}", snapshot.bindings);
+        let active = &snapshot.bindings[0];
+        assert_eq!(active.binding.id.source.kind, HookSourceKind::FactoryAgent);
+        assert_eq!(
+            active.policy,
+            HookSourcePolicy {
+                strict: true,
+                on_ask: HookOnAsk::FailRun,
+            }
+        );
+
+        // Strict in effect: a hook that prints nothing denies instead of letting the command
+        // through, as it does when only the lenient entry selects it.
+        fs::write(
+            layout.root().join("hooks/record_shell.sh"),
+            "#!/bin/sh\ncat > /dev/null\n",
+        )
+        .expect("rewrite the script");
+        assert_eq!(
+            layout.dispatch(&registry, "ls").effects.verdict,
+            HookVerdict::Deny
+        );
+        let mut lenient = HookRegistry::new();
+        load_sources(&mut lenient, &[from_agent]);
+        assert_eq!(
+            layout.dispatch(&lenient, "ls").effects.verdict,
+            HookVerdict::NoOpinion
+        );
+    }
+
+    /// When several hooks ask, the run ends if any one of them comes from an entry set to
+    /// `fail_run`, whichever source ranks first.
+    #[test]
+    fn any_asker_from_a_fail_run_entry_ends_the_run() {
+        let layout = Layout::new();
+        let asking = layout.factory.sibling("factory-asks");
+        let factory_asks = worker_source(
+            &write_worker_hooks(
+                &asking,
+                "beforeShellExecution",
+                r#"cat > /dev/null
+printf '{"permission":"ask","agent_message":"The factory asks before anything is published."}'"#,
+                json!({}),
+            ),
+            HookSourceKind::FactoryWide,
+        );
+
+        for (reviewer_on_ask, ends_the_run) in
+            [(HookOnAsk::FailRun, true), (HookOnAsk::Deny, false)]
+        {
+            let mut registry = HookRegistry::new();
+            load_sources(
+                &mut registry,
+                &[
+                    with_policy(layout.reviewer_hooks(), false, reviewer_on_ask),
+                    factory_asks.clone(),
+                ],
+            );
+            let outcome = layout.dispatch(&registry, "publish v2");
+            assert_eq!(outcome.effects.verdict, HookVerdict::Ask);
+            let on_ask = outcome
+                .effects
+                .askers
+                .iter()
+                .map(|asker| asker.on_ask)
+                .collect::<Vec<_>>();
+            assert_eq!(on_ask, vec![reviewer_on_ask, HookOnAsk::Deny]);
+            assert_eq!(
+                outcome.effects.an_asker_fails_the_run(),
+                ends_the_run,
+                "reviewer on ask: {reviewer_on_ask:?}"
+            );
+        }
     }
 }
