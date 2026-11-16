@@ -32,13 +32,20 @@ use super::protocol::{METHOD_REQUEST_PERMISSION, PermissionOutcome, RequestPermi
 const JSON_RPC_VERSION: &str = "2.0";
 const METHOD_NOT_FOUND: i64 = -32601;
 const INTERNAL_ERROR: i64 = -32603;
+/// Bounds the rendered `data` so an agent that attaches a large payload (a backtrace, a whole
+/// API response) cannot flood the task status.
+const MAX_RENDERED_DATA_CHARS: usize = 1000;
 
-/// A JSON-RPC error returned to the agent for a request it made to us.
+/// A JSON-RPC error, either answered by the agent or returned to it for a request it made to us.
 #[derive(Debug, Deserialize, thiserror::Error)]
-#[error("ACP error {code}: {message}")]
+#[error("ACP error {code}: {}", self.detail())]
 pub(super) struct RpcError {
     pub code: i64,
     pub message: String,
+    /// Agents often send a generic `message` (e.g. "Internal error") and put the actual cause
+    /// here.
+    #[serde(default)]
+    pub data: Option<Value>,
 }
 
 impl RpcError {
@@ -46,6 +53,7 @@ impl RpcError {
         Self {
             code: METHOD_NOT_FOUND,
             message: format!("Method {method} not supported"),
+            data: None,
         }
     }
 
@@ -53,7 +61,25 @@ impl RpcError {
         Self {
             code: INTERNAL_ERROR,
             message: error.to_string(),
+            data: None,
         }
+    }
+
+    /// The message followed by the rendered `data`, if it adds anything.
+    pub(super) fn detail(&self) -> String {
+        let data = match &self.data {
+            None | Some(Value::Null) => return self.message.clone(),
+            Some(Value::String(data)) => data.trim().to_owned(),
+            Some(data) => data.to_string(),
+        };
+        if data.is_empty() || data == self.message {
+            return self.message.clone();
+        }
+        let mut rendered: String = data.chars().take(MAX_RENDERED_DATA_CHARS).collect();
+        if rendered.len() < data.len() {
+            rendered.push('…');
+        }
+        format!("{}: {rendered}", self.message)
     }
 }
 
